@@ -1273,7 +1273,12 @@ model Employee {
   /// сотрудником (`CashFlowEntry.postedById`). `onDelete: SetNull` со
   /// стороны проводки — журнал append-only и должен уцелеть при
   /// деактивации учётки. См. `model CashFlowEntry` ниже.
-  cashFlowEntriesPosted CashFlowEntry[] @relation("CashFlowEntryPostedBy")
+  cashFlowEntriesPosted                CashFlowEntry[]                @relation("CashFlowEntryPostedBy")
+  routeWorkPermitsCreated              RouteWorkPermit[]              @relation("PermitCreatedBy")
+  routeWorkPermitsRevoked              RouteWorkPermit[]              @relation("PermitRevokedBy")
+  /// Значения справочника «Характеристика», добавленные этим сотрудником
+  /// из комбобокса техкарты.
+  materialCharacteristicOptionsCreated MaterialCharacteristicOption[] @relation("MaterialCharacteristicOptionCreatedBy")
 
   @@index([role])
   @@index([compensationType])
@@ -3598,6 +3603,48 @@ model TechCardParameter {
   @@index([techCardId, sortOrder])
 }
 
+/// ЗНАЧЕНИЕ СПРАВОЧНИКА «Характеристика» строки материала — то, что
+/// менеджер выбирает (или дописывает) в поле «Характеристика» техкарты.
+///
+/// Зачем таблица (решение пользователя 29.07.2026): поле «Подтип» из формы
+/// техкарты убрано, его значения переехали в список «Характеристики», а сам
+/// список сделан ПОПОЛНЯЕМЫМ — набранное менеджером значение сохраняется и
+/// предлагается в следующих техкартах. Встроенные значения (лейблы
+/// `MATERIAL_SUBTYPES`) в таблице НЕ хранятся: они живут в коде и
+/// подмешиваются на чтении (`mergeCharacteristicOptions` в
+/// `@sewing/shared/material-characteristic-options`). Здесь — только то, что
+/// добавили руками.
+///
+/// `valueNorm` — каноничный ключ (trim + схлопнутые пробелы + нижний регистр
+/// + «ё»→«е»), по нему уникальность: «Молния» и «молния » не должны стать
+/// двумя пунктами списка. Показываем при этом `value` — ровно как ввели.
+///
+/// Само выбранное значение хранится не здесь, а в `fabricType` строки
+/// материала (`TechCardMaterialLine` / `OrderMaterialRequirement`): справочник
+/// подсказывает, а не владеет значением строки.
+model MaterialCharacteristicOption {
+  id String @id @default(cuid())
+
+  /// Роль материала (`MAIN_FABRIC`, `PACKAGING`, ...) — список привязан к
+  /// роли, как раньше подтипы были привязаны к группе. Свободная строка по
+  /// тем же соображениям, что `TechCardMaterialLine.materialRole`.
+  roleKey   String
+  /// Значение как ввёл пользователь — оно и показывается в списке.
+  value     String
+  /// Нормализованное значение для уникальности и поиска.
+  valueNorm String
+
+  /// Кто добавил — для разбора «откуда в списке взялась опечатка».
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy Employee? @relation("MaterialCharacteristicOptionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([roleKey, valueNorm])
+  @@index([roleKey])
+}
+
 /// Строка материала в шаблоне техкарты. На MVP — простая линейная
 /// норма «qtyPerUnit на 1 единицу изделия»; никаких формул или
 /// зависимостей от размеров (см. ADR-0022).
@@ -3632,10 +3679,15 @@ model TechCardMaterialLine {
   sortOrder                     Int
   /// Свободное человекочитаемое имя материала (на MVP без справочника).
   name                          String
-  /// Единица измерения (м, шт, г, и т.п.). Свободная строка.
+  /// Единица ЗАКУПКИ (кг, м пог., шт). Свободная строка. Уезжает в снимок
+  /// заказа как `OrderMaterialRequirement.unit`, а оттуда — в сметы, склад и
+  /// заказы поставщикам, поэтому смысл поля менять нельзя.
   unit                          String
-  /// Норма расхода на одну единицу изделия. Положительное число,
-  /// валидируется в DTO/сервисе (без БД-check).
+  /// Единица НОРМЫ, если она отличается от закупочной («м пог.» при закупке
+  /// в «кг»). `null` — норма и закупка в одной единице, как было всегда.
+  normUnit                      String?
+  /// Норма расхода на одну единицу изделия в `normUnit ?? unit`. Положительное
+  /// число, валидируется в DTO/сервисе (без БД-check).
   qtyPerUnit                    Decimal  @db.Decimal(12, 4)
   note                          String?
   /// Этап 3: роль материала из общего списка `MATERIAL_ROLES` (см.
@@ -3761,12 +3813,25 @@ model OrderMaterialRequirement {
   sourceTechCardLineId          String?
   sortOrder                     Int
   name                          String
+  /// Единица ЗАКУПКИ строки («кг» у трикотажа, «м пог.» у плащёвки). На ней
+  /// держатся сметы, складские балансы (`StockBalance` замораживает единицу)
+  /// и обязательность ширины/плотности (`requiredIfUnitKg`), поэтому менять
+  /// её значения у существующих строк нельзя.
   unit                          String
-  /// Норма на единицу изделия — копия `TechCardMaterialLine.qtyPerUnit`
-  /// в момент snapshot-а.
-  qtyPerUnit                    Decimal  @db.Decimal(12, 4)
-  /// Полная потребность по заказу: `qtyPerUnit * Σ OrderItem.qtyPlan`.
-  totalQty                      Decimal  @db.Decimal(12, 4)
+  /// Единица НОРМЫ, если строка разводит расход и закупку («м пог.» при
+  /// закупке в «кг»). Номенклатура отдаёт РАСХОД, а не количество к закупке,
+  /// поэтому источник нормы сверяется именно с этой единицей.
+  /// `null` — строка не расщеплена и ведёт себя как раньше: норма и закупка в
+  /// одной единице `unit`. Все строки, заведённые до появления поля, такие.
+  normUnit                      String?
+  /// Норма на единицу изделия в `normUnit ?? unit` — копия
+  /// `TechCardMaterialLine.qtyPerUnit` в момент snapshot-а.
+  qtyPerUnit                    Decimal       @db.Decimal(12, 4)
+  /// Количество К ЗАКУПКЕ в единице `unit`. Без расщепления это просто
+  /// `qtyPerUnit * Σ OrderItem.qtyPlan`; при расщеплении — расход в единице
+  /// нормы, пересчитанный через ширину рулона и плотность
+  /// (`computeNormPurchase` в shared, зеркало формулы расчёта потребности).
+  totalQty                      Decimal       @db.Decimal(12, 4)
   note                          String?
   /// Этап 3 «Потребности цеха»: snapshot-копии новых полей
   /// `TechCardMaterialLine` в момент `OrdersService.start()`. Все

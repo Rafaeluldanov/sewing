@@ -19,13 +19,16 @@ import { WarehousesModule } from './modules/warehouses/warehouses.module.js';
 import { OperationsModule } from './modules/operations/operations.module.js';
 import { SalaryModule } from './modules/salary/salary.module.js';
 import { PayrollModule } from './modules/payroll/payroll.module.js';
+import { PayrollCalendarModule } from './modules/payroll-calendar/payroll-calendar.module.js';
 import { PayrollPayoutsModule } from './modules/payroll-payouts/payroll-payouts.module.js';
 import { EmployeesModule } from './modules/employees/employees.module.js';
+import { AppRolesModule } from './modules/app-roles/app-roles.module.js';
 import { CostsModule } from './modules/costs/costs.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { PrintersModule } from './modules/printers/printers.module.js';
 import { RoutesModule } from './modules/routes/routes.module.js';
 import { TechCardsModule } from './modules/tech-cards/tech-cards.module.js';
+import { MaterialCharacteristicOptionsModule } from './modules/material-characteristic-options/material-characteristic-options.module.js';
 import { ConstructorTasksModule } from './modules/constructor-tasks/constructor-tasks.module.js';
 import { CuttingTasksModule } from './modules/cutting-tasks/cutting-tasks.module.js';
 import { RecutModule } from './modules/recut/recut.module.js';
@@ -94,14 +97,17 @@ import { IntegrationsModule } from './modules/integrations/integrations.module.j
     OperationsModule,
     SalaryModule,
     PayrollModule,
+    PayrollCalendarModule,
     PayrollPayoutsModule,
     EmployeesModule,
+    AppRolesModule,
     CostsModule,
     TreasuryModule,
     DashboardModule,
     PrintersModule,
     RoutesModule,
     TechCardsModule,
+    MaterialCharacteristicOptionsModule,
     ConstructorTasksModule,
     CuttingTasksModule,
     RecutModule,

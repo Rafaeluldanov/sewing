@@ -23,9 +23,13 @@ import {
 import {
   getMaterialCharacteristic,
   getMaterialSubtype,
-  getMaterialSubtypesByGroup,
   resolveRequiredCharacteristicKeys,
 } from '@sewing/shared/material-characteristics';
+import {
+  characteristicValueFromSubtypeKey,
+  resolveSubtypeKeyByCharacteristic,
+} from '@sewing/shared/material-characteristic-options';
+import { CharacteristicCombobox } from '@/components/materials/characteristic-combobox';
 import {
   createTechCardAction,
   pullMaterialLinesFromCategoryAction,
@@ -279,6 +283,12 @@ function rowFromPulledLine(line: {
   return emptyMaterialRow({
     materialRole: line.roleKey,
     fabricType: line.labelSnapshot,
+    // Подтип выводим из подтянутого названия по тому же правилу, что и
+    // при ручном вводе: пришёл параметр «Молния» — строка сразу получает
+    // подтип со своими доп. полями, а не пустоту, которую менеджер
+    // раньше добирал руками через убранное поле «Подтип».
+    subtypeKey:
+      resolveSubtypeKeyByCharacteristic(line.roleKey, line.labelSnapshot) ?? '',
     unit: line.unit,
     qtyPerUnit:
       pulled !== '' && Number.isFinite(numeric) && numeric > 0 ? pulled : '1',
@@ -426,7 +436,13 @@ export function TechCardForm({
           .filter(([k]) => !LEGACY_CHARACTERISTIC_KEYS.includes(k))
           .map(([k, v]) => [k, String(v)]),
       ),
-      fabricType: l.fabricType ?? '',
+      // Поле «Характеристика» (бывшая «Характеристика полотна»). У строк,
+      // заполненных ДО отказа от поля «Подтип», значение лежит в
+      // `subtypeKey`, а `fabricType` пуст — показываем лейбл подтипа,
+      // чтобы старая техкарта открывалась заполненной, а не пустой.
+      fabricType:
+        (l.fabricType ?? '') ||
+        characteristicValueFromSubtypeKey(l.subtypeKey),
       densityGsm: l.densityGsm == null ? '' : String(l.densityGsm),
       plannedWidthCm:
         l.plannedWidthCm == null ? '' : String(l.plannedWidthCm),
@@ -1390,9 +1406,12 @@ function MaterialRowCard({
   const isLegacyRole =
     row.materialRole !== '' &&
     !isKnownTechCardMaterialRoleKey(row.materialRole);
-  // Фаза 2 «Характеристики номенклатуры»: подтипы выбранной группы,
-  // выбранный подтип и его «новые» характеристики (без legacy-колонки).
-  const subtypeOptions = getMaterialSubtypesByGroup(row.materialRole);
+  // Подтип строки БОЛЬШЕ НЕ ВЫБИРАЕТСЯ руками (поле «Подтип» убрано,
+  // решение пользователя 29.07.2026): он выводится из значения поля
+  // «Характеристика». Выбрали из списка знакомое значение («Молния») —
+  // строка получает `subtypeKey` и вместе с ним доп. поля подтипа
+  // (Тип/Длина) и правила обязательности «ЕСЛИ КГ». Набрали своё —
+  // подтипа нет, доп. полей тоже.
   const subtype = row.subtypeKey ? getMaterialSubtype(row.subtypeKey) : null;
   const requiredCharKeys = new Set(
     row.subtypeKey
@@ -1471,8 +1490,10 @@ function MaterialRowCard({
             onChange={(e) =>
               onChange({
                 materialRole: e.target.value,
-                // Смена группы обнуляет подтип и его характеристики —
-                // старый подтип принадлежал другой группе.
+                // Смена роли обнуляет характеристику и всё, что от неё
+                // зависит: список значений привязан к роли, и «Молния»
+                // в роли «Основное полотно» — мусор, а не данные.
+                fabricType: '',
                 subtypeKey: '',
                 characteristics: {},
               })
@@ -1510,48 +1531,49 @@ function MaterialRowCard({
           </select>
         </div>
         {/*
-          Фаза 2 «Характеристики номенклатуры»: подтип материала
-          (Молния / Кашкорсе / Дублерин / ...). Показываем select только
-          если у выбранной группы есть подтипы; иначе сохраняем текущее
-          значение hidden-инпутом (backward-compat).
+          Поле «Характеристика» — бывшие «Подтип» + «Характеристика
+          полотна», сведённые в один комбобокс (решение пользователя
+          29.07.2026, макет
+          `docs/mockups/tech-card-characteristic-combobox-mockup.html`).
+          Значения бывшего подтипа — первые пункты списка; ниже них
+          то, что менеджеры дописали сами.
+
+          `subtypeKey` теперь не выбирается, а ВЫВОДИТСЯ из значения и
+          уезжает hidden-инпутом: снапшот заказа, cut-readiness и
+          costing продолжают читать привычное поле.
         */}
-        {subtypeOptions.length > 0 ? (
-          <div className="admin-field">
-            <label htmlFor={`mat-${row.key}-subtype`}>Подтип</label>
-            <select
-              id={`mat-${row.key}-subtype`}
-              name={`material[${row.key}][subtypeKey]`}
-              value={row.subtypeKey}
-              onChange={(e) =>
-                onChange({ subtypeKey: e.target.value, characteristics: {} })
-              }
-              style={{ width: '100%' }}
-            >
-              <option value="">— не задано —</option>
-              {subtypeOptions.map((s) => (
-                <option key={s.subtypeKey} value={s.subtypeKey}>
-                  {s.label}
-                </option>
-              ))}
-              {row.subtypeKey &&
-                !subtypeOptions.some(
-                  (s) => s.subtypeKey === row.subtypeKey,
-                ) && (
-                  <option value={row.subtypeKey}>
-                    {row.subtypeKey} (legacy)
-                  </option>
-                )}
-            </select>
-          </div>
-        ) : (
-          row.subtypeKey && (
-            <input
-              type="hidden"
-              name={`material[${row.key}][subtypeKey]`}
-              value={row.subtypeKey}
-            />
-          )
-        )}
+        <div className="admin-field">
+          <label htmlFor={`mat-${row.key}-characteristic`}>Характеристика</label>
+          <CharacteristicCombobox
+            id={`mat-${row.key}-characteristic`}
+            name={`material[${row.key}][fabricType]`}
+            roleKey={row.materialRole}
+            value={row.fabricType}
+            maxLength={120}
+            placeholder="кулирка / молния / кашкорсе"
+            onChange={(next) => {
+              const nextSubtype =
+                resolveSubtypeKeyByCharacteristic(row.materialRole, next) ?? '';
+              onChange(
+                nextSubtype === row.subtypeKey
+                  ? { fabricType: next }
+                  : {
+                      fabricType: next,
+                      subtypeKey: nextSubtype,
+                      // Подтип задаёт НАБОР характеристик: сменился
+                      // подтип — прежние значения относятся к чужим
+                      // полям, и тащить их дальше нельзя.
+                      characteristics: {},
+                    },
+              );
+            }}
+          />
+        </div>
+        <input
+          type="hidden"
+          name={`material[${row.key}][subtypeKey]`}
+          value={row.subtypeKey}
+        />
         {/*
           Динамические характеристики подтипа без legacy-колонки
           (Тип / Длина / Толщина / Ширина / Кол-во проколов). Legacy-
@@ -1591,21 +1613,6 @@ function MaterialRowCard({
             </div>
           );
         })}
-        <div className="admin-field">
-          <label htmlFor={`mat-${row.key}-fabric`}>
-            Характеристика полотна
-          </label>
-          <input
-            id={`mat-${row.key}-fabric`}
-            name={`material[${row.key}][fabricType]`}
-            type="text"
-            value={row.fabricType}
-            onChange={(e) => onChange({ fabricType: e.target.value })}
-            placeholder="кулирка / двунитка / интерлок"
-            maxLength={120}
-            style={{ width: '100%' }}
-          />
-        </div>
         {/*
           Этап «Фурнитура в техкарте» (см. ТЗ §7): для PACKAGING поля
           «Плотность, г/м²» и «Ширина рулона, см» не имеют смысла —

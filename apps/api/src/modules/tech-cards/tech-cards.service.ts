@@ -144,6 +144,8 @@ export class TechCardsService {
       sortOrder: number;
       name: string;
       unit: string;
+      /** Единица нормы, если строка развела расход и закупку. */
+      normUnit: string | null;
       qtyPerUnit: Prisma.Decimal;
       note: string | null;
       // Этап 3 «Потребности цеха»: копируются в snapshot
@@ -213,6 +215,7 @@ export class TechCardsService {
         sortOrder: l.sortOrder,
         name: l.name,
         unit: l.unit,
+        normUnit: l.normUnit,
         qtyPerUnit: l.qtyPerUnit,
         note: l.note,
         // БД хранит свободной строкой (расширяемость без миграции).
@@ -1039,6 +1042,9 @@ export class TechCardsService {
               sortOrder: (i + 1) * 10,
               name: r.name,
               unit: r.unit,
+              // Расщепление переезжает в шаблон вместе со строкой — иначе
+              // следующий заказ по нему снова схлопнул бы единицы.
+              normUnit: r.normUnit,
               qtyPerUnit: r.qtyPerUnit,
               note: cells.note,
               materialRole: r.materialRole,

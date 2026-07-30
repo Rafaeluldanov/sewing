@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Техкарта: «Подтип» убран → «Характеристика» с пополняемым списком</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --shadow-lg:0 10px 32px rgba(20,20,20,.16),0 2px 8px rgba(20,20,20,.08);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 80px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1180px; margin:0 auto; padding:0 20px; }
+
+  .topnav{ position:sticky; top:0; z-index:40; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1180px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:700; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:88ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:1.25rem; margin:0 0 .3rem; }
+  .sect > p{ margin:0 0 1.1rem; color:var(--color-fg-muted); max-width:92ch; }
+
+  .shots{ display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start; }
+  .shot{ flex:1 1 460px; min-width:330px; }
+  .shot--wide{ flex:1 1 100%; }
+  .shot__cap{ font-size:.85rem; font-weight:700; margin:0 0 .5rem; display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; }
+  .shot__cap small{ font-weight:400; color:var(--color-fg-muted); }
+  .tag{ display:inline-flex; align-items:center; padding:1px 8px; border-radius:var(--radius-pill); font-size:.72rem; font-weight:700; }
+  .tag--bad{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+  .tag--good{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .tag--new{ background:var(--btn-primary-bg); color:var(--btn-primary-fg); border:1px solid var(--btn-primary-edge); }
+
+  /* ---------- карточка строки материала (admin-material-row) ---------- */
+  .mrow{ background:var(--color-bg-card); border:1px solid var(--color-border); border-radius:var(--radius-lg);
+         padding:.75rem .875rem; display:flex; flex-direction:column; gap:.625rem; box-shadow:var(--shadow-sm); }
+  .mrow__head{ display:flex; align-items:center; gap:.45rem; font-size:.8rem; color:var(--color-fg-muted); }
+  .mrow__head b{ color:var(--color-fg-strong); font-size:var(--title-subsection); }
+  .mgrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(178px,1fr)); gap:.55rem; align-items:end; }
+  .fld{ display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .fld > label{ font-size:10.5px; font-weight:700; color:var(--color-fg-muted); text-transform:uppercase; letter-spacing:.04em;
+                display:flex; align-items:center; gap:.25rem; }
+  .fld > label .req{ color:var(--color-danger); }
+  .ctl{ padding:.4rem .55rem; border:1px solid var(--color-border-strong); border-radius:7px; background:#fff;
+        font-size:.86rem; min-height:33px; display:flex; align-items:center; gap:.3rem; color:var(--color-fg); }
+  .ctl--ph{ color:var(--color-fg-subtle); }
+  .ctl--sel::after{ content:'⌄'; margin-left:auto; color:var(--color-fg-subtle); font-size:1rem; line-height:0; padding-bottom:.3rem; }
+  .ctl--num{ justify-content:flex-end; font-variant-numeric:tabular-nums; }
+  .ctl--off{ background:var(--color-bg-muted); color:var(--color-fg-subtle); }
+  .ctl--kill{ background:var(--color-danger-soft); border-color:#f0b9b4; color:var(--color-danger-fg); text-decoration:line-through; }
+  .fld--kill > label{ color:var(--color-danger-fg); }
+  .imgbox{ border:1px dashed var(--color-border-strong); border-radius:7px; min-height:33px; display:flex; align-items:center;
+           padding:.3rem .5rem; font-size:.78rem; color:var(--color-fg-subtle); gap:.35rem; }
+  .trash{ width:33px; height:33px; border:1px solid var(--color-border-strong); border-radius:7px; background:#fff;
+          display:flex; align-items:center; justify-content:center; color:var(--color-fg-muted); }
+
+  /* ---------- комбобокс ---------- */
+  .cbx{ position:relative; }
+  .cbx__input{ width:100%; padding:.4rem .55rem; padding-right:1.7rem; border:1px solid var(--color-border-strong); border-radius:7px;
+               background:#fff; font:inherit; font-size:.86rem; min-height:33px; color:var(--color-fg); font-family:inherit; }
+  .cbx__input::placeholder{ color:var(--color-fg-subtle); }
+  .cbx__input:focus{ outline:none; border-color:var(--color-accent); box-shadow:0 0 0 3px var(--color-accent-soft); }
+  .cbx__caret{ position:absolute; right:.5rem; top:50%; transform:translateY(-60%); color:var(--color-fg-subtle); font-size:1rem; line-height:0; pointer-events:none; }
+  .cbx__pop{ position:absolute; z-index:20; top:calc(100% + 4px); left:0; right:0; background:#fff; border:1px solid var(--color-border-strong);
+             border-radius:var(--radius-md); box-shadow:var(--shadow-lg); padding:.25rem; max-height:236px; overflow:auto; }
+  .cbx__pop[hidden]{ display:none; }
+  .cbx__grp{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--color-fg-subtle);
+             padding:.35rem .5rem .2rem; display:flex; align-items:center; gap:.3rem; }
+  .cbx__opt{ display:flex; align-items:center; gap:.4rem; padding:.38rem .5rem; border-radius:var(--radius-sm); font-size:.86rem; cursor:pointer; }
+  .cbx__opt:hover, .cbx__opt.is-active{ background:var(--color-bg-tint); }
+  .cbx__opt .mark{ font-weight:700; color:var(--color-accent-fg); }
+  .cbx__opt .own{ margin-left:auto; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+                  color:var(--color-ok-fg); background:var(--color-ok-soft); border-radius:var(--radius-pill); padding:1px 6px; }
+  .cbx__opt .del{ margin-left:auto; color:var(--color-fg-subtle); font-size:.9rem; padding:0 .2rem; border-radius:var(--radius-sm); }
+  .cbx__opt .del:hover{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+  .cbx__add{ display:flex; align-items:center; gap:.4rem; padding:.45rem .5rem; margin-top:.15rem; border-top:1px solid var(--color-border);
+             font-size:.86rem; font-weight:700; color:var(--btn-primary-fg); background:var(--color-bg-tint); border-radius:var(--radius-sm); cursor:pointer; }
+  .cbx__add .plus{ display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:var(--radius-pill);
+                   background:var(--btn-primary-bg); border:1px solid var(--btn-primary-edge); font-size:.8rem; line-height:1; }
+  .cbx__empty{ padding:.5rem; font-size:.82rem; color:var(--color-fg-subtle); }
+
+  .toast{ position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(12px); opacity:0; pointer-events:none;
+          background:var(--color-fg-strong); color:#fff; font-size:.85rem; font-weight:700; padding:.55rem .9rem;
+          border-radius:var(--radius-pill); box-shadow:var(--shadow-lg); transition:.18s; z-index:80; }
+  .toast.is-on{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+  /* ---------- пояснительные блоки ---------- */
+  .note{ margin-top:.6rem; font-size:.85rem; color:var(--color-fg-muted); background:#fff; border:1px solid var(--color-border);
+         border-left:3px solid var(--btn-primary-edge); border-radius:var(--radius-md); padding:.6rem .75rem; }
+  .note b{ color:var(--color-fg-strong); }
+  .note--ask{ border-left-color:var(--color-accent); }
+  .note ul{ margin:.4rem 0 0; padding-left:1.1rem; }
+  .note li{ margin-bottom:.25rem; }
+  code{ font-family:ui-monospace,Menlo,monospace; font-size:.82em; background:var(--color-bg-muted); padding:1px 5px; border-radius:4px; }
+
+  .cards{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:.7rem; }
+  .card{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.85rem .95rem; }
+  .card h3{ margin:0 0 .35rem; font-size:var(--title-subsection); }
+  .card p{ margin:0; font-size:.85rem; color:var(--color-fg-muted); }
+  .card ol{ margin:.4rem 0 0; padding-left:1.1rem; font-size:.85rem; color:var(--color-fg-muted); }
+
+  table.dict{ width:100%; border-collapse:collapse; font-size:.85rem; background:#fff;
+              border:1px solid var(--color-border); border-radius:var(--radius-md); overflow:hidden; }
+  table.dict th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted);
+                 font-weight:700; padding:7px 10px; border-bottom:1px solid var(--color-border); background:var(--color-bg-muted); }
+  table.dict td{ padding:7px 10px; border-bottom:1px solid var(--color-border); vertical-align:top; }
+  table.dict tr:last-child td{ border-bottom:none; }
+  .chip{ display:inline-flex; align-items:center; gap:.25rem; padding:2px 8px; border-radius:var(--radius-pill);
+         background:var(--color-bg-muted); font-size:.78rem; margin:0 .2rem .2rem 0; }
+  .chip--own{ background:var(--color-ok-soft); color:var(--color-ok-fg); font-weight:700; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__in">
+    <span class="topnav__brand">Макет · Техкарта</span>
+    <a href="#now">1. Как сейчас</a>
+    <a href="#new">2. Как станет</a>
+    <a href="#cbx">3. Комбобокс: сценарии</a>
+    <a href="#dict">4. Где живёт список</a>
+    <a href="#open">5. Что решить</a>
+  </div>
+</nav>
+
+<div class="doc">
+
+  <section class="intro">
+    <h1>Техкарта: «Подтип» убираем, «Характеристика» становится пополняемым списком</h1>
+    <p>
+      Сегодня в строке материала техкарты два поля-соседа: <b>«Подтип»</b> (жёсткий выпадающий список из
+      <code>MATERIAL_SUBTYPES</code> — Молния, Кнопка, Кашкорсе, Дублерин, Синтепон…) и <b>«Характеристика полотна»</b>
+      (свободный текст, <code>fabricType</code>). Подтип нельзя дополнить из интерфейса — новое значение требует правки кода.
+    </p>
+    <p>
+      Предложение по вашей задаче: <b>поле «Подтип» удалить</b>, все его значения <b>перенести в список поля
+      «Характеристика»</b>, а само поле сделать комбобоксом — можно <b>выбрать из списка</b>, можно <b>набрать своё</b>;
+      набранное <b>сохраняется в список</b> и в следующий раз предлагается наравне с готовыми.
+    </p>
+    <div class="principles">
+      <div class="principle"><b>Одно поле вместо двух</b><span>«Роль материала» → «Характеристика». Больше ничего выбирать не нужно.</span></div>
+      <div class="principle"><b>Список привязан к роли</b><span>У «Фурнитуры» свой список (Молния, Кнопка…), у «Основного полотна» — свой (кулирка, футер…).</span></div>
+      <div class="principle"><b>Список растёт сам</b><span>Набрал «кашкорсе 2×2» → «+ Добавить» → значение в справочнике для всех техкарт.</span></div>
+      <div class="principle"><b>Старые техкарты живут</b><span>Заполненный <code>subtypeKey</code> при открытии переезжает в «Характеристику» его лейблом.</span></div>
+    </div>
+  </section>
+
+  <!-- ============================================================= 1 -->
+  <section class="sect" id="now">
+    <h2>1. Как сейчас</h2>
+    <p>
+      Строка материала в форме техкарты (<code>/admin/tech-cards</code> → блок «Материалы»). Роль <b>«Фурнитура»</b> —
+      здесь разница видна лучше всего: подтип «Молния» дотягивает свои под-поля «Тип» и «Длина».
+    </p>
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--bad">сейчас</span> два поля выбора + свободный текст <small>— и подтип нельзя пополнить из UI</small></p>
+        <div class="mrow">
+          <div class="mrow__head"><b>Материал 1</b> · строка спецификации</div>
+          <div class="mgrid">
+            <div class="fld"><label>Роль материала</label><div class="ctl ctl--sel">Фурнитура</div></div>
+            <div class="fld fld--kill">
+              <label>Подтип</label>
+              <div class="ctl ctl--sel ctl--kill">Молния</div>
+            </div>
+            <div class="fld"><label>Тип</label><div class="ctl">спираль</div></div>
+            <div class="fld"><label>Длина, см</label><div class="ctl ctl--num">60</div></div>
+            <div class="fld"><label>Характеристика полотна</label><div class="ctl ctl--ph">кулирка / двунитка / интерлок</div></div>
+            <div class="fld"><label>Правило цвета</label><div class="ctl ctl--sel">По расцветке</div></div>
+            <div class="fld"><label>Фиксированный цвет</label><div class="ctl ctl--off">— не нужно —</div></div>
+            <div class="fld"><label>Размер / характеристика</label><div class="ctl">5</div></div>
+            <div class="fld"><label>Материал</label><div class="ctl">металл</div></div>
+            <div class="fld"><label>Изображение материала</label><div class="imgbox">📎 файл не выбран</div></div>
+            <div class="fld"><label>&nbsp;</label><div class="trash">🗑</div></div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Что мешает.</b> «Подтип» — закрытый перечень в коде (<code>packages/shared/src/material-characteristics.ts</code>).
+          Нужного значения нет → менеджер либо выбирает «примерно похожее», либо оставляет пусто и пишет всё
+          в свободный текст. Рядом стоит поле «Характеристика полотна», которое и так свободное — получается два поля
+          про одно и то же.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================= 2 -->
+  <section class="sect" id="new">
+    <h2>2. Как станет</h2>
+    <p>
+      «Подтип» из формы исчезает. Остаётся одно поле <b>«Характеристика»</b> — комбобокс. Кликните по нему в макете:
+      он живой, список открывается, значения выбираются, новое можно добавить.
+    </p>
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--good">станет</span> одно поле «Характеристика» <span class="tag tag--new">кликабельно</span></p>
+        <div class="mrow">
+          <div class="mrow__head"><b>Материал 1</b> · строка спецификации</div>
+          <div class="mgrid">
+            <div class="fld">
+              <label>Роль материала</label>
+              <select class="cbx__input" id="roleA">
+                <option value="PACKAGING">Фурнитура</option>
+                <option value="MAIN_FABRIC">Основное полотно</option>
+                <option value="INTERLINING">Клеевые материалы</option>
+                <option value="FILLER">Наполнитель</option>
+                <option value="RIB">Рибана / кашкорсе</option>
+              </select>
+            </div>
+            <div class="fld">
+              <label>Характеристика <span class="tag tag--new">новое</span></label>
+              <div class="cbx" data-cbx data-role-from="roleA"></div>
+            </div>
+            <div class="fld"><label>Тип</label><div class="ctl">спираль</div></div>
+            <div class="fld"><label>Длина, см</label><div class="ctl ctl--num">60</div></div>
+            <div class="fld"><label>Правило цвета</label><div class="ctl ctl--sel">По расцветке</div></div>
+            <div class="fld"><label>Фиксированный цвет</label><div class="ctl ctl--off">— не нужно —</div></div>
+            <div class="fld"><label>Размер / характеристика</label><div class="ctl">5</div></div>
+            <div class="fld"><label>Материал</label><div class="ctl">металл</div></div>
+            <div class="fld"><label>Изображение материала</label><div class="imgbox">📎 файл не выбран</div></div>
+            <div class="fld"><label>&nbsp;</label><div class="trash">🗑</div></div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Что изменилось ровно.</b>
+          <ul>
+            <li>Поле «Подтип» удалено из формы.</li>
+            <li>Поле «Характеристика полотна» переименовано в <b>«Характеристика»</b> (оно теперь не только про полотно)
+              и превращено в комбобокс.</li>
+            <li>В списке комбобокса — значения бывшего «Подтипа» для выбранной роли <i>плюс</i> всё, что раньше
+              вводили руками в этой роли.</li>
+            <li>Смена «Роли материала» меняет список (как раньше меняла набор подтипов).</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================= 3 -->
+  <section class="sect" id="cbx">
+    <h2>3. Комбобокс: четыре состояния</h2>
+    <p>Все четыре — рабочие, можно потыкать. Пятый блок — как список выглядит после того, как в него добавили своё.</p>
+
+    <div class="shots">
+      <div class="shot">
+        <p class="shot__cap">3.1 Пусто → клик открывает весь список</p>
+        <div class="mrow"><div class="mgrid" style="grid-template-columns:1fr">
+          <div class="fld">
+            <label>Характеристика</label>
+            <div class="cbx" data-cbx data-role="PACKAGING"></div>
+          </div>
+        </div></div>
+        <div class="note">Клик по пустому полю показывает <b>весь</b> список роли — не нужно угадывать первую букву.</div>
+      </div>
+
+      <div class="shot">
+        <p class="shot__cap">3.2 Набор текста → список фильтруется</p>
+        <div class="mrow"><div class="mgrid" style="grid-template-columns:1fr">
+          <div class="fld">
+            <label>Характеристика</label>
+            <div class="cbx" data-cbx data-role="PACKAGING" data-preset="кн" data-open="1"></div>
+          </div>
+        </div></div>
+        <div class="note">Совпадение подсвечено. Регистр и лишние пробелы не важны.</div>
+      </div>
+
+      <div class="shot">
+        <p class="shot__cap">3.3 Совпадений нет → «+ Добавить»</p>
+        <div class="mrow"><div class="mgrid" style="grid-template-columns:1fr">
+          <div class="fld">
+            <label>Характеристика</label>
+            <div class="cbx" data-cbx data-role="PACKAGING" data-preset="карабин витой" data-open="1"></div>
+          </div>
+        </div></div>
+        <div class="note">
+          Жёлтая строка внизу — единственный способ пополнить список, и он же обычный ввод: нажали Enter или кликнули —
+          значение и записано в строку, и добавлено в справочник роли.
+        </div>
+      </div>
+
+      <div class="shot">
+        <p class="shot__cap">3.4 Уже добавленные — с меткой и удалением</p>
+        <div class="mrow"><div class="mgrid" style="grid-template-columns:1fr">
+          <div class="fld">
+            <label>Характеристика</label>
+            <div class="cbx" data-cbx data-role="MAIN_FABRIC" data-open="1"></div>
+          </div>
+        </div></div>
+        <div class="note">
+          Значения, добавленные пользователями, помечены <span class="chip chip--own">своё</span> и их можно убрать
+          из списка крестиком (в техкартах, где значение уже проставлено, текст остаётся — удаляется только подсказка).
+        </div>
+      </div>
+    </div>
+
+    <div class="note note--ask" style="margin-top:1rem">
+      <b>Клавиатура.</b> ↑/↓ — по списку, Enter — выбрать подсвеченное (или добавить новое, если совпадений нет),
+      Esc — закрыть, Tab — принять текст как есть. Значение, набранное и не подтверждённое через «+ Добавить»,
+      всё равно сохраняется в строку техкарты — <i>вопрос ниже: молча пополнять список или только по кнопке.</i>
+    </div>
+  </section>
+
+  <!-- ============================================================= 4 -->
+  <section class="sect" id="dict">
+    <h2>4. Где живёт список</h2>
+    <p>
+      Список — это справочник, общий для всех техкарт тенанта, разложенный по ролям материала. Стартовое наполнение —
+      бывшие подтипы; дальше он растёт от менеджеров.
+    </p>
+    <table class="dict">
+      <thead><tr><th style="width:210px">Роль материала</th><th>Значения списка</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>Фурнитура</b></td>
+          <td>
+            <span class="chip">Молния</span><span class="chip">Кнопка</span><span class="chip">Люверс</span>
+            <span class="chip">Фастекс</span><span class="chip">Фиксатор</span><span class="chip">Кольцо</span>
+            <span class="chip">Полукольцо</span><span class="chip">Концевик</span><span class="chip">Стропа</span>
+            <span class="chip">Лента</span><span class="chip">Кант</span><span class="chip">Резинка</span>
+            <span class="chip">Шляпная резинка</span><span class="chip">Шнур</span><span class="chip">Подвяз</span>
+            <span class="chip">Вязаный воротник</span><span class="chip">Пуговица</span>
+            <span class="chip chip--own">карабин витой</span>
+          </td>
+        </tr>
+        <tr>
+          <td><b>Основное полотно</b></td>
+          <td>
+            <span class="chip">Основное полотно</span>
+            <span class="chip chip--own">кулирка</span><span class="chip chip--own">футер 3-нитка</span>
+            <span class="chip chip--own">интерлок</span><span class="chip chip--own">двунитка</span>
+          </td>
+        </tr>
+        <tr>
+          <td><b>Клеевые материалы</b></td>
+          <td><span class="chip">Дублерин</span><span class="chip">Флизелин</span><span class="chip">Паутинка</span>
+              <span class="chip">Клеевая кромка</span><span class="chip">Бортовка</span></td>
+        </tr>
+        <tr>
+          <td><b>Наполнитель</b></td>
+          <td><span class="chip">Синтепон</span><span class="chip">Искусственный пух</span></td>
+        </tr>
+        <tr>
+          <td><b>Рибана / кашкорсе</b></td>
+          <td><span class="chip">Рибана</span><span class="chip">Кашкорсе</span><span class="chip chip--own">кашкорсе 2×2</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="cards" style="margin-top:1rem">
+      <div class="card">
+        <h3>Что под капотом</h3>
+        <p>Новая таблица-справочник (роль + значение + кто/когда добавил) в БД тенанта. Готовые значения —
+          сид из <code>MATERIAL_SUBTYPES</code>, чтобы список не был пустым на старте.</p>
+      </div>
+      <div class="card">
+        <h3>Дубли</h3>
+        <p>Сравнение без регистра и лишних пробелов: «Молния» и «молния » — одно значение,
+          второй раз в список не попадёт.</p>
+      </div>
+      <div class="card">
+        <h3>Старые техкарты</h3>
+        <p>Если в строке лежит <code>subtypeKey</code>, при открытии он показывается в «Характеристике»
+          своим лейблом — ничего не теряется и не требует ручной правки.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================= 5 -->
+  <section class="sect" id="open">
+    <h2>5. Что нужно решить до кода</h2>
+    <p>Три развилки — от ответов зависит объём работы. Ответьте прямо в чате, макет поправлю.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>① Под-поля бывшего подтипа</h3>
+        <p>Подтип не только назывался — он <b>включал поля</b>: «Молния» → Тип, Длина; «Пуговица» → Тип, Материал,
+          Размер, Кол-во проколов; полотно на «кг» → требовало Плотность и Ширину рулона.</p>
+        <ol>
+          <li><b>Оставить связь скрытой</b> — выбрали из списка знакомое значение, под-поля появились как раньше;
+            набрали своё — под-полей нет. <i>Минимальная правка, ничего не ломается.</i></li>
+          <li><b>Убрать совсем</b> — под-поля показываются всегда, независимо от значения (или их просто нет).
+            <i>Проще в голове, но теряется правило «для кг обязательны плотность и ширина рулона».</i></li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>② Когда значение попадает в список</h3>
+        <ol>
+          <li><b>Только по «+ Добавить»</b> — осознанное действие, список чище.</li>
+          <li><b>Автоматически при сохранении техкарты</b> — ноль лишних кликов, но список быстро зарастёт
+            опечатками.</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>③ Кто может пополнять и чистить</h3>
+        <ol>
+          <li>Любой, кто редактирует техкарту (быстро, но без контроля).</li>
+          <li>Пополнять — все, удалять/переименовывать — только через страницу справочника в админке.</li>
+        </ol>
+        <p style="margin-top:.4rem">Нужна ли <b>отдельная страница справочника</b> в админке (как у остальных
+          справочников, с архивом) — или хватит правки прямо из комбобокса?</p>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* --------------------------------------------------------------------
+   Справочник: сид = бывшие подтипы (own:false) + добавленные (own:true)
+   -------------------------------------------------------------------- */
+const DICT = {
+  PACKAGING: [
+    'Молния','Кнопка','Люверс','Фастекс','Фиксатор','Кольцо','Полукольцо','Концевик',
+    'Стропа','Лента','Кант','Резинка','Шляпная резинка','Шнур','Подвяз','Вязаный воротник','Пуговица'
+  ].map(v => ({ v, own:false })),
+  MAIN_FABRIC: [
+    { v:'Основное полотно', own:false },
+    { v:'кулирка', own:true }, { v:'футер 3-нитка', own:true },
+    { v:'интерлок', own:true }, { v:'двунитка', own:true },
+  ],
+  INTERLINING: ['Дублерин','Флизелин','Паутинка','Клеевая кромка','Бортовка'].map(v => ({ v, own:false })),
+  FILLER: ['Синтепон','Искусственный пух'].map(v => ({ v, own:false })),
+  RIB: [{ v:'Рибана', own:false }, { v:'Кашкорсе', own:false }, { v:'кашкорсе 2×2', own:true }],
+};
+const norm = s => s.trim().toLowerCase().replace(/\s+/g, ' ').replace(/ё/g, 'е');
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('is-on');
+  clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('is-on'), 2200);
+}
+
+/* --------------------------------------------------------------------
+   Комбобокс
+   -------------------------------------------------------------------- */
+class Combo {
+  constructor(host){
+    this.host = host;
+    this.roleSelectId = host.dataset.roleFrom || null;
+    this.role = host.dataset.role || (this.roleSelectId
+      ? document.getElementById(this.roleSelectId).value : 'PACKAGING');
+    this.value = host.dataset.preset || '';
+    this.active = 0;
+    this.host.innerHTML = `
+      <input class="cbx__input" type="text" placeholder="выберите или введите" value="${this.value}" />
+      <span class="cbx__caret">⌄</span>
+      <div class="cbx__pop" hidden></div>`;
+    this.input = host.querySelector('.cbx__input');
+    this.pop = host.querySelector('.cbx__pop');
+
+    this.input.addEventListener('focus', () => this.open());
+    this.input.addEventListener('click', () => this.open());
+    this.input.addEventListener('input', () => { this.value = this.input.value; this.active = 0; this.open(); });
+    this.input.addEventListener('keydown', e => this.onKey(e));
+    this.pop.addEventListener('mousedown', e => e.preventDefault());
+    document.addEventListener('click', e => { if (!host.contains(e.target)) this.close(); });
+
+    if (this.roleSelectId){
+      document.getElementById(this.roleSelectId).addEventListener('change', e => {
+        this.role = e.target.value; this.value = ''; this.input.value = '';
+        toast('Роль сменилась — список характеристик другой');
+        this.render();
+      });
+    }
+    if (host.dataset.open) this.open(); else this.render();
+  }
+  list(){
+    const q = norm(this.value);
+    const all = DICT[this.role] || [];
+    return q ? all.filter(o => norm(o.v).includes(q)) : all.slice();
+  }
+  canAdd(){
+    const q = norm(this.value);
+    return q.length > 0 && !(DICT[this.role] || []).some(o => norm(o.v) === q);
+  }
+  open(){ this.pop.hidden = false; this.render(); }
+  close(){ this.pop.hidden = true; }
+  render(){
+    const items = this.list();
+    let html = '';
+    if (items.length){
+      html += `<div class="cbx__grp">Характеристики роли</div>`;
+      const q = norm(this.value);
+      items.forEach((o, i) => {
+        let label = o.v;
+        if (q){
+          const idx = norm(o.v).indexOf(q);
+          if (idx >= 0) label = o.v.slice(0, idx) + '<span class="mark">' + o.v.slice(idx, idx + q.length) + '</span>' + o.v.slice(idx + q.length);
+        }
+        html += `<div class="cbx__opt${i === this.active ? ' is-active' : ''}" data-i="${i}">
+                   <span>${label}</span>
+                   ${o.own ? '<span class="own">своё</span><span class="del" data-del="' + i + '" title="Убрать из списка">✕</span>' : ''}
+                 </div>`;
+      });
+    } else if (!this.canAdd()){
+      html += `<div class="cbx__empty">Список пуст</div>`;
+    }
+    if (this.canAdd()){
+      html += `<div class="cbx__add" data-add>
+                 <span class="plus">+</span> Добавить «${this.value.trim()}» в список
+               </div>`;
+    }
+    this.pop.innerHTML = html;
+    this.pop.querySelectorAll('.cbx__opt').forEach(el => {
+      el.addEventListener('click', ev => {
+        if (ev.target.dataset.del !== undefined){ this.remove(+ev.target.dataset.del); ev.stopPropagation(); return; }
+        this.pick(items[+el.dataset.i].v);
+      });
+    });
+    const add = this.pop.querySelector('[data-add]');
+    if (add) add.addEventListener('click', () => this.add());
+  }
+  pick(v){ this.value = v; this.input.value = v; this.close(); }
+  add(){
+    const v = this.value.trim();
+    if (!v) return;
+    (DICT[this.role] = DICT[this.role] || []).push({ v, own:true });
+    toast(`«${v}» добавлено в список — теперь предлагается во всех техкартах`);
+    this.pick(v);
+    document.querySelectorAll('[data-cbx]').forEach(h => { if (h !== this.host && h._c && h._c.role === this.role && !h._c.pop.hidden) h._c.render(); });
+  }
+  remove(i){
+    const items = this.list();
+    const target = items[i];
+    const all = DICT[this.role];
+    const idx = all.findIndex(o => norm(o.v) === norm(target.v));
+    if (idx >= 0) all.splice(idx, 1);
+    toast(`«${target.v}» убрано из списка`);
+    this.render();
+  }
+  onKey(e){
+    const items = this.list();
+    if (e.key === 'ArrowDown'){ e.preventDefault(); this.active = Math.min(this.active + 1, Math.max(items.length - 1, 0)); this.open(); }
+    else if (e.key === 'ArrowUp'){ e.preventDefault(); this.active = Math.max(this.active - 1, 0); this.open(); }
+    else if (e.key === 'Enter'){
+      e.preventDefault();
+      if (items.length) this.pick(items[this.active].v);
+      else if (this.canAdd()) this.add();
+    }
+    else if (e.key === 'Escape'){ this.close(); }
+  }
+}
+document.querySelectorAll('[data-cbx]').forEach(h => { h._c = new Combo(h); });
+</script>
+</body>
+</html>

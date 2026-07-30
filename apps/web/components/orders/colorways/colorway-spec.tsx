@@ -39,8 +39,12 @@ import {
 import {
   getMaterialCharacteristic,
   getMaterialSubtype,
-  getMaterialSubtypesByGroup,
 } from '@sewing/shared/material-characteristics';
+import {
+  characteristicValueFromSubtypeKey,
+  resolveSubtypeKeyByCharacteristic,
+} from '@sewing/shared/material-characteristic-options';
+import { CharacteristicCombobox } from '@/components/materials/characteristic-combobox';
 
 import {
   applyTechCardParamToAllAction,
@@ -153,6 +157,11 @@ export function ColorwaySpec({
   // план операций пересобираются, маршрут и паспорта — нет, потребности
   // пересчитываются best-effort, событие уходит в журнал правок.
   const amendment = params.editMode === 'AMENDMENT';
+  // Есть ли в группе строка, у которой расход и закупка в разных единицах.
+  // От этого зависит, показывать таблицу в один блок или в два.
+  const hasSplitLines = (group?.lines ?? []).some(
+    (l) => (l.normUnit ?? '').trim() !== '',
+  );
 
   function apply(r: TechCardParamsActionResult): void {
     if (!r.ok) {
@@ -290,20 +299,44 @@ export function ColorwaySpec({
       <div className="cws-tablewrap">
         <table className="cws-table">
           <thead>
+            {/* Шапка раздваивается ТОЛЬКО когда в группе есть строка, у которой
+                единица нормы отличается от закупочной. Иначе оба блока
+                показывали бы одно и то же число, а лишняя пара колонок —
+                это шум для всех, у кого расход и закупка в одной единице. */}
+            {hasSplitLines && (
+              <tr>
+                <th colSpan={2}></th>
+                <th className="cws-grp cws-grp--norm" colSpan={3}>
+                  Расход — единица техкарты
+                </th>
+                <th></th>
+                <th className="cws-grp cws-grp--buy" colSpan={2}>
+                  Закупка
+                </th>
+                <th></th>
+              </tr>
+            )}
             <tr>
               <th>Материал</th>
               <th>Параметры</th>
               <th className="num">Норма/шт</th>
               <th>Ед.</th>
               <th>Цвет</th>
-              <th className="num">Итого</th>
+              <th className="num">{hasSplitLines ? 'Расход' : 'Итого'}</th>
+              {hasSplitLines && (
+                <>
+                  <th aria-label="Пересчёт"></th>
+                  <th className="cws-zone--buy">Ед.</th>
+                  <th className="num cws-zone--buy">К закупке</th>
+                </>
+              )}
               <th aria-label="Действия"></th>
             </tr>
           </thead>
           <tbody>
             {group.lines.length === 0 && (
               <tr>
-                <td colSpan={7} className="cws-muted">
+                <td colSpan={hasSplitLines ? 10 : 7} className="cws-muted">
                   Пока пусто: выберите техкарту расцветки — материалы придут из
                   шаблона, — или добавьте материал вручную.
                 </td>
@@ -326,9 +359,14 @@ export function ColorwaySpec({
                   value: (l.characteristics ?? {})[key],
                 }))
                 .filter((c) => c.value !== undefined && c.value !== '');
-              const subtypeLabel = l.subtypeKey
-                ? (getMaterialSubtype(l.subtypeKey)?.label ?? l.subtypeKey)
-                : null;
+              // Чип-«шапка» строки — значение поля «Характеристика» (то, что
+              // заменило подтип). У старых строк своего значения нет —
+              // показываем лейбл подтипа, чтобы чип не пропал.
+              const characteristicChip =
+                (l.fabricType ?? '').trim() ||
+                (l.subtypeKey
+                  ? (getMaterialSubtype(l.subtypeKey)?.label ?? l.subtypeKey)
+                  : null);
               return (
                 <Fragment
                   key={`${l.id}:${l.name}:${l.qtyPerUnit}:${l.unit}:${l.colorText ?? ''}:${l.densityGsm ?? ''}:${l.subtypeKey ?? ''}:${JSON.stringify(l.characteristics ?? {})}`}
@@ -401,9 +439,9 @@ export function ColorwaySpec({
                       onClick={() => setOpenLine(open ? null : l.id)}
                       title="Открыть параметры материала"
                     >
-                      {subtypeLabel && (
+                      {characteristicChip && (
                         <span className="cws-chip cws-chip--subtype">
-                          {subtypeLabel}
+                          {characteristicChip}
                         </span>
                       )}
                       {chips.map((c) => (
@@ -419,7 +457,7 @@ export function ColorwaySpec({
                           {c.def?.unit ? ` ${c.def.unit}` : ''}
                         </span>
                       ))}
-                      {chips.length === 0 && !subtypeLabel && (
+                      {chips.length === 0 && !characteristicChip && (
                         <span className="cws-chip cws-chip--empty">
                           + параметр
                         </span>
@@ -459,15 +497,29 @@ export function ColorwaySpec({
                     )}
                     </span>
                   </td>
+                  {/* Единица РАСХОДА. У расщеплённой строки это `normUnit` и
+                      правится она отдельно от закупочной; у обычной — прежнее
+                      поле `unit`, как и было. */}
                   <td>
                     <input
                       className="cws-cell cws-cell--sm"
-                      defaultValue={l.unit}
+                      defaultValue={l.normUnit ?? l.unit}
                       disabled={ro || pending || unitBound}
-                      title={unitBound ? boundTitle : undefined}
+                      title={
+                        unitBound
+                          ? boundTitle
+                          : l.normUnit
+                            ? 'Единица нормы расхода. Закупочная единица — в блоке «Закупка».'
+                            : undefined
+                      }
                       onBlur={(e) => {
                         const next = e.target.value.trim();
-                        if (next && next !== l.unit) saveLine(l.id, { unit: next });
+                        if (!next) return;
+                        if (l.normUnit) {
+                          if (next !== l.normUnit) saveLine(l.id, { normUnit: next });
+                        } else if (next !== l.unit) {
+                          saveLine(l.id, { unit: next });
+                        }
                       }}
                     />
                   </td>
@@ -484,9 +536,35 @@ export function ColorwaySpec({
                       }}
                     />
                   </td>
+                  {/* Расход — в единице НОРМЫ; у нерасщеплённой строки это
+                      прежнее «итого» в единице закупки, поле в поле. */}
                   <td className="num cws-total">
-                    {l.totalQty} {l.unit}
+                    {l.normUnit ? (l.totalNorm ?? '—') : l.totalQty}{' '}
+                    {l.normUnit ?? l.unit}
                   </td>
+                  {hasSplitLines && (
+                    <>
+                      <td className="num cws-arrow">{l.normUnit ? '→' : ''}</td>
+                      <td className="cws-zone--buy">
+                        {l.normUnit ? l.unit : ''}
+                      </td>
+                      <td className="num cws-total cws-zone--buy">
+                        {!l.normUnit ? (
+                          ''
+                        ) : l.purchaseProblem ? (
+                          /* Прочерк с объяснением, а не тихий ноль: ноль
+                             читается как «материал не нужен». */
+                          <span className="cws-nocalc" title={l.purchaseProblem}>
+                            —
+                          </span>
+                        ) : (
+                          <span title={l.purchaseFormula ?? undefined}>
+                            {l.totalQty} {l.unit}
+                          </span>
+                        )}
+                      </td>
+                    </>
+                  )}
                   <td className="num">
                     {!ro && (
                       <button
@@ -507,7 +585,7 @@ export function ColorwaySpec({
                 </tr>
                 {open && (
                   <tr className="cws-exp">
-                    <td colSpan={7}>
+                    <td colSpan={hasSplitLines ? 10 : 7}>
                       <LineParams
                         line={l}
                         readOnly={ro}
@@ -848,10 +926,19 @@ function LineParams({
     >,
   ) => void;
 }) {
-  const subtypes = getMaterialSubtypesByGroup(line.materialRole ?? '');
   const keys = characteristicKeysForLine(line);
   const values = line.characteristics ?? {};
   const disabled = readOnly || pending;
+  // Поле «Характеристика» вместо убранного «Подтипа» (решение пользователя
+  // 29.07.2026): выбор из пополняемого списка либо свой текст. Подтип не
+  // выбирается, а выводится из значения — и уходит тем же патчем, потому что
+  // он задаёт набор характеристик ниже.
+  const role = line.materialRole ?? '';
+  // Строки, заполненные до этой правки, держат значение в `subtypeKey` —
+  // показываем его лейбл, иначе поле выглядело бы пустым.
+  const characteristicValue =
+    (line.fabricType ?? '') || characteristicValueFromSubtypeKey(line.subtypeKey);
+  const characteristicBound = line.boundFields.includes('core:fabricType');
 
   return (
     <div className="cws-params-panel">
@@ -863,30 +950,33 @@ function LineParams({
       </div>
 
       <div className="cws-fields">
-        {subtypes.length > 0 && (
-          <label className="cws-field">
-            <span>Подтип</span>
-            <select
-              className="cws-cell"
-              value={line.subtypeKey ?? ''}
-              disabled={disabled}
-              onChange={(e) => onSave({ subtypeKey: e.target.value || null })}
-            >
-              <option value="">— не задан —</option>
-              {subtypes.map((s) => (
-                <option key={s.subtypeKey} value={s.subtypeKey}>
-                  {s.label}
-                </option>
-              ))}
-              {line.subtypeKey &&
-                !subtypes.some((s) => s.subtypeKey === line.subtypeKey) && (
-                  <option value={line.subtypeKey}>
-                    {line.subtypeKey} (legacy)
-                  </option>
-                )}
-            </select>
-          </label>
-        )}
+        <label className="cws-field">
+          <span>
+            Характеристика
+            {characteristicBound ? ' 🔒' : ''}
+          </span>
+          <CharacteristicCombobox
+            roleKey={role}
+            value={characteristicValue}
+            disabled={disabled || characteristicBound}
+            placeholder={characteristicBound ? '—' : 'выберите или введите'}
+            onCommit={(next) => {
+              const trimmed = next.trim();
+              if (trimmed === characteristicValue.trim()) return;
+              const nextSubtype = resolveSubtypeKeyByCharacteristic(
+                role,
+                trimmed,
+              );
+              // Подтип шлём вместе со значением: он задаёт набор
+              // характеристик, и бэкенд по нему уносит значения, которых у
+              // нового набора нет.
+              onSave({
+                fabricType: trimmed === '' ? null : trimmed,
+                subtypeKey: nextSubtype,
+              });
+            }}
+          />
+        </label>
 
         {keys.map((key) => {
           const def = getMaterialCharacteristic(key);
@@ -1075,6 +1165,14 @@ function SpecStyles() {
 .cws-table tr:last-child td { border-bottom:0; }
 .cws-table td.num { text-align:right; white-space:nowrap; }
 .cws-total { font-variant-numeric:tabular-nums; color:var(--color-fg-strong); font-weight:600; }
+/* Сдвоенная шапка: расход слева, закупка справа. Появляется только у групп,
+   где единица нормы отличается от закупочной. */
+.cws-table th.cws-grp { text-align:center; font-size:10px; border-bottom:0; padding-bottom:3px; }
+.cws-table th.cws-grp--norm { background:var(--color-ok-soft,var(--color-bg-tint)); color:var(--color-ok-fg,var(--color-fg-strong)); }
+.cws-table th.cws-grp--buy { background:var(--color-accent-soft,var(--color-bg-muted)); color:var(--color-accent-fg,var(--color-fg-strong)); }
+.cws-table td.cws-zone--buy, .cws-table th.cws-zone--buy { background:color-mix(in srgb, var(--color-accent-soft,var(--color-bg-muted)) 34%, transparent); }
+.cws-arrow { color:var(--color-accent-fg,var(--color-fg-muted)); font-weight:700; }
+.cws-nocalc { color:var(--color-fg-subtle); cursor:help; }
 .cws-cell { width:100%; min-width:70px; height:var(--cws-h); padding:0 8px; border:1px solid var(--color-border-strong);
   border-radius:var(--cws-r); font:inherit; font-size:13px; background:var(--color-bg-card); color:var(--color-fg); }
 select.cws-cell { padding-right:22px; }

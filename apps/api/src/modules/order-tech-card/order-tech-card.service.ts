@@ -28,6 +28,10 @@ import {
   MATERIAL_CHARACTERISTICS,
 } from '@sewing/shared/material-characteristics';
 import {
+  computeNormPurchase,
+  needsPurchaseConversion,
+} from '@sewing/shared/norm-purchase';
+import {
   derivePatternNormPerUnit,
   describePatternNormSource,
   matchPatternNormSources,
@@ -177,11 +181,14 @@ export class OrderTechCardService {
           orderVariantId: true,
           name: true,
           unit: true,
+          normUnit: true,
           qtyPerUnit: true,
           totalQty: true,
           materialRole: true,
           fabricType: true,
           densityGsm: true,
+          // Нужны для пересчёта расхода в закупочную единицу.
+          plannedWidthCm: true,
           resolvedColorText: true,
           selectedColorText: true,
           isManual: true,
@@ -286,17 +293,38 @@ export class OrderTechCardService {
         .filter((p) => vk(p.orderVariantId) === gk)
         .map((p) => this.toParamDto(p, rows));
 
+      // Тираж группы — им средневзвешенная норма разворачивается в расход, а
+      // расход пересчитывается в закупочную единицу.
+      const groupQty = sizePlan.reduce((s, p) => s + p.qtyPlan, 0);
+
       const lines: OrderTechCardLineDto[] = rows.map((r) => {
         const normSource = normByLine.get(r.id) ?? null;
         const derived = normSource
           ? derivePatternNormPerUnit(normSource, sizePlan)
           : null;
+        // Строка развела единицы — показываем обе стороны: расход в единице
+        // нормы и количество к закупке. Иначе блок закупки просто повторил бы
+        // расход, и его на экране не будет.
+        const split = needsPurchaseConversion(r.normUnit, r.unit)
+          ? computeNormPurchase({
+              normPerUnit: Number(r.qtyPerUnit.toString()),
+              normUnit: r.normUnit,
+              qty: groupQty,
+              purchaseUnit: r.unit,
+              widthCm: r.plannedWidthCm,
+              densityGsm: r.densityGsm,
+            })
+          : null;
         return {
           id: r.id,
           name: r.name,
           unit: r.unit,
+          normUnit: r.normUnit,
           qtyPerUnit: r.qtyPerUnit.toString(),
           totalQty: r.totalQty.toString(),
+          totalNorm: split ? String(split.totalNorm) : null,
+          purchaseProblem: split && !split.ok ? split.message : null,
+          purchaseFormula: split && split.ok ? split.formula || null : null,
           materialRole: r.materialRole,
           fabricType: r.fabricType,
           densityGsm: r.densityGsm,
@@ -640,6 +668,10 @@ export class OrderTechCardService {
         sortOrder: (last?.sortOrder ?? 0) + 10,
         name: dto.name,
         unit: dto.unit,
+        // Ручная строка — частый случай расщепления: норму вводят в метрах, а
+        // закупают на вес. Тираж посчитает ближайший resync через
+        // `computeLineTotalQty`, поэтому единица нормы нужна уже здесь.
+        normUnit: dto.normUnit?.trim() || null,
         qtyPerUnit: new Prisma.Decimal(dto.qtyPerUnit),
         totalQty: new Prisma.Decimal(0),
         note: dto.note ?? null,
@@ -706,6 +738,7 @@ export class OrderTechCardService {
         id: true,
         name: true,
         unit: true,
+        normUnit: true,
         qtyPerUnit: true,
         note: true,
         materialRole: true,
@@ -747,6 +780,9 @@ export class OrderTechCardService {
       assertCellFree('Норма расхода', 'core:qtyPerUnit');
     }
     if (dto.densityGsm !== undefined) assertCellFree('Плотность', 'char:density');
+    if (dto.fabricType !== undefined) {
+      assertCellFree('Характеристика', 'core:fabricType');
+    }
 
     // Правку плотности кладём В ОБЕ стороны зеркала (JSON главнее legacy при
     // merge в `normalizeMaterialLineCells` — одна сторона тихо откатилась бы).
@@ -846,13 +882,20 @@ export class OrderTechCardService {
       }
     }
 
+    // Характеристика строки — то самое поле, которое заменило «Подтип».
+    // Приходит вместе с выведенным `subtypeKey` одним патчем.
+    const nextFabricType =
+      dto.fabricType === undefined
+        ? row.fabricType
+        : dto.fabricType?.trim() || null;
+
     const cells = normalizeMaterialLineCells({
       name: dto.name ?? row.name,
       unit: dto.unit ?? row.unit,
       qtyPerUnit: dto.qtyPerUnit ?? row.qtyPerUnit.toString(),
       note: row.note,
       materialRole: row.materialRole,
-      fabricType: row.fabricType,
+      fabricType: nextFabricType,
       densityGsm: legacy.densityGsm,
       plannedWidthCm: legacy.plannedWidthCm,
       hardwareSizeText: legacy.hardwareSizeText,
@@ -896,6 +939,12 @@ export class OrderTechCardService {
       data: {
         name: cells.name,
         unit: cells.unit,
+        // Единица нормы идёт МИМО `MaterialLineCells`: параметризовать её
+        // (`core:normUnit`) никто не просил, а протаскивание в cells потянуло
+        // бы за собой targets, clearCell и зеркало характеристик.
+        ...(dto.normUnit !== undefined
+          ? { normUnit: dto.normUnit?.trim() || null }
+          : {}),
         qtyPerUnit: new Prisma.Decimal(cells.qtyPerUnit),
         densityGsm: cells.densityGsm,
         plannedWidthCm: cells.plannedWidthCm,
@@ -904,6 +953,7 @@ export class OrderTechCardService {
         characteristics:
           (cells.characteristics as Prisma.InputJsonValue | null) ??
           Prisma.DbNull,
+        fabricType: cells.fabricType,
         subtypeKey: nextSubtypeKey,
         ...(qtyEdited ? { qtySource: 'ORDER' } : {}),
         ...colorData,
@@ -926,6 +976,11 @@ export class OrderTechCardService {
     }
     if (dto.densityGsm !== undefined && cells.densityGsm !== row.densityGsm) {
       changed.push(`плотность ${row.densityGsm ?? '—'} → ${cells.densityGsm ?? '—'}`);
+    }
+    if (dto.fabricType !== undefined && cells.fabricType !== row.fabricType) {
+      changed.push(
+        `характеристика ${row.fabricType ?? '—'} → ${cells.fabricType ?? '—'}`,
+      );
     }
     if (dto.subtypeKey !== undefined && nextSubtypeKey !== row.subtypeKey) {
       const label = nextSubtypeKey

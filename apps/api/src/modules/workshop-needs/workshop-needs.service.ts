@@ -2734,10 +2734,18 @@ export class WorkshopNeedsService {
         const w = `Не указана ширина материала для пересчёта погонных метров в м². Заполните ширину в техкарте по строке с ролью «${head.roleKey}».`;
         noteParts.push(w);
         warnings.push(`«${head.labelSnapshot}»: ${w}`);
-        // Безопасно: создаём строку с calculatedQty = 0 в outputUnit,
-        // чтобы менеджер видел явную проблему, а не ложное число.
-        calculatedQty = new Prisma.Decimal(0);
-        unit = 'м²';
+        // Ноль «ради явной проблемы» проблему как раз и прятал: в списке
+        // видно 0, а не предупреждение, и строка выпадает из закупки.
+        // Показываем расход в погонных метрах — число настоящее, единица
+        // честная, причина в предупреждении.
+        calculatedQty = rawLinearM.toDecimalPlaces(
+          4,
+          Prisma.Decimal.ROUND_HALF_UP,
+        );
+        unit = 'м пог.';
+        noteParts.push(
+          'Пересчёт в м² невозможен — строка оставлена в погонных метрах.',
+        );
       } else {
         const areaM2 = rawLinearM.mul(widthCm).div(100);
         totalAreaM2 = areaM2.toDecimalPlaces(
@@ -2767,8 +2775,19 @@ export class WorkshopNeedsService {
           noteParts.push(d);
           warnings.push(`«${head.labelSnapshot}»: ${d}`);
         }
-        calculatedQty = new Prisma.Decimal(0);
-        unit = 'кг';
+        // Пересчитать нечем — но ноль читается как «материал не нужен» и
+        // молча выпадает из закупки. Показываем РЕАЛЬНЫЙ расход в погонных
+        // метрах: число видно, единица честно говорит, что это не килограммы,
+        // а предупреждение выше называет недостающую характеристику. Так же
+        // поступает ветка неизвестной единицы ниже.
+        calculatedQty = rawLinearM.toDecimalPlaces(
+          4,
+          Prisma.Decimal.ROUND_HALF_UP,
+        );
+        unit = 'м пог.';
+        noteParts.push(
+          'Пересчёт в кг невозможен — строка оставлена в погонных метрах.',
+        );
       } else {
         const areaM2 = rawLinearM.mul(widthCm as number).div(100);
         totalAreaM2 = areaM2.toDecimalPlaces(

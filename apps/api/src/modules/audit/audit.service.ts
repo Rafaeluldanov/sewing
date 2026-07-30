@@ -607,7 +607,18 @@ export type AuditEntityType =
   | 'CONSTRUCTOR_TASK'
   | 'DISPLAY_SCREEN'
   | 'EQUIPMENT'
-  | 'PRINTER';
+  | 'PRINTER'
+  /**
+   * Значение справочника «Характеристика» строки материала техкарты
+   * (см. `apps/api/src/modules/material-characteristic-options/*`,
+   * `prisma/schema.prisma::MaterialCharacteristicOption`). События —
+   * `MATERIAL_CHARACTERISTIC_OPTION_CREATED` (менеджер пополнил список из
+   * комбобокса) и `MATERIAL_CHARACTERISTIC_OPTION_DELETED` (убрал своё
+   * значение из подсказок). `entityId` — `MaterialCharacteristicOption.id`.
+   * Значения в самих техкартах при удалении не меняются — справочник
+   * подсказывает, а не владеет значением строки.
+   */
+  | 'MATERIAL_CHARACTERISTIC_OPTION';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

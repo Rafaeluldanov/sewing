@@ -230,10 +230,31 @@ export interface OrderTechCardLineDto {
   /** `OrderMaterialRequirement.id`. */
   id: string;
   name: string;
+  /** Единица ЗАКУПКИ («кг» у трикотажа) — в ней же считается `totalQty`. */
   unit: string;
-  /** Decimal как строка. */
+  /**
+   * Единица НОРМЫ, если строка развела расход и закупку («м пог.» при закупке
+   * в «кг»). `null` — не расщеплена: норма и закупка в одной единице `unit`,
+   * и экран показывает один блок вместо двух.
+   */
+  normUnit: string | null;
+  /** Decimal как строка. Норма на изделие в `normUnit ?? unit`. */
   qtyPerUnit: string;
+  /** Количество К ЗАКУПКЕ в `unit`. */
   totalQty: string;
+  /**
+   * Расход на весь тираж в единице НОРМЫ (`qtyPerUnit × тираж`). Заполнен
+   * только у расщеплённых строк — у остальных совпал бы с `totalQty`.
+   */
+  totalNorm: string | null;
+  /**
+   * Почему пересчёт в закупочную единицу не сделан («не указана ширина
+   * рулона»). `null` — либо пересчёт удался, либо он не требуется.
+   * Показывается вместо числа: молчаливый ноль читается как «не нужно».
+   */
+  purchaseProblem: string | null;
+  /** Цепочка пересчёта для примечания: «823.2 м пог. × 185 см / 100 × …». */
+  purchaseFormula: string | null;
   materialRole: string | null;
   fabricType: string | null;
   colorText: string | null;
@@ -275,6 +296,8 @@ export const CreateOrderTechCardLineSchema = z.object({
   orderVariantId: z.string().min(1).nullish(),
   name: z.string().trim().min(1, 'Укажите название материала').max(200),
   unit: z.string().trim().min(1, 'Укажите единицу измерения').max(20),
+  /** Единица нормы, если она отличается от закупочной. Пусто — не расщепляем. */
+  normUnit: z.string().trim().max(20).nullish(),
   qtyPerUnit: z
     .string()
     .trim()
@@ -311,6 +334,15 @@ export const UpdateOrderTechCardLineSchema = z
   .object({
     name: z.string().trim().min(1, 'Название не может быть пустым').max(200).optional(),
     unit: z.string().trim().min(1, 'Единица не может быть пустой').max(20).optional(),
+    /**
+     * Единица НОРМЫ. Пустая строка / `null` — схлопнуть расщепление обратно:
+     * норма и закупка снова в одной единице `unit`.
+     *
+     * Правка одной только этой единицы норму не меняет, поэтому источник
+     * нормы (`qtySource`) она НЕ понижает до `ORDER` — иначе строка перестала
+     * бы освежаться из номенклатуры, хотя число осталось прежним.
+     */
+    normUnit: z.string().trim().max(20).nullish(),
     qtyPerUnit: z
       .string()
       .trim()
@@ -321,9 +353,20 @@ export const UpdateOrderTechCardLineSchema = z
     colorText: z.string().trim().max(120).nullish(),
     densityGsm: z.number().int().positive().max(100_000).nullish(),
     /**
+     * Характеристика материала («кулирка», «Молния», «кашкорсе 2×2») — то,
+     * что менеджер выбирает в комбобоксе вместо убранного поля «Подтип»
+     * (решение пользователя 29.07.2026). `null`/пусто — снять значение.
+     */
+    fabricType: z.string().trim().max(120).nullish(),
+    /**
      * Подтип материала. Он задаёт НАБОР характеристик, поэтому смена подтипа
      * — событие того же уровня, что смена роли: сервис чистит значения,
      * которых у нового подтипа нет. `null` — снять подтип.
+     *
+     * Руками больше не выбирается: UI выводит его из `fabricType` (значение
+     * из списка совпало с лейблом подтипа → его ключ) и присылает вместе с
+     * ним. Поле остаётся в контракте, потому что снимок, cut-readiness и
+     * costing продолжают читать `subtypeKey`.
      */
     subtypeKey: z.string().trim().max(60).nullish(),
     /**
@@ -344,6 +387,7 @@ export const UpdateOrderTechCardLineSchema = z
       v.qtyPerUnit === undefined &&
       v.colorText === undefined &&
       v.densityGsm === undefined &&
+      v.fabricType === undefined &&
       v.subtypeKey === undefined &&
       v.characteristics === undefined
     ) {

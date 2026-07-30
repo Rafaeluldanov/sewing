@@ -104,6 +104,18 @@ const SnapshotMaterialRequirementSchema = z.object({
   sortOrder: z.number().int(),
   name: z.string(),
   unit: z.string(),
+  /**
+   * Единица нормы, если строка развела расход и закупку.
+   *
+   * `nullish`, а не `nullable`: снимки неактивных вариантов уже лежат в БД без
+   * этого поля, и обязательное поле уронило бы их разбор в `SNAPSHOT_INVALID`.
+   * Потерять поле при восстановлении нельзя — строка «схлопнется» обратно, и
+   * ближайший пересчёт положит длину в килограммовую ячейку.
+   */
+  normUnit: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
   qtyPerUnit: decimalString,
   totalQty: decimalString,
   note: z.string().nullable(),

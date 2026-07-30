@@ -20487,3 +20487,176 @@ select.off-route__select {
   font-size: 0.88rem;
   color: var(--muted);
 }
+
+/* -------------------------------------------------------------
+   Комбобокс «Характеристика» строки материала
+   (components/materials/characteristic-combobox.tsx).
+
+   Поле «Подтип» из формы техкарты убрано, его значения переехали в
+   список «Характеристики»: можно выбрать из списка, можно набрать
+   своё, набранное пополняет список. Отсюда три части в разметке —
+   инпут, выпадающий список и жёлтая строка «+ Добавить».
+
+   Инпут стилизуем ПО ЭЛЕМЕНТУ (`input.mcbx__input`), а не одним
+   классом: базовое правило полей в этом файле — селектор по атрибуту
+   `input[type=text]` (0,1,1), и одиночный класс ему молча проигрывает.
+   ------------------------------------------------------------- */
+.mcbx {
+  position: relative;
+  min-width: 0;
+}
+input.mcbx__input {
+  width: 100%;
+  padding: 0.4rem 1.7rem 0.4rem 0.55rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 7px;
+  background: var(--color-bg-card);
+  font: inherit;
+  font-size: 0.86rem;
+  min-height: 33px;
+  color: var(--color-fg);
+}
+input.mcbx__input::placeholder { color: var(--color-fg-subtle); }
+input.mcbx__input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+input.mcbx__input:disabled {
+  background: var(--color-bg-muted);
+  color: var(--color-fg-subtle);
+}
+.mcbx__caret {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-60%);
+  color: var(--color-fg-subtle);
+  font-size: 1rem;
+  line-height: 0;
+  pointer-events: none;
+}
+.mcbx__pop {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 220px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 0.25rem;
+  max-height: 240px;
+  overflow: auto;
+}
+.mcbx__grp {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-fg-subtle);
+  padding: 0.35rem 0.5rem 0.2rem;
+}
+.mcbx__opt {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.38rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+.mcbx__opt.is-active { background: var(--color-bg-tint); }
+.mcbx__opt-text { overflow-wrap: anywhere; }
+.mcbx__own {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-ok-fg);
+  background: var(--color-ok-soft);
+  border-radius: var(--radius-pill);
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.mcbx__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-fg-subtle);
+  cursor: pointer;
+  flex: none;
+}
+.mcbx__del:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+}
+.mcbx__add {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  margin-top: 0.15rem;
+  padding: 0.45rem 0.5rem;
+  border: none;
+  border-top: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tint);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--btn-primary-fg);
+  text-align: left;
+  cursor: pointer;
+}
+.mcbx__add:disabled { opacity: 0.6; cursor: default; }
+.mcbx__plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--btn-primary-bg);
+  border: 1px solid var(--btn-primary-edge);
+  flex: none;
+}
+.mcbx__empty {
+  padding: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--color-fg-subtle);
+}
+
+/* ── Плашка «потребность устарела» (вкладка «Потребности» заказа) ──────────
+   Спецификацию поправили, а пересчёт не прошёл — цифры в закупке устарели.
+   Предупреждение, а не ошибка: данные не сломаны, они просто отстали. */
+.needs-stale {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding: 0.85rem 1rem;
+  border-left: 3px solid var(--color-warn);
+  background: var(--color-warn-soft);
+  border-radius: var(--radius-md);
+}
+.needs-stale__body { flex: 1 1 320px; min-width: 0; }
+.needs-stale__title {
+  display: block;
+  font-size: var(--title-subsection);
+  color: var(--color-warn-fg);
+  margin-bottom: 0.2rem;
+}
+.needs-stale__text { margin: 0 0 0.2rem; font-size: 0.88rem; }
+.needs-stale__hint { margin: 0; font-size: 0.82rem; color: var(--color-fg-muted); }
+.needs-stale__actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+.needs-stale__confirm { flex: 1 1 100%; display: flex; flex-direction: column; gap: 0.5rem; }
+.needs-stale__error { margin: 0; font-size: 0.82rem; color: var(--color-danger-fg); }

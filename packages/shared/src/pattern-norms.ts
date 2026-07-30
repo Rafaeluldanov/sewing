@@ -66,7 +66,28 @@ export interface MaterialLineForMatch {
   materialRole: string | null;
   name: string | null;
   fabricType: string | null;
+  /**
+   * Единица ЗАКУПКИ строки («кг» у трикотажа). Историческое поле `unit`: на нём
+   * держатся сметы, складские балансы и обязательность ширины/плотности.
+   */
   unit: string | null;
+  /**
+   * Единица НОРМЫ, если строка её разводит с закупочной («м пог.» при закупке в
+   * «кг»). Именно с ней сверяется источник: номенклатура отдаёт число расхода, а
+   * не количество к закупке. `null` — строка не расщеплена, сверяемся с `unit`
+   * (так ведут себя все строки, заведённые до появления поля).
+   */
+  normUnit?: string | null;
+}
+
+/**
+ * Единица, с которой источник обязан совпасть: норма, если строка её развела,
+ * иначе закупочная. Одно место на все три шага сопоставления — иначе легко
+ * получить пару, где шаг 1 сверился с одной единицей, а шаг 3 с другой.
+ */
+function matchUnitOf(line: MaterialLineForMatch): string | null {
+  const norm = (line.normUnit ?? '').trim();
+  return norm === '' ? line.unit : line.normUnit ?? null;
 }
 
 /** План по размерам расцветки — по нему считается средневзвешенная норма. */
@@ -175,7 +196,7 @@ export function matchPatternNormSources(
   const takenSources = new Set<string>();
 
   const compatible = (l: MaterialLineForMatch, s: PatternNormSource): boolean =>
-    l.materialRole === s.roleKey && isNormUnitCompatible(l.unit, s);
+    l.materialRole === s.roleKey && isNormUnitCompatible(matchUnitOf(l), s);
 
   // 1) Точное совпадение имени параметра со строкой.
   for (const s of sources) {

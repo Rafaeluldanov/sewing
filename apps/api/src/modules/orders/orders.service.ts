@@ -56,6 +56,7 @@ import type {
   TechCardParameterBindings,
   TechCardParameterValue,
 } from '@sewing/shared/tech-card-parameters';
+import { computeNormPurchase } from '@sewing/shared/norm-purchase';
 import {
   derivePatternNormPerUnit,
   matchPatternNormSources,
@@ -4880,6 +4881,43 @@ export class OrdersService {
    * (см. `existingMat === 0` guard), чтобы введённый менеджером
    * цвет не терялся.
    */
+  /**
+   * Тираж строки в её ЗАКУПОЧНОЙ единице.
+   *
+   * Без расщепления (`normUnit` пуст или совпадает с `unit`) это прежнее
+   * `норма × количество` — байт-в-байт как было. Если строка развела единицу
+   * нормы и единицу закупки, расход в метрах пересчитывается в закупочную
+   * единицу через ширину рулона и плотность — той же формулой, что и расчёт
+   * потребности, чтобы спецификация и закупка не разошлись.
+   *
+   * Пересчёт невозможен (нет ширины/плотности) — пишем расход как есть. Ноль
+   * здесь был бы хуже: он выглядит как «материал не нужен», тогда как на деле
+   * не хватает характеристики, и об этом скажет `WorkshopNeedsService`.
+   */
+  private computeLineTotalQty(params: {
+    qtyPerUnit: Prisma.Decimal;
+    normUnit: string | null;
+    unit: string;
+    qty: number;
+    plannedWidthCm: number | null;
+    densityGsm: number | null;
+  }): Prisma.Decimal {
+    const { qtyPerUnit, normUnit, unit, qty } = params;
+    const plain = qtyPerUnit.mul(new Prisma.Decimal(qty));
+    if (!normUnit || normUnit.trim() === '') return plain;
+
+    const res = computeNormPurchase({
+      normPerUnit: Number(qtyPerUnit.toString()),
+      normUnit,
+      qty,
+      purchaseUnit: unit,
+      widthCm: params.plannedWidthCm,
+      densityGsm: params.densityGsm,
+    });
+    if (!res.ok) return new Prisma.Decimal(res.totalNorm);
+    return new Prisma.Decimal(res.purchaseQty);
+  }
+
   private async rebuildMaterialRequirementsSnapshot(
     orderId: string,
     tx: Prisma.TransactionClient,
@@ -4975,6 +5013,7 @@ export class OrdersService {
         qtyPerUnit: true,
         name: true,
         unit: true,
+        normUnit: true,
         note: true,
         densityGsm: true,
         plannedWidthCm: true,
@@ -5190,6 +5229,7 @@ export class OrdersService {
                 name: r.name,
                 fabricType: r.fabricType,
                 unit: r.unit,
+                normUnit: r.normUnit,
               })),
               normSources,
             )
@@ -5230,7 +5270,14 @@ export class OrdersService {
           data: {
             variantColor: g.variantColor,
             qtyPerUnit,
-            totalQty: qtyPerUnit.mul(baseDecimal),
+            totalQty: this.computeLineTotalQty({
+              qtyPerUnit,
+              normUnit: r.normUnit,
+              unit: cells.unit,
+              qty: g.qty,
+              plannedWidthCm: cells.plannedWidthCm,
+              densityGsm: cells.densityGsm,
+            }),
             // Строка потеряла источник в номенклатуре (параметр убрали /
             // переименовали) — честно переводим её в «из шаблона», иначе UI
             // обещал бы связь, которой уже нет.
@@ -5274,16 +5321,52 @@ export class OrdersService {
       // Строка шаблона ищет свой источник нормы в номенклатуре — иначе в
       // заказ уехала бы заглушка «1», которую ставит «Подтянуть из
       // номенклатуры» в редакторе техкарты.
-      const normsByLine = matchPatternNormSources(
-        lines.materialLines.map((l) => ({
-          key: l.id,
-          materialRole: l.materialRole,
-          name: l.name,
-          fabricType: l.fabricType,
-          unit: l.unit,
-        })),
-        normSources,
-      );
+      const matchInput = lines.materialLines.map((l) => ({
+        key: l.id,
+        materialRole: l.materialRole,
+        name: l.name,
+        fabricType: l.fabricType,
+        unit: l.unit,
+        // Строка, разведшая единицы, ищет источник по единице НОРМЫ:
+        // номенклатура отдаёт расход, а не количество к закупке.
+        normUnit: l.normUnit,
+      }));
+      const normsByLine = matchPatternNormSources(matchInput, normSources);
+
+      // ВТОРОЙ ЗАХОД: автоматическое расщепление единиц.
+      //
+      // Полотно и рибану закупают на вес, поэтому строка стоит в «кг». А
+      // поразмерная норма в номенклатуре ВСЕГДА в погонных метрах — «кг» у
+      // параметра означает лишь «пересчитать через ширину и плотность». Пара
+      // «строка в кг ↔ норма в метрах» несовместима по единицам, и первый заход
+      // её не берёт: положить длину в килограммовую ячейку хуже, чем ничего.
+      //
+      // Но развести единицы здесь можно без единого вопроса менеджеру: если
+      // строка не нашла источник ТОЛЬКО из-за единицы, а поразмерная норма её
+      // роли в номенклатуре есть — строка получает единицу нормы «м пог.», а
+      // «кг» остаётся единицей закупки. Ровно то, ради чего поле и заведено.
+      //
+      // Молча ломать этим ничего нельзя: `unit` не меняется, значит сметы,
+      // складские балансы и обязательность ширины/плотности не двигаются.
+      const autoNormUnit = new Map<string, string>();
+      const unmatched = matchInput.filter((l) => !normsByLine.has(l.key));
+      if (unmatched.length > 0) {
+        const LINEAR_INPUT_UNIT = 'м пог.';
+        const retryInput = unmatched.map((l) => ({
+          ...l,
+          normUnit: LINEAR_INPUT_UNIT,
+        }));
+        // Матчим ТОЛЬКО против поразмерных источников: плоскую норму («Молния,
+        // 1 шт») расщеплять нечем и незачем.
+        const linearSources = normSources.filter(
+          (s) => s.kind === 'LINEAR_M_BY_SIZE',
+        );
+        const retry = matchPatternNormSources(retryInput, linearSources);
+        for (const [key, source] of retry) {
+          autoNormUnit.set(key, LINEAR_INPUT_UNIT);
+          normsByLine.set(key, source);
+        }
+      }
       for (const l of lines.materialLines) {
         const compositeKey = `${vk(g.variantId)}|${
           composeMaterialMatchKey(
@@ -5319,6 +5402,12 @@ export class OrdersService {
         const derivedNorm = normSource
           ? derivePatternNormPerUnit(normSource, g.sizePlan)
           : null;
+        // Единица нормы: своя из шаблона, иначе — выданная вторым заходом.
+        // Норму в ячейку не поставили (её ведёт слот-параметр) — расщеплять
+        // нечего, иначе в поле нормы осталось бы число шаблона, подписанное
+        // метрами.
+        const lineNormUnit =
+          l.normUnit ?? (derivedNorm ? (autoNormUnit.get(l.id) ?? null) : null);
 
         // Подстановка значений в ячейки. `applyParametersToCells` сама
         // зеркалит characteristics ↔ legacy-колонки — без этого плотность
@@ -5352,8 +5441,16 @@ export class OrdersService {
           sortOrder: l.sortOrder,
           name: cells.name,
           unit: cells.unit,
+          normUnit: lineNormUnit,
           qtyPerUnit,
-          totalQty: qtyPerUnit.mul(baseDecimal),
+          totalQty: this.computeLineTotalQty({
+            qtyPerUnit,
+            normUnit: lineNormUnit,
+            unit: cells.unit,
+            qty: g.qty,
+            plannedWidthCm: cells.plannedWidthCm,
+            densityGsm: cells.densityGsm,
+          }),
           note: cells.note,
           materialRole: cells.materialRole,
           fabricType: cells.fabricType,
