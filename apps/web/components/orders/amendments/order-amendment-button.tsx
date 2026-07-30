@@ -1,16 +1,24 @@
 'use client';
 
 /**
- * `OrderAmendmentButton` — кнопка «Изменить в производстве» в шапке
- * карточки «Производство по размерам» (вкладка «Производство» заказа).
- * Открывает `OrderAmendmentDialog` с вкладками «Количество» / «Размерность».
+ * `OrderAmendmentButton` — кнопка, открывающая `OrderAmendmentDialog`.
+ * Обслуживает два входа фичи «Правка заказа» (`FEATURE_ORDER_AMENDMENTS`):
  *
- * Фича «Правка заказа в производстве» (флаг `FEATURE_ORDER_AMENDMENTS`).
- * Монтируется только когда заказ в `IN_PRODUCTION` и у роли есть право
- * управлять заказом (см. `OrderProductionTab`).
+ *   - «Изменить в производстве» — шапка карточки «Производство по
+ *     размерам» на вкладке «Производство». Все три вкладки
+ *     (Количество / Размерность / Маршрут), только `IN_PRODUCTION`.
+ *   - «Изменить маршрут» — шапка карточки «Маршрут операций» там же.
+ *     Одна вкладка «Маршрут», окно `ORDER_ROUTE_EDITABLE_STATUSES`
+ *     (всё, кроме `DONE`/`CANCELLED`): состав операций меняют и на
+ *     расчёте, и на ходу в цеху.
+ *
+ * Различие несёт не кнопка, а набор переданных состояний: `null` в
+ * `quantityState`/`sizeState` убирает соответствующие вкладки. Право
+ * управлять заказом и статус проверяет вызывающая сторона
+ * (`OrderProductionTab`), тут только UI.
  */
 import { useState } from 'react';
-import { SlidersHorizontal } from 'lucide-react';
+import { SlidersHorizontal, Workflow } from 'lucide-react';
 import type {
   OperationAmendmentStateDto,
   QuantityAmendmentStateDto,
@@ -20,9 +28,15 @@ import { OrderAmendmentDialog } from './order-amendment-dialog';
 
 interface Props {
   orderId: string;
-  quantityState: QuantityAmendmentStateDto;
-  sizeState: SizeAmendmentStateDto;
+  /** `null` — вкладки нет (вход «Изменить маршрут»). */
+  quantityState: QuantityAmendmentStateDto | null;
+  sizeState: SizeAmendmentStateDto | null;
   operationState: OperationAmendmentStateDto;
+  /** Подпись кнопки; она же — заголовок окна. */
+  label: string;
+  /** Иконка: слайдеры у полной правки, схема маршрута у route-only. */
+  variant?: 'full' | 'route';
+  testId?: string;
 }
 
 export function OrderAmendmentButton({
@@ -30,8 +44,12 @@ export function OrderAmendmentButton({
   quantityState,
   sizeState,
   operationState,
+  label,
+  variant = 'full',
+  testId = 'order-amendment-button',
 }: Props) {
   const [open, setOpen] = useState(false);
+  const Icon = variant === 'route' ? Workflow : SlidersHorizontal;
 
   return (
     <>
@@ -39,10 +57,10 @@ export function OrderAmendmentButton({
         type="button"
         className="admin-btn admin-btn--ghost"
         onClick={() => setOpen(true)}
-        data-testid="order-amendment-button"
+        data-testid={testId}
       >
-        <SlidersHorizontal size={16} strokeWidth={1.6} aria-hidden />
-        Изменить в производстве
+        <Icon size={16} strokeWidth={1.6} aria-hidden />
+        {label}
       </button>
       {open && (
         <OrderAmendmentDialog
@@ -50,6 +68,7 @@ export function OrderAmendmentButton({
           quantityState={quantityState}
           sizeState={sizeState}
           operationState={operationState}
+          title={label}
           onClose={() => setOpen(false)}
         />
       )}

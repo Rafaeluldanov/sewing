@@ -622,6 +622,20 @@ export class OrderOperationPlanService {
     totalTimeSec: number | null;
     warnings: string[];
   }> {
+    // Маршрут заказа правили холстом — источник истины снимок, а не
+    // шаблон. Считать по шаблону здесь значило бы показать менеджеру
+    // стоимость маршрута, которого у заказа уже нет. Развилка стоит
+    // ОДИН раз, в самом расчёте: `recalculateAndWrite` зовут семь мест
+    // (create / update / startCalculation / ручной пересчёт / …), и
+    // каждому нужен один и тот же ответ.
+    const custom = await tx.order.findUnique({
+      where: { id: orderId },
+      select: { routeCustomizedAt: true },
+    });
+    if (custom?.routeCustomizedAt) {
+      return this.recalculateAndWriteFromSnapshot(orderId, tx);
+    }
+
     const result = await this.calculateForOrder(orderId, tx);
     await tx.order.update({
       where: { id: orderId },
@@ -695,8 +709,10 @@ export class OrderOperationPlanService {
       select: {
         id: true,
         routeTemplateId: true,
+        routeCustomizedAt: true,
         operationPlanCalculatedAt: true,
         items: { select: { id: true, qtyPlan: true } },
+        routeSteps: { select: { operationId: true } },
         routeTemplate: {
           select: {
             id: true,
@@ -714,7 +730,17 @@ export class OrderOperationPlanService {
       };
     }
 
-    if (!order.routeTemplateId || !order.routeTemplate) {
+    // Маршрут правили холстом — шаблон больше не источник шагов (ре-синк
+    // выключен, см. `syncOrderRouteStepsSnapshot`), поэтому его
+    // `updatedAt` не должен помечать план устаревшим: иначе менеджер
+    // получил бы вечный badge «план устарел», который не снимается
+    // пересчётом. Шаги берём из снимка — ставки и нормы ИХ операций на
+    // план по-прежнему влияют.
+    const routeCustomized = order.routeCustomizedAt != null;
+    const hasRoute = routeCustomized
+      ? order.routeSteps.length > 0
+      : Boolean(order.routeTemplateId && order.routeTemplate);
+    if (!hasRoute) {
       return {
         isStale: false,
         sourceUpdatedAt: null,
@@ -734,7 +760,13 @@ export class OrderOperationPlanService {
       };
     }
 
-    const operationIds = order.routeTemplate.steps.map((s) => s.operationId);
+    const operationIds = routeCustomized
+      ? order.routeSteps.map((s) => s.operationId)
+      : (order.routeTemplate?.steps ?? []).map((s) => s.operationId);
+    // `null` = шаблон из источников исключён (маршрут ручной).
+    const templateUpdatedAt = routeCustomized
+      ? null
+      : order.routeTemplate?.updatedAt ?? null;
 
     // Если snapshot ещё ни разу не считался, но source-данные есть —
     // считаем стейл с понятной причиной. UI нарисует кнопку
@@ -744,7 +776,7 @@ export class OrderOperationPlanService {
       // дату последнего изменения (или `null`, если источников ещё
       // нет). Routes-шаблон updatedAt всегда есть.
       const sourceUpdatedAt = await this.collectMaxSourceUpdatedAt(
-        order.routeTemplate.updatedAt,
+        templateUpdatedAt,
         operationIds,
       );
       return {
@@ -756,7 +788,7 @@ export class OrderOperationPlanService {
 
     const calculatedAt = order.operationPlanCalculatedAt;
     const sourceUpdatedAt = await this.collectMaxSourceUpdatedAt(
-      order.routeTemplate.updatedAt,
+      templateUpdatedAt,
       operationIds,
     );
 
@@ -785,12 +817,16 @@ export class OrderOperationPlanService {
    * `operationIds` может быть пустым (шаблон без шагов) — тогда мы
    * учитываем только `RouteTemplate.updatedAt`. Никаких throws на
    * пустой массив; Prisma `where: { in: [] }` корректно вернёт пусто.
+   *
+   * `routeTemplateUpdatedAt = null` — шаблон исключён из источников:
+   * маршрут заказа правили вручную, и правки шаблона до него больше не
+   * доезжают (см. `Order.routeCustomizedAt`).
    */
   private async collectMaxSourceUpdatedAt(
-    routeTemplateUpdatedAt: Date,
+    routeTemplateUpdatedAt: Date | null,
     operationIds: string[],
   ): Promise<Date | null> {
-    let max: Date = routeTemplateUpdatedAt;
+    let max: Date | null = routeTemplateUpdatedAt;
 
     if (operationIds.length > 0) {
       const [opAgg, rateAgg, normAgg] = await this.prisma.$transaction([
@@ -813,7 +849,7 @@ export class OrderOperationPlanService {
         normAgg._max.updatedAt,
       ];
       for (const c of candidates) {
-        if (c && c.getTime() > max.getTime()) max = c;
+        if (c && (max === null || c.getTime() > max.getTime())) max = c;
       }
     }
 

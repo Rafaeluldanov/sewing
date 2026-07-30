@@ -596,6 +596,55 @@ export function isOrderPlanEditable(status: OrderStatus): boolean {
 }
 
 /**
+ * Статусы, в которых маршрут заказа правится ХОЛСТОМ (состав, порядок и
+ * параллельные группы шагов `OrderRouteStep`) — карточка «Маршрут операций»
+ * на вкладке «Производство», окно `PUT /orders/:id/amendments/route`.
+ * Единый источник истины для backend-гейта (`OrderAmendmentsService`) и UI.
+ *
+ * Окно шире `ORDER_PLAN_EDITABLE_STATUSES` намеренно: состав операций
+ * меняют «на ходу» и после запуска — до запуска трогать можно весь маршрут,
+ * после запуска правка ограничена **фронтом производства** (шаги, которые
+ * паспорта прошли или проходят сейчас, заморожены; см. `planRouteAmendment`).
+ * Это не два разных правила, а одно: `frontierIndex` до запуска равен −1,
+ * поэтому замороженный префикс пуст и холст размораживается целиком.
+ *
+ * `DONE` / `CANCELLED` исключены: заказ закрыт, менять в нём нечего (та же
+ * граница, что у режима «Расценки и нормы» в блоке «Операции»).
+ *
+ * ВАЖНО: ручная правка маршрута выставляет `Order.routeCustomizedAt` и с
+ * этого момента ре-синк снимка из шаблона (`syncOrderRouteStepsSnapshot`)
+ * выключается — иначе «Пересчитать план операций» молча вернул бы маршрут
+ * к шаблону. Флаг снимается, когда менеджер осознанно выбирает ДРУГОЙ
+ * шаблон маршрута в форме редактирования заказа.
+ */
+export const ORDER_ROUTE_EDITABLE_STATUSES = [
+  'DRAFT',
+  'CALCULATION',
+  'CALCULATION_DONE',
+  'SAMPLE_PRODUCTION',
+  'IN_PRODUCTION',
+] as const satisfies readonly OrderStatus[];
+
+export function isOrderRouteEditable(status: OrderStatus): boolean {
+  return (ORDER_ROUTE_EDITABLE_STATUSES as readonly OrderStatus[]).includes(
+    status,
+  );
+}
+
+/**
+ * Заказ уже запущен: по нему есть (или могут быть) паспорта, поэтому у
+ * правки маршрута появляется фронт производства и обязательная причина
+ * правки. До запуска маршрут — часть плана, причина не нужна.
+ */
+export function isOrderStarted(status: OrderStatus): boolean {
+  return (
+    status === 'SAMPLE_PRODUCTION' ||
+    status === 'IN_PRODUCTION' ||
+    status === 'DONE'
+  );
+}
+
+/**
  * Человекочитаемые лейблы статуса заказа. Источник истины для всех
  * UI: легаси `/orders/*`, новый `/admin/orders/*`, форма
  * редактирования. Бэкенд лейблы не отдаёт — он отдаёт raw-enum, а
@@ -1623,6 +1672,14 @@ export interface OrderListItemDto {
   routeTemplateId: string | null;
   routeTemplateCode: string | null;
   routeTemplateName: string | null;
+  /**
+   * Маршрут заказа правили холстом вручную (`Order.routeCustomizedAt`), и
+   * снимок шагов больше не повторяет шаблон. UI обязан это показывать:
+   * иначе карточка «Маршрут операций» называет шаблон, цепочка под ним
+   * другая, и различие выглядит багом. Одновременно это значит, что
+   * правки шаблона в справочнике до заказа больше не доезжают.
+   */
+  routeCustomized: boolean;
   /**
    * Ручное переопределение адаптивного режима сплит-распошива (см.
    * `apps/api/src/modules/passports/route-mode.ts`). AUTO — режим

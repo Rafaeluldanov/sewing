@@ -19,6 +19,13 @@
  *     код `AMENDMENT_BELOW_CUT`;
  *   - заказы с ≥2 расцветками пока не поддержаны (правка per-цвет —
  *     следующая фаза), код `AMENDMENT_MULTIVARIANT_UNSUPPORTED`.
+ *
+ * ИСКЛЮЧЕНИЕ — правка маршрута (ФАЗА 3.1, `PUT .../amendments/route`):
+ * её окно шире производства и задано `ORDER_ROUTE_EDITABLE_STATUSES`
+ * (всё, кроме `DONE`/`CANCELLED`). Один и тот же холст обслуживает и
+ * расчёт, и производство: до запуска `frontierIndex = −1`, замороженный
+ * префикс пуст и маршрут правится целиком; после запуска фронт режет
+ * цепочку. Причина правки требуется только у запущенного заказа.
  */
 
 import { z } from 'zod';
@@ -230,6 +237,15 @@ export interface OperationAmendmentStateDto {
   orderId: string;
   editable: boolean;
   /**
+   * Заказ уже запущен (`SAMPLE_PRODUCTION`/`IN_PRODUCTION`/`DONE`). От
+   * этого зависит РЕЖИМ холста, а не сама доступность правки:
+   *   - `true`  — есть фронт производства, причина правки обязательна;
+   *   - `false` — маршрут правится целиком, причина не нужна.
+   * Отличать по `frontierIndex === -1` нельзя: у только что запущенного
+   * заказа паспортов ещё нет, а причина уже обязана быть.
+   */
+  started: boolean;
+  /**
    * Индекс дальше которого стоят все паспорта (`max currentRouteStepIndex`,
    * −1 если паспортов нет). Вставлять операцию можно после шага с
    * `index >= frontierIndex` либо в конец.
@@ -272,7 +288,16 @@ export type RouteAmendmentStep = z.infer<typeof RouteAmendmentStepSchema>;
  */
 export const ApplyRouteAmendmentSchema = z.object({
   steps: z.array(RouteAmendmentStepSchema).min(1, 'Маршрут не может быть пустым'),
-  reason: z.string().trim().min(1, 'Укажите причину правки').max(500),
+  /**
+   * Причина правки. Схемой НЕ требуется, потому что окно правки маршрута
+   * шире производства (см. `ORDER_ROUTE_EDITABLE_STATUSES`): до запуска
+   * маршрут — обычная часть плана заказа, оправдываться не за что.
+   * Обязательной причина становится у ЗАПУЩЕННОГО заказа — там правка
+   * задевает уже идущую работу, и её надо объяснить в журнале. Проверку
+   * держит backend (`AMENDMENT_REASON_REQUIRED`), а не схема: статуса
+   * заказа схема не знает.
+   */
+  reason: z.string().trim().max(500).optional().default(''),
 });
 export type ApplyRouteAmendmentDto = z.infer<typeof ApplyRouteAmendmentSchema>;
 

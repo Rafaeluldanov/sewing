@@ -1551,6 +1551,8 @@ export class OrdersService {
     companyDivision: { id: string; code: string; name: string } | null;
     routeTemplateId: string | null;
     routeTemplate: { code: string; name: string } | null;
+    /** Маршрут заказа правили холстом — снимок шагов главнее шаблона. */
+    routeCustomizedAt: Date | null;
     routeModeOverride: RouteModeOverride;
     patternItemId: string | null;
     patternItem: {
@@ -1642,6 +1644,7 @@ export class OrdersService {
       routeTemplateId: o.routeTemplateId,
       routeTemplateCode: o.routeTemplate?.code ?? null,
       routeTemplateName: o.routeTemplate?.name ?? null,
+      routeCustomized: o.routeCustomizedAt != null,
       routeModeOverride: o.routeModeOverride,
       // Soft-pattern MVP (этап 2 «Лекала»): live-поля карточки
       // лекала + snapshot-поля заказа. UI выбирает, что показать
@@ -1897,10 +1900,21 @@ export class OrdersService {
   ): Promise<{ steps: number; replaced: boolean }> {
     const order = await tx.order.findUnique({
       where: { id: orderId },
-      select: { id: true, routeTemplateId: true },
+      select: { id: true, routeTemplateId: true, routeCustomizedAt: true },
     });
     if (!order) {
       return { steps: 0, replaced: false };
+    }
+
+    // Маршрут заказа правили холстом — снимок главнее шаблона. Без этого
+    // выхода ре-синк ниже увидел бы расхождение структуры и молча вернул
+    // маршрут к шаблону на первой же «Пересчитать план операций» (а также
+    // при любом сохранении формы заказа: `wantsRouteChange` там true при
+    // повторной отправке того же `routeTemplateId`). Флаг снимает только
+    // осознанный выбор ДРУГОГО шаблона в `update()`.
+    if (order.routeCustomizedAt) {
+      const kept = await tx.orderRouteStep.count({ where: { orderId } });
+      return { steps: kept, replaced: false };
     }
 
     const currentSteps = await tx.orderRouteStep.findMany({
@@ -2317,6 +2331,14 @@ export class OrdersService {
     const wantsProductChange =
       dto.productId !== undefined && dto.productId !== currentProductId;
     const wantsRouteChange = dto.routeTemplateId !== undefined;
+    // Смена шаблона НА ДРУГОЙ — в отличие от `wantsRouteChange`, который
+    // true и при повторной отправке того же id (форма редактирования шлёт
+    // `routeTemplateId` всегда). Только такой осознанный выбор снимает
+    // `routeCustomizedAt` и возвращает шаблону роль источника истины:
+    // иначе сохранение формы ради срока стирало бы ручную правку маршрута.
+    const wantsRouteTemplateSwap =
+      wantsRouteChange &&
+      (dto.routeTemplateId ?? null) !== (current.routeTemplateId ?? null);
     const wantsTechCardChange = dto.techCardId !== undefined;
     // Soft-pattern MVP (этап 2 «Лекала»): смена/сброс лекала тоже
     // считается «потенциально опасной» — после `start()` snapshot
@@ -2667,6 +2689,11 @@ export class OrdersService {
               dto.routeTemplateId === undefined
                 ? undefined
                 : dto.routeTemplateId,
+            // Выбран другой шаблон — ручная правка маршрута отменяется, и
+            // `syncOrderRouteStepsSnapshot` ниже пересоберёт снимок из
+            // нового шаблона (per-order расценки/нормы при этом
+            // сохраняются по `operationId`).
+            routeCustomizedAt: wantsRouteTemplateSwap ? null : undefined,
             techCardId:
               dto.techCardId === undefined ? undefined : dto.techCardId,
             // Soft-pattern MVP (этап 2 «Лекала»): передаём undefined
@@ -3818,6 +3845,7 @@ export class OrdersService {
       routeTemplateId: order.routeTemplateId,
       routeTemplateCode: order.routeTemplate?.code ?? null,
       routeTemplateName: order.routeTemplate?.name ?? null,
+      routeCustomized: order.routeCustomizedAt != null,
       routeModeOverride: order.routeModeOverride,
       techCardId: order.techCardId,
       techCardCode: order.techCard?.code ?? null,
@@ -4766,6 +4794,23 @@ export class OrdersService {
     // (Фаза 3), не попала бы в план (её нет в шаблоне), а следующая правка
     // количества затёрла бы её вклад. Для не-правленых заказов снимок ==
     // шаблон, поэтому число не меняется.
+    await this.orderOperationPlan.recalculateAndWriteFromSnapshot(orderId, tx);
+  }
+
+  /**
+   * Производные ПРАВКИ МАРШРУТА (`OrderAmendmentsService.applyRoute`).
+   *
+   * Состав операций меняет только план стоимости/времени, поэтому здесь
+   * узкий пересчёт по снимку — без пересборки `OrderMaterialRequirement`,
+   * которую делает «количественный» `rebuildQtyDerivedSnapshotsInTx`.
+   * Разница принципиальна: окно правки маршрута включает
+   * `CALCULATION_DONE`, а там снимок материалов уже отработан закупщиком,
+   * и трогать его правкой операций нельзя.
+   */
+  async rebuildRouteDerivedSnapshotsInTx(
+    orderId: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
     await this.orderOperationPlan.recalculateAndWriteFromSnapshot(orderId, tx);
   }
 

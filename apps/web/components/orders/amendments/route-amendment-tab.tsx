@@ -1,9 +1,17 @@
 'use client';
 
 /**
- * `RouteAmendmentTab` — вкладка «Маршрут» drawer-а «Изменить заказ в
- * производстве» (фича `FEATURE_ORDER_AMENDMENTS`). Заменила вкладку
- * «Операция» с двумя селектами («какую» + «после шага N»).
+ * `RouteAmendmentTab` — холст правки маршрута заказа. Одна поверхность на
+ * два сценария (фича `FEATURE_ORDER_AMENDMENTS`):
+ *   - до запуска (`Расчёт` и раньше) — кнопка «Изменить маршрут» в
+ *     карточке «Маршрут операций» на вкладке «Производство»;
+ *   - в производстве — вкладка «Маршрут» drawer-а «Изменить заказ в
+ *     производстве».
+ *
+ * Разделяет их не статус, а `state.started`: у запущенного заказа есть
+ * фронт производства (замороженный префикс) и обязательная причина
+ * правки, до запуска — ни того, ни другого (`frontierIndex = −1`, весь
+ * маршрут размораживается тем же кодом, без отдельной ветки).
  *
  * Маршрут показан той же цепочкой чипов, что и в справочнике маршрутов
  * (`AdminRouteSteps`, классы `.admin-route-step*`), но цепочка стала
@@ -425,7 +433,10 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
 
   const dirty = changes.length > 0;
   const reasonTrimmed = reason.trim();
-  const canSubmit = dirty && reasonTrimmed.length > 0;
+  // Причина обязательна только у запущенного заказа — там правка задевает
+  // идущую работу. До запуска маршрут правится как остальной план заказа
+  // (тот же гейт держит backend, см. `AMENDMENT_REASON_REQUIRED`).
+  const canSubmit = dirty && (!state.started || reasonTrimmed.length > 0);
 
   const payload = JSON.stringify({
     steps: toPayloadSteps(draft),
@@ -563,7 +574,7 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
     return (
       <div className="amend-note amend-note--warn">
         <Info size={16} strokeWidth={1.7} aria-hidden />
-        Маршрут правится только когда заказ в производстве.
+        Заказ закрыт — маршрут в нём уже не меняется.
       </div>
     );
   }
@@ -611,14 +622,25 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
     >
       <input type="hidden" name="payload" value={payload} />
 
-      <div className="amend-note amend-note--warn">
-        <Info size={16} strokeWidth={1.7} aria-hidden />
-        <span>
-          Маршрут меняется только <b>впереди фронта производства</b>: шаги,
-          которые уже прошёл или проходит хотя бы один паспорт, заморожены.
-          Уже сделанную работу правка не трогает.
-        </span>
-      </div>
+      {state.started ? (
+        <div className="amend-note amend-note--warn">
+          <Info size={16} strokeWidth={1.7} aria-hidden />
+          <span>
+            Маршрут меняется только <b>впереди фронта производства</b>: шаги,
+            которые уже прошёл или проходит хотя бы один паспорт, заморожены.
+            Уже сделанную работу правка не трогает.
+          </span>
+        </div>
+      ) : (
+        <div className="amend-note amend-note--info">
+          <Info size={16} strokeWidth={1.7} aria-hidden />
+          <span>
+            Заказ ещё не запущен — маршрут правится целиком. Сохранённая
+            цепочка <b>заменяет шаблон</b> для этого заказа: дальнейшие
+            правки шаблона в справочнике сюда больше не доедут.
+          </span>
+        </div>
+      )}
 
       <div className={`rb${drag ? ' rb--dragging' : ''}`}>
         <section className="rb-panel">
@@ -709,17 +731,19 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
               )}
             </div>
 
-            <div className="admin-field" style={{ marginTop: 10 }}>
-              <label htmlFor="routeAmendReason">Причина правки *</label>
-              <input
-                id="routeAmendReason"
-                type="text"
-                maxLength={500}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Например: клиент попросил добавить ОТК перед упаковкой"
-              />
-            </div>
+            {state.started && (
+              <div className="admin-field" style={{ marginTop: 10 }}>
+                <label htmlFor="routeAmendReason">Причина правки *</label>
+                <input
+                  id="routeAmendReason"
+                  type="text"
+                  maxLength={500}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Например: клиент попросил добавить ОТК перед упаковкой"
+                />
+              </div>
+            )}
 
             <div className="rb-foot">
               <div className="rb-totals">

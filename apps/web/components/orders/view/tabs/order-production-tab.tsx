@@ -47,6 +47,7 @@ import type {
   OrderRouteStepDto,
   OrderSizeBreakdownRow,
 } from '@sewing/shared/orders';
+import { isOrderRouteEditable } from '@sewing/shared/orders';
 import type {
   OperationAmendmentStateDto,
   OrderColorwaysDto,
@@ -207,33 +208,52 @@ export async function OrderProductionTab({
     for (const r of shopfloor.rows) shopBySize.set(r.sizeId, r);
   }
 
-  // Правка заказа в производстве (фича FEATURE_ORDER_AMENDMENTS): вкладки
-  // «Количество» (ФАЗА 1) и «Размерность» (ФАЗА 2). Грузим состояния
-  // только когда действие реально доступно — заказ в производстве, роль
-  // управляет заказом, фича включена. При ошибке просто не показываем
-  // кнопку (не роняем вкладку).
+  // Правка заказа (фича FEATURE_ORDER_AMENDMENTS). Два разных окна:
+  //   - количество/размерность — только `IN_PRODUCTION` (второй ярус
+  //     редактируемости поверх заморозки плана, ADR-0006);
+  //   - маршрут — `ORDER_ROUTE_EDITABLE_STATUSES`, т.е. и на расчёте:
+  //     состав операций меняют «на ходу», а до запуска фронт производства
+  //     пуст и холст правит всю цепочку.
+  // Грузим состояния только когда действие реально доступно. При ошибке
+  // просто не показываем кнопку (не роняем вкладку).
+  const amendmentsEnabled = canManage && isOrderAmendmentsEnabled();
   let quantityState: QuantityAmendmentStateDto | null = null;
   let sizeState: SizeAmendmentStateDto | null = null;
   let operationState: OperationAmendmentStateDto | null = null;
-  if (
-    canManage &&
-    order.status === 'IN_PRODUCTION' &&
-    isOrderAmendmentsEnabled()
-  ) {
+  if (amendmentsEnabled && order.status === 'IN_PRODUCTION') {
     try {
-      [quantityState, sizeState, operationState] = await Promise.all([
+      [quantityState, sizeState] = await Promise.all([
         getQuantityAmendmentState(order.id),
         getSizeAmendmentState(order.id),
-        getOperationAmendmentState(order.id),
       ]);
     } catch {
       quantityState = null;
       sizeState = null;
+    }
+  }
+  if (amendmentsEnabled && isOrderRouteEditable(order.status)) {
+    try {
+      operationState = await getOperationAmendmentState(order.id);
+    } catch {
       operationState = null;
     }
   }
+  // Полная правка (три вкладки) — только когда доступны ВСЕ состояния.
   const amendmentAvailable =
     quantityState !== null && sizeState !== null && operationState !== null;
+  // Правка маршрута — отдельная кнопка в карточке «Маршрут операций».
+  // Она видна и на расчёте, где количества/размерности в окне нет.
+  const routeEditAction = operationState ? (
+    <OrderAmendmentButton
+      orderId={order.id}
+      quantityState={null}
+      sizeState={null}
+      operationState={operationState}
+      label="Изменить маршрут"
+      variant="route"
+      testId="order-route-edit-button"
+    />
+  ) : null;
   const matrixActions =
     amendmentAvailable || (canManage && shipmentBalances.length > 0) ? (
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -243,6 +263,7 @@ export async function OrderProductionTab({
             quantityState={quantityState!}
             sizeState={sizeState!}
             operationState={operationState!}
+            label="Изменить в производстве"
           />
         )}
         {canManage && shipmentBalances.length > 0 && (
@@ -325,10 +346,17 @@ export async function OrderProductionTab({
           title="Маршрут операций"
           hint={order.routeTemplateName ?? order.techCardName ?? undefined}
           actions={
-            isStarted ? (
-              <AdminStatusBadge tone="muted">
-                <Lock size={12} strokeWidth={1.7} aria-hidden /> snapshot
-              </AdminStatusBadge>
+            routeEditAction || isStarted ? (
+              <div
+                style={{ display: 'flex', gap: 8, alignItems: 'center' }}
+              >
+                {isStarted && (
+                  <AdminStatusBadge tone="muted">
+                    <Lock size={12} strokeWidth={1.7} aria-hidden /> snapshot
+                  </AdminStatusBadge>
+                )}
+                {routeEditAction}
+              </div>
             ) : null
           }
         />
@@ -339,6 +367,20 @@ export async function OrderProductionTab({
               <strong>{order.routeTemplateName}</strong>
             ) : (
               <span className="admin-muted">не выбран</span>
+            )}
+            {/*
+              Маршрут правили руками: цепочка ниже больше не повторяет
+              шаблон, названный строкой выше. Без этой пометки расхождение
+              читается как баг, а не как решение менеджера. Заодно это
+              предупреждение: правки шаблона в справочнике сюда не доедут.
+            */}
+            {order.routeCustomized && (
+              <>
+                {' '}
+                <AdminStatusBadge tone="warning">
+                  изменён в заказе
+                </AdminStatusBadge>
+              </>
             )}
           </dd>
           <dt>Шаблон техкарты</dt>

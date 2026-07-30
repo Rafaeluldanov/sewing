@@ -15,6 +15,7 @@ import type {
   SizeAmendmentStateDto,
 } from '@sewing/shared';
 import { planRouteAmendment } from '@sewing/shared';
+import { isOrderRouteEditable, isOrderStarted } from '@sewing/shared/orders';
 import {
   AmendmentBelowCutException,
   AmendmentMultiVariantUnsupportedException,
@@ -588,7 +589,12 @@ export class OrderAmendmentsService {
 
     return {
       orderId,
-      editable: order.status === OrderStatus.IN_PRODUCTION,
+      // Окно правки маршрута шире производства: холст обслуживает и
+      // расчёт, и цех (см. `ORDER_ROUTE_EDITABLE_STATUSES`). До запуска
+      // `frontierIndex = −1`, поэтому `movable`/`removable` ниже сами
+      // размораживают всю цепочку — отдельной ветки для расчёта нет.
+      editable: isOrderRouteEditable(order.status),
+      started: isOrderStarted(order.status),
       frontierIndex,
       steps: order.routeSteps.map((s) => {
         // Шаг СТРОГО впереди фронта: на `frontierIndex` стоит самый
@@ -753,8 +759,15 @@ export class OrderAmendmentsService {
   }
 
   /**
-   * Правка маршрута целиком (drawer «Изменить в производстве» → вкладка
-   * «Маршрут»): состав, порядок и параллельные группы ВПЕРЕДИ фронта.
+   * Правка маршрута целиком (холст «Изменить маршрут» — карточка «Маршрут
+   * операций» на вкладке «Производство» и вкладка «Маршрут» drawer-а
+   * «Изменить в производстве»): состав, порядок и параллельные группы.
+   *
+   * Окно — `ORDER_ROUTE_EDITABLE_STATUSES` (всё, кроме `DONE`/`CANCELLED`):
+   * маршрут меняют и на расчёте, и на ходу в цеху. Разделение проходит не
+   * по статусу, а по фронту производства: до запуска паспортов нет,
+   * `frontierIndex = −1`, замороженный префикс пуст и правится вся
+   * цепочка; после запуска фронт режет её ровно там, куда дошла работа.
    *
    * Клиент присылает весь целевой маршрут; что добавлено/убрано/
    * переставлено, считает чистый `planRouteAmendment` — он же стережёт
@@ -769,6 +782,11 @@ export class OrderAmendmentsService {
    * `Passport.currentRouteStepIndex` НЕ трогаем: по построению ни один
    * паспорт не стоит на индексе больше `frontierIndex`, а меняем мы только
    * хвост за ним.
+   *
+   * После успеха выставляем `Order.routeCustomizedAt` — с этого момента
+   * снимок шагов главнее шаблона, и `syncOrderRouteStepsSnapshot` больше
+   * не пересобирает маршрут из `RouteTemplate` (иначе «Пересчитать план
+   * операций» на расчёте молча откатил бы правку).
    */
   async applyRoute(
     orderId: string,
@@ -798,8 +816,23 @@ export class OrderAmendmentsService {
         message: 'Заказ не найден',
       });
     }
-    if (order.status !== OrderStatus.IN_PRODUCTION) {
-      throw new OrderNotAmendableException();
+    if (!isOrderRouteEditable(order.status)) {
+      throw new OrderNotAmendableException(
+        'Заказ закрыт — маршрут в нём уже не меняется.',
+      );
+    }
+    const started = isOrderStarted(order.status);
+    // Причина обязательна только у запущенного заказа: там правка задевает
+    // идущую работу, и журнал должен объяснять зачем. До запуска маршрут —
+    // обычная часть плана (схема поэтому причину не требует, статуса она
+    // не знает — см. `ApplyRouteAmendmentSchema`).
+    const reason = dto.reason?.trim() ?? '';
+    if (started && reason.length === 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'AMENDMENT_REASON_REQUIRED',
+        message: 'Укажите причину правки маршрута заказа в производстве.',
+      });
     }
 
     const targetIds = dto.steps.map((s) => s.operationId);
@@ -956,9 +989,20 @@ export class OrderAmendmentsService {
         }
       }
 
+      // Снимок шагов стал главнее шаблона — фиксируем это ДО пересчёта
+      // плана: `recalculateAndWrite*` читает флаг и считает по снимку.
+      await tx.order.update({
+        where: { id: orderId },
+        data: { routeCustomizedAt: new Date() },
+      });
+
       // План стоимости/времени считается ПО СНИМКУ — после перекладки
-      // индексов достраиваем производные (как и при вставке операции).
-      await this.orders.rebuildQtyDerivedSnapshotsInTx(orderId, tx);
+      // индексов достраиваем производные. Материалы не трогаем: состав
+      // операций на снимок `OrderMaterialRequirement` не влияет, а на
+      // `CALCULATION_DONE` его пересборка задела бы уже посчитанное
+      // закупщиком (поэтому здесь узкий пересчёт, а не общий
+      // `rebuildQtyDerivedSnapshotsInTx` из правки количества).
+      await this.orders.rebuildRouteDerivedSnapshotsInTx(orderId, tx);
 
       await this.audit.log(
         {
@@ -967,7 +1011,7 @@ export class OrderAmendmentsService {
           entityId: orderId,
           employeeId: actorEmployeeId ?? null,
           payload: {
-            reason: dto.reason,
+            reason,
             summary,
             added: plan.addedOperationIds,
             removed: plan.removedOperationIds,

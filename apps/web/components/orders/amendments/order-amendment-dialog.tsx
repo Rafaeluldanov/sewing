@@ -1,12 +1,19 @@
 'use client';
 
 /**
- * `OrderAmendmentDialog` — модальная оболочка «Изменить заказ в
- * производстве» (фича `FEATURE_ORDER_AMENDMENTS`). Одна точка входа с
- * вкладками:
+ * `OrderAmendmentDialog` — модальная оболочка правки заказа (фича
+ * `FEATURE_ORDER_AMENDMENTS`). Вкладки:
  *   - «Количество» (ФАЗА 1) — правка планового тиража по размерам;
  *   - «Размерность» (ФАЗА 2) — добавить/убрать размер;
- *   - «Маршрут» (ФАЗА 3.1) — состав и порядок операций впереди фронта.
+ *   - «Маршрут» (ФАЗА 3.1) — состав и порядок операций.
+ *
+ * Окно обслуживает ДВА входа, поэтому состояния вкладок опциональны:
+ *   - «Изменить в производстве» (`IN_PRODUCTION`) — все три вкладки;
+ *   - «Изменить маршрут» (карточка «Маршрут операций», окно
+ *     `ORDER_ROUTE_EDITABLE_STATUSES`) — только «Маршрут», без
+ *     переключателя вкладок.
+ * Переданы состояния — вкладка есть; `null` — вкладки нет. Так один и тот
+ * же холст живёт в одном месте, а не копируется под расчёт.
  *
  * Оболочка (overlay/шапка/переключатель вкладок/CSS) — здесь; логика
  * форм — в `QuantityAmendmentTab` / `SizeAmendmentTab` /
@@ -32,9 +39,12 @@ import { RouteAmendmentTab } from './route-amendment-tab';
 
 interface Props {
   orderId: string;
-  quantityState: QuantityAmendmentStateDto;
-  sizeState: SizeAmendmentStateDto;
+  /** `null` — вкладка не показывается (вход «Изменить маршрут»). */
+  quantityState: QuantityAmendmentStateDto | null;
+  sizeState: SizeAmendmentStateDto | null;
   operationState: OperationAmendmentStateDto;
+  /** Заголовок окна — зависит от входа, а не от статуса заказа. */
+  title: string;
   onClose: () => void;
 }
 
@@ -45,16 +55,22 @@ export function OrderAmendmentDialog({
   quantityState,
   sizeState,
   operationState,
+  title,
   onClose,
 }: Props) {
-  const [tab, setTab] = useState<TabKey>('qty');
+  // Вкладка по умолчанию — первая доступная: у входа «Изменить маршрут»
+  // количества/размерности нет, и открыться на них было бы нечем.
+  const [tab, setTab] = useState<TabKey>(
+    quantityState ? 'qty' : sizeState ? 'sizes' : 'route',
+  );
+  const hasTabs = quantityState !== null || sizeState !== null;
 
   return (
     <ModalPortal>
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Изменить заказ в производстве"
+        aria-label={title}
         className="amend-overlay"
         onClick={onClose}
       >
@@ -65,7 +81,7 @@ export function OrderAmendmentDialog({
           <header className="amend-header">
             <h2>
               <SlidersHorizontal size={18} strokeWidth={1.7} aria-hidden />{' '}
-              Изменить заказ в производстве
+              {title}
             </h2>
             <button
               type="button"
@@ -77,46 +93,52 @@ export function OrderAmendmentDialog({
             </button>
           </header>
 
-          <div className="amend-tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === 'qty'}
-              className={`amend-tab${tab === 'qty' ? ' amend-tab--active' : ''}`}
-              onClick={() => setTab('qty')}
-            >
-              Количество
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === 'sizes'}
-              className={`amend-tab${tab === 'sizes' ? ' amend-tab--active' : ''}`}
-              onClick={() => setTab('sizes')}
-            >
-              Размерность
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === 'route'}
-              className={`amend-tab${tab === 'route' ? ' amend-tab--active' : ''}`}
-              onClick={() => setTab('route')}
-              data-testid="amend-tab-route"
-            >
-              Маршрут
-            </button>
-          </div>
+          {hasTabs && (
+            <div className="amend-tabs" role="tablist">
+              {quantityState && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === 'qty'}
+                  className={`amend-tab${tab === 'qty' ? ' amend-tab--active' : ''}`}
+                  onClick={() => setTab('qty')}
+                >
+                  Количество
+                </button>
+              )}
+              {sizeState && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === 'sizes'}
+                  className={`amend-tab${tab === 'sizes' ? ' amend-tab--active' : ''}`}
+                  onClick={() => setTab('sizes')}
+                >
+                  Размерность
+                </button>
+              )}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'route'}
+                className={`amend-tab${tab === 'route' ? ' amend-tab--active' : ''}`}
+                onClick={() => setTab('route')}
+                data-testid="amend-tab-route"
+              >
+                Маршрут
+              </button>
+            </div>
+          )}
 
           <div className="amend-body">
-            {tab === 'qty' && (
+            {tab === 'qty' && quantityState && (
               <QuantityAmendmentTab
                 orderId={orderId}
                 state={quantityState}
                 onClose={onClose}
               />
             )}
-            {tab === 'sizes' && (
+            {tab === 'sizes' && sizeState && (
               <SizeAmendmentTab
                 orderId={orderId}
                 state={sizeState}
