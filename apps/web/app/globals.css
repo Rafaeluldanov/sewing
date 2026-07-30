@@ -18243,20 +18243,6 @@ body:has(.admin-layout) .app-header { display: none !important; }
   justify-content: space-between;
   gap: 0.5rem;
 }
-/* Строка `WAITING` («Ждём расклад») — единственная НЕкликабельная: печатать
-   по ней нечего. Рисуется <div>, а не <a>, поэтому гасим hover-подсветку
-   `.cut-orders__card:hover` — иначе строка выглядит нажимаемой и раскройщик
-   тычет в неё. Блок обязан идти ПОСЛЕ `.cut-orders__card:hover` в файле:
-   специфичность равная, спор решает порядок. */
-.cutter-release-queue__card--locked {
-  cursor: default;
-}
-.cutter-release-queue__card--locked:hover,
-.cutter-release-queue__card--locked:focus-visible {
-  border-color: var(--color-border-strong);
-  background: #fff;
-}
-
 /* Вкладка «Стеллаж» кабинета раскройщика (`apps/web/app/cutter/shelf/`).
    Своей вёрстки у экрана нет — всю работу ведёт переиспользованная
    панель размещения помощника (`.shelf-placement`), поэтому нужен ровно

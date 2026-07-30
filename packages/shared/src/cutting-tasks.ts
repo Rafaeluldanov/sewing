@@ -257,12 +257,23 @@ export type SaveCuttingTaskProgressDto = z.infer<
  * Возвращает список проблем человеческим языком (пустой = можно
  * завершать). `sizeLabel` — подпись размера в сообщениях (код размера);
  * по умолчанию падаем на `sizeId`.
+ *
+ * `opts.hasClosedLays` — в задаче есть ЗАКРЫТЫЕ расклады, которых нет в
+ * `lays`. Проверяется только то, что реально уходит в сохранение: закрытые
+ * расклады свою проверку прошли при «Расклад готов», форма их не шлёт
+ * (`CUTTING_LAY_LOCKED`), и когда закрыты ВСЕ — payload пуст. Без этого
+ * флага «нет ни одного расклада» ловило валидный кейс «остались только
+ * закрытые, добивать нечего» и запирало раскрой: задача навсегда
+ * `IN_PROGRESS`, заказ — в «Ждём расклад».
  */
 export function listCuttingCompletionProblems(
   lays: CuttingTaskLayInputDto[],
   sizeLabel: (sizeId: string) => string = (id) => id,
+  opts: { hasClosedLays?: boolean } = {},
 ): string[] {
-  if (lays.length === 0) return ['нет ни одного расклада'];
+  if (lays.length === 0) {
+    return opts.hasClosedLays ? [] : ['нет ни одного расклада'];
+  }
 
   const problems: string[] = [];
   lays.forEach((lay, i) => {

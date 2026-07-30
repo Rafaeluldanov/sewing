@@ -332,4 +332,37 @@ describeWithDb('integration — partial cutting completion by lay', () => {
       laysTotal: 2,
     });
   });
+
+  test('все расклады закрыты → «Раскрой завершён» с пустым payload ставит DONE', async () => {
+    // Реальный залёт (заказ 02-00002, 30.07): единственный расклад закрыт
+    // кнопкой «Расклад готов», форма шлёт пустой `lays` (закрытые она не
+    // отправляет — `CUTTING_LAY_LOCKED`). Гейт полноты не должен читать это
+    // как «нет ни одного расклада», иначе раскрой не закрыть никогда.
+    await save([lay([{ ordinal: 1, layers: 10 }])]).expect(200);
+    await completeLay(1).expect(201);
+
+    const r = await request(t.app.getHttpServer())
+      .post(`/api/cutting-tasks/${taskId}/complete`)
+      .set('Cookie', cutterCookie)
+      .send({ lays: [] });
+    expect(r.status).toBe(201);
+    expect(r.body.status).toBe('DONE');
+    // Расклад остался один и со своим исходным `completedAt` — «завершить
+    // раскрой» не переписывает подпись того, кто закрыл настил.
+    expect(r.body.lays).toHaveLength(1);
+    expect(r.body.lays[0]).toMatchObject({
+      ordinal: 1,
+      completedByName: seed.employees['cutter'].fullName,
+    });
+  });
+
+  test('пустой payload без единого закрытого расклада по-прежнему отвергается', async () => {
+    const r = await request(t.app.getHttpServer())
+      .post(`/api/cutting-tasks/${taskId}/complete`)
+      .set('Cookie', cutterCookie)
+      .send({ lays: [] });
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('CUTTING_TASK_COMPLETION_INCOMPLETE');
+    expect(String(r.body.message)).toContain('нет ни одного расклада');
+  });
 });

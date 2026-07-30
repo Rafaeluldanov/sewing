@@ -635,15 +635,14 @@ export class CuttingTasksService {
     // уже закрытые расклады свою проверку прошли при закрытии, а форма
     // может их вообще не присылать.
     if (opts.markDone) {
+      // Пустой payload при уже закрытых раскладах — валидный кейс «остались
+      // только закрытые, добивать нечего» (`hasClosedLays`).
       const problems = listCuttingCompletionProblems(
         dto.lays,
         (sizeId) => sizeMeta.get(sizeId)?.sizeCodeSnapshot ?? sizeId,
+        { hasClosedLays: task.lays.some((l) => l.completedAt) },
       );
-      // Пустой payload при уже закрытых раскладах — валидный кейс
-      // «остались только закрытые, добивать нечего».
-      const onlyClosedLeft =
-        dto.lays.length === 0 && task.lays.some((l) => l.completedAt);
-      if (problems.length > 0 && !onlyClosedLeft) {
+      if (problems.length > 0) {
         throw new CuttingTaskCompletionIncompleteException(problems);
       }
     }

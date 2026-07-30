@@ -319,11 +319,16 @@ export function CuttingForm({
     // Зеркало backend-гейта (`CUTTING_TASK_COMPLETION_INCOMPLETE`):
     // завершать можно только полностью заполненный настил — раскройщик
     // видит, что именно не заполнено, без похода на сервер.
+    //
+    // `hasClosedLays` обязателен: закрытые расклады в payload не уходят, и
+    // когда закрыты ВСЕ, `payload.lays` пуст — без флага гейт ругался бы
+    // «нет ни одного расклада» на раскрое, который весь уже закрыт.
     const problems = listCuttingCompletionProblems(
       payload.lays,
       (sizeId) =>
         selectableSizes.find((r) => r.sizeId === sizeId)?.sizeCodeSnapshot ??
         sizeId,
+      { hasClosedLays: layDrafts.some((l) => l.completedAt) },
     );
     if (problems.length > 0) {
       setError(`Нельзя завершить раскрой: ${problems.join('; ')}.`);

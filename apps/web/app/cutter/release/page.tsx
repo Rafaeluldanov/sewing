@@ -22,9 +22,12 @@ export const dynamic = 'force-dynamic';
  *   - `NEW` — жёлтая полоса, бейдж «N паспортов» (сколько ещё не выпущено
  *     по ЗАКРЫТЫМ раскладам). Кликабельна: иди печатай;
  *   - `WAITING` — синяя полоса, бейдж-статус «Ждём расклад». По закрытым
- *     раскладам выпущено всё, но раскрой продолжается. НЕ кликабельна:
- *     печатать нечего, заказ вернётся в `NEW` сам после следующего
- *     «Расклад готов» — тап в форму, где ноль рулонов, только путает;
+ *     раскладам выпущено всё, но раскрой продолжается: заказ вернётся в
+ *     `NEW` сам после следующего «Расклад готов». Кликабельна — выпускать
+ *     нечего, но паспорта закрытых раскладов уже существуют, и их надо
+ *     уметь ПЕРЕПЕЧАТАТЬ (зависший принтер, потерянный паспорт). Раньше
+ *     строка была заперта, и такой заказ становился тупиком: печатать
+ *     неоткуда до конца раскроя;
  *   - `DONE` — зелёная полоса, статус «Завершено». Кликабельна для
  *     повторной печати (потерянный/испорченный паспорт).
  *
@@ -88,8 +91,10 @@ export default async function CutterReleaseQueuePage() {
         <ul className="cut-orders__list" aria-label="Заказы на выпуск">
           {items.map((o) => {
             const done = o.status === 'DONE';
-            // «Ждём расклад» — единственное НЕкликабельное состояние: по
-            // закрытым раскладам выпущено всё, печатать нечего.
+            // «Ждём расклад»: по закрытым раскладам выпущено всё, новых
+            // паспортов не будет до следующего «Расклад готов». Строка всё
+            // равно кликабельна — внутри доступна повторная печать уже
+            // выпущенных паспортов.
             const waiting = o.status === 'WAITING';
             const tone = done ? 'done' : waiting ? 'in_progress' : 'new';
             // Сколько паспортов ждут печати ПО ЗАКРЫТЫМ раскладам. Для `NEW`
@@ -136,7 +141,7 @@ export default async function CutterReleaseQueuePage() {
                 {waiting ? (
                   <span className="cut-orders__card-meta">
                     по закрытым раскладам выпущено всё — заказ вернётся в
-                    очередь сам
+                    очередь сам; откройте, чтобы перепечатать паспорта
                   </span>
                 ) : null}
               </>
@@ -144,26 +149,15 @@ export default async function CutterReleaseQueuePage() {
 
             return (
               <li key={o.orderId}>
-                {waiting ? (
-                  <div
-                    className={
-                      'cut-orders__card cutter-release-queue__card--locked' +
-                      ` constructor-card--status-${tone}`
-                    }
-                  >
-                    {body}
-                  </div>
-                ) : (
-                  <Link
-                    className={
-                      'cut-orders__card' + ` constructor-card--status-${tone}`
-                    }
-                    href={`/cutter/release/${o.orderId}`}
-                    prefetch={false}
-                  >
-                    {body}
-                  </Link>
-                )}
+                <Link
+                  className={
+                    'cut-orders__card' + ` constructor-card--status-${tone}`
+                  }
+                  href={`/cutter/release/${o.orderId}`}
+                  prefetch={false}
+                >
+                  {body}
+                </Link>
               </li>
             );
           })}
