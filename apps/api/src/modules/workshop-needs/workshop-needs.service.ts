@@ -3,7 +3,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, type WorkshopNeed } from '@prisma/client';
+import { Prisma, type OrderStatus, type WorkshopNeed } from '@prisma/client';
 import type {
   CalculateWorkshopNeedsDto,
   CalculateWorkshopNeedsResultDto,
@@ -13,6 +13,7 @@ import type {
   WorkshopNeedArchiveSkipDto,
   WorkshopNeedDto,
   WorkshopNeedListItemDto,
+  WorkshopNeedOrderCalculationFilter,
   WorkshopNeedsArchiveResultDto,
 } from '@sewing/shared/workshop-needs';
 import {
@@ -125,11 +126,12 @@ export class WorkshopNeedsService {
     const effectiveOrderCalculationStatus =
       query.orderCalculationStatus ?? (query.orderId ? 'ALL' : 'ACTIVE');
     if (effectiveOrderCalculationStatus !== 'ALL') {
-      const orderStatus =
-        effectiveOrderCalculationStatus === 'ACTIVE'
-          ? 'CALCULATION'
-          : 'CALCULATION_DONE';
-      where.order = mergeOrderWhere(where.order, { status: orderStatus });
+      where.order = mergeOrderWhere(where.order, {
+        status:
+          ORDER_CALCULATION_FILTER_ORDER_STATUS[
+            effectiveOrderCalculationStatus
+          ],
+      });
     }
 
     // Фича «Архив расчётов цеха»: скоуп по `Order.needsArchivedAt`.
@@ -3589,6 +3591,35 @@ function enrichmentFromTechCardLine(
     requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
   };
 }
+
+/**
+ * Управленческий фильтр «Статус расчёта» → конкретный `Order.status`
+ * (см. `WORKSHOP_NEED_ORDER_CALCULATION_FILTERS` в shared). `ALL`
+ * из ключей исключён — он значит «не фильтровать вообще».
+ *
+ * `IN_PRODUCTION` / `ORDER_DONE` добавлены, чтобы закупщик видел
+ * потребности запущенных и уже выпущенных заказов отдельными списками:
+ * до этого они пропадали из рабочего экрана и находились только
+ * под `ALL`.
+ *
+ * Внимание на асимметрию имён (она историческая, см. JSDoc
+ * `WORKSHOP_NEED_ORDER_CALCULATION_FILTERS` в shared): `DONE` — это
+ * завершённый РАСЧЁТ (`CALCULATION_DONE`), а выпущенный заказ
+ * (`Order.status = DONE`) — это `ORDER_DONE`.
+ *
+ * `Record<...>` без `Partial` намеренно: добавление нового значения
+ * фильтра в shared сразу ломает компиляцию здесь, и маппинг нельзя
+ * забыть дописать.
+ */
+const ORDER_CALCULATION_FILTER_ORDER_STATUS: Record<
+  Exclude<WorkshopNeedOrderCalculationFilter, 'ALL'>,
+  OrderStatus
+> = {
+  ACTIVE: 'CALCULATION',
+  DONE: 'CALCULATION_DONE',
+  IN_PRODUCTION: 'IN_PRODUCTION',
+  ORDER_DONE: 'DONE',
+};
 
 /**
  * Аккуратно объединяет существующий `where.order` с дополнительным

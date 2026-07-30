@@ -7,6 +7,12 @@
  * управленческий фильтр по `Order.status`:
  *   - `ACTIVE` (default) — `Order.status = CALCULATION`;
  *   - `DONE`             — `Order.status = CALCULATION_DONE`;
+ *   - `IN_PRODUCTION`    — `Order.status = IN_PRODUCTION` (заказы,
+ *     запущенные в производство: закупка по ним могла остаться
+ *     незакрытой, а из рабочего списка они пропадали);
+ *   - `ORDER_DONE`       — `Order.status = DONE` (выпущенные заказы;
+ *     имя не `DONE`, потому что `DONE` здесь исторически = завершённый
+ *     РАСЧЁТ);
  *   - `ALL`              — без фильтра по статусу заказа.
  *
  * `WorkshopNeed.status` остаётся в shared / inline-edit-row /
@@ -61,13 +67,24 @@ describe('Shared workshop-needs — Статус расчёта', () => {
     expect(WORKSHOP_NEED_ORDER_CALCULATION_FILTERS).toEqual([
       'ACTIVE',
       'DONE',
+      'IN_PRODUCTION',
+      'ORDER_DONE',
       'ALL',
     ]);
     expect(WORKSHOP_NEED_ORDER_CALCULATION_FILTER_LABELS).toEqual({
       ACTIVE: 'В расчёте',
       DONE: 'Расчёт завершён',
+      IN_PRODUCTION: 'В производстве',
+      ORDER_DONE: 'Заказ завершён',
       ALL: 'Все',
     });
+    // `ALL` — последний в списке: он рендерится последней опцией
+    // select-а, любые новые стадии добавляются перед ним.
+    expect(
+      WORKSHOP_NEED_ORDER_CALCULATION_FILTERS[
+        WORKSHOP_NEED_ORDER_CALCULATION_FILTERS.length - 1
+      ],
+    ).toBe('ALL');
   });
 
   test('Источник содержит экспорты констант и Zod-схему', () => {
@@ -88,6 +105,16 @@ describe('Shared workshop-needs — Статус расчёта', () => {
     expect(
       ListWorkshopNeedsQuerySchema.safeParse({
         orderCalculationStatus: 'DONE',
+      }).success,
+    ).toBe(true);
+    expect(
+      ListWorkshopNeedsQuerySchema.safeParse({
+        orderCalculationStatus: 'IN_PRODUCTION',
+      }).success,
+    ).toBe(true);
+    expect(
+      ListWorkshopNeedsQuerySchema.safeParse({
+        orderCalculationStatus: 'ORDER_DONE',
       }).success,
     ).toBe(true);
     expect(
@@ -135,10 +162,22 @@ describe('WorkshopNeedsService.list — фильтр Статус расчёта
     );
   });
 
-  test('Применяет фильтр order.status для ACTIVE / DONE и пропускает для ALL', () => {
-    // Конкретные значения статуса заказа подставляются для ACTIVE/DONE.
-    expect(src).toMatch(/'CALCULATION'/);
-    expect(src).toMatch(/'CALCULATION_DONE'/);
+  test('Применяет фильтр order.status по таблице маппинга и пропускает ALL', () => {
+    // Маппинг «значение фильтра → Order.status» лежит в одном месте,
+    // `ALL` из ключей исключён (значит «не фильтровать»).
+    expect(src).toMatch(
+      /const ORDER_CALCULATION_FILTER_ORDER_STATUS: Record<\s*Exclude<WorkshopNeedOrderCalculationFilter, 'ALL'>/,
+    );
+    expect(src).toMatch(/ACTIVE:\s*'CALCULATION'/);
+    expect(src).toMatch(/DONE:\s*'CALCULATION_DONE'/);
+    expect(src).toMatch(/IN_PRODUCTION:\s*'IN_PRODUCTION'/);
+    // Асимметрия имён: ORDER_DONE (фильтр) → DONE (Order.status).
+    expect(src).toMatch(/ORDER_DONE:\s*'DONE'/);
+    // Ветка `!== 'ALL'` и применение маппинга к where.order.
+    expect(src).toMatch(/effectiveOrderCalculationStatus !== 'ALL'/);
+    expect(src).toMatch(
+      /ORDER_CALCULATION_FILTER_ORDER_STATUS\[\s*effectiveOrderCalculationStatus\s*\]/,
+    );
     // Аккуратное объединение с уже существующим where.order.
     expect(src).toMatch(/mergeOrderWhere/);
   });
@@ -233,12 +272,29 @@ describe('/admin/workshop-needs — UI «Статус расчёта»', () => {
   test('В шапке фильтра есть подсказка про default = ACTIVE', () => {
     expect(src).toMatch(/По умолчанию показаны только заказы в статусе «Расчёт»/);
     expect(src).toMatch(/Завершённые расчёты скрыты/);
+    // Подсказка называет, куда уехали скрытые заказы, — иначе закупщик
+    // считает, что потребность потерялась.
+    expect(src).toMatch(/«В производстве»/);
+    expect(src).toMatch(/«Заказ завершён»/);
   });
 
-  test('Empty states по фильтру ACTIVE/DONE/ALL', () => {
+  test('Empty states по всем значениям фильтра', () => {
     expect(src).toMatch(/Нет заказов в расчёте/);
     expect(src).toMatch(/Нет завершённых расчётов/);
+    expect(src).toMatch(/filter === 'IN_PRODUCTION'/);
+    expect(src).toMatch(/Нет заказов в производстве/);
+    expect(src).toMatch(/filter === 'ORDER_DONE'/);
+    expect(src).toMatch(/Нет завершённых заказов/);
     expect(src).toMatch(/Потребностей пока нет/);
+  });
+
+  test('«Архивировать все» не получает заказы, не проходящие гейт', () => {
+    // allOrderIds на активной вкладке сужается по isArchivableStatus —
+    // под фильтром «В производстве» кнопка иначе всегда возвращает
+    // «пропущено: N».
+    expect(src).toMatch(
+      /const allOrderIds = Array\.from\([\s\S]*?isArchivableStatus\(n\.orderStatus\)/,
+    );
   });
 });
 

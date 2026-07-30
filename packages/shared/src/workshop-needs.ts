@@ -434,21 +434,39 @@ const ExpectedDeliveryDateField: z.ZodType<string | null | undefined> = z
  * `WORKSHOP_NEED_STATUSES`). Это фильтр по статусу заказа-документа
  * (`Order.status`):
  *
- *   - `ACTIVE` → `Order.status = 'CALCULATION'` — заказы, по которым
- *     закупщик ещё в работе. Default для общего списка.
- *   - `DONE`   → `Order.status = 'CALCULATION_DONE'` — расчёт по
+ *   - `ACTIVE`        → `Order.status = 'CALCULATION'` — заказы, по
+ *     которым закупщик ещё в работе. Default для общего списка.
+ *   - `DONE`          → `Order.status = 'CALCULATION_DONE'` — расчёт по
  *     заказу зафиксирован, в текущей работе не мешает.
- *   - `ALL`    → не фильтруем по `Order.status` вообще.
+ *   - `IN_PRODUCTION` → `Order.status = 'IN_PRODUCTION'` — заказ уже
+ *     запущен в производство. Закупка по нему могла остаться
+ *     незакрытой (ждём поставку), поэтому у закупщика должен быть
+ *     отдельный вход в такие потребности, а не только «Все».
+ *   - `ORDER_DONE`    → `Order.status = 'DONE'` — заказ выпущен. Смотрят
+ *     постфактум (сверить закупку с фактом, доначислить приход), поэтому
+ *     тоже отдельным списком.
+ *   - `ALL`           → не фильтруем по `Order.status` вообще.
+ *
+ * ⚠️ Имена значений НЕ равны именам `Order.status`: `DONE` здесь — это
+ * завершённый РАСЧЁТ (`CALCULATION_DONE`), исторически сложившееся имя.
+ * Выпущенный заказ (`Order.status = DONE`) поэтому назван `ORDER_DONE`.
+ * Маппинг «значение фильтра → `Order.status`» один и живёт в
+ * `WorkshopNeedsService` (`ORDER_CALCULATION_FILTER_ORDER_STATUS`).
  *
  * Дефолт сознательно «прячет» завершённые расчёты из глобального
  * списка, чтобы рабочее место закупщика не обрастало хвостом
  * закрытых документов. В endpoint-е конкретного заказа default
  * меняется на `ALL` — карточка заказа продолжает видеть свои
  * потребности независимо от того, идёт расчёт или закончен.
+ *
+ * Заказы `DRAFT` / `SAMPLE_PRODUCTION` / `CANCELLED` отдельного значения
+ * не имеют (это не стадии закупки тиража) — они видны только под `ALL`.
  */
 export const WORKSHOP_NEED_ORDER_CALCULATION_FILTERS = [
   'ACTIVE',
   'DONE',
+  'IN_PRODUCTION',
+  'ORDER_DONE',
   'ALL',
 ] as const;
 export type WorkshopNeedOrderCalculationFilter =
@@ -463,6 +481,11 @@ export const WORKSHOP_NEED_ORDER_CALCULATION_FILTER_LABELS: Record<
 > = {
   ACTIVE: 'В расчёте',
   DONE: 'Расчёт завершён',
+  IN_PRODUCTION: 'В производстве',
+  // Бейдж статуса на карточке показывает «Завершён» (см.
+  // `formatOrderStatus`) — в фильтре уточняем «Заказ», чтобы не путать
+  // со «Расчёт завершён» строкой выше.
+  ORDER_DONE: 'Заказ завершён',
   ALL: 'Все',
 };
 

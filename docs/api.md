@@ -604,7 +604,7 @@ DTO: `packages/shared/src/cutting-closure.ts`. ADR: 0018.
 
 | Метод | Путь                                              | RBAC               | Описание |
 | ----- | ------------------------------------------------- | ------------------ | -------- |
-| GET   | `/api/workshop-needs`                             | ADMIN, SHOP_MANAGER | List `ListWorkshopNeedsQuery`. |
+| GET   | `/api/workshop-needs`                             | ADMIN, SHOP_MANAGER | List `ListWorkshopNeedsQuery`. Управленческий фильтр `orderCalculationStatus` по `Order.status`: `ACTIVE` (default без `orderId`) = `CALCULATION`, `DONE` = `CALCULATION_DONE`, `IN_PRODUCTION` = `IN_PRODUCTION` (запущенные заказы — их закупка могла остаться незакрытой), `ORDER_DONE` = `DONE` (выпущенные — сверка постфактум), `ALL` = без фильтра. Имена значений не равны `Order.status`: `DONE` здесь — завершённый расчёт, выпущенный заказ — `ORDER_DONE`. Скоуп архива — `orderArchive` (`ACTIVE`/`ARCHIVED`/`ALL`). |
 | GET   | `/api/workshop-needs/:id`                         | ADMIN, SHOP_MANAGER | Карточка. |
 | PATCH | `/api/workshop-needs/:id`                         | ADMIN, SHOP_MANAGER | `UpdateWorkshopNeedDto`. Закупщик правит `purchaseQty`/`quotedPrice`/`quotedCurrency`/`expectedDeliveryDate`/`selectedSupplierId`/`selectedSupplierCatalogItemId`/`comment`. |
 | POST  | `/api/workshop-needs/:id/cancel`                  | ADMIN, SHOP_MANAGER | `status → CANCELLED`. |

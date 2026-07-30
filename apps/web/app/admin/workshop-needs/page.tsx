@@ -11,6 +11,11 @@
  *   query-param `orderCalculationStatus`):
  *     - `ACTIVE` (default) — `Order.status = CALCULATION`;
  *     - `DONE`             — `Order.status = CALCULATION_DONE`;
+ *     - `IN_PRODUCTION`    — `Order.status = IN_PRODUCTION` (заказ уже
+ *       запущен; закупка по нему может быть не закрыта, поэтому нужен
+ *       отдельный вход, а не только «Все»);
+ *     - `ORDER_DONE`       — `Order.status = DONE` (заказ выпущен;
+ *       смотрят постфактум — сверить закупку с фактом);
  *     - `ALL`              — без фильтра по статусу заказа.
  *
  *   Прежний верхний фильтр по `WorkshopNeed.status` убран из UI —
@@ -306,7 +311,20 @@ export default async function AdminWorkshopNeedsPage({
   }
   const activeTabCount = tab === 'active' ? currentOrderCount : otherOrderCount;
   const archiveTabCount = tab === 'archive' ? currentOrderCount : otherOrderCount;
-  const allOrderIds = Array.from(new Set(items.map((n) => n.orderId)));
+  // Кнопка «Архивировать все» шлёт весь список одним запросом, поэтому на
+  // активной вкладке отдаём в неё только заказы, которые пройдут гейт
+  // архивации. Иначе под фильтром «В производстве» кнопка гарантированно
+  // возвращает «пропущено: N» — ни один запущенный заказ архивировать
+  // нельзя. В архиве список не сужаем: «Очистить архив» гейта по
+  // `Order.status` не имеет (архивный заказ мог уехать в производство).
+  const allOrderIds = Array.from(
+    new Set(
+      (tab === 'archive'
+        ? items
+        : items.filter((n) => isArchivableStatus(n.orderStatus))
+      ).map((n) => n.orderId),
+    ),
+  );
 
   // Справочник поставщиков для inline-выбора в строках (нужен, чтобы
   // проставить `selectedSupplierId` и создать заказ). Грузим только
@@ -369,7 +387,7 @@ export default async function AdminWorkshopNeedsPage({
       <AdminCard>
         <AdminSectionHeader
           title="Фильтр"
-          hint='По умолчанию показаны только заказы в статусе «Расчёт». Завершённые расчёты скрыты.'
+          hint='По умолчанию показаны только заказы в статусе «Расчёт». Завершённые расчёты скрыты — они под «Расчёт завершён», запущенные заказы под «В производстве», выпущенные под «Заказ завершён».'
         />
 
         <form
@@ -608,6 +626,24 @@ function EmptyOrdersState({
       <AdminEmptyState
         icon={<ClipboardList size={26} strokeWidth={1.6} aria-hidden />}
         title="Нет завершённых расчётов"
+      />
+    );
+  }
+  if (filter === 'IN_PRODUCTION') {
+    return (
+      <AdminEmptyState
+        icon={<ClipboardList size={26} strokeWidth={1.6} aria-hidden />}
+        title="Нет заказов в производстве"
+        hint="Потребности запущенных заказов появятся здесь."
+      />
+    );
+  }
+  if (filter === 'ORDER_DONE') {
+    return (
+      <AdminEmptyState
+        icon={<ClipboardList size={26} strokeWidth={1.6} aria-hidden />}
+        title="Нет завершённых заказов"
+        hint="Потребности выпущенных заказов появятся здесь."
       />
     );
   }

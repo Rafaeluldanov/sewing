@@ -446,10 +446,10 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
   // ---------------------------------------------------------------------------
 
   test('orderCalculationStatus: default ACTIVE прячет CALCULATION_DONE-заказы', async () => {
-    const { activeOrderId, doneOrderId } =
+    const { activeOrderId, doneOrderId, productionOrderId, releasedOrderId } =
       await prepareCalculationStatusFixture(t, seed, cookies.manager);
 
-    // Без query: default ACTIVE → A видим, B нет.
+    // Без query: default ACTIVE → A видим, B/C/D нет.
     const def = await request(t.app.getHttpServer())
       .get('/api/workshop-needs')
       .set('Cookie', cookies.manager)
@@ -457,6 +457,8 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
     const defIds = def.body.map((n: { orderId: string }) => n.orderId);
     expect(defIds).toContain(activeOrderId);
     expect(defIds).not.toContain(doneOrderId);
+    expect(defIds).not.toContain(productionOrderId);
+    expect(defIds).not.toContain(releasedOrderId);
 
     // Явно ACTIVE — то же самое.
     const active = await request(t.app.getHttpServer())
@@ -466,10 +468,12 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
     const activeIds = active.body.map((n: { orderId: string }) => n.orderId);
     expect(activeIds).toContain(activeOrderId);
     expect(activeIds).not.toContain(doneOrderId);
+    expect(activeIds).not.toContain(productionOrderId);
+    expect(activeIds).not.toContain(releasedOrderId);
   });
 
   test('orderCalculationStatus=DONE возвращает только CALCULATION_DONE', async () => {
-    const { activeOrderId, doneOrderId } =
+    const { activeOrderId, doneOrderId, productionOrderId, releasedOrderId } =
       await prepareCalculationStatusFixture(t, seed, cookies.manager);
 
     const r = await request(t.app.getHttpServer())
@@ -479,10 +483,50 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
     const ids = r.body.map((n: { orderId: string }) => n.orderId);
     expect(ids).toContain(doneOrderId);
     expect(ids).not.toContain(activeOrderId);
+    expect(ids).not.toContain(productionOrderId);
+    // `DONE` — это завершённый РАСЧЁТ, а не выпущенный заказ.
+    expect(ids).not.toContain(releasedOrderId);
   });
 
-  test('orderCalculationStatus=ALL возвращает и активные, и завершённые', async () => {
-    const { activeOrderId, doneOrderId } =
+  test('orderCalculationStatus=IN_PRODUCTION возвращает только запущенные заказы', async () => {
+    const { activeOrderId, doneOrderId, productionOrderId, releasedOrderId } =
+      await prepareCalculationStatusFixture(t, seed, cookies.manager);
+
+    const r = await request(t.app.getHttpServer())
+      .get('/api/workshop-needs?orderCalculationStatus=IN_PRODUCTION')
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    const ids = r.body.map((n: { orderId: string }) => n.orderId);
+    expect(ids).toContain(productionOrderId);
+    expect(ids).not.toContain(activeOrderId);
+    expect(ids).not.toContain(doneOrderId);
+    expect(ids).not.toContain(releasedOrderId);
+    // Все пришедшие строки — только запущенного заказа.
+    for (const n of r.body) {
+      expect(n.orderStatus).toBe('IN_PRODUCTION');
+    }
+  });
+
+  test('orderCalculationStatus=ORDER_DONE возвращает только выпущенные заказы', async () => {
+    const { activeOrderId, doneOrderId, productionOrderId, releasedOrderId } =
+      await prepareCalculationStatusFixture(t, seed, cookies.manager);
+
+    const r = await request(t.app.getHttpServer())
+      .get('/api/workshop-needs?orderCalculationStatus=ORDER_DONE')
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    const ids = r.body.map((n: { orderId: string }) => n.orderId);
+    expect(ids).toContain(releasedOrderId);
+    expect(ids).not.toContain(activeOrderId);
+    expect(ids).not.toContain(doneOrderId);
+    expect(ids).not.toContain(productionOrderId);
+    for (const n of r.body) {
+      expect(n.orderStatus).toBe('DONE');
+    }
+  });
+
+  test('orderCalculationStatus=ALL возвращает все стадии заказа', async () => {
+    const { activeOrderId, doneOrderId, productionOrderId, releasedOrderId } =
       await prepareCalculationStatusFixture(t, seed, cookies.manager);
 
     const r = await request(t.app.getHttpServer())
@@ -492,6 +536,8 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
     const ids = r.body.map((n: { orderId: string }) => n.orderId);
     expect(ids).toContain(activeOrderId);
     expect(ids).toContain(doneOrderId);
+    expect(ids).toContain(productionOrderId);
+    expect(ids).toContain(releasedOrderId);
   });
 
   test('orderId-эндпоинт не скрывает CALCULATION_DONE-заказ (default ALL)', async () => {
@@ -664,7 +710,9 @@ async function prepareSimpleQtyPerUnitOrder(
 /**
  * Готовит фикстуру под фильтр `orderCalculationStatus`:
  *   - заказ A — `Order.status = CALCULATION` + WorkshopNeed;
- *   - заказ B — `Order.status = CALCULATION_DONE` + WorkshopNeed.
+ *   - заказ B — `Order.status = CALCULATION_DONE` + WorkshopNeed;
+ *   - заказ C — `Order.status = IN_PRODUCTION` + WorkshopNeed;
+ *   - заказ D — `Order.status = DONE` (выпущен) + WorkshopNeed.
  *
  * Используем `prisma.order.update` напрямую, чтобы не тащить весь
  * happy-path `start-calculation` / `complete-calculation` (он
@@ -676,7 +724,12 @@ async function prepareCalculationStatusFixture(
   t: TestApp,
   seed: SeedResult,
   cookie: string,
-): Promise<{ activeOrderId: string; doneOrderId: string }> {
+): Promise<{
+  activeOrderId: string;
+  doneOrderId: string;
+  productionOrderId: string;
+  releasedOrderId: string;
+}> {
   // Не используем `prepareSimpleQtyPerUnitOrder` дважды — он завязан
   // на фиксированный `code = 'TC-SIMPLE'`, и второй вызов упадёт в
   // 409 на уникальности `TechCard.code`. Создаём заказы с
@@ -714,7 +767,49 @@ async function prepareCalculationStatusFixture(
     },
   );
 
-  for (const id of [activeOrderId, doneOrderId]) {
+  // Заказ C — уже запущен в производство: под ним проверяем фильтр
+  // `orderCalculationStatus=IN_PRODUCTION` (закупка запущенного заказа
+  // не должна пропадать из рабочего списка закупщика).
+  const tcC = await createTechCard(t, cookie, {
+    code: 'TC-OCS-C',
+    name: 'Calc filter C',
+    materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
+  });
+  const productionOrderId = await createOrderWithPatternAndTechCard(
+    t,
+    seed,
+    cookie,
+    {
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
+      techCardId: tcC.id,
+      patternItemId: null,
+    },
+  );
+
+  // Заказ D — уже выпущен: под ним проверяем `ORDER_DONE` (фильтр
+  // называется не `DONE`, потому что `DONE` = завершённый РАСЧЁТ).
+  const tcD = await createTechCard(t, cookie, {
+    code: 'TC-OCS-D',
+    name: 'Calc filter D',
+    materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
+  });
+  const releasedOrderId = await createOrderWithPatternAndTechCard(
+    t,
+    seed,
+    cookie,
+    {
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
+      techCardId: tcD.id,
+      patternItemId: null,
+    },
+  );
+
+  for (const id of [
+    activeOrderId,
+    doneOrderId,
+    productionOrderId,
+    releasedOrderId,
+  ]) {
     await request(t.app.getHttpServer())
       .post(`/api/orders/${id}/workshop-needs/calculate`)
       .set('Cookie', cookie)
@@ -730,6 +825,14 @@ async function prepareCalculationStatusFixture(
     where: { id: doneOrderId },
     data: { status: 'CALCULATION_DONE' },
   });
+  await t.prisma.order.update({
+    where: { id: productionOrderId },
+    data: { status: 'IN_PRODUCTION' },
+  });
+  await t.prisma.order.update({
+    where: { id: releasedOrderId },
+    data: { status: 'DONE' },
+  });
 
-  return { activeOrderId, doneOrderId };
+  return { activeOrderId, doneOrderId, productionOrderId, releasedOrderId };
 }
