@@ -9447,6 +9447,22 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .admin-compact-grouped-card {
   padding: 0;
   overflow: hidden;
+  /* Отступы задаёт сам заголовок (правило ниже), а таблица идёт
+     edge-to-edge — общий grid-gap карточки здесь не нужен. */
+  gap: 0;
+}
+
+/* Заголовок-полоска компактной карточки. Карточка обнулила padding
+   ради edge-to-edge таблицы — вместе с ним заголовок терял и свои
+   отступы, из-за чего «Активные / Всего: N» слева и кнопка
+   bulk-архива справа прилипали к углам блока. Возвращаем padding
+   самому заголовку: по горизонтали — ровно как у ячеек компактной
+   таблицы и `.admin-compact-group-row__inner` (0.75rem), чтобы
+   заголовок вставал по одной вертикали с колонками и разделителями
+   категорий. */
+.admin-compact-grouped-card > .admin-section-header {
+  padding: 0.7rem 0.75rem;
+  border-bottom: 1px solid var(--admin-border);
 }
 
 .admin-compact-table-wrap {
