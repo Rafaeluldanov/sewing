@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
+  CUTTING_LAY_BLOCKING_PASSPORTS_SHOWN,
   computeCuttingTotals,
   listCuttingCompletionProblems,
   listLayCompletionProblems,
@@ -30,6 +31,35 @@ import {
   CuttingTaskPayloadInvalidException,
 } from '../../common/errors.js';
 import { countReleasePairs } from '../../common/cutting-release.js';
+import { AuditService } from '../audit/audit.service.js';
+
+/**
+ * Паспорт, выпущенный по раскладу, с признаком «уже ушёл в работу» —
+ * основа гейта правки закрытого расклада (`reopenLay`).
+ */
+interface LayPassportState {
+  id: string;
+  number: string;
+  /** `Passport.cuttingLayOrdinal` — номер расклада, из которого выпущен. */
+  layOrdinal: number;
+  sizeId: string;
+  /** `Passport.rollOrdinal`; `null` у паспортов не рулонного выпуска. */
+  rollOrdinal: number | null;
+  /** Штук в паспорте — в `AuditLog` при удалении ради правки настила. */
+  qtyCut: number;
+  /**
+   * Паспорт двинулся с кроя: сменил статус, лёг в ячейку, получил
+   * событие кроме `CREATED`, попал в коробку или в проведённое
+   * списание материалов. Такой паспорт удалять нельзя — за ним уже
+   * стоят движения склада и производства.
+   *
+   * Условие «свежести» (`moved === false`) намеренно совпадает с
+   * `PassportsService.editableBlockReason`: паспорт, который автор мог
+   * бы удалить сам на «Выпущенных паспортах», снимается и открытием
+   * расклада.
+   */
+  moved: boolean;
+}
 
 /**
  * Сервис «Кабинет раскройщика» (`CuttingTask`, роль `CUTTER`).
@@ -53,7 +83,10 @@ import { countReleasePairs } from '../../common/cutting-release.js';
 export class CuttingTasksService {
   private readonly logger = new Logger(CuttingTasksService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   private readonly summaryInclude = {
     order: { select: { number: true, color: true, customer: true } },
@@ -122,22 +155,21 @@ export class CuttingTasksService {
     if (!task) throw new CuttingTaskNotFoundException();
 
     // Частичное завершение: сколько паспортов уже выпущено по каждому
-    // раскладу. Нужно для подписи «выпущено 2 из 8» и для гейта «Открыть
-    // расклад» (кнопка гаснет, если по раскладу есть паспорта).
-    const releasedPassports = await this.prisma.passport.findMany({
-      where: {
-        orderId: task.orderId,
-        status: { not: 'CANCELLED' },
-        cuttingLayOrdinal: { not: null },
-        rollOrdinal: { not: null },
-      },
-      select: { sizeId: true, rollOrdinal: true, cuttingLayOrdinal: true },
-    });
+    // раскладу — подпись «выпущено 2 из 8». Плюс правка закрытого
+    // расклада: сколько паспортов снимется при «Открыть расклад» и какие
+    // из них уже ушли в работу (тогда открыть нельзя вовсе).
+    const layPassports = await this.loadLayPassports(task.orderId);
     const releasedSet = new Set(
-      releasedPassports.map(
-        (p) => `${p.cuttingLayOrdinal}:${p.sizeId}:${p.rollOrdinal}`,
-      ),
+      layPassports
+        .filter((p) => p.rollOrdinal != null)
+        .map((p) => `${p.layOrdinal}:${p.sizeId}:${p.rollOrdinal}`),
     );
+    const passportsByLay = new Map<number, LayPassportState[]>();
+    for (const p of layPassports) {
+      const list = passportsByLay.get(p.layOrdinal) ?? [];
+      list.push(p);
+      passportsByLay.set(p.layOrdinal, list);
+    }
 
     const sizeRows: CuttingTaskSizeRowDto[] = task.sizeRows.map((r) => ({
       id: r.id,
@@ -162,6 +194,8 @@ export class CuttingTasksService {
         ],
         releasedSet,
       );
+      const own = passportsByLay.get(l.ordinal) ?? [];
+      const blocked = own.filter((p) => p.moved);
       return {
         id: l.id,
         ordinal: l.ordinal,
@@ -182,6 +216,11 @@ export class CuttingTasksService {
         completedByName: l.completedBy?.fullName ?? null,
         totalPassports: totalPairs,
         releasedPassports: releasedPairs,
+        reopenDeletesPassports: own.length - blocked.length,
+        reopenBlockedPassports: blocked
+          .slice(0, CUTTING_LAY_BLOCKING_PASSPORTS_SHOWN)
+          .map((p) => p.number),
+        reopenBlockedTotal: blocked.length,
       };
     });
 
@@ -806,18 +845,40 @@ export class CuttingTasksService {
   }
 
   /**
-   * «Открыть расклад» — снять закрытие, чтобы поправить настил.
+   * «Открыть расклад» — снять закрытие, чтобы поправить настил
+   * (раскройщик ошибся в «на настиле»/слоях или закрыл лишний расклад).
    *
-   * Разрешено, только пока по раскладу нет ни одного живого паспорта:
-   * иначе правка слоёв/«на настиле» разошлась бы с `qtyCut` уже
-   * напечатанных паспортов (`CUTTING_LAY_HAS_PASSPORTS` — сначала удалить
-   * их на «Выпущенных паспортах»).
+   * Что делаем с уже выпущенными по раскладу паспортами. Настил и
+   * паспорт связаны жёстко: паспорт несёт снимок расклада (`qtyCut` =
+   * слои × «на настиле», номер «Расклад N · Рулон M»). Открыть расклад и
+   * оставить старые паспорта — значит развести бумагу в цехе с данными в
+   * системе. Поэтому:
+   *   - «свежие» паспорта (`CREATED`, без ячейки, без событий кроме
+   *     `CREATED`, не в коробке, без проведённого списания материалов)
+   *     удаляются вместе с открытием расклада — в одной транзакции, с
+   *     `AuditLog` на каждый. Раскройщик подтверждает это в форме, видя
+   *     их число (`CuttingTaskLayDto.reopenDeletesPassports`). Каскадом
+   *     уходят и сдельные начисления за выпуск (`OperationEntry`) — как
+   *     при самостоятельном удалении паспорта автором: выпуска не
+   *     случилось, начислять не за что;
+   *   - паспорт, который УЖЕ ушёл в работу, не удаляем и расклад не
+   *     открываем — `CUTTING_LAY_HAS_PASSPORTS` с номерами. Такие
+   *     паспорта отменяет мастер.
+   *
+   * Права автора паспорта здесь НЕ проверяем (в отличие от
+   * `PassportsService.delete`): расклад — единица работы раскройщика, а
+   * выпустить по нему паспорта мог помощник. Иначе типовой цех, где
+   * печатает помощник, не смог бы исправить ошибку настила вообще.
    *
    * Работает и для задачи в статусе `DONE`: тогда задача возвращается в
    * `IN_PROGRESS` (раскрой снова идёт) — иначе расклад открыт, а форма
    * read-only.
    */
-  async reopenLay(id: string, ordinal: number): Promise<CuttingTaskDetailDto> {
+  async reopenLay(
+    id: string,
+    ordinal: number,
+    employeeId: string | null = null,
+  ): Promise<CuttingTaskDetailDto> {
     const task = await this.prisma.cuttingTask.findUnique({
       where: { id },
       select: {
@@ -833,18 +894,76 @@ export class CuttingTasksService {
     // Уже открыт — идемпотентно.
     if (!lay.completedAt) return this.getOne(id);
 
-    const released = await this.prisma.passport.count({
-      where: {
-        orderId: task.orderId,
-        cuttingLayOrdinal: ordinal,
-        status: { not: 'CANCELLED' },
-      },
-    });
-    if (released > 0) {
-      throw new CuttingLayHasPassportsException(ordinal, released);
+    const passports = await this.loadLayPassports(task.orderId, ordinal);
+    const blocked = passports.filter((p) => p.moved);
+    if (blocked.length > 0) {
+      throw new CuttingLayHasPassportsException(
+        ordinal,
+        blocked
+          .slice(0, CUTTING_LAY_BLOCKING_PASSPORTS_SHOWN)
+          .map((p) => p.number),
+        blocked.length,
+      );
     }
+    const staleIds = passports.map((p) => p.id);
 
     await this.prisma.$transaction(async (tx) => {
+      if (staleIds.length > 0) {
+        await tx.passportDefect.deleteMany({
+          where: { passportId: { in: staleIds } },
+        });
+        await tx.operationEntry.deleteMany({
+          where: { passportId: { in: staleIds } },
+        });
+        await tx.passportEvent.deleteMany({
+          where: { passportId: { in: staleIds } },
+        });
+        // Условие «свежести» повторяем в самом DELETE: между проверкой и
+        // транзакцией паспорт могли разместить в ячейке или отсканировать
+        // (помощник работает параллельно). Если снеслось меньше, чем
+        // собирались, — кто-то успел, откатываем всё и просим повторить.
+        const deleted = await tx.passport.deleteMany({
+          where: { id: { in: staleIds }, status: 'CREATED', currentCellId: null },
+        });
+        if (deleted.count !== staleIds.length) {
+          // Уцелевшие (значит, уже двинувшиеся) паспорта ещё в БД —
+          // называем их в ошибке; транзакция откатится целиком.
+          const survivors = await tx.passport.findMany({
+            where: { id: { in: staleIds } },
+            orderBy: { number: 'asc' },
+            take: CUTTING_LAY_BLOCKING_PASSPORTS_SHOWN,
+            select: { number: true },
+          });
+          throw new CuttingLayHasPassportsException(
+            ordinal,
+            survivors.map((s) => s.number),
+            staleIds.length - deleted.count,
+          );
+        }
+        for (const p of passports) {
+          await this.audit.log(
+            {
+              event: 'PASSPORT_DELETED',
+              entityType: 'PASSPORT',
+              entityId: p.id,
+              employeeId,
+              // Набор полей — как у `PassportsService.delete`, чтобы
+              // разбор инцидента не зависел от того, каким путём паспорт
+              // снесли; `reason` отличает удаление ради правки настила.
+              payload: {
+                number: p.number,
+                orderId: task.orderId,
+                sizeId: p.sizeId,
+                qtyCut: p.qtyCut,
+                cuttingLayOrdinal: ordinal,
+                rollOrdinal: p.rollOrdinal,
+                reason: 'CUTTING_LAY_REOPENED',
+              },
+            },
+            tx,
+          );
+        }
+      }
       await tx.cuttingTaskLay.update({
         where: { id: lay.id },
         data: { completedAt: null, completedById: null },
@@ -857,9 +976,77 @@ export class CuttingTasksService {
       }
     });
     this.logger.log(
-      `event=cutting-lay.reopened taskId=${id} ordinal=${ordinal} taskWasDone=${task.status === 'DONE'}`,
+      `event=cutting-lay.reopened taskId=${id} ordinal=${ordinal} taskWasDone=${task.status === 'DONE'} passportsDeleted=${staleIds.length}`,
     );
     return this.getOne(id);
+  }
+
+  /**
+   * Паспорта, выпущенные по раскладам заказа, с признаком «уже ушёл в
+   * работу» (`moved`). Без `ordinal` — по всем раскладам (карточка
+   * задачи), с `ordinal` — по одному (гейт «Открыть расклад»).
+   *
+   * Отменённые (`CANCELLED`) паспорта не в счёт: они не занимают тройку
+   * «расклад × размер × рулон» и открытию расклада не мешают.
+   */
+  private async loadLayPassports(
+    orderId: string,
+    ordinal?: number,
+  ): Promise<LayPassportState[]> {
+    const passports = await this.prisma.passport.findMany({
+      where: {
+        orderId,
+        status: { not: 'CANCELLED' },
+        cuttingLayOrdinal: ordinal == null ? { not: null } : ordinal,
+      },
+      orderBy: { number: 'asc' },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        sizeId: true,
+        rollOrdinal: true,
+        cuttingLayOrdinal: true,
+        currentCellId: true,
+        qtyCut: true,
+        // Упакованный паспорт и проведённое списание материалов — тоже
+        // «ушёл в работу»: их сносить нельзя (см. `PassportsService.delete`).
+        boxItems: { select: { id: true }, take: 1 },
+        materialIssues: {
+          where: { status: 'POSTED' },
+          select: { id: true },
+          take: 1,
+        },
+      },
+    });
+    if (passports.length === 0) return [];
+
+    // Любое событие кроме `CREATED` = паспорт двигался (выдан, сканирован,
+    // размещён). Одним запросом на все паспорта — без N+1.
+    const events = await this.prisma.passportEvent.findMany({
+      where: {
+        passportId: { in: passports.map((p) => p.id) },
+        type: { not: 'CREATED' },
+      },
+      select: { passportId: true },
+      distinct: ['passportId'],
+    });
+    const withEvents = new Set(events.map((e) => e.passportId));
+
+    return passports.map((p) => ({
+      id: p.id,
+      number: p.number,
+      layOrdinal: p.cuttingLayOrdinal as number,
+      sizeId: p.sizeId,
+      rollOrdinal: p.rollOrdinal,
+      qtyCut: p.qtyCut,
+      moved:
+        p.status !== 'CREATED' ||
+        p.currentCellId != null ||
+        withEvents.has(p.id) ||
+        p.boxItems.length > 0 ||
+        p.materialIssues.length > 0,
+    }));
   }
 
   // ---------------------------------------------------------------------------

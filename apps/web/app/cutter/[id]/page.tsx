@@ -143,7 +143,9 @@ export default async function CutterTaskDetailPage({ params }: PageProps) {
         <>
           <section className="constructor-card-block">
             <p className="constructor-muted">
-              Раскрой завершён. Данные переданы дальше по производству.
+              Раскрой завершён. Данные переданы дальше по производству. Нашли
+              ошибку в настиле — нажмите «Открыть расклад» в нужном блоке:
+              задача вернётся в работу, и расклад снова можно будет править.
             </p>
           </section>
           <CuttingForm

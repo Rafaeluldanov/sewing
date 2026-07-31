@@ -65,6 +65,11 @@ interface LayDraft {
   /** Сколько паспортов по раскладу уже выпущено / ожидается. */
   releasedPassports: number;
   totalPassports: number;
+  /** Сколько паспортов будет удалено при открытии расклада (см. DTO). */
+  reopenDeletesPassports: number;
+  /** Номера паспортов, уже ушедших в работу — они запирают расклад. */
+  reopenBlockedPassports: string[];
+  reopenBlockedTotal: number;
   /** Выбранные размеры: `sizeId → perLayerQty` строкой. Наличие = выбран. */
   sizes: Record<string, string>;
   rolls: RollDraft[];
@@ -102,6 +107,9 @@ const NEW_LAY_META = {
   completedByName: null,
   releasedPassports: 0,
   totalPassports: 0,
+  reopenDeletesPassports: 0,
+  reopenBlockedPassports: [] as string[],
+  reopenBlockedTotal: 0,
 } as const;
 
 function layFromDto(dto: CuttingTaskLayDto): LayDraft {
@@ -116,6 +124,9 @@ function layFromDto(dto: CuttingTaskLayDto): LayDraft {
     completedByName: dto.completedByName,
     releasedPassports: dto.releasedPassports,
     totalPassports: dto.totalPassports,
+    reopenDeletesPassports: dto.reopenDeletesPassports,
+    reopenBlockedPassports: dto.reopenBlockedPassports,
+    reopenBlockedTotal: dto.reopenBlockedTotal,
     sizes,
     rolls: dto.rolls.map((r) => ({
       key: `roll-${r.id}`,
@@ -419,20 +430,34 @@ export function CuttingForm({
     return layDrafts.filter((l) => !l.completedAt).findIndex((l) => l.key === lay.key);
   }
 
-  /** «Открыть расклад» — снять закрытие, если по нему нет паспортов. */
+  /**
+   * «Открыть расклад» — снять закрытие, чтобы поправить настил или
+   * удалить лишний расклад.
+   *
+   * Свежие паспорта расклада backend удалит вместе с открытием (настил
+   * меняется — их `qtyCut` и номера «Расклад N · Рулон M» больше не
+   * соответствуют), поэтому подтверждение называет их число прямым
+   * текстом. Ушедшие в работу паспорта запирают расклад — тогда кнопка
+   * недоступна, а причина написана рядом.
+   */
   function handleReopenLay(lay: LayDraft) {
     setError(null);
     if (lay.ordinal == null) return;
-    if (lay.releasedPassports > 0) {
+    if (lay.reopenBlockedTotal > 0) {
       setError(
-        `По раскладу уже выпущено паспортов: ${lay.releasedPassports}. ` +
-          'Сначала удалите их в «Выпущенных паспортах».',
+        `Расклад не открыть: паспорта ${lay.reopenBlockedPassports.join(', ')} ` +
+          'уже в работе. Их отменяет мастер.',
       );
       return;
     }
     const ok = window.confirm(
-      'Открыть расклад для правок? Выпуск паспортов по нему станет недоступен, ' +
-        'пока вы не закроете его снова.',
+      lay.reopenDeletesPassports > 0
+        ? `Открыть расклад ${lay.ordinal} для правок?\n\n` +
+            `Выпущенные по нему паспорта будут УДАЛЕНЫ: ${lay.reopenDeletesPassports} шт. ` +
+            'Напечатанные листки станут недействительны — выбросьте их. ' +
+            'После правок закройте расклад и выпустите паспорта заново.'
+        : 'Открыть расклад для правок? Выпуск паспортов по нему станет недоступен, ' +
+            'пока вы не закроете его снова.',
     );
     if (!ok) return;
     startTransition(async () => {
@@ -459,11 +484,11 @@ export function CuttingForm({
             // что записано в паспортах (`Расклад N · Рулон M`).
             ordinal={lay.ordinal ?? idx + 1}
             readOnly={readOnly || !!lay.completedAt}
-            canRemove={
-              !readOnly &&
-              !lay.completedAt &&
-              layDrafts.filter((l) => !l.completedAt).length > 1
-            }
+            // Удалить можно открытый расклад, если он в задаче не
+            // единственный. Считаем ВСЕ расклады, а не только открытые:
+            // лишний расклад чаще всего оказывается один открытый среди
+            // закрытых — именно его и надо снести.
+            canRemove={!readOnly && !lay.completedAt && layDrafts.length > 1}
             problems={lay.completedAt ? [] : layProblems(lay)}
             onCompleteLay={() => handleCompleteLay(lay)}
             onReopenLay={() => handleReopenLay(lay)}
@@ -824,23 +849,32 @@ function LayBlock({
        * Частичное завершение раскроя. Открытый расклад: «Расклад готов»
        * (гаснет, пока настил не заполнен — причины показываем рядом теми же
        * словами, что и backend). Закрытый: подпись «кто закрыл» + «Открыть
-       * расклад», доступный пока по раскладу нет выпущенных паспортов.
+       * расклад» — единственный вход в правку уже закрытого настила
+       * (ошиблись в «на настиле», закрыли лишний расклад). Гаснет только
+       * если паспорта расклада уже ушли в работу: их backend удалить не
+       * может, а без удаления настил и бумага разойдутся.
        */}
       {lay.completedAt ? (
         <div className="cutter-lay__foot">
           <p className="cutter-lay__closed-note">
             Настил закрыт
-            {lay.completedByName ? `, закрыл ${lay.completedByName}` : ''} — правки
-            недоступны.{' '}
-            {lay.releasedPassports > 0
-              ? `По раскладу выпущено паспортов: ${lay.releasedPassports}, открыть его можно только после их удаления.`
-              : 'Паспортов по нему ещё нет — расклад можно открыть.'}
+            {lay.completedByName ? `, закрыл ${lay.completedByName}` : ''} — чтобы
+            поправить размеры, слои или удалить лишний расклад, откройте его.{' '}
+            {lay.reopenBlockedTotal > 0
+              ? `Сейчас нельзя: паспорта ${lay.reopenBlockedPassports.join(', ')}${
+                  lay.reopenBlockedTotal > lay.reopenBlockedPassports.length
+                    ? ` и ещё ${lay.reopenBlockedTotal - lay.reopenBlockedPassports.length}`
+                    : ''
+                } уже в работе — отменить их может мастер.`
+              : lay.reopenDeletesPassports > 0
+                ? `Выпущенные по раскладу паспорта (${lay.reopenDeletesPassports} шт.) при открытии будут удалены — выпустите их заново после правок.`
+                : 'Паспортов по нему ещё нет — открывайте свободно.'}
           </p>
           <button
             type="button"
             className="constructor-btn constructor-btn--ghost"
             onClick={onReopenLay}
-            disabled={disabled || lay.releasedPassports > 0}
+            disabled={disabled || lay.reopenBlockedTotal > 0}
           >
             Открыть расклад
           </button>

@@ -24,8 +24,11 @@
  *      переиспользуются даже после удаления расклада.
  *   4. «Расклад готов» на незаполненном настиле → 400
  *      `CUTTING_LAY_COMPLETION_INCOMPLETE`; закрытие идемпотентно.
- *   5. «Открыть расклад» возвращает его в работу, но только пока по нему
- *      нет паспортов (иначе 409 `CUTTING_LAY_HAS_PASSPORTS`).
+ *   5. «Открыть расклад» возвращает его в работу и СНИМАЕТ свежие
+ *      паспорта расклада (иначе бумага разойдётся с новым настилом);
+ *      паспорт, уже ушедший в работу, запирает расклад — 409
+ *      `CUTTING_LAY_HAS_PASSPORTS` с его номером. Открытый расклад можно
+ *      удалить целиком (кейс «закрыли лишний расклад»).
  *   6. «Раскрой завершён» закрывает оставшиеся расклады и ставит `DONE`.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
@@ -122,6 +125,30 @@ describeWithDb('integration — partial cutting completion by lay', () => {
     return request(t.app.getHttpServer())
       .post(`/api/cutting-tasks/${taskId}/lays/${ordinal}/reopen`)
       .set('Cookie', cutterCookie);
+  }
+
+  /**
+   * Выпустить паспорт по рулону 1 закрытого расклада 1 (раскройщик умеет
+   * сам). Возвращает номер выпущенного паспорта.
+   */
+  async function releasePassport(layOrdinal = 1, rollOrdinal = 1) {
+    const rel = await request(t.app.getHttpServer())
+      .post('/api/passports/release-from-rolls')
+      .set('Cookie', cutterCookie)
+      .send({
+        orderId,
+        layOrdinal,
+        sizeId,
+        cutDate: '2026-09-27T00:00:00.000Z',
+        rollOrdinals: [rollOrdinal],
+      });
+    expect(rel.status).toBe(201);
+    const passport = await t.prisma.passport.findFirst({
+      where: { orderId, cuttingLayOrdinal: layOrdinal, rollOrdinal },
+      select: { number: true },
+    });
+    expect(passport).not.toBeNull();
+    return passport!.number;
   }
 
   // ---------------------------------------------------------------------------
@@ -264,28 +291,68 @@ describeWithDb('integration — partial cutting completion by lay', () => {
     await save([lay([{ ordinal: 1, layers: 9 }], { ordinal: 1 })]).expect(200);
   });
 
-  test('расклад с выпущенным паспортом не открывается (CUTTING_LAY_HAS_PASSPORTS)', async () => {
+  test('открытие расклада снимает свежие паспорта и даёт править настил', async () => {
     await save([lay([{ ordinal: 1, layers: 4 }])]).expect(200);
     await completeLay(1).expect(201);
+    const number = await releasePassport();
 
-    // Выпускаем паспорт по закрытому раскладу — раскройщик может сам.
-    const rel = await request(t.app.getHttpServer())
-      .post('/api/passports/release-from-rolls')
+    // Карточка честно говорит, сколько паспортов снесётся при открытии.
+    const before = await request(t.app.getHttpServer())
+      .get(`/api/cutting-tasks/${taskId}`)
       .set('Cookie', cutterCookie)
-      .send({
-        orderId,
-        layOrdinal: 1,
-        sizeId,
-        cutDate: '2026-09-27T00:00:00.000Z',
-        rollOrdinals: [1],
-      });
-    expect(rel.status).toBe(201);
+      .expect(200);
+    expect(before.body.lays[0]).toMatchObject({
+      releasedPassports: 1,
+      reopenDeletesPassports: 1,
+      reopenBlockedPassports: [],
+      reopenBlockedTotal: 0,
+    });
+
+    const r = await reopenLay(1);
+    expect(r.status).toBe(201);
+    expect(r.body.lays[0].completedAt).toBeNull();
+    expect(r.body.lays[0].releasedPassports).toBe(0);
+
+    // Паспорт снесён вместе с событиями и начислениями за выпуск.
+    const left = await t.prisma.passport.findMany({ where: { orderId } });
+    expect(left).toHaveLength(0);
+    expect(
+      await t.prisma.passportEvent.count({ where: { passport: { orderId } } }),
+    ).toBe(0);
+
+    // Удаление зафиксировано в аудите с причиной — разбор инцидента.
+    const audit = await t.prisma.auditLog.findFirst({
+      where: { event: 'PASSPORT_DELETED' },
+    });
+    expect(audit).not.toBeNull();
+    expect(audit!.payload).toMatchObject({
+      number,
+      cuttingLayOrdinal: 1,
+      reason: 'CUTTING_LAY_REOPENED',
+    });
+
+    // И настил снова правится: ошибочные 4 слоя меняем на 9.
+    await save([lay([{ ordinal: 1, layers: 9 }], { ordinal: 1 })]).expect(200);
+  });
+
+  test('расклад с ушедшим в работу паспортом не открывается (CUTTING_LAY_HAS_PASSPORTS)', async () => {
+    await save([lay([{ ordinal: 1, layers: 4 }])]).expect(200);
+    await completeLay(1).expect(201);
+    const number = await releasePassport();
+
+    // Паспорт двинулся с кроя (выдан швее) — удалять его нельзя.
+    await t.prisma.passport.updateMany({
+      where: { orderId },
+      data: { status: 'IN_PROGRESS' },
+    });
 
     const r = await reopenLay(1);
     expect(r.status).toBe(409);
     expect(r.body.code).toBe('CUTTING_LAY_HAS_PASSPORTS');
+    // Номер паспорта в сообщении: раскройщику надо знать, что искать.
+    expect(r.body.message).toContain(number);
 
-    // Расклад остался закрытым, прогресс выпуска виден в карточке.
+    // Расклад остался закрытым, паспорт цел.
     const detail = await request(t.app.getHttpServer())
       .get(`/api/cutting-tasks/${taskId}`)
       .set('Cookie', cutterCookie)
@@ -294,7 +361,24 @@ describeWithDb('integration — partial cutting completion by lay', () => {
       completedAt: expect.any(String),
       releasedPassports: 1,
       totalPassports: 1,
+      reopenDeletesPassports: 0,
+      reopenBlockedPassports: [number],
+      reopenBlockedTotal: 1,
     });
+    expect(await t.prisma.passport.count({ where: { orderId } })).toBe(1);
+  });
+
+  test('закрытый расклад без паспортов открывается и удаляется целиком', async () => {
+    // Раскройщик закрыл лишний расклад 2 — его надо снести.
+    await save([lay([{ ordinal: 1, layers: 4 }])]).expect(200);
+    await completeLay(1).expect(201);
+    await save([lay([{ ordinal: 1, layers: 3 }])]).expect(200);
+    await completeLay(2).expect(201);
+
+    await reopenLay(2).expect(201);
+    // Открытый расклад, которого нет в payload, удаляется (закрытый №1 цел).
+    const r = await save([]).expect(200);
+    expect(r.body.lays.map((l: { ordinal: number }) => l.ordinal)).toEqual([1]);
   });
 
   // ---------------------------------------------------------------------------

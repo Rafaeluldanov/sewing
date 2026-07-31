@@ -150,18 +150,27 @@ export class CuttingTasksController {
   }
 
   /**
-   * «Открыть расклад» — снять закрытие, чтобы поправить настил. Разрешено,
-   * только пока по раскладу нет живых паспортов
-   * (409 `CUTTING_LAY_HAS_PASSPORTS`). Если задача была `DONE`, она
-   * возвращается в `IN_PROGRESS`.
+   * «Открыть расклад» — снять закрытие, чтобы поправить настил
+   * (ошиблись в «на настиле»/слоях, закрыли лишний расклад).
+   *
+   * Свежие паспорта расклада (`CREATED`, без ячейки и событий) при этом
+   * УДАЛЯЮТСЯ: настил меняется, а они несут его снимок. Если хоть один
+   * паспорт уже ушёл в работу — 409 `CUTTING_LAY_HAS_PASSPORTS` с их
+   * номерами, расклад остаётся закрытым. Если задача была `DONE`, она
+   * возвращается в `IN_PROGRESS`. Идемпотентно.
    */
   @Post(':id/lays/:ordinal/reopen')
   @Roles('CUTTER', 'SHOP_MANAGER', 'ADMIN')
   reopenLay(
     @Param('id') id: string,
     @Param('ordinal') ordinal: string,
+    @CurrentUser() user: AuthPrincipal,
   ): Promise<CuttingTaskDetailDto> {
-    return this.tasks.reopenLay(id, this.parseOrdinal(ordinal));
+    return this.tasks.reopenLay(
+      id,
+      this.parseOrdinal(ordinal),
+      user.employeeId,
+    );
   }
 
   private parseOrdinal(raw: string): number {
