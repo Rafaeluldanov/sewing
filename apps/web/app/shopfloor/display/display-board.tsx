@@ -7,6 +7,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type RefObject,
 } from 'react';
 import Link from 'next/link';
 import { LogOut, Package, Scissors, Search, type LucideIcon } from 'lucide-react';
@@ -229,6 +231,10 @@ function dlog(payload: Record<string, unknown>): void {
  *
  * Если правишь брейкпоинты в CSS — поправь и здесь (иначе лог начнёт
  * врать; на саму отрисовку это не влияет).
+ *
+ * `tv-4k` пережил отдельный css-слой ≥2400px (тот больше не нужен:
+ * шкала `--display-u` там упирается в потолок `clamp`'а) — в логе
+ * метка остаётся полезной, чтобы отличить 4K-панель от 1080p.
  */
 function viewportTier(width: number, height: number): string {
   if (height >= 1400 && height > width) return 'portrait-kiosk';
@@ -237,6 +243,120 @@ function viewportTier(width: number, height: number): string {
   if (width <= 767) return 'phone';
   if (width <= 1199) return 'compact';
   return 'desktop';
+}
+
+/**
+ * Нижняя граница авто-подгонки матрицы (см. `useMatrixFit`). Ниже 0.55
+ * от шкалы экрана цифры на TV перестают читаться с 5 м, и «влезло
+ * целиком» уже не стоит потери смысла — в этом случае матрица честно
+ * оставляет себе внутренний скролл, как было раньше.
+ */
+const MATRIX_FIT_MIN = 0.55;
+/**
+ * Потолок числа замеров на одну «порцию» изменений. Замер → новый
+ * `fit` → ре-рендер → снова замер: шаг сходится за 2-3 итерации, но
+ * счётчик страхует от патологических случаев (например, таблица, у
+ * которой высота не убывает при уменьшении шрифта из-за min-width
+ * колонок). Сбрасывается при ресайзе зоны и при смене данных.
+ */
+const MATRIX_FIT_MAX_PASSES = 8;
+
+/**
+ * Авто-подгонка матрицы «вся целиком, без скролла».
+ *
+ * CSS-шкала (`--display-u`, см. globals.css → `.display-screen`) делает
+ * размеры пропорциональными вьюпорту, но она НЕ знает, сколько строк и
+ * колонок в конкретном заказе: 3 цвета × 5 размеров с маршрутом из
+ * четырёх операций влезают на любой экран, а 8 цветов × 7 размеров с
+ * десятью операциями — уже нет. Поэтому дополнительный множитель
+ * считаем по факту: сравниваем `scrollHeight/Width` таблицы с
+ * `clientHeight/Width` её scroll-зоны и ужимаем шкалу ровно во столько
+ * раз, во сколько не влезает.
+ *
+ * Возвращаемый `fit` уходит инлайновой переменной `--display-fit` на
+ * саму `<table>` — там его подхватывает правило `.display-matrix`.
+ * Заголовок блока остаётся на шкале экрана намеренно: высота scroll-
+ * зоны тогда не зависит от подгонки, и итерации сходятся, а не гуляют.
+ *
+ * Замер идёт в `useEffect` (не в layout-фазе) сознательно: витрина
+ * рендерится и на сервере, лишний кадр на TV незаметен, а
+ * `useLayoutEffect` в SSR даёт предупреждение React.
+ */
+function useMatrixFit(
+  scrollRef: RefObject<HTMLDivElement | null>,
+  tableRef: RefObject<HTMLTableElement | null>,
+  /** Меняется при смене данных матрицы — повод пересчитать с нуля. */
+  contentKey: string,
+): number {
+  const [fit, setFit] = useState(1);
+  const passesRef = useRef(0);
+  const [resizeTick, setResizeTick] = useState(0);
+
+  // Ресайз окна/зоны — единственный внешний триггер: сама подгонка
+  // размеров scroll-зоны не меняет (её высоту задаёт grid витрины),
+  // поэтому обратной связи «fit → resize → fit» здесь нет.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      passesRef.current = 0;
+      setResizeTick((t) => t + 1);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [scrollRef]);
+
+  useEffect(() => {
+    passesRef.current = 0;
+  }, [contentKey]);
+
+  useEffect(() => {
+    const scroll = scrollRef.current;
+    const table = tableRef.current;
+    if (!scroll || !table) return;
+    // Подгонка нужна только в КИОСК-режиме (десктоп / TV / портретный
+    // киоск), где витрина не скроллится и «не влезло» = «не видно».
+    // В ручных слоях (телефон, планшет, низкий экран) страница
+    // скроллится намеренно, а размеры там уже подобраны под руку —
+    // ужимать их до нечитаемости нельзя.
+    //
+    // Признак режима читаем из САМОГО CSS (`overflow-y` витрины:
+    // hidden = киоск, auto = ручной), а не повторяем брейкпоинты в JS:
+    // иначе при следующей правке globals.css эти два списка разъедутся
+    // молча (та же грабля, что с `viewportTier`, — но там расхождение
+    // портит лишь лог, а здесь испортило бы экран).
+    const screenEl = scroll.closest('.display-screen');
+    const manualScroll =
+      !!screenEl &&
+      getComputedStyle(screenEl).overflowY !== 'hidden';
+    if (manualScroll) {
+      if (fit !== 1) setFit(1);
+      return;
+    }
+    if (passesRef.current >= MATRIX_FIT_MAX_PASSES) return;
+    const availH = scroll.clientHeight;
+    const availW = scroll.clientWidth;
+    const needH = table.scrollHeight;
+    const needW = table.scrollWidth;
+    if (!availH || !availW || !needH || !needW) return;
+    const ratio = Math.min(availH / needH, availW / needW);
+    let next: number;
+    if (ratio >= 1) {
+      // Есть запас. Растём обратно только при заметном зазоре (>5%) и
+      // с недобором (0.97), иначе на границе «ровно влезает» экран
+      // начинает дышать шрифтом туда-сюда на каждом polling-тике.
+      if (fit >= 1 || ratio < 1.05) return;
+      next = Math.min(1, fit * ratio * 0.97);
+    } else {
+      next = Math.max(MATRIX_FIT_MIN, fit * ratio * 0.99);
+    }
+    next = Math.round(next * 1000) / 1000;
+    if (Math.abs(next - fit) < 0.01) return;
+    passesRef.current += 1;
+    setFit(next);
+  }, [fit, resizeTick, contentKey, scrollRef, tableRef]);
+
+  return fit;
 }
 
 function clientApiBase(): string {
@@ -1318,6 +1438,23 @@ function ProductionFlowMatrix({
   // split-блок (sewing/QC/WTO) + 1 колонка «Брак». Нужен для
   // colSpan заголовка цветовой группы.
   const dataColumnsCount = stages.length + processSplits.length * 2 + 1;
+  // Авто-подгонка «вся матрица целиком, без скролла» (см. `useMatrixFit`).
+  // Пересчёт с нуля нужен, когда меняется ГЕОМЕТРИЯ таблицы — число
+  // цветовых блоков, строк-размеров или колонок маршрута; цифры внутри
+  // ячеек на размеры не влияют, поэтому в ключ не входят (иначе каждый
+  // polling-тик гонял бы замеры впустую).
+  const fitKey = useMemo(
+    () =>
+      [
+        processSplits.length,
+        stages.length,
+        ...colors.map((c) => `${c.colorKey}:${c.rows.length}`),
+      ].join('|'),
+    [colors, processSplits.length, stages.length],
+  );
+  const matrixScrollRef = useRef<HTMLDivElement | null>(null);
+  const matrixTableRef = useRef<HTMLTableElement | null>(null);
+  const matrixFit = useMatrixFit(matrixScrollRef, matrixTableRef, fitKey);
   // Шапка матрицы — двухстрочная:
   //   ряд 1 — постоянные колонки (Размер/Крой/Упаковка/...) идут с
   //           `rowSpan=2`; каждый split-блок (sewing-операция, ОТК,
@@ -1341,8 +1478,12 @@ function ProductionFlowMatrix({
       {colors.length === 0 ? (
         <div className="display-empty">нет активных партий</div>
       ) : (
-        <div className="display-matrix__scroll">
-          <table className="display-matrix">
+        <div className="display-matrix__scroll" ref={matrixScrollRef}>
+          <table
+            className="display-matrix"
+            ref={matrixTableRef}
+            style={{ '--display-fit': matrixFit } as CSSProperties}
+          >
             <thead>
               <tr>
                 <th

@@ -4467,6 +4467,43 @@ button.current-work__head--toggle:focus-visible .current-work__title {
    - никаких hover/focus-состояний и интерактива — экран read-only.
    ============================================================================ */
 .display-screen {
+  /* ------------------------------------------------------------------
+     Единая шкала витрины (`--display-u`).
+     ------------------------------------------------------------------
+     Раньше размеры жили тремя независимыми способами: `clamp(rem, vw,
+     rem)` в базовом слое, ФИКСИРОВАННЫЕ rem в TV-слоях (≥1600 / ≥2400)
+     и ещё раз фиксированные — в портретном киоске. Из-за этого экран
+     «не адаптировался»: на любом мониторе шире 1600px шрифты вставали
+     в TV-размер (часы 4rem, ячейка 1.7rem) независимо от того, TV это
+     на стене или окно браузера на столе, а высота вьюпорта не влияла
+     на размеры вообще — шапка с KPI съедали пол-экрана, и матрица
+     всегда упиралась в собственный скролл.
+
+     Теперь ВСЕ размеры витрины (шрифты, padding'и, gap'ы, ширины
+     колонок) считаются от одной единицы `--display-u`, а она — от
+     МЕНЬШЕЙ из двух долей вьюпорта:
+
+       min(0.72vw, 1.15vh)
+
+     Почему min, а не одна ось: матрица растёт в обе стороны — вширь от
+     числа операций маршрута, ввысь от «цвет × размер». Привязка только
+     к vw давала гигантский шрифт на низком широком экране (1920×800 —
+     окно браузера с открытой консолью), привязка только к vh — мелкий
+     на портретной панели. Коэффициенты подобраны так, что на 1920×1080
+     единица ≈ 12.4px, на 1440×900 ≈ 10.4px, на 4K ≈ 24px (потолок
+     clamp'а); это примерно на четверть меньше прежнего десктопного
+     масштаба — что и просили.
+
+     `--display-u-base` — «чистая» шкала экрана, `--display-u` — то, что
+     реально читают правила. Разделены ради `--display-fit`: матрица
+     переопределяет `--display-u` на себе (см. `.display-matrix`), а
+     слои-исключения (портретный киоск) правят только базу. */
+  --display-u-base: clamp(0.58rem, min(0.72vw, 1.15vh), 1.5rem);
+  /* Коэффициент авто-подгонки матрицы: 1 = шкала экрана как есть.
+     Ставится инлайном из `ProductionFlowMatrix` (display-board.tsx),
+     когда таблица не помещается в свою зону целиком. */
+  --display-fit: 1;
+  --display-u: var(--display-u-base);
   /* Light dashboard palette — намеренно изолировано от глобальной темы
      приложения (только под `.display-screen`), чтобы остальной UI не
      переключался в светлый режим. */
@@ -4519,8 +4556,9 @@ button.current-work__head--toggle:focus-visible .current-work__title {
      до своего min-content, а не раздувать grid выше viewport — это
      ключ к надёжному внутреннему overflow матрицы. */
   grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 1rem;
-  padding: 1.25rem 1.5rem 1.5rem;
+  gap: calc(var(--display-u) * 0.85);
+  padding: calc(var(--display-u) * 1) calc(var(--display-u) * 1.2)
+    calc(var(--display-u) * 1.2);
   background: var(--display-bg);
   color: var(--display-fg);
   font-family: 'Inter', system-ui, sans-serif;
@@ -4538,11 +4576,11 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  gap: 1rem;
-  padding: 0.25rem 0;
+  gap: calc(var(--display-u) * 0.85);
+  padding: calc(var(--display-u) * 0.2) 0;
 }
 .display-screen__brand {
-  font-size: clamp(1.2rem, 1.6vw, 1.6rem);
+  font-size: calc(var(--display-u) * 1.5);
   font-weight: 700;
   letter-spacing: 0.18em;
   display: inline-flex;
@@ -4556,7 +4594,7 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   line-height: 1;
 }
 .display-screen__clock {
-  font-size: clamp(2rem, 3.4vw, 3.4rem);
+  font-size: calc(var(--display-u) * 3.7);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -4567,8 +4605,8 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 1rem;
-  font-size: clamp(0.85rem, 1vw, 1rem);
+  gap: calc(var(--display-u) * 0.85);
+  font-size: calc(var(--display-u) * 1.15);
   color: var(--display-fg-muted);
 }
 .display-status {
@@ -4580,8 +4618,8 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   font-weight: 600;
 }
 .display-status__dot {
-  width: 0.65rem;
-  height: 0.65rem;
+  width: calc(var(--display-u) * 0.6);
+  height: calc(var(--display-u) * 0.6);
   border-radius: 50%;
   background: currentColor;
 }
@@ -4616,14 +4654,14 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 .display-screen__logout {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.7rem;
+  gap: calc(var(--display-u) * 0.35);
+  padding: calc(var(--display-u) * 0.28) calc(var(--display-u) * 0.6);
   border: 1px solid var(--display-fg-muted);
   border-radius: 0.5rem;
   background: transparent;
   color: var(--display-fg-muted);
   font: inherit;
-  font-size: clamp(0.8rem, 0.95vw, 0.95rem);
+  font-size: calc(var(--display-u) * 1.1);
   line-height: 1;
   cursor: pointer;
   transition:
@@ -4641,7 +4679,7 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 .display-kpi {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 0.75rem;
+  gap: calc(var(--display-u) * 0.6);
 }
 @media (max-width: 1399px) {
   .display-kpi {
@@ -4652,21 +4690,21 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   background: var(--display-bg-card);
   border: 1px solid var(--display-border);
   border-radius: 0.85rem;
-  padding: 0.85rem 1rem;
+  padding: calc(var(--display-u) * 0.6) calc(var(--display-u) * 0.75);
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: calc(var(--display-u) * 0.2);
   box-shadow: var(--display-shadow);
 }
 .display-kpi__value {
-  font-size: clamp(1.6rem, 2.4vw, 2.4rem);
+  font-size: calc(var(--display-u) * 2.6);
   font-weight: 800;
   line-height: 1.05;
   font-variant-numeric: tabular-nums;
   color: var(--display-fg);
 }
 .display-kpi__label {
-  font-size: 0.78rem;
+  font-size: calc(var(--display-u) * 0.95);
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--display-fg-muted);
@@ -4702,8 +4740,10 @@ button.current-work__head--toggle:focus-visible .current-work__title {
    скроллиться без ломания equipment-плиток. */
 .display-board {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
-  gap: 1rem;
+  /* Правая колонка тоже на шкале: фиксированные 320px на 4K съедали
+     непропорционально мало, а на 1366×768 — слишком много. */
+  grid-template-columns: minmax(0, 2fr) minmax(calc(var(--display-u) * 24), 1fr);
+  gap: calc(var(--display-u) * 0.85);
   /* Цепочка `min-height: 0` (display-screen → display-board →
      production/equipment → display-block → scroll-area) ОБЯЗАТЕЛЬНА:
      иначе flex/grid items получают неявный `min-height: auto`,
@@ -4742,7 +4782,7 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   /* Имя операции занимает обе подколонки; рамку рисуем только
      снизу — между ним и второй строкой шапки. */
   border-bottom: 1px solid var(--display-border-strong);
-  padding-bottom: 0.4rem;
+  padding-bottom: calc(var(--display-u) * 0.35);
 }
 .display-matrix__th--sewing-op .display-matrix__th-op {
   display: inline-block;
@@ -4764,19 +4804,21 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 }
 /* Вторая строка шапки (подколонки ▶/✔). Sticky должен «прилипать»
    к низу первой строки, иначе под ней просвечивают строки данных
-   при скролле. `top` берётся с запасом по высоте row-1, рассчитан
-   эмпирически по реальному `font-size 0.85rem + padding 0.65rem`
-   первой строки. На TV-слое (≥1600px) подменяется ниже. */
+   при скролле. `top` = высота row-1 в единицах шкалы: текст (1u при
+   line-height ≈ 1.2) + вертикальный padding (2 × 0.55u) + нижний
+   отступ имени операции (0.35u) ≈ 2.75u. Считается от `--display-u`
+   ВНУТРИ таблицы, поэтому авто-подгонка (`--display-fit`) двигает
+   его синхронно со шрифтом шапки — отдельных TV-значений больше нет. */
 .display-matrix__th--sub {
-  top: 2.4rem;
-  font-size: 1rem;
+  top: calc(var(--display-u) * 2.75);
+  font-size: calc(var(--display-u) * 1.15);
   font-weight: 800;
   letter-spacing: 0;
-  padding: 0.35rem 0.4rem;
+  padding: calc(var(--display-u) * 0.3) calc(var(--display-u) * 0.35);
 }
 .display-matrix__th--sub .display-matrix__th-dir {
   display: inline-block;
-  font-size: 1.1rem;
+  font-size: calc(var(--display-u) * 1.3);
   font-weight: 800;
   line-height: 1;
 }
@@ -4784,8 +4826,8 @@ button.current-work__head--toggle:focus-visible .current-work__title {
    одинаковые, чтобы данные строк ниже выравнивались зеркально. */
 .display-matrix__th--sew-in,
 .display-matrix__th--sew-done {
-  min-width: 2.6rem;
-  width: 2.6rem;
+  min-width: calc(var(--display-u) * 2.8);
+  width: calc(var(--display-u) * 2.8);
 }
 /* Внутренний разделитель между ▶ и ✔ убираем: визуально они
    принадлежат одной операции, граница рисуется только под
@@ -4883,24 +4925,24 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   background: var(--display-bg-card);
   border: 1px solid var(--display-border);
   border-radius: 1rem;
-  padding: 1rem 1.25rem;
+  padding: calc(var(--display-u) * 0.8) calc(var(--display-u) * 1);
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
+  gap: calc(var(--display-u) * 0.7);
   min-height: 0;
   overflow: hidden;
   box-shadow: var(--display-shadow);
 }
 .display-block__title {
   margin: 0;
-  font-size: clamp(1rem, 1.2vw, 1.3rem);
+  font-size: calc(var(--display-u) * 1.35);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.16em;
   color: var(--display-fg-muted);
   display: inline-flex;
   align-items: baseline;
-  gap: 0.75rem;
+  gap: calc(var(--display-u) * 0.6);
 }
 .display-block__title-badge {
   font-size: 0.78em;
@@ -4920,7 +4962,7 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   color: var(--display-fg-subtle);
 }
 .display-empty {
-  font-size: clamp(1.1rem, 1.4vw, 1.5rem);
+  font-size: calc(var(--display-u) * 1.55);
   font-weight: 600;
   color: var(--display-fg-subtle);
   text-align: center;
@@ -4956,6 +4998,14 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   contain: layout paint;
 }
 .display-matrix {
+  /* Авто-подгонка «вся матрица целиком, без скролла»: `--display-fit`
+     приходит инлайном из `ProductionFlowMatrix` (display-board.tsx) и
+     ужимает ТОЛЬКО таблицу. Переопределяем `--display-u` здесь, на
+     самой `<table>`, а не на `.display-block--matrix`, специально:
+     заголовок блока остаётся на шкале экрана, значит доступная высота
+     scroll-зоны от подгонки не меняется и итерации замера сходятся
+     (иначе шрифт ↓ → заголовок ↓ → места больше → шрифт ↑ → дребезг). */
+  --display-u: calc(var(--display-u-base) * var(--display-fit));
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
@@ -4971,12 +5021,12 @@ button.current-work__head--toggle:focus-visible .current-work__title {
      поверх sticky на TV/WebKit. */
   background: var(--display-bg-soft);
   background-clip: padding-box;
-  font-size: 0.85rem;
+  font-size: calc(var(--display-u) * 1);
   text-transform: uppercase;
   letter-spacing: 0.1em;
   font-weight: 700;
   color: var(--display-fg-muted);
-  padding: 0.65rem 0.6rem;
+  padding: calc(var(--display-u) * 0.55) calc(var(--display-u) * 0.5);
   text-align: center;
   border-bottom: 1px solid var(--display-border-strong);
   white-space: nowrap;
@@ -4984,7 +5034,7 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 }
 .display-matrix__th--first {
   text-align: left;
-  padding-left: 1rem;
+  padding-left: calc(var(--display-u) * 0.8);
   /* «Угловая» ячейка шапки: липнет сразу по двум осям (top: 0 наследует
      от `.display-matrix__th`), поэтому z-index должен быть выше и
      sticky-шапки (2), и липкой колонки размеров (1). */
@@ -4993,10 +5043,10 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 }
 .display-matrix__th-icon {
   display: inline-flex;
-  width: 1.1rem;
-  height: 1.1rem;
-  vertical-align: -0.2rem;
-  margin-right: 0.35rem;
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.2em;
+  margin-right: 0.35em;
   color: var(--display-fg-muted);
 }
 .display-matrix__th-icon svg {
@@ -5025,9 +5075,9 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   color: var(--display-crit);
 }
 .display-matrix__cell {
-  padding: 0.55rem 0.6rem;
+  padding: calc(var(--display-u) * 0.42) calc(var(--display-u) * 0.45);
   text-align: center;
-  font-size: clamp(1.1rem, 1.4vw, 1.5rem);
+  font-size: calc(var(--display-u) * 1.55);
   font-weight: 600;
   color: var(--display-fg);
   border-bottom: 1px solid var(--display-border);
@@ -5178,8 +5228,9 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 }
 .display-matrix__row-label {
   text-align: left;
-  padding: 0.55rem 0.6rem 0.55rem 1rem;
-  font-size: clamp(0.95rem, 1.1vw, 1.15rem);
+  padding: calc(var(--display-u) * 0.42) calc(var(--display-u) * 0.45)
+    calc(var(--display-u) * 0.42) calc(var(--display-u) * 0.8);
+  font-size: calc(var(--display-u) * 1.2);
   font-weight: 600;
   color: var(--display-fg-muted);
   border-bottom: 1px solid var(--display-border);
@@ -5207,8 +5258,9 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 }
 .display-matrix__color-row .display-matrix__color-label {
   text-align: left;
-  padding: 0.65rem 0.6rem 0.55rem 1rem;
-  font-size: 0.95rem;
+  padding: calc(var(--display-u) * 0.5) calc(var(--display-u) * 0.45)
+    calc(var(--display-u) * 0.42) calc(var(--display-u) * 0.8);
+  font-size: calc(var(--display-u) * 1.05);
   text-transform: uppercase;
   letter-spacing: 0.14em;
   font-weight: 700;
@@ -5221,21 +5273,22 @@ button.current-work__head--toggle:focus-visible .current-work__title {
    поэтому sticky на самой ячейке бесполезен — сдвигаться внутри своего
    containing block ей некуда. Липнет ВНУТРЕННИЙ span: при горизонтальном
    скролле название цвета остаётся у левого края, ровно над липкой
-   колонкой размеров. `left: 1rem` совпадает с padding-left ячейки, так
-   что в исходном положении (scrollLeft = 0) ничего не сдвигается. */
+   колонкой размеров. `left` совпадает с padding-left ячейки (обе
+   величины — `0.8 × --display-u`), так что в исходном положении
+   (scrollLeft = 0) ничего не сдвигается. */
 .display-matrix__color-label-inner {
   position: sticky;
-  left: 1rem;
+  left: calc(var(--display-u) * 0.8);
   display: inline-flex;
   align-items: center;
 }
 .display-matrix__color-swatch {
   display: inline-block;
-  width: 0.85rem;
-  height: 0.85rem;
-  border-radius: 0.2rem;
-  margin-right: 0.55rem;
-  vertical-align: -0.1rem;
+  width: 0.85em;
+  height: 0.85em;
+  border-radius: 0.2em;
+  margin-right: 0.55em;
+  vertical-align: -0.1em;
   border: 1px solid var(--display-border-strong);
 }
 .display-matrix__color-swatch--black {
@@ -5254,7 +5307,7 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 .display-matrix__total-row--grand .display-matrix__row-label {
   background: var(--display-fg);
   color: #f7f7f6;
-  font-size: clamp(1.15rem, 1.5vw, 1.6rem);
+  font-size: calc(var(--display-u) * 1.75);
   border-top: 2px solid var(--display-fg);
   border-bottom: 0;
 }
@@ -5283,10 +5336,11 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   margin: 0;
   padding: 0;
   display: grid;
-  /* 4–6 колонок в ряд: на ≥1080p ширина блока ~360–400px,
-     `minmax(56px, 1fr)` даёт 5–6 квадратных плиток в строке. */
-  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
-  gap: 0.4rem;
+  /* 4–6 колонок в ряд: плитка ≈ 5 единиц шкалы (на 1080p ~62px, на
+     1440×900 ~52px, на 4K ~120px) — доля блока под неё одна и та же
+     на любом экране, поэтому число колонок в ряду не «плавает». */
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--display-u) * 5), 1fr));
+  gap: calc(var(--display-u) * 0.4);
   /* Та же история, что и у `.display-matrix__scroll`: грид-плитки
      должны жить внутри собственной scroll-зоны и НЕ выталкивать
      соседей (totals) за пределы блока. */
@@ -5301,11 +5355,11 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.2rem;
+  gap: calc(var(--display-u) * 0.18);
   aspect-ratio: 1 / 1;
   /* Минимальный padding — экран на 30+ станков не должен «дышать»
      лишними пикселями. */
-  padding: 0.25rem 0.2rem;
+  padding: calc(var(--display-u) * 0.22) calc(var(--display-u) * 0.18);
   border-radius: 0.5rem;
   background: var(--display-bg-soft);
   border: 1px solid var(--display-border);
@@ -5327,7 +5381,7 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   cursor: pointer;
 }
 .display-equipment-tile__num {
-  font-size: clamp(1rem, 1.4vw, 1.45rem);
+  font-size: calc(var(--display-u) * 1.5);
   font-weight: 800;
   letter-spacing: 0.02em;
   line-height: 1;
@@ -5361,7 +5415,7 @@ button.current-work__head--toggle:focus-visible .current-work__title {
    через запятую без пробела (узкая плитка), длинное —
    обрезается ellipsis'ом, чтобы плитка не растягивалась. */
 .display-equipment-tile__sizes {
-  font-size: clamp(0.7rem, 0.85vw, 0.9rem);
+  font-size: calc(var(--display-u) * 0.95);
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.02em;
@@ -6542,7 +6596,7 @@ body:has(.master-page) .app-main {
   color: var(--display-fg, inherit);
 }
 .display-orphan-calls__title {
-  font-size: 0.85rem;
+  font-size: calc(var(--display-u) * 0.95);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -6565,11 +6619,11 @@ body:has(.master-page) .app-main {
   background: #ffffff;
   border: 1px solid #c7d2fe;
   border-radius: 999px;
-  font-size: 0.9rem;
+  font-size: calc(var(--display-u) * 1);
   color: #1e1b4b;
 }
 .display-orphan-calls__waiting {
-  font-size: 0.8rem;
+  font-size: calc(var(--display-u) * 0.9);
   color: #4338ca;
 }
 /* Компактный totals-чип под сеткой: только цвет + цифра, без подписей.
@@ -6577,10 +6631,10 @@ body:has(.master-page) .app-main {
 .display-equipment__totals {
   display: flex;
   justify-content: flex-start;
-  gap: 0.6rem;
-  padding-top: 0.4rem;
+  gap: calc(var(--display-u) * 0.55);
+  padding-top: calc(var(--display-u) * 0.35);
   border-top: 1px solid var(--display-border);
-  font-size: 0.85rem;
+  font-size: calc(var(--display-u) * 0.95);
   color: var(--display-fg-muted);
 }
 .display-equipment__total {
@@ -6591,15 +6645,15 @@ body:has(.master-page) .app-main {
 .display-equipment__total::before {
   content: '';
   display: inline-block;
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.55em;
+  height: 0.55em;
   border-radius: 999px;
   background: currentColor;
-  margin-right: 0.3rem;
-  vertical-align: 0.05rem;
+  margin-right: 0.3em;
+  vertical-align: 0.05em;
 }
 .display-equipment__total strong {
-  font-size: 1.1rem;
+  font-size: calc(var(--display-u) * 1.25);
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
@@ -6633,115 +6687,39 @@ body:has(.display-screen) {
 }
 
 /* TV / large-display layer ------------------------------------------------- */
-/* Цели:
-     - читаемость с расстояния 3-7 м на 44" мониторе (1920×1080 fullscreen);
-     - KPI остаётся в одну строку из 8 карточек (никакого wrap'а в 4×2);
-     - board остаётся двухколоночным (production + equipment);
-     - матрица и плитки оборудования — крупнее, но НЕ ломают chain
-       overflow (только font-size / padding / icon-size, layout цепочка
-       выше остаётся прежней).
+/* Цели прежние: читаемость с 3-7 м на 44" мониторе (1920×1080 fullscreen),
+   KPI в одну строку из 8 карточек, board остаётся двухколоночным.
+
+   ИЗМЕНИЛОСЬ КАК. Раньше слой перечислял два десятка ФИКСИРОВАННЫХ
+   `font-size` (часы 4rem, ячейка 1.7rem, KPI 2.8rem …). Из-за них любой
+   экран шире 1600px — что TV на стене, что окно браузера на 27"
+   мониторе, что ноутбук с внешним 1600×900 — получал одинаковые
+   «телевизорные» размеры, не зависящие ни от ширины, ни от высоты
+   вьюпорта. Это и была та самая «неадаптивность»: шапка с KPI съедали
+   пол-экрана, а матрица всегда упиралась в собственный скролл.
+
+   Теперь весь апскейл — одна строка: слой лишь поднимает единицу шкалы
+   (`--display-u-base`, см. `.display-screen`), а шрифты, padding'и,
+   ширины колонок и sticky-`top` второй строки шапки пересчитываются от
+   неё сами. Отдельный 4K-слой (≥2400px) больше не нужен: там шкала
+   упирается в верхнюю границу clamp'а.
+
    Брейкпоинт `min-width: 1600px` намеренно выше десктопного (≥1199),
    чтобы laptop/desktop-вид (1280-1440) не перерастал в TV-режим.
    Все правила скоупаны под `.display-screen` — на остальные страницы
    приложения этот слой не влияет. */
 @media (min-width: 1600px) {
   .display-screen {
-    padding: 1.5rem 1.75rem 1.75rem;
-    gap: 1.25rem;
+    /* Та же формула min(vw, vh), коэффициенты выше десктопных:
+       1920×1080 → ≈13.4px (десктопная дала бы 12.4), 2560×1440 →
+       ≈17.9px, 3840×2160 → 24px (потолок clamp'а). */
+    --display-u-base: clamp(0.7rem, min(0.78vw, 1.24vh), 1.5rem);
   }
-  .display-screen__brand {
-    font-size: 1.8rem;
-  }
-  .display-screen__clock {
-    font-size: 4rem;
-  }
-  .display-screen__meta {
-    font-size: 1.1rem;
-  }
-  .display-kpi {
-    gap: 1rem;
-  }
-  .display-kpi__card {
-    padding: 1rem 1.15rem;
-  }
-  .display-kpi__value {
-    font-size: 2.8rem;
-  }
-  .display-kpi__label {
-    font-size: 0.95rem;
-  }
-  .display-block__title {
-    font-size: 1.35rem;
-  }
-  .display-matrix__th {
-    font-size: 1rem;
-    padding: 0.85rem 0.7rem;
-  }
-  /* На TV первая строка шапки выше (font-size 1rem + padding 0.85rem),
-     значит sticky подколонок должен прилипать к её низу — иначе
-     второй ряд накладывается на первый и закрывает имя операции. */
-  .display-matrix__th--sub {
-    top: 2.85rem;
-    font-size: 1.1rem;
-    padding: 0.4rem 0.5rem;
-  }
-  .display-matrix__th--sub .display-matrix__th-dir {
-    font-size: 1.25rem;
-  }
-  .display-matrix__cell {
-    font-size: 1.7rem;
-    padding: 0.7rem 0.7rem;
-  }
-  .display-matrix__row-label {
-    font-size: 1.25rem;
-    padding: 0.7rem 0.7rem 0.7rem 1.1rem;
-  }
-  .display-matrix__total-row--grand .display-matrix__cell,
-  .display-matrix__total-row--grand .display-matrix__row-label {
-    font-size: 1.85rem;
-  }
+  /* Единственное, что не выражается через шкалу: плитки оборудования на
+     TV удобнее держать чуть просторнее сетки по умолчанию — иначе на
+     30+ станков ряд получается из 7-8 колонок и номер читается хуже. */
   .display-equipment-grid {
-    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-    gap: 0.5rem;
-  }
-  .display-equipment-tile__num {
-    font-size: 1.55rem;
-  }
-  .display-equipment-tile__sizes {
-    font-size: 0.95rem;
-  }
-  .display-equipment__totals {
-    font-size: 1rem;
-  }
-  .display-equipment__total strong {
-    font-size: 1.3rem;
-  }
-}
-
-/* 4K / большие панели (≥ 2400px). Только дополнительный апскейл шрифтов
-   и плиток; layout остаётся таким же двухколоночным. */
-@media (min-width: 2400px) {
-  .display-screen__clock {
-    font-size: 5rem;
-  }
-  .display-kpi__value {
-    font-size: 3.4rem;
-  }
-  .display-matrix__cell {
-    font-size: 2rem;
-  }
-  .display-matrix__total-row--grand .display-matrix__cell,
-  .display-matrix__total-row--grand .display-matrix__row-label {
-    font-size: 2.2rem;
-  }
-  .display-equipment-grid {
-    grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
-  }
-  .display-equipment-tile__num {
-    font-size: 1.85rem;
-  }
-  .display-equipment-tile__sizes {
-    font-size: 1.1rem;
+    grid-template-columns: repeat(auto-fill, minmax(calc(var(--display-u) * 5.6), 1fr));
   }
 }
 
@@ -7024,17 +7002,21 @@ body:has(.display-screen) {
    и очень высокой панели горизонтальное деление съедает матрицу. */
 @media (orientation: portrait) and (min-height: 1400px) {
   .display-screen {
+    /* Портретный 1080×1920 по ширине не дотягивает до TV-слоя (≥1600px),
+       хотя физически это тот же большой монитор в зале. Общая формула
+       min(0.72vw, 1.15vh) здесь даёт мизерную единицу (ширина всего
+       1080px), поэтому оси меняем местами: ведущей становится ширина,
+       а высота — ограничителем. На 1080×1920 выходит ≈12.4px (как у
+       ландшафтного 1080p), на 2160×3840 — потолок clamp'а. */
+    --display-u-base: clamp(0.7rem, min(1.15vw, 0.62vh), 1.5rem);
     grid-template-rows: auto auto minmax(0, 1fr);
     overflow: hidden;
-    padding: 1.5rem 1.5rem 1.75rem;
-    gap: 1.25rem;
   }
   .display-board {
     grid-template-columns: minmax(0, 1fr);
     /* Матрица забирает ~60% остатка, оборудование ~40%; оба блока
        скроллятся внутри себя. */
     grid-template-rows: minmax(0, 1.5fr) minmax(0, 1fr);
-    gap: 1rem;
   }
   .display-matrix__scroll {
     flex: 1 1 auto;
@@ -7043,60 +7025,12 @@ body:has(.display-screen) {
   .display-equipment-grid {
     flex: 1 1 auto;
     overflow-y: auto;
-    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-    gap: 0.5rem;
-  }
-  /* Портретный 1080×1920 по ширине не дотягивает до TV-слоя (≥1600px),
-     хотя физически это тот же большой монитор в зале — апскейл шрифтов
-     повторяем здесь. */
-  .display-screen__brand {
-    font-size: 1.6rem;
-  }
-  .display-screen__clock {
-    font-size: 3.2rem;
-  }
-  .display-screen__meta {
-    font-size: 1rem;
+    /* Плитки крупнее, чем в ландшафте: ширина блока здесь — вся
+       ширина экрана, и мелкая сетка растянулась бы в 12+ колонок. */
+    grid-template-columns: repeat(auto-fill, minmax(calc(var(--display-u) * 6.5), 1fr));
   }
   .display-kpi {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.9rem;
-  }
-  .display-kpi__value {
-    font-size: 2.6rem;
-  }
-  .display-kpi__label {
-    font-size: 0.9rem;
-  }
-  .display-block__title {
-    font-size: 1.3rem;
-  }
-  .display-matrix__th {
-    font-size: 0.95rem;
-    padding: 0.8rem 0.65rem;
-  }
-  .display-matrix__th--sub {
-    top: 2.75rem;
-    font-size: 1.05rem;
-    padding: 0.4rem 0.45rem;
-  }
-  .display-matrix__cell {
-    font-size: 1.55rem;
-    padding: 0.65rem 0.6rem;
-  }
-  .display-matrix__row-label {
-    font-size: 1.2rem;
-    padding: 0.65rem 0.65rem 0.65rem 1rem;
-  }
-  .display-matrix__total-row--grand .display-matrix__cell,
-  .display-matrix__total-row--grand .display-matrix__row-label {
-    font-size: 1.75rem;
-  }
-  .display-equipment-tile__num {
-    font-size: 1.6rem;
-  }
-  .display-equipment-tile__sizes {
-    font-size: 1rem;
   }
 }
 

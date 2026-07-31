@@ -1411,9 +1411,11 @@ describe('UI: light-theme dashboard на /shopfloor/display', () => {
     expect(css).toMatch(/\.display-equipment-tile--online\b/);
     expect(css).toMatch(/\.display-equipment-tile--warning\b/);
     expect(css).toMatch(/\.display-equipment-tile--offline\b/);
-    // Грид компактный: 4–6 колонок (auto-fill / minmax(56px,1fr)).
+    // Грид компактный: 4–6 колонок (auto-fill). Минимум плитки — не
+    // фиксированные px, а доля шкалы (≈5 единиц): тогда число колонок
+    // в ряду одинаково и на ноутбуке, и на 4K.
     expect(css).toMatch(
-      /\.display-equipment-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(56px,\s*1fr\)\)/,
+      /\.display-equipment-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(calc\(var\(--display-u\)\s*\*\s*[\d.]+\),\s*1fr\)\)/,
     );
   });
 
@@ -1555,9 +1557,11 @@ describe('UI layout: fullscreen / TV geometry на /shopfloor/display', () => {
   });
 
   test('display-board: двухколоночный grid + min-height/min-width: 0', () => {
-    // Двухколоночный layout (production 2fr, equipment 1fr с минимумом 320px).
+    // Двухколоночный layout (production 2fr, equipment 1fr с минимумом
+    // в единицах шкалы — фиксированные 320px на 4K забирали слишком
+    // мало, а на 1366×768 слишком много).
     expect(css).toMatch(
-      /\.display-board\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*2fr\)\s+minmax\(320px,\s*1fr\)/,
+      /\.display-board\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*2fr\)\s+minmax\(calc\(var\(--display-u\)\s*\*\s*[\d.]+\),\s*1fr\)/,
     );
     expect(css).toMatch(/\.display-board\s*\{[\s\S]*?min-height:\s*0/);
     expect(css).toMatch(/\.display-board\s*\{[\s\S]*?min-width:\s*0/);
@@ -1620,19 +1624,63 @@ describe('UI layout: fullscreen / TV geometry на /shopfloor/display', () => {
     );
   });
 
-  test('TV / large-display layer существует и не схлопывает board', () => {
+  test('Единая шкала: все размеры витрины считаются от --display-u', () => {
+    // Корень «неадаптивности»: размеры жили тремя независимыми
+    // способами (clamp(rem,vw,rem) в базе, фиксированные rem в TV-слое,
+    // ещё раз фиксированные — в портретном киоске), и ни один не
+    // учитывал ВЫСОТУ вьюпорта. Теперь единица одна и зависит от
+    // меньшей из двух долей экрана.
+    expect(css).toMatch(
+      /\.display-screen\s*\{[\s\S]*?--display-u-base:\s*clamp\([^)]*min\(\s*[\d.]+vw\s*,\s*[\d.]+vh\s*\)/,
+    );
+    expect(css).toMatch(/\.display-screen\s*\{[\s\S]*?--display-u:\s*var\(--display-u-base\)/);
+    // Ключевые размеры матрицы и шапки — только через шкалу, никаких
+    // «своих» rem/vw (иначе экран снова перестанет адаптироваться).
+    for (const rule of [
+      '\\.display-matrix__cell',
+      '\\.display-matrix__th',
+      '\\.display-screen__clock',
+      '\\.display-kpi__value',
+    ]) {
+      const decl = css.match(
+        new RegExp(`${rule}\\s*\\{[\\s\\S]*?font-size:\\s*([^;]+);`),
+      )?.[1];
+      expect(decl).toBeDefined();
+      expect(decl).toMatch(/var\(--display-u\)/);
+    }
+  });
+
+  test('TV / large-display layer правит шкалу, а не отдельные шрифты', () => {
     // Намеренно отдельный media query ≥ 1600px (выше десктопного 1199),
     // чтобы laptop/desktop-вид не перерастал в TV-режим случайно.
     expect(css).toMatch(/@media\s*\(min-width:\s*1600px\)/);
-    // Внутри TV-слоя размер ячеек матрицы и плиток должен расти,
-    // а не board — переключаться в одну колонку.
     const tvLayer =
       css.match(/@media\s*\(min-width:\s*1600px\)\s*\{[\s\S]*?\n\}/)?.[0] ??
       '';
-    expect(tvLayer).toMatch(/\.display-matrix__cell/);
-    expect(tvLayer).toMatch(/\.display-kpi__value/);
+    // Апскейл на TV = одна строка: поднятая единица шкалы. Фиксированных
+    // font-size тут быть не должно — именно они делали экран одинаковым
+    // и для TV на стене, и для окна браузера на 27" мониторе.
+    expect(tvLayer).toMatch(/--display-u-base:\s*clamp\(/);
+    expect(tvLayer).not.toMatch(/font-size:/);
     // В TV-слое НЕ должно быть переключения board в одноколоночный режим.
     expect(tvLayer).not.toMatch(/grid-template-columns:\s*1fr\s*;/);
+  });
+
+  test('Матрица авто-подгоняется под свою зону (--display-fit)', () => {
+    // CSS-шкала не знает, сколько в заказе цветов/размеров/операций,
+    // поэтому «вся матрица целиком, без скролла» доводится замером:
+    // scrollHeight/Width таблицы против clientHeight/Width её зоны.
+    expect(css).toMatch(
+      /\.display-matrix\s*\{[\s\S]*?--display-u:\s*calc\(\s*var\(--display-u-base\)\s*\*\s*var\(--display-fit\)\s*\)/,
+    );
+    expect(board).toMatch(/function useMatrixFit\(/);
+    expect(board).toMatch(/MATRIX_FIT_MIN\s*=\s*0?\.\d+/);
+    expect(board).toMatch(/new ResizeObserver\(/);
+    expect(board).toMatch(/scrollHeight/);
+    // Переменная уходит инлайном именно на <table> — заголовок блока
+    // остаётся на шкале экрана, иначе замер «дышит» (шрифт ↓ →
+    // заголовок ↓ → места больше → шрифт ↑).
+    expect(board).toMatch(/'--display-fit':\s*matrixFit/);
   });
 
   test('Single-column collapse — только узкие экраны (<= 1199px)', () => {
