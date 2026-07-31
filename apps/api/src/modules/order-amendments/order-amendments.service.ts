@@ -571,9 +571,18 @@ export class OrderAmendmentsService {
 
     const frontierIndex = await this.frontierIndex(orderId);
     const workedOpIds = await this.operationIdsWithWork(orderId);
-    const usedOpIds = new Set(order.routeSteps.map((s) => s.operationId));
+    // Операции, уже стоящие в маршруте, из палитры НЕ убираем: одна и та же
+    // операция может стоять в маршруте несколько раз (чередующиеся ОТК/ВТО
+    // между швейными шагами), и чип нужен, чтобы поставить её снова.
+    const stepCountByOpId = new Map<string, number>();
+    for (const s of order.routeSteps) {
+      stepCountByOpId.set(
+        s.operationId,
+        (stepCountByOpId.get(s.operationId) ?? 0) + 1,
+      );
+    }
     const available = await this.prisma.operation.findMany({
-      where: { id: { notIn: [...usedOpIds] }, active: true },
+      where: { active: true },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
       select: {
         id: true,
@@ -618,7 +627,14 @@ export class OrderAmendmentsService {
               ? s.timeNormSecOverride ?? s.operation?.timeNormSec ?? null
               : null,
           movable,
-          removable: movable && !workedOpIds.has(s.operationId),
+          // Выработка висит на ОПЕРАЦИИ, а не на строке маршрута: пока в
+          // маршруте остаётся хотя бы одно её вхождение, лишнее убирается
+          // свободно. Блокируем только последнее (см. `planRouteAmendment`,
+          // нарушение `STEP_HAS_WORK`).
+          removable:
+            movable &&
+            (!workedOpIds.has(s.operationId) ||
+              (stepCountByOpId.get(s.operationId) ?? 0) > 1),
         };
       }),
       availableOperations: available.map((op) => ({
@@ -626,6 +642,7 @@ export class OrderAmendmentsService {
         code: op.code,
         name: op.name,
         category: op.category ?? null,
+        inRouteCount: stepCountByOpId.get(op.id) ?? 0,
         rateRub:
           op.pricingMode === 'FIXED' ? decimalToNumber(op.fixedRate) : null,
         timeNormSec: op.timeNormMode === 'FIXED' ? op.timeNormSec ?? null : null,
@@ -874,16 +891,17 @@ export class OrderAmendmentsService {
       dto.steps.map((s) => ({
         operationId: s.operationId,
         parallelGroup: s.parallelGroup ?? null,
+        sourceIndex: s.sourceIndex ?? null,
       })),
       frontier,
       workedOpIds,
     );
     if (!planned.ok) {
       const v = planned.violation;
-      if (v.code === 'DUPLICATE_OPERATION') {
+      if (v.code === 'DUPLICATE_IN_PARALLEL_GROUP') {
         const op = opById.get(v.operationId);
         throw new AmendmentOperationAlreadyInRouteException(
-          `Операция «${op?.name || op?.code || '?'}» встречается в маршруте дважды.`,
+          `Операция «${op?.name || op?.code || '?'}» стоит дважды в одной параллельной группе — так группа никогда не закроется.`,
         );
       }
       if (v.code === 'STEP_HAS_WORK') {
@@ -904,8 +922,7 @@ export class OrderAmendmentsService {
     };
 
     const summaryParts: string[] = [];
-    for (const p of plan.placements) {
-      if (p.fromIndex !== null) continue;
+    for (const p of plan.added) {
       const prev = plan.placements[p.index - 1];
       summaryParts.push(
         `+ «${nameOf(p.operationId)}» ${
@@ -916,9 +933,10 @@ export class OrderAmendmentsService {
     for (const id of plan.removedOperationIds) {
       summaryParts.push(`− «${nameOf(id)}»`);
     }
-    for (const id of plan.movedOperationIds) {
-      const to = plan.placements.find((p) => p.operationId === id);
-      summaryParts.push(`«${nameOf(id)}» → шаг ${(to?.index ?? 0) + 1}`);
+    // По placement, а не по operationId: одна операция может стоять в
+    // маршруте несколько раз, и переставлено конкретное вхождение.
+    for (const p of plan.moved) {
+      summaryParts.push(`«${nameOf(p.operationId)}» → шаг ${p.index + 1}`);
     }
     const summary = summaryParts.join('; ');
 
@@ -934,7 +952,11 @@ export class OrderAmendmentsService {
       };
     }
 
-    const stepById = new Map(order.routeSteps.map((s) => [s.operationId, s]));
+    // Ключ — ПОЗИЦИЯ снимка (`index`), а не операция: при повторах операции
+    // в маршруте (чередующиеся ОТК/ВТО) по `operationId` строки неразличимы,
+    // и вторая позиция затирала бы первую вместе с её per-order расценкой,
+    // нормой времени и поразмерными переопределениями.
+    const stepByIndex = new Map(order.routeSteps.map((s) => [s.index, s]));
     const removedStepIds = order.routeSteps
       .filter((s) => plan.removedIndexes.includes(s.index))
       .map((s) => s.id);
@@ -971,7 +993,8 @@ export class OrderAmendmentsService {
 
       for (const p of plan.placements) {
         if (p.index <= frontier) continue; // замороженный префикс не трогаем
-        const existing = stepById.get(p.operationId);
+        const existing =
+          p.fromIndex === null ? undefined : stepByIndex.get(p.fromIndex);
         if (existing) {
           await tx.orderRouteStep.update({
             where: { id: existing.id },

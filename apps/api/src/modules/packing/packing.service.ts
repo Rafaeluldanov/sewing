@@ -316,12 +316,16 @@ export class PackingService {
           where: { orderId: fresh.orderId },
           select: { operation: { select: { id: true, category: true } } },
         });
-        const hasQc = routeSteps.some(
+        // Считаем ШАГИ, а не «есть ли такой»: ОТК и ВТО могут стоять в
+        // маршруте несколько раз (проверка между этапами и финальная), и
+        // тогда упаковка обязана требовать столько же пройденных проверок —
+        // иначе повторный контроль обходится молча.
+        const qcSteps = routeSteps.filter(
           (s) => s.operation.category === OperationCategory.QC,
-        );
-        const hasWto = routeSteps.some(
+        ).length;
+        const wtoSteps = routeSteps.filter(
           (s) => s.operation.category === OperationCategory.IRONING,
-        );
+        ).length;
         packingOperationId =
           routeSteps.find(
             (s) => s.operation.category === OperationCategory.PACKING,
@@ -341,27 +345,25 @@ export class PackingService {
         const afterRework = lastRework
           ? { createdAt: { gt: lastRework.createdAt } }
           : {};
-        if (hasQc) {
-          const qc = await tx.passportEvent.findFirst({
+        if (qcSteps > 0) {
+          const qc = await tx.passportEvent.count({
             where: {
               passportId: fresh.id,
               type: PassportEventType.QC_PASSED,
               ...afterRework,
             },
-            select: { id: true },
           });
-          if (!qc) throw new PassportNotQcPassedException();
+          if (qc < qcSteps) throw new PassportNotQcPassedException();
         }
-        if (hasWto) {
-          const wto = await tx.passportEvent.findFirst({
+        if (wtoSteps > 0) {
+          const wto = await tx.passportEvent.count({
             where: {
               passportId: fresh.id,
               type: PassportEventType.WTO_PASSED,
               ...afterRework,
             },
-            select: { id: true },
           });
-          if (!wto) throw new PassportNotWtoPassedException();
+          if (wto < wtoSteps) throw new PassportNotWtoPassedException();
         }
       }
 

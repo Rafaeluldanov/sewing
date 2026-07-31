@@ -785,6 +785,13 @@ export class EarningsService {
        * не случится — иначе строка зависнет в pending навсегда.
        */
       approveImmediately?: boolean;
+      /**
+       * Номер прохода операции по маршруту (`OperationEntry.passOrdinal`),
+       * если вызывающий знает его точнее позиции паспорта. Нужен ОТК:
+       * `QC_PASSED` не двигает `currentRouteStepIndex`, поэтому вторая
+       * проверка в маршруте определяется по числу пройденных проверок.
+       */
+      passOrdinal?: number;
     },
   ): Promise<void> {
     if (!args.operationId || !args.employeeId) return;
@@ -815,8 +822,15 @@ export class EarningsService {
     // изделием расценку (`OrderRouteStep.rateOverride`) для FIXED-операций.
     const passportForOrder = await tx.passport.findUnique({
       where: { id: args.passportId },
-      select: { orderId: true },
+      select: { orderId: true, currentRouteStepIndex: true },
     });
+    const passOrdinal =
+      args.passOrdinal ??
+      (await this.resolvePassOrdinal(tx, {
+        orderId: passportForOrder?.orderId ?? null,
+        operationId: op.id,
+        currentRouteStepIndex: passportForOrder?.currentRouteStepIndex ?? null,
+      }));
     const rate = await this.operations.resolveRate(
       op.id,
       args.sizeId,
@@ -889,6 +903,7 @@ export class EarningsService {
       approvalMode: ApprovalMode.AFTER_RELEASE,
       sourceEventType: EarningSource.OPERATION_TRANSITION,
       sourceEventId: args.sourceEventId ?? null,
+      passOrdinal,
       approvedAt: approveImmediately ? new Date() : null,
     });
     if (creditedAgainst.length > 0) {
@@ -1439,6 +1454,43 @@ export class EarningsService {
    * cutter-аудитом, чтобы не плодить лишних строк в `AuditLog` при
    * идемпотентных повторных вызовах.
    */
+  /**
+   * Номер ПРОХОДА операции по маршруту заказа для ключа идемпотентности
+   * (`OperationEntry.passOrdinal`): `0` — первое вхождение операции в
+   * маршрут, `1` — второе и т.д.
+   *
+   * Операция может стоять в маршруте несколько раз (чередующиеся ОТК/ВТО
+   * между швейными шагами) — тогда паспорт проходит её столько же раз, и
+   * каждый проход оплачивается отдельно. Без ordinal второй проход упирался
+   * бы в `@@unique` первого и молча не создавался.
+   *
+   * Считаем по ПОЗИЦИИ паспорта в маршруте, а не по числу закрытых событий:
+   * при возврате ОТК на переделку паспорт остаётся на том же шаге, ordinal
+   * не меняется, и повторное закрытие того же прохода по-прежнему не
+   * оплачивается дважды. Операция вне маршрута (крой, переделка) и обычный
+   * маршрут без повторов дают `0` — прежнее поведение.
+   */
+  private async resolvePassOrdinal(
+    tx: Prisma.TransactionClient,
+    args: {
+      orderId: string | null;
+      operationId: string;
+      currentRouteStepIndex: number | null;
+    },
+  ): Promise<number> {
+    if (!args.orderId || args.currentRouteStepIndex == null) return 0;
+    const occurrences = await tx.orderRouteStep.findMany({
+      where: { orderId: args.orderId, operationId: args.operationId },
+      orderBy: { index: 'asc' },
+      select: { index: true },
+    });
+    if (occurrences.length < 2) return 0;
+    const at = occurrences.findIndex(
+      (s) => s.index === args.currentRouteStepIndex,
+    );
+    return at > 0 ? at : 0;
+  }
+
   private async safeCreate(
     tx: Prisma.TransactionClient,
     data: Prisma.OperationEntryUncheckedCreateInput,

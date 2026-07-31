@@ -69,6 +69,14 @@ interface Props {
 interface DraftStep {
   key: string;
   operationId: string;
+  /**
+   * Индекс шага в СНИМКЕ маршрута, который продолжает эта строка; `null` —
+   * шаг добавлен в этой правке. Идентичность шага — позиция, а не операция:
+   * одна операция может стоять в маршруте несколько раз (чередующиеся
+   * ОТК/ВТО), и по `operationId` такие шаги неразличимы. Уходит на бэкенд
+   * как `sourceIndex` (см. `RouteAmendmentStepSchema`).
+   */
+  sourceIndex: number | null;
   name: string;
   code: string;
   category: string | null;
@@ -93,9 +101,19 @@ type DragSource =
   | { kind: 'pool'; operationId: string }
   | { kind: 'step'; index: number };
 
+/**
+ * Счётчик ключей для шагов, добавленных в этой правке. Именно счётчик, а не
+ * `operationId`: одну и ту же операцию можно поставить в маршрут несколько
+ * раз, и общий ключ схлопнул бы такие чипы в React в один.
+ */
+let draftKeySeq = 0;
+
 function toDraft(steps: readonly OperationAmendmentStepDto[]): DraftStep[] {
   return steps.map((s, i) => ({
-    key: `step:${s.operationId}`,
+    // Ключ по позиции снимка, а не по операции — при повторах операции
+    // ключи обязаны различаться.
+    key: `step:${s.index}`,
+    sourceIndex: s.index,
     operationId: s.operationId,
     name: s.operationName,
     code: s.operationCode,
@@ -113,8 +131,10 @@ function toDraft(steps: readonly OperationAmendmentStepDto[]): DraftStep[] {
 }
 
 function fromOption(op: OperationAmendmentOptionDto): DraftStep {
+  draftKeySeq += 1;
   return {
-    key: `new:${op.id}`,
+    key: `new:${op.id}:${draftKeySeq}`,
+    sourceIndex: null,
     operationId: op.id,
     name: op.name || op.code,
     code: op.code,
@@ -136,10 +156,18 @@ function fromOption(op: OperationAmendmentOptionDto): DraftStep {
  */
 function toPayloadSteps(
   rows: readonly DraftStep[],
-): { operationId: string; parallelGroup: number | null }[] {
+): {
+  operationId: string;
+  parallelGroup: number | null;
+  sourceIndex: number | null;
+}[] {
   const out = rows.map((s) => ({
     operationId: s.operationId,
     parallelGroup: null as number | null,
+    // Идентичность шага для бэкенда: какую строку снимка продолжает эта
+    // позиция. Без неё повторы операции сопоставились бы по порядку, и
+    // per-order расценка/норма могли бы уехать на чужое вхождение.
+    sourceIndex: s.sourceIndex,
   }));
   let group = 0;
   rows.forEach((s, i) => {
@@ -327,30 +355,40 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
    */
   const minSlot = initial.filter((s) => s.frozen).length;
 
-  const usedIds = useMemo(
-    () => new Set(draft.map((s) => s.operationId)),
-    [draft],
-  );
+  /**
+   * Сколько раз операция стоит в текущем черновике маршрута. Операцию из
+   * палитры НЕ убираем — одна и та же операция может стоять в маршруте
+   * несколько раз (ОТК/ВТО, чередующиеся со швейными шагами), — но чип
+   * показывает счётчик, чтобы повтор был осознанным, а не промахом мышью.
+   */
+  const countByOperationId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of draft) {
+      map.set(s.operationId, (map.get(s.operationId) ?? 0) + 1);
+    }
+    return map;
+  }, [draft]);
 
   const pool = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const available = state.availableOperations.filter(
-      (op) => !usedIds.has(op.id) && (!q || op.name.toLowerCase().includes(q)),
-    );
-    // Убранные из маршрута шаги возвращаются в палитру: иначе операцию,
-    // которую только что выбросили, нельзя было бы вернуть назад.
-    const removed = initial
-      .filter((s) => !usedIds.has(s.operationId))
-      .filter((s) => !q || s.name.toLowerCase().includes(q))
-      .map<OperationAmendmentOptionDto>((s) => ({
+    const byId = new Map<string, OperationAmendmentOptionDto>();
+    for (const op of state.availableOperations) byId.set(op.id, op);
+    // Операции, которых нет в палитре справочника (архивные), но которые
+    // стоят в маршруте: иначе убранный шаг нельзя было бы вернуть назад.
+    for (const s of initial) {
+      if (byId.has(s.operationId)) continue;
+      byId.set(s.operationId, {
         id: s.operationId,
         code: s.code,
         name: s.name,
         category: s.category,
         rateRub: s.rateRub,
         timeNormSec: s.timeNormSec,
-      }));
-    const all = [...removed, ...available];
+      });
+    }
+    const all = [...byId.values()].filter(
+      (op) => !q || op.name.toLowerCase().includes(q),
+    );
     const groups = [...OPERATION_CATEGORY_ORDER, 'UNKNOWN'].map((cat) => ({
       category: cat,
       label:
@@ -362,7 +400,7 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
       items: all.filter((op) => (op.category ?? 'UNKNOWN') === cat),
     }));
     return groups.filter((g) => g.items.length > 0);
-  }, [state.availableOperations, initial, usedIds, query]);
+  }, [state.availableOperations, initial, query]);
 
   const totals = useMemo(() => {
     const sum = (rows: DraftStep[]) => ({
@@ -379,13 +417,20 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
     };
   }, [draft, initial]);
 
-  /** Человекочитаемая сводка — то же, что бэкенд запишет в журнал. */
+  /**
+   * Человекочитаемая сводка — то же, что бэкенд запишет в журнал. Считается
+   * по ПОЗИЦИЯМ снимка (`sourceIndex`), а не по операциям: при повторах
+   * операции в маршруте «добавлено/убрано/переставлено» относится к
+   * конкретному вхождению, и сравнение по `operationId` показывало бы
+   * добавление второго ОТК как «ничего не изменилось».
+   */
   const changes = useMemo(() => {
-    const wasIds = initial.map((s) => s.operationId);
-    const nowIds = draft.map((s) => s.operationId);
+    const keptSources = new Set(
+      draft.map((s) => s.sourceIndex).filter((v): v is number => v !== null),
+    );
     const out: { tone: string; label: string; text: string }[] = [];
     draft.forEach((s, i) => {
-      if (wasIds.includes(s.operationId)) return;
+      if (s.sourceIndex !== null) return;
       const prev = draft[i - 1];
       out.push({
         tone: 'ok',
@@ -394,18 +439,22 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
       });
     });
     initial.forEach((s) => {
-      if (nowIds.includes(s.operationId)) return;
+      if (s.sourceIndex !== null && keptSources.has(s.sourceIndex)) return;
       out.push({ tone: 'danger', label: 'Убрано', text: `«${s.name}»` });
     });
     // Перестановка считается по относительному порядку выживших шагов:
     // вставка в начало сдвигает хвост, но это не перестановка.
-    const survivedBefore = wasIds.filter((id) => nowIds.includes(id));
-    const survivedAfter = nowIds.filter((id) => wasIds.includes(id));
+    const survivedBefore = initial
+      .map((s) => s.sourceIndex)
+      .filter((v): v is number => v !== null && keptSources.has(v));
+    const survivedAfter = draft
+      .map((s) => s.sourceIndex)
+      .filter((v): v is number => v !== null);
     draft.forEach((s, i) => {
-      if (!wasIds.includes(s.operationId)) return;
+      if (s.sourceIndex === null) return;
       if (
-        survivedBefore.indexOf(s.operationId) ===
-        survivedAfter.indexOf(s.operationId)
+        survivedBefore.indexOf(s.sourceIndex) ===
+        survivedAfter.indexOf(s.sourceIndex)
       ) {
         return;
       }
@@ -416,7 +465,10 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
       });
     });
     draft.forEach((s, i) => {
-      const before = initial.find((x) => x.operationId === s.operationId);
+      const before =
+        s.sourceIndex === null
+          ? undefined
+          : initial.find((x) => x.sourceIndex === s.sourceIndex);
       const parallelWas = before ? before.linkedWithPrev : false;
       if (s.linkedWithPrev !== parallelWas && i > 0) {
         out.push({
@@ -467,12 +519,17 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
     );
 
   /**
-   * Вставка из палитры. Если операция была в маршруте и её только что
-   * убрали — возвращаем ИСХОДНЫЙ шаг, а не новый: для бэкенда это тот же
-   * `operationId`, и метка «новая» на нём была бы враньём.
+   * Вставка из палитры. Если у операции есть вхождение в снимке, которое
+   * сейчас выброшено из черновика, — возвращаем ИМЕННО ЕГО, а не новый шаг:
+   * за строкой снимка висят per-order расценка и норма времени, а метка
+   * «новая» на возвращённом шаге была бы враньём. Если все вхождения
+   * операции уже стоят в маршруте — добавляем ЕЩЁ ОДНО: повторы разрешены.
    */
   const insertAt = (op: OperationAmendmentOptionDto, at: number) => {
-    const restored = initial.find((s) => s.operationId === op.id);
+    const usedSources = new Set(draft.map((s) => s.sourceIndex));
+    const restored = initial.find(
+      (s) => s.operationId === op.id && !usedSources.has(s.sourceIndex),
+    );
     const next = draft.slice();
     next.splice(at, 0, restored ? { ...restored, linkedWithPrev: false } : fromOption(op));
     applyRows(next);
@@ -494,7 +551,11 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
       reject('Шаг уже проходят паспорта — убрать нельзя');
       return;
     }
-    if (step.hasWork) {
+    // Выработка привязана к операции, а не к строке маршрута: пока в
+    // маршруте остаётся другое вхождение той же операции, лишнее убирается
+    // свободно. Блокируем только последнее (тот же гейт держит backend —
+    // нарушение `STEP_HAS_WORK`).
+    if (step.hasWork && (countByOperationId.get(step.operationId) ?? 0) <= 1) {
       reject(`По операции «${step.name}» уже есть выработка — убрать нельзя`);
       return;
     }
@@ -814,7 +875,9 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
             />
             {pool.length === 0 ? (
               <p className="rb-panel__hint">
-                Все операции справочника уже в маршруте.
+                {query.trim()
+                  ? 'Ничего не найдено — уточните запрос.'
+                  : 'В справочнике нет активных операций.'}
               </p>
             ) : (
               pool.map((group) => (
@@ -826,12 +889,14 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
                   <div className="rb-pool__items">
                     {group.items.map((op) => {
                       const Icon = routeStepIcon(op.category);
+                      const inRoute = countByOperationId.get(op.id) ?? 0;
                       return (
                         <span
                           key={op.id}
                           className={`admin-route-step ${routeStepTone(
                             op.category,
                           )} admin-route-step--draggable`}
+                          data-in-route={inRoute || undefined}
                           draggable
                           tabIndex={0}
                           data-operation-code={op.code}
@@ -850,7 +915,11 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
                               insertAt(op, draft.length);
                             }
                           }}
-                          title={`${op.name} — перетащите в маршрут или нажмите Enter, чтобы добавить в конец`}
+                          title={
+                            inRoute > 0
+                              ? `${op.name} — уже в маршруте (${inRoute}). Операцию можно поставить ещё раз: перетащите или нажмите Enter`
+                              : `${op.name} — перетащите в маршрут или нажмите Enter, чтобы добавить в конец`
+                          }
                         >
                           <span className="admin-route-step__num" aria-hidden>
                             <Plus size={11} strokeWidth={2} />
@@ -864,6 +933,14 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
                           {op.rateRub != null && (
                             <span className="admin-route-step__meta">
                               {op.rateRub} ₽
+                            </span>
+                          )}
+                          {inRoute > 0 && (
+                            <span
+                              className="admin-route-step__tag"
+                              title="Столько раз операция уже стоит в маршруте"
+                            >
+                              ×{inRoute}
                             </span>
                           )}
                         </span>

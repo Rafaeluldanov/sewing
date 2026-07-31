@@ -386,7 +386,12 @@ export class QcService {
             select: { createdAt: true },
           })
         : null;
-      const existing = await tx.passportEvent.findFirst({
+      // Сколько проверок паспорт уже прошёл в текущем заходе. Не «есть ли
+      // хоть один QC_PASSED»: ОТК может стоять в маршруте несколько раз
+      // (проверка между швейными этапами и финальная), и тогда паспорт
+      // обязан пройти её столько же раз — иначе второй ОТК молча уходил бы
+      // в идемпотентную ветку и шаг никогда не закрывался.
+      const passedCount = await tx.passportEvent.count({
         where: {
           passportId,
           type: PassportEventType.QC_PASSED,
@@ -394,9 +399,14 @@ export class QcService {
             ? { createdAt: { gt: lastReworkOnQcOp.createdAt } }
             : {}),
         },
-        select: { id: true },
       });
-      if (existing) return;
+      const qcOccurrences =
+        passedCount > 0 && operationId && passport.orderId
+          ? await tx.orderRouteStep.count({
+              where: { orderId: passport.orderId, operationId },
+            })
+          : 0;
+      if (passedCount >= Math.max(1, qcOccurrences)) return;
       const isRecheck = lastReworkOnQcOp !== null;
       const createdEvent = await tx.passportEvent.create({
         data: {
@@ -456,6 +466,11 @@ export class QcService {
           qty: passport.qtyGood,
           sourceEventId: createdEvent.id,
           approveImmediately: retroactive,
+          // ОТК не двигает `currentRouteStepIndex`, поэтому проход
+          // определяем по числу уже пройденных проверок: при двух шагах
+          // ОТК в маршруте вторая проверка — отдельное начисление, иначе
+          // она упёрлась бы в ключ идемпотентности первой.
+          passOrdinal: passedCount,
         });
       }
     });
@@ -792,10 +807,21 @@ export class QcService {
       },
     });
     if (steps.length === 0) return;
-    const qcStep = steps.find(
-      (s) => s.operation.category === OperationCategory.QC,
-    );
-    if (!qcStep) return;
+    // Шагов ОТК в маршруте может быть несколько (чередующиеся проверки
+    // между швейными этапами). Гейт применяем к ТОМУ проходу, на который
+    // паспорт сейчас идёт: сколько `QC_PASSED` уже есть, столько проверок
+    // пройдено. Один шаг ОТК — прежнее поведение (берётся он же).
+    const qcSteps = steps
+      .filter((s) => s.operation.category === OperationCategory.QC)
+      .sort((a, b) => a.index - b.index);
+    if (qcSteps.length === 0) return;
+    const passedQc =
+      qcSteps.length > 1
+        ? await this.prisma.passportEvent.count({
+            where: { passportId, type: PassportEventType.QC_PASSED },
+          })
+        : 0;
+    const qcStep = qcSteps[Math.min(passedQc, qcSteps.length - 1)];
 
     const groupMax = new Map<number, number>();
     const groupOps = new Map<number, string[]>();

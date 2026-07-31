@@ -189,13 +189,23 @@ export class MasterActionsService {
     // «Расхождения» у мастера.
     let offRouteShiftOperationId: string | null = null;
     if (targetShift) {
-      const matched = await this.prisma.orderRouteStep.findFirst({
+      // Операция может стоять в маршруте несколько раз (чередующиеся
+      // ОТК/ВТО). Берём вхождение, ближайшее ВПЕРЁД от текущей позиции
+      // паспорта, — то, к которому он реально идёт; если таких нет
+      // (все проходы позади) — последнее. Иначе передача паспорта
+      // молча откатывала бы его на первый по счёту шаг.
+      const occurrences = await this.prisma.orderRouteStep.findMany({
         where: {
           orderId: passport.orderId,
           operationId: targetShift.operationId,
         },
+        orderBy: { index: 'asc' },
         select: { index: true, operationId: true },
       });
+      const fromIdx = passport.currentRouteStepIndex ?? -1;
+      const matched =
+        occurrences.find((s) => s.index >= fromIdx) ??
+        occurrences[occurrences.length - 1];
       if (matched) {
         nextOperationId = matched.operationId;
         nextRouteStepIndex = matched.index;

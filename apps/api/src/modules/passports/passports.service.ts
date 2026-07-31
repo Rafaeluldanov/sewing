@@ -1491,6 +1491,7 @@ export class PassportsService {
     if (!passport.orderId) return none;
     const steps = await this.prisma.orderRouteStep.findMany({
       where: { orderId: passport.orderId },
+      orderBy: { index: 'asc' },
       select: {
         index: true,
         operationId: true,
@@ -1500,9 +1501,22 @@ export class PassportsService {
     });
     if (steps.length === 0) return none;
 
+    // Порядковый номер ВХОЖДЕНИЯ операции в маршрут (0, 1, 2…). Одна и та
+    // же операция может стоять в маршруте несколько раз (чередующиеся
+    // ОТК/ВТО между швейными шагами), и по `operationId` такие шаги
+    // неразличимы — а именно их и надо различать: «ОТК сделан» относится к
+    // конкретному проходу, а не к операции вообще.
+    const ordinalByStepIndex = new Map<number, number>();
+    const occurrenceCount = new Map<string, number>();
+    for (const s of steps) {
+      const seen = occurrenceCount.get(s.operationId) ?? 0;
+      ordinalByStepIndex.set(s.index, seen);
+      occurrenceCount.set(s.operationId, seen + 1);
+    }
+
     const groupMin = new Map<number, number>();
     const groupMax = new Map<number, number>();
-    const groupOps = new Map<number, string[]>();
+    const groupOps = new Map<number, { operationId: string; index: number }[]>();
     for (const s of steps) {
       if (s.parallelGroup == null) continue;
       groupMin.set(
@@ -1514,7 +1528,7 @@ export class PassportsService {
         Math.max(groupMax.get(s.parallelGroup) ?? s.index, s.index),
       );
       const arr = groupOps.get(s.parallelGroup) ?? [];
-      arr.push(s.operationId);
+      arr.push({ operationId: s.operationId, index: s.index });
       groupOps.set(s.parallelGroup, arr);
     }
     // Групп-репрезентативный ранг шага (свёртка параллельной группы).
@@ -1528,7 +1542,26 @@ export class PassportsService {
     // закрываемым шагам — это нужно после отказа от необратимого
     // сворачивания маршрута (Вариант B, см. route-mode.ts): снимок всегда
     // сплит, а швея физически закрывает один 04.
-    let targetStep = steps.find((s) => s.operationId === targetOperationId);
+    const targetOccurrences = steps.filter(
+      (s) => s.operationId === targetOperationId,
+    );
+    let targetStep = targetOccurrences[0];
+    if (targetOccurrences.length > 1) {
+      // Повтор операции в маршруте: паспорт идёт на ПЕРВОЕ ещё не
+      // закрытое вхождение. Сколько проходов закрыто — считаем по
+      // `OPERATION_FINISHED` этого паспорта на этой операции: одно
+      // событие = один пройденный проход. Когда закрыты все, остаёмся на
+      // последнем — сюда доходят только идемпотентные повторы (сам запрет
+      // повторного прохода держит `assertOperationNotFinished`).
+      const finishedPasses = await this.countFinishedPasses(
+        passport.id,
+        targetOperationId,
+      );
+      targetStep =
+        targetOccurrences[
+          Math.min(finishedPasses, targetOccurrences.length - 1)
+        ];
+    }
     if (!targetStep) {
       const subs = await this.prisma.operationSubstitution.findMany({
         where: { substituteOpId: targetOperationId },
@@ -1623,7 +1656,9 @@ export class PassportsService {
       // Только substitutes для операций, реально проверяемых здесь —
       // иначе тянули бы весь справочник.
       const opsToCheck = [
-        ...groupsBefore.flatMap((g) => groupOps.get(g) ?? []),
+        ...groupsBefore.flatMap((g) =>
+          (groupOps.get(g) ?? []).map((o) => o.operationId),
+        ),
         ...sequentialBefore.map((s) => s.operationId),
       ];
       const [finished, substitutes] = await Promise.all([
@@ -1645,33 +1680,49 @@ export class PassportsService {
       const permitSubsForGate = (
         await loadActivePermitSubstitutions(this.prisma, passport.orderId)
       ).filter((p) => opsToCheck.includes(p.satisfiesOpId));
-      const finishedSet = new Set(finished.map((e) => e.operationId));
+      // Считаем ПРОХОДЫ, а не факт «операция где-то закрыта»: операция может
+      // стоять в маршруте несколько раз, и первый закрытый ОТК не должен
+      // засчитывать второй. Шаг с порядковым номером вхождения `ordinal`
+      // закрыт, когда проходов по операции строго больше `ordinal`.
+      const finishedPasses = new Map<string, number>();
+      for (const e of finished) {
+        if (!e.operationId) continue;
+        finishedPasses.set(
+          e.operationId,
+          (finishedPasses.get(e.operationId) ?? 0) + 1,
+        );
+      }
       const substitutesFor = new Map<string, string[]>();
       for (const s of [...substitutes, ...permitSubsForGate]) {
         const arr = substitutesFor.get(s.satisfiesOpId) ?? [];
         arr.push(s.substituteOpId);
         substitutesFor.set(s.satisfiesOpId, arr);
       }
-      const isSatisfied = (opId: string): boolean => {
-        if (finishedSet.has(opId)) return true;
-        const subs = substitutesFor.get(opId);
-        if (!subs) return false;
-        return subs.some((sub) => finishedSet.has(sub));
-      };
+      // Проходы, закрывающие операцию: свои + сделанные под заместителем
+      // (`OperationSubstitution` / наряд-допуск). Для операции без повторов
+      // это прежнее «закрыта или нет».
+      const passesFor = (opId: string): number =>
+        (finishedPasses.get(opId) ?? 0) +
+        (substitutesFor.get(opId) ?? []).reduce(
+          (acc, sub) => acc + (finishedPasses.get(sub) ?? 0),
+          0,
+        );
+      const isSatisfied = (opId: string, stepIndex: number): boolean =>
+        passesFor(opId) > (ordinalByStepIndex.get(stepIndex) ?? 0);
       // Название операции по id — для текста ошибки. Берём из снимка
       // маршрута (там же, где считали группы), чтобы не ходить в БД ещё раз.
       const nameOf = (opId: string): string =>
         steps.find((s) => s.operationId === opId)?.operation.name ?? opId;
       for (const g of groupsBefore) {
         const ops = groupOps.get(g) ?? [];
-        const unmet = ops.filter((op) => !isSatisfied(op));
+        const unmet = ops.filter((o) => !isSatisfied(o.operationId, o.index));
         if (unmet.length > 0) {
           groupIncomplete = true;
-          missingGroupOps.push(...unmet.map(nameOf));
+          missingGroupOps.push(...unmet.map((o) => nameOf(o.operationId)));
         }
       }
       const unmetSeq = sequentialBefore.filter(
-        (s) => !isSatisfied(s.operationId),
+        (s) => !isSatisfied(s.operationId, s.index),
       );
       if (unmetSeq.length > 0) {
         sequentialIncomplete = true;
@@ -2001,7 +2052,11 @@ export class PassportsService {
     // операции создаёт второй `ISSUED_TO_EMPLOYEE` и паспорт начинает
     // «висеть» у швеи без OPERATION_FINISHED (см. инцидент 09.05.2026,
     // 60+ дубль-выдач у трёх швей).
-    await this.assertOperationNotFinished(passport.id, targetOperationId);
+    await this.assertOperationNotFinished(
+      passport.id,
+      targetOperationId,
+      passport.orderId,
+    );
 
     // Запрещаем «получить крой» на операции, идущей в маршруте раньше
     // уже зафиксированного шага паспорта. Симметрично
@@ -2673,7 +2728,11 @@ export class PassportsService {
     // приходит после повторного `ISSUED_TO_EMPLOYEE` — поскольку issue
     // уже заблокирован, до сюда не должно дойти; защита оставлена на
     // случай race-condition / прямого вызова.
-    await this.assertOperationNotFinished(passport.id, completedOperationId);
+    await this.assertOperationNotFinished(
+      passport.id,
+      completedOperationId,
+      passport.orderId,
+    );
 
     // Если у заказа есть snapshot маршрута — ищем шаг, который
     // соответствует завершаемой операции. Это нужно, чтобы корректно
@@ -3343,16 +3402,19 @@ export class PassportsService {
     return false;
   }
 
-  private async assertOperationNotFinished(
+  /**
+   * Сколько раз паспорт УЖЕ прошёл эту операцию в текущем «заходе».
+   *
+   * Одно `OPERATION_FINISHED` = один пройденный проход. События до
+   * последней переделки (`OPERATION_REWORK_OPENED` по этой же паре
+   * passport+operation) не считаются: ОТК вернул изделие, тот проход
+   * аннулирован и его надо сделать заново (см. `QcService.returnToRework`
+   * и `docs/flows.md §F5a`).
+   */
+  private async countFinishedPasses(
     passportId: string,
     operationId: string,
-  ): Promise<void> {
-    // Учитываем `OPERATION_FINISHED` только для текущего «прохода»
-    // операции. Если ОТК вернул паспорт на переделку
-    // (`OPERATION_REWORK_OPENED` для этой же пары passport+operation),
-    // отсчёт идёт от последнего rework — старые `OPERATION_FINISHED`
-    // относились к прошлому проходу и больше не блокируют. См.
-    // `QcService.returnToRework` и `docs/flows.md §F5a`.
+  ): Promise<number> {
     const lastRework = await this.prisma.passportEvent.findFirst({
       where: {
         passportId,
@@ -3362,16 +3424,41 @@ export class PassportsService {
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true },
     });
-    const finished = await this.prisma.passportEvent.findFirst({
+    return this.prisma.passportEvent.count({
       where: {
         passportId,
         operationId,
         type: PassportEventType.OPERATION_FINISHED,
         ...(lastRework ? { createdAt: { gt: lastRework.createdAt } } : {}),
       },
-      select: { id: true },
     });
-    if (finished) {
+  }
+
+  /**
+   * Гейт «эту операцию паспорт уже проходил».
+   *
+   * Считаем не факт, а ЧИСЛО проходов: операция может стоять в маршруте
+   * заказа несколько раз (чередующиеся ОТК/ВТО между швейными шагами), и
+   * тогда паспорт обязан пройти её столько же раз. Блокируем, когда
+   * закрыты все вхождения. Операции вне маршрута (крой, переделка) — как
+   * раньше: один проход.
+   */
+  private async assertOperationNotFinished(
+    passportId: string,
+    operationId: string,
+    orderId?: string | null,
+  ): Promise<void> {
+    const finishedPasses = await this.countFinishedPasses(
+      passportId,
+      operationId,
+    );
+    if (finishedPasses === 0) return;
+    const occurrences = orderId
+      ? await this.prisma.orderRouteStep.count({
+          where: { orderId, operationId },
+        })
+      : 0;
+    if (finishedPasses >= Math.max(1, occurrences)) {
       throw new PassportOperationAlreadyFinishedException();
     }
   }

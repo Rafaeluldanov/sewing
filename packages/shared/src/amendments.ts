@@ -230,6 +230,13 @@ export interface OperationAmendmentOptionDto {
   rateRub: number | null;
   /** Норма времени по справочнику (`FIXED`), иначе `null`. */
   timeNormSec: number | null;
+  /**
+   * Сколько раз операция уже стоит в маршруте заказа. Палитра операции из
+   * маршрута НЕ прячет — повторы разрешены (чередующиеся ОТК/ВТО), — но
+   * чип показывает счётчик, чтобы «поставил второй раз» не выглядело
+   * случайностью. `0` — операции в маршруте нет.
+   */
+  inRouteCount?: number;
 }
 
 /** Ответ GET-состояния добавления операции. */
@@ -277,6 +284,22 @@ export const RouteAmendmentStepSchema = z.object({
    * одинаковым ненулевым значением — один этап, порядок внутри любой.
    */
   parallelGroup: z.number().int().min(1).nullable().optional(),
+  /**
+   * Какой шаг ТЕКУЩЕГО снимка продолжает эта позиция
+   * (`OrderRouteStep.index`); `null`/отсутствует — шаг новый.
+   *
+   * Нужен потому, что одна операция может стоять в маршруте НЕСКОЛЬКО раз
+   * (чередующиеся ОТК/ВТО между швейными шагами). По `operationId` такие
+   * шаги неразличимы, а различать их обязательно: за строкой снимка висят
+   * per-order расценка, норма времени и поразмерные переопределения
+   * (`OrderRouteStepSizeOverride`) — перепутав шаги местами, правка
+   * перевесила бы их на чужую позицию.
+   *
+   * Клиент может не присылать поле (старые клиенты, ручные вызовы) — тогда
+   * шаги сопоставляются по порядку появления операции, что для маршрута
+   * без повторов даёт ровно прежнее поведение.
+   */
+  sourceIndex: z.number().int().min(0).nullable().optional(),
 });
 export type RouteAmendmentStep = z.infer<typeof RouteAmendmentStepSchema>;
 
@@ -324,6 +347,13 @@ export interface RoutePlanCurrentStep {
 export interface RoutePlanTargetStep {
   operationId: string;
   parallelGroup: number | null;
+  /**
+   * Шаг снимка, который продолжает эта позиция (`OrderRouteStep.index`).
+   * `null`/`undefined` — шаг новый либо клиент идентичность не прислал
+   * (тогда планировщик сопоставит по порядку появления операции).
+   * См. `RouteAmendmentStepSchema.sourceIndex`.
+   */
+  sourceIndex?: number | null;
 }
 
 /** Что делать с одной позицией целевого маршрута. */
@@ -340,25 +370,43 @@ export interface RouteAmendmentPlan {
   placements: RoutePlanPlacement[];
   /** Прежние index'ы шагов, которых нет в целевом маршруте. */
   removedIndexes: number[];
-  /** operationId добавленных шагов. */
+  /** Позиции целевого маршрута, которым не нашлось шага в снимке. */
+  added: RoutePlanPlacement[];
+  /**
+   * Позиции, сменившие место среди выживших шагов. Именно позиции, а не
+   * operationId: одна операция может стоять в маршруте несколько раз, и
+   * «переставлен» относится к конкретному вхождению.
+   */
+  moved: RoutePlanPlacement[];
+  /** operationId добавленных шагов (для счётчиков и журнала). */
   addedOperationIds: string[];
   /** operationId убранных шагов. */
   removedOperationIds: string[];
-  /** Шаги, сменившие позицию (без учёта добавленных/убранных). */
+  /** operationId шагов, сменивших позицию. */
   movedOperationIds: string[];
   /** Правка ничего не меняет — сохранять нечего. */
   noop: boolean;
 }
 
 export type RouteAmendmentViolation =
-  /** В целевом маршруте одна операция встречается дважды. */
-  | { code: 'DUPLICATE_OPERATION'; operationId: string }
+  /**
+   * Одна операция дважды внутри ОДНОЙ параллельной группы. Повторы в
+   * маршруте вообще-то разрешены (чередующиеся ОТК/ВТО), но группа —
+   * это «сделать всё из набора в любом порядке», и один и тот же шаг
+   * в наборе дважды смысла не имеет: AND-гейт закрывается одним
+   * `OPERATION_FINISHED` и второе вхождение никогда не «догорит».
+   */
+  | { code: 'DUPLICATE_IN_PARALLEL_GROUP'; operationId: string }
   /**
    * Тронут замороженный префикс: шаги с `index <= frontierIndex` обязаны
    * остаться теми же и в том же порядке (их уже проходят паспорта).
    */
   | { code: 'FRONTIER_CHANGED'; index: number }
-  /** Шаг впереди фронта убран, но по его операции уже есть выработка. */
+  /**
+   * Операция ПОЛНОСТЬЮ убрана из маршрута, хотя по ней уже есть выработка.
+   * Убрать одно из НЕСКОЛЬКИХ вхождений можно: начисления ссылаются на
+   * операцию, а она в маршруте остаётся.
+   */
   | { code: 'STEP_HAS_WORK'; operationId: string };
 
 export type RouteAmendmentPlanResult =
@@ -376,8 +424,16 @@ export type RouteAmendmentPlanResult =
  * их прошли или проходят прямо сейчас. Менять можно только хвост.
  *
  * `operationIdsWithWork` — операции этого заказа, по которым уже есть
- * записи выработки: убирать такой шаг нельзя, даже если он впереди фронта
- * (сдельные начисления ссылаются на операцию).
+ * записи выработки: убрать ПОСЛЕДНЕЕ вхождение такой операции нельзя,
+ * даже если оно впереди фронта (сдельные начисления ссылаются на
+ * операцию). Одно из нескольких вхождений убирается свободно.
+ *
+ * ОДНА ОПЕРАЦИЯ МОЖЕТ СТОЯТЬ В МАРШРУТЕ НЕСКОЛЬКО РАЗ (чередующиеся ОТК
+ * и ВТО между швейными шагами), поэтому идентичность шага здесь —
+ * ПОЗИЦИЯ (`index` снимка), а не `operationId`. Целевой шаг говорит, какую
+ * строку снимка он продолжает, через `sourceIndex`; если клиент его не
+ * прислал, вхождения сопоставляются по порядку появления операции — для
+ * маршрута без повторов это в точности прежнее поведение.
  */
 export function planRouteAmendment(
   current: readonly RoutePlanCurrentStep[],
@@ -387,15 +443,25 @@ export function planRouteAmendment(
 ): RouteAmendmentPlanResult {
   const ordered = [...current].sort((a, b) => a.index - b.index);
 
-  const seen = new Set<string>();
+  // Дубль внутри одной параллельной группы — единственный оставшийся запрет
+  // на повтор операции: группа = «сделать всё из набора», второй одинаковый
+  // шаг в наборе никогда не закроется отдельно.
+  const seenInGroup = new Map<number, Set<string>>();
   for (const t of target) {
+    const group = t.parallelGroup ?? null;
+    if (group == null) continue;
+    const seen = seenInGroup.get(group) ?? new Set<string>();
     if (seen.has(t.operationId)) {
       return {
         ok: false,
-        violation: { code: 'DUPLICATE_OPERATION', operationId: t.operationId },
+        violation: {
+          code: 'DUPLICATE_IN_PARALLEL_GROUP',
+          operationId: t.operationId,
+        },
       };
     }
     seen.add(t.operationId);
+    seenInGroup.set(group, seen);
   }
 
   // Замороженный префикс: 0..frontierIndex включительно — один в один.
@@ -412,12 +478,54 @@ export function planRouteAmendment(
     }
   }
 
-  const byOperationId = new Map(ordered.map((s) => [s.operationId, s]));
-  const targetIds = new Set(target.map((t) => t.operationId));
+  // --- Сопоставление позиций целевого маршрута со строками снимка --------
+  //
+  // Идентичность шага — позиция снимка, а не операция: повторы разрешены.
+  // Три прохода, каждый следующий добирает то, что не разобрал предыдущий:
+  //   1. замороженный префикс — тождественно себе (проверен выше);
+  //   2. явный `sourceIndex` клиента — если строка ещё свободна и это та же
+  //      операция (иначе поле — мусор от устаревшей вкладки, игнорируем);
+  //   3. добор по порядку появления операции — прежнее поведение для
+  //      маршрутов без повторов и разумная эвристика для старых клиентов.
+  const byIndex = new Map(ordered.map((s) => [s.index, s]));
+  const takenIndexes = new Set<number>();
+  const sourceOf: (number | null)[] = target.map(() => null);
 
-  const removed = ordered.filter((s) => !targetIds.has(s.operationId));
+  for (let i = 0; i < frozenCount; i += 1) {
+    sourceOf[i] = ordered[i].index;
+    takenIndexes.add(ordered[i].index);
+  }
+
+  target.forEach((t, i) => {
+    if (sourceOf[i] !== null) return;
+    const src = t.sourceIndex;
+    if (src == null || takenIndexes.has(src)) return;
+    if (byIndex.get(src)?.operationId !== t.operationId) return;
+    sourceOf[i] = src;
+    takenIndexes.add(src);
+  });
+
+  const freeByOperation = new Map<string, number[]>();
+  for (const s of ordered) {
+    if (takenIndexes.has(s.index)) continue;
+    const queue = freeByOperation.get(s.operationId) ?? [];
+    queue.push(s.index);
+    freeByOperation.set(s.operationId, queue);
+  }
+  target.forEach((t, i) => {
+    if (sourceOf[i] !== null) return;
+    const src = freeByOperation.get(t.operationId)?.shift();
+    if (src === undefined) return;
+    sourceOf[i] = src;
+    takenIndexes.add(src);
+  });
+
+  const removed = ordered.filter((s) => !takenIndexes.has(s.index));
+  const targetIds = new Set(target.map((t) => t.operationId));
   for (const s of removed) {
-    if (operationIdsWithWork.has(s.operationId)) {
+    // Выработка привязана к ОПЕРАЦИИ, а не к строке маршрута: пока хотя бы
+    // одно вхождение операции в маршруте остаётся, убрать лишнее можно.
+    if (operationIdsWithWork.has(s.operationId) && !targetIds.has(s.operationId)) {
       return {
         ok: false,
         violation: { code: 'STEP_HAS_WORK', operationId: s.operationId },
@@ -425,34 +533,31 @@ export function planRouteAmendment(
     }
   }
 
-  const placements: RoutePlanPlacement[] = target.map((t, i) => {
-    const prev = byOperationId.get(t.operationId);
-    return {
-      index: i,
-      operationId: t.operationId,
-      parallelGroup: t.parallelGroup ?? null,
-      fromIndex: prev ? prev.index : null,
-    };
-  });
+  const placements: RoutePlanPlacement[] = target.map((t, i) => ({
+    index: i,
+    operationId: t.operationId,
+    parallelGroup: t.parallelGroup ?? null,
+    fromIndex: sourceOf[i],
+  }));
 
   const added = placements.filter((p) => p.fromIndex === null);
 
   // «Переставлен» — сменился ОТНОСИТЕЛЬНЫЙ порядок среди выживших шагов, а
   // не абсолютный index: вставка операции в начало сдвигает весь хвост, но
-  // это не перестановка, и в сводке правки такой шум не нужен.
+  // это не перестановка, и в сводке правки такой шум не нужен. Сравниваем
+  // по позициям снимка — при повторах operationId шаги не различает.
   const survivedBefore = ordered
-    .filter((s) => targetIds.has(s.operationId))
-    .map((s) => s.operationId);
-  const survivedAfter = target
-    .filter((t) => byOperationId.has(t.operationId))
-    .map((t) => t.operationId);
+    .filter((s) => takenIndexes.has(s.index))
+    .map((s) => s.index);
+  const survivedAfter = placements
+    .filter((p) => p.fromIndex !== null)
+    .map((p) => p.fromIndex as number);
   const moved = placements.filter(
     (p) =>
       p.fromIndex !== null &&
-      (survivedBefore.indexOf(p.operationId) !==
-        survivedAfter.indexOf(p.operationId) ||
-        (byOperationId.get(p.operationId)?.parallelGroup ?? null) !==
-          p.parallelGroup),
+      (survivedBefore.indexOf(p.fromIndex) !==
+        survivedAfter.indexOf(p.fromIndex) ||
+        (byIndex.get(p.fromIndex)?.parallelGroup ?? null) !== p.parallelGroup),
   );
 
   return {
@@ -460,6 +565,8 @@ export function planRouteAmendment(
     plan: {
       placements,
       removedIndexes: removed.map((s) => s.index),
+      added,
+      moved,
       addedOperationIds: added.map((p) => p.operationId),
       removedOperationIds: removed.map((s) => s.operationId),
       movedOperationIds: moved.map((p) => p.operationId),

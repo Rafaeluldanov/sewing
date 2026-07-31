@@ -5,7 +5,12 @@
  * Планировщик — вся арифметика индексов вкладки «Маршрут» drawer-а
  * «Изменить заказ в производстве»: он считает, что добавлено / убрано /
  * переставлено, и стережёт инварианты (замороженный префикс до фронта,
- * дубли операций, удаление шага с выработкой).
+ * дубль операции внутри параллельной группы, удаление последнего шага с
+ * выработкой).
+ *
+ * Одна операция может стоять в маршруте НЕСКОЛЬКО раз (чередующиеся
+ * ОТК/ВТО между швейными шагами), поэтому идентичность шага — позиция
+ * снимка (`sourceIndex`), а не `operationId`.
  */
 import { describe, expect, test } from 'vitest';
 import {
@@ -156,16 +161,140 @@ describe('planRouteAmendment — перестановка и удаление в
     });
   });
 
-  test('дубль операции отклоняется', () => {
+  test('удаление ОДНОГО из нескольких вхождений операции с выработкой — можно', () => {
+    // Два ОТК в маршруте, по операции есть выработка. Убираем первый:
+    // операция в маршруте остаётся, начислениям есть на что ссылаться.
+    const withTwoQc: RoutePlanCurrentStep[] = [
+      { index: 0, operationId: 'cut', parallelGroup: null },
+      { index: 1, operationId: 'issue', parallelGroup: null },
+      { index: 2, operationId: 'overlock', parallelGroup: null },
+      { index: 3, operationId: 'qc', parallelGroup: null },
+      { index: 4, operationId: 'coverstitch', parallelGroup: null },
+      { index: 5, operationId: 'qc', parallelGroup: null },
+    ];
+    // Холст присылает идентичность выжившего шага: остался ФИНАЛЬНЫЙ ОТК
+    // (шаг 5 снимка), убран промежуточный (шаг 3).
+    const res = planRouteAmendment(
+      withTwoQc,
+      [
+        { operationId: 'cut', parallelGroup: null, sourceIndex: 0 },
+        { operationId: 'issue', parallelGroup: null, sourceIndex: 1 },
+        { operationId: 'overlock', parallelGroup: null, sourceIndex: 2 },
+        { operationId: 'coverstitch', parallelGroup: null, sourceIndex: 4 },
+        { operationId: 'qc', parallelGroup: null, sourceIndex: 5 },
+      ],
+      2,
+      new Set(['qc']),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.plan.removedIndexes).toEqual([3]);
+    // Выживший ОТК — это шаг 5 снимка, а не «какой-то qc».
+    expect(res.plan.placements[4]).toMatchObject({
+      operationId: 'qc',
+      fromIndex: 5,
+    });
+  });
+});
+
+describe('planRouteAmendment — повторы операции в маршруте', () => {
+  test('вторая такая же операция добавляется как НОВЫЙ шаг', () => {
     const res = planRouteAmendment(
       CURRENT,
-      target('cut', 'issue', 'overlock', 'coverstitch', 'qc', 'qc'),
+      target('cut', 'issue', 'overlock', 'coverstitch', 'qc', 'binding', 'qc'),
+      2,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.plan.addedOperationIds).toEqual(['binding', 'qc']);
+    expect(res.plan.removedOperationIds).toEqual([]);
+    // Первый ОТК остаётся прежним шагом снимка, второй — новый.
+    expect(res.plan.placements[4]).toMatchObject({
+      operationId: 'qc',
+      fromIndex: 4,
+    });
+    expect(res.plan.placements[6]).toMatchObject({
+      operationId: 'qc',
+      fromIndex: null,
+    });
+  });
+
+  test('sourceIndex решает, какое из вхождений куда встало', () => {
+    const withTwoQc: RoutePlanCurrentStep[] = [
+      { index: 0, operationId: 'cut', parallelGroup: null },
+      { index: 1, operationId: 'qc', parallelGroup: null },
+      { index: 2, operationId: 'overlock', parallelGroup: null },
+      { index: 3, operationId: 'qc', parallelGroup: null },
+    ];
+    // Меняем вхождения местами: второй ОТК уходит вперёд, первый — назад.
+    const res = planRouteAmendment(
+      withTwoQc,
+      [
+        { operationId: 'cut', parallelGroup: null, sourceIndex: 0 },
+        { operationId: 'qc', parallelGroup: null, sourceIndex: 3 },
+        { operationId: 'overlock', parallelGroup: null, sourceIndex: 2 },
+        { operationId: 'qc', parallelGroup: null, sourceIndex: 1 },
+      ],
+      -1,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.plan.placements.map((p) => p.fromIndex)).toEqual([0, 3, 2, 1]);
+    expect(res.plan.addedOperationIds).toEqual([]);
+    expect(res.plan.removedOperationIds).toEqual([]);
+  });
+
+  test('без sourceIndex вхождения сопоставляются по порядку', () => {
+    const withTwoQc: RoutePlanCurrentStep[] = [
+      { index: 0, operationId: 'cut', parallelGroup: null },
+      { index: 1, operationId: 'qc', parallelGroup: null },
+      { index: 2, operationId: 'overlock', parallelGroup: null },
+      { index: 3, operationId: 'qc', parallelGroup: null },
+    ];
+    const res = planRouteAmendment(
+      withTwoQc,
+      target('cut', 'qc', 'overlock', 'qc'),
+      -1,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.plan.placements.map((p) => p.fromIndex)).toEqual([0, 1, 2, 3]);
+    expect(res.plan.noop).toBe(true);
+  });
+
+  test('дубль ВНУТРИ одной параллельной группы отклоняется', () => {
+    const res = planRouteAmendment(
+      CURRENT,
+      [
+        { operationId: 'cut', parallelGroup: null },
+        { operationId: 'issue', parallelGroup: null },
+        { operationId: 'overlock', parallelGroup: null },
+        { operationId: 'qc', parallelGroup: 1 },
+        { operationId: 'qc', parallelGroup: 1 },
+      ],
       2,
     );
     expect(res).toEqual({
       ok: false,
-      violation: { code: 'DUPLICATE_OPERATION', operationId: 'qc' },
+      violation: { code: 'DUPLICATE_IN_PARALLEL_GROUP', operationId: 'qc' },
     });
+  });
+
+  test('одна операция в РАЗНЫХ параллельных группах — можно', () => {
+    const res = planRouteAmendment(
+      CURRENT,
+      [
+        { operationId: 'cut', parallelGroup: null },
+        { operationId: 'issue', parallelGroup: null },
+        { operationId: 'overlock', parallelGroup: null },
+        { operationId: 'coverstitch', parallelGroup: 1 },
+        { operationId: 'qc', parallelGroup: 1 },
+        { operationId: 'binding', parallelGroup: 2 },
+        { operationId: 'qc', parallelGroup: 2 },
+      ],
+      2,
+    );
+    expect(res.ok).toBe(true);
   });
 });
 

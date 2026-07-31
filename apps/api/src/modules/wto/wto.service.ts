@@ -139,11 +139,6 @@ export class WtoService {
     // `QcService.completeQc` — здесь применяется тот же подход
     // «check-then-insert» под одной транзакцией.
     await this.prisma.$transaction(async (tx) => {
-      const existing = await tx.passportEvent.findFirst({
-        where: { passportId, type: PassportEventType.WTO_PASSED },
-        select: { id: true },
-      });
-      if (existing) return;
       // Для retroactive (`status==PACKED`) `currentOperationId` обычно
       // не на категории IRONING — пытаемся достать operationId ВТО
       // из маршрута заказа, иначе оставляем `currentOperationId`.
@@ -154,6 +149,20 @@ export class WtoService {
             passport.orderId,
           )
         : passport.currentOperationId;
+      // Считаем ПРОХОДЫ, а не факт: ВТО может стоять в маршруте несколько
+      // раз (например, отпарить до нанесения и после), и тогда паспорт
+      // обязан пройти её столько же раз — иначе второй проход молча уходил
+      // бы в идемпотентную ветку и шаг никогда не закрывался.
+      const passedCount = await tx.passportEvent.count({
+        where: { passportId, type: PassportEventType.WTO_PASSED },
+      });
+      const occurrences =
+        passedCount > 0 && operationId && passport.orderId
+          ? await tx.orderRouteStep.count({
+              where: { orderId: passport.orderId, operationId },
+            })
+          : 0;
+      if (passedCount >= Math.max(1, occurrences)) return;
       const createdEvent = await tx.passportEvent.create({
         data: {
           passportId,
