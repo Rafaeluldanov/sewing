@@ -4696,9 +4696,12 @@ export class CuttingLayHasPassportsException extends BusinessException {
   constructor(ordinal: number, numbers: string[], total: number) {
     const shown = numbers.join(', ');
     const tail = total > numbers.length ? ` и ещё ${total - numbers.length}` : '';
+    const many = total > 1;
     super(
       'CUTTING_LAY_HAS_PASSPORTS',
-      `Расклад №${ordinal} не открыть: паспорта ${shown}${tail} уже в работе (размещены в ячейке или пошли по операциям). Отмените их через мастера, потом открывайте расклад.`,
+      `Расклад №${ordinal} не открыть: ${many ? 'паспорта' : 'паспорт'} ${shown}${tail} ` +
+        `уже в работе (размещены в ячейке или пошли по операциям). ` +
+        `${many ? 'Отмените их' : 'Отмените его'} через мастера, потом открывайте расклад.`,
       HttpStatus.CONFLICT,
     );
   }

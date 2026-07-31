@@ -444,9 +444,11 @@ export function CuttingForm({
     setError(null);
     if (lay.ordinal == null) return;
     if (lay.reopenBlockedTotal > 0) {
+      const many = lay.reopenBlockedTotal > 1;
       setError(
-        `Расклад не открыть: паспорта ${lay.reopenBlockedPassports.join(', ')} ` +
-          'уже в работе. Их отменяет мастер.',
+        `Расклад не открыть: ${many ? 'паспорта' : 'паспорт'} ` +
+          `${lay.reopenBlockedPassports.join(', ')} уже в работе. ` +
+          `${many ? 'Их' : 'Его'} отменяет мастер.`,
       );
       return;
     }
@@ -861,11 +863,15 @@ function LayBlock({
             {lay.completedByName ? `, закрыл ${lay.completedByName}` : ''} — чтобы
             поправить размеры, слои или удалить лишний расклад, откройте его.{' '}
             {lay.reopenBlockedTotal > 0
-              ? `Сейчас нельзя: паспорта ${lay.reopenBlockedPassports.join(', ')}${
+              ? `Сейчас нельзя: ${
+                  lay.reopenBlockedTotal > 1 ? 'паспорта' : 'паспорт'
+                } ${lay.reopenBlockedPassports.join(', ')}${
                   lay.reopenBlockedTotal > lay.reopenBlockedPassports.length
                     ? ` и ещё ${lay.reopenBlockedTotal - lay.reopenBlockedPassports.length}`
                     : ''
-                } уже в работе — отменить их может мастер.`
+                } уже в работе — ${
+                  lay.reopenBlockedTotal > 1 ? 'отменить их' : 'отменить его'
+                } может мастер.`
               : lay.reopenDeletesPassports > 0
                 ? `Выпущенные по раскладу паспорта (${lay.reopenDeletesPassports} шт.) при открытии будут удалены — выпустите их заново после правок.`
                 : 'Паспортов по нему ещё нет — открывайте свободно.'}
