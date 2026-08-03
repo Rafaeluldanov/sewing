@@ -9846,6 +9846,10 @@ body:has(.admin-layout) .app-header { display: none !important; }
 @media (max-width: 900px) {
   .rb { grid-template-columns: minmax(0, 1fr); }
 }
+/* Тач-режим (кабинет мастера): одна колонка при любой ширине окна —
+   холст живёт в 720-пиксельной `.master-page`, а палитра выезжает
+   нижним листом (`.rb-pool--sheet`), колонка под неё не нужна. */
+.rb--compact { grid-template-columns: minmax(0, 1fr); }
 .rb-panel {
   border: 1px solid var(--admin-border);
   border-radius: 12px;
@@ -20723,3 +20727,458 @@ input.mcbx__input:disabled {
   margin-top: 0.35rem;
 }
 .order-need-editor__danger { margin-left: auto; color: var(--color-danger-fg); }
+
+/* ========================================================================
+ * Вкладка «Заказы» кабинета мастера (`/master`, `orders-routes-view.tsx`)
+ * + тач-режим холста правки маршрута (`RouteAmendmentTab compact`).
+ *
+ * Мобайл-first, как и весь `/master`: крупные цели под палец, карточки
+ * вместо таблиц. Чипы маршрута — те же `.admin-route-step*`, что в
+ * справочнике и в drawer-е заказа; здесь только модификаторы «мини»
+ * (строка списка) и «тап/выбран» (тач-режим).
+ * ===================================================================== */
+
+.morders {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.morders__tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.morders__tab {
+  padding: 7px 13px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-card);
+  color: var(--color-fg-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.morders__tab.is-active {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-soft);
+  color: var(--color-accent-fg);
+}
+.morders__search {
+  width: 100%;
+  font: inherit;
+  font-size: 0.88rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+}
+
+.morders__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.morders__card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-sm);
+}
+/* Вся карточка — одна цель нажатия: у мастера телефон в одной руке. */
+.morders__card-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  padding: 11px 12px;
+  cursor: pointer;
+  border-radius: var(--radius-lg);
+}
+.morders__card-btn:active {
+  background: var(--color-bg-soft);
+}
+.morders__card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.morders__number {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.morders__status {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--admin-blue-soft);
+  color: var(--admin-blue-fg);
+  white-space: nowrap;
+}
+.morders__product {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  margin-top: 1px;
+}
+.morders__meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 0.35rem;
+  font-size: 0.76rem;
+  color: var(--color-fg-subtle);
+}
+.morders__due {
+  font-weight: 700;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-sm);
+}
+.morders__due--ok {
+  background: var(--color-bg-muted);
+  color: var(--color-fg-muted);
+}
+.morders__due--warn {
+  background: var(--color-warn-soft);
+  color: var(--color-warn-fg);
+}
+.morders__due--bad {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+}
+
+.morders__chain {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 2px;
+}
+.morders__chain-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.morders__chain-sep {
+  color: var(--color-fg-subtle);
+  font-size: 0.8rem;
+}
+.morders__front {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 0.4rem;
+  margin-left: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-warn-soft);
+  color: var(--color-warn-fg);
+  border: 1px dashed var(--color-warn);
+  font-size: 0.62rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.morders__no-route {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: var(--color-danger-fg);
+}
+.morders__bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  margin-top: 0.5rem;
+  overflow: hidden;
+}
+.morders__bar i {
+  display: block;
+  height: 100%;
+  background: var(--color-ok);
+  border-radius: var(--radius-pill);
+}
+.morders__progress {
+  font-size: 0.75rem;
+  color: var(--color-fg-muted);
+  margin-top: 0.25rem;
+}
+.morders__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 1rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  text-align: center;
+}
+
+/* ---------- экран одного заказа ---------- */
+
+.morders__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.morders__detail-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.morders__back {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--color-fg-muted);
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.morders__back:active {
+  background: var(--color-bg-muted);
+}
+.morders__focus {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-md);
+  background: var(--color-warn-soft);
+  color: var(--color-warn-fg);
+  font-size: 0.83rem;
+}
+.morders__route-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  padding: 11px 12px;
+}
+.morders__route-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+.morders__route-title {
+  font-size: var(--title-subsection);
+  font-weight: 700;
+}
+.morders__totals {
+  display: flex;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--color-border);
+}
+.morders__totals b {
+  font-variant-numeric: tabular-nums;
+}
+.morders__hint {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  color: var(--color-fg-muted);
+}
+.morders__hint--warn {
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--radius-md);
+  background: var(--color-warn-soft);
+  color: var(--color-warn-fg);
+}
+/* `.master-page__primary` — общая крупная жёлтая кнопка терминала. */
+.morders__cta {
+  margin-top: 0.8rem;
+}
+.morders__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.morders__cancel {
+  align-self: flex-start;
+}
+
+/* Кнопка «Поправить маршрут →» в строке расхождения — второй ответ на
+   ту же строку рядом с «выдать допуск». */
+.divergence-row__to-route {
+  border-color: var(--btn-primary-edge);
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  font-weight: 700;
+}
+
+/* ---------- чип маршрута: мини (список) и тач (холст) ---------- */
+
+.admin-route-step--mini {
+  height: 22px;
+  font-size: 0.72rem;
+  padding: 0 7px;
+  gap: 4px;
+}
+.admin-route-step--mini .admin-route-step__name {
+  font-weight: 700;
+}
+/* Тач-режим: чип — цель нажатия, поэтому выше и с явным фокусом. */
+.admin-route-step--tap {
+  height: 34px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+.admin-route-step--tap:focus-visible {
+  outline: 2px solid var(--admin-blue);
+  outline-offset: 2px;
+}
+.admin-route-step--picked {
+  box-shadow: 0 0 0 3px var(--admin-blue);
+}
+
+/* ---------- тач-панель действий над шагом ---------- */
+
+.rb-touch {
+  margin-top: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-sm);
+  padding: 9px 10px;
+}
+.rb-touch__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.rb-touch__title {
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+.rb-touch__close {
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-muted);
+  padding: 0.25rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+}
+.rb-touch__acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.rb-touch__act {
+  flex: 1 1 0;
+  min-width: 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0.55rem 0.3rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  cursor: pointer;
+}
+.rb-touch__act:active {
+  background: var(--color-bg-soft);
+}
+.rb-touch__act--on {
+  border-color: var(--admin-blue);
+  background: var(--admin-blue-soft);
+  color: var(--admin-blue-fg);
+}
+.rb-touch__act--danger {
+  border-color: var(--color-danger-soft);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+}
+.rb-touch__act:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.rb-touch__hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.76rem;
+  color: var(--color-fg-subtle);
+}
+
+/* ---------- слот вставки в тач-режиме ---------- */
+
+/* В мышином режиме слот проявляется только при перетаскивании
+   (`.rb--dragging .rb-slot`). Пальцем перетаскивать нечего, поэтому в
+   тач-режиме слот виден всегда — это и есть кнопка «добавить сюда». */
+.rb-slot--tap {
+  min-width: 34px;
+  height: 34px;
+  border: 1px dashed var(--admin-blue);
+  border-radius: var(--radius-pill);
+  background: var(--admin-blue-soft);
+  color: var(--admin-blue-fg);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.rb-slot--tap.rb-slot--locked {
+  border-color: var(--color-border-strong);
+  background: transparent;
+  color: var(--color-fg-subtle);
+  cursor: not-allowed;
+}
+.rb-slot--tap .rb-slot__label {
+  display: none;
+}
+
+/* ---------- палитра нижним листом ---------- */
+
+.rb-pool--sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 71;
+  max-height: 72vh;
+  overflow-y: auto;
+  border-radius: 18px 18px 0 0;
+  border: 1px solid var(--color-border);
+  box-shadow: 0 -10px 30px rgba(15, 23, 42, 0.18);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+}
+.rb-pool--sheet .rb-panel__head {
+  position: sticky;
+  top: 0;
+  background: var(--color-bg-card);
+  z-index: 1;
+}
+/* В листе чип — цель нажатия, а не источник перетаскивания. */
+.rb-pool--sheet .admin-route-step {
+  height: 34px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+.rb-pool__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  border: 0;
+  padding: 0;
+  background: rgba(15, 23, 42, 0.45);
+  cursor: pointer;
+}
