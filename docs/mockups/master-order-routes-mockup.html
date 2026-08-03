@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Кабинет мастера → Заказы и маршруты (прототип)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+
+    --admin-blue:#2f7fd1;   --admin-blue-soft:#d9e8fb;   --admin-blue-fg:#1f6bc0;
+    --admin-green:#2e9e4a;  --admin-green-soft:#e4f4e6;  --admin-green-fg:#2f7d4e;
+    --admin-orange:#f97316; --admin-orange-soft:#ffedd5; --admin-orange-fg:#9a3412;
+    --admin-purple:#7c3aed; --admin-purple-soft:#ede9fe; --admin-purple-fg:#5b21b6;
+    --admin-coral:#fb7185;  --admin-coral-soft:#ffe4e6;  --admin-coral-fg:#9f1239;
+    --admin-border:#e4e4e1; --admin-soft:#f1f1ef; --admin-surface:#fff;
+    --admin-muted:#5f5f5c; --admin-text:#1b1b1b; --admin-primary:#2f7fd1;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 90px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1320px; margin:0 auto; padding:0 20px; }
+
+  /* ---------- навигация документа ---------- */
+  .topnav{ position:sticky; top:0; z-index:60; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1320px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:600; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:88ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:var(--title-hero); margin:0 0 .3rem; }
+  .sect > h2 small{ font-weight:400; color:var(--color-fg-muted); font-size:.8rem; font-family:ui-monospace,Menlo,monospace; margin-left:.5rem; }
+  .sect > p{ margin:0 0 1.1rem; color:var(--color-fg-muted); max-width:88ch; }
+  .row{ display:flex; gap:1.4rem; flex-wrap:wrap; align-items:flex-start; }
+  .cap{ font-size:.8rem; color:var(--color-fg-subtle); text-align:center; margin:.5rem auto 0; max-width:400px; }
+  .cap b{ color:var(--color-fg-muted); }
+
+  /* ---------- телефон ---------- */
+  .phone{ width:392px; border:9px solid #1e293b; border-radius:34px; background:#1e293b; box-shadow:var(--shadow-md); }
+  .phone__in{ border-radius:26px; overflow:hidden; background:var(--color-bg-soft); }
+  .mp{ padding:14px 14px 20px; display:flex; flex-direction:column; gap:12px; }
+
+  /* синяя RoleHeaderCard */
+  .rolecard{ background:linear-gradient(135deg,#2f6fd0,#5b46c9); color:#fff; border-radius:var(--radius-lg); padding:12px 14px; }
+  .rolecard__name{ font-weight:700; font-size:1.05rem; }
+  .rolecard__role{ font-size:.78rem; opacity:.85; }
+  .rolecard__status{ font-size:.76rem; opacity:.9; margin-top:.35rem; }
+
+  .mtabs{ display:flex; gap:6px; margin:2px 0 2px; overflow-x:auto; padding-bottom:2px; }
+  .mtab{ padding:8px 14px; border-radius:var(--radius-pill); border:1px solid transparent; background:transparent;
+         color:var(--color-fg-muted); font:inherit; font-size:13px; font-weight:700; white-space:nowrap; cursor:pointer; }
+  .mtab.is-active{ background:var(--color-accent); color:#fff; }
+  .mtab.is-new{ box-shadow:0 0 0 2px var(--btn-primary-bg); border-radius:var(--radius-pill); }
+
+  /* фильтр-строка */
+  .filters{ display:flex; gap:6px; flex-wrap:wrap; }
+  .pillbtn{ font:inherit; font-size:.78rem; font-weight:700; padding:.3rem .6rem; border-radius:var(--radius-pill);
+            border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg-muted); cursor:pointer; }
+  .pillbtn.is-on{ background:var(--color-accent-soft); border-color:var(--color-accent-soft); color:var(--color-accent-fg); }
+  .search{ width:100%; font:inherit; font-size:.85rem; padding:.45rem .6rem; border:1px solid var(--color-border-strong);
+           border-radius:var(--radius-md); background:#fff; }
+
+  /* карточка заказа в списке */
+  .ocard{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:11px 12px; }
+  .ocard + .ocard{ margin-top:9px; }
+  .ocard__top{ display:flex; align-items:baseline; justify-content:space-between; gap:.5rem; }
+  .ocard__num{ font-weight:700; font-size:.95rem; }
+  .ocard__name{ font-size:.85rem; color:var(--color-fg-muted); margin-top:1px; }
+  .ocard__meta{ font-size:.78rem; color:var(--color-fg-subtle); margin-top:.3rem; display:flex; gap:.6rem; flex-wrap:wrap; }
+  .ocard__chain{ margin-top:.55rem; }
+  .ocard__bar{ height:6px; border-radius:999px; background:var(--color-bg-muted); margin-top:.55rem; overflow:hidden; }
+  .ocard__bar i{ display:block; height:100%; background:var(--admin-green); border-radius:999px; }
+  .ocard__progress{ font-size:.76rem; color:var(--color-fg-muted); margin-top:.25rem; }
+
+  /* ---------- цепочка маршрута (близнец .admin-route-step* / .rb-*) ---------- */
+  .chain{ list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; align-items:center; gap:8px 2px; }
+  .chain__sep{ color:var(--admin-muted); font-size:.85rem; padding:0 2px; user-select:none; }
+  .chain__sep--par{ display:inline-flex; align-items:center; color:var(--admin-primary); font-weight:700; }
+  .step{ display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 10px 0 6px; border-radius:999px;
+         background:var(--admin-soft); color:var(--admin-text); font-size:.85rem; line-height:1;
+         border:1px solid var(--admin-border); white-space:nowrap; }
+  .step--sm{ height:24px; font-size:.76rem; padding:0 8px 0 5px; }
+  .step__num{ display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 5px;
+              border-radius:999px; background:var(--admin-surface); color:var(--admin-muted); font-size:.72rem; font-weight:700;
+              border:1px solid var(--admin-border); }
+  .step__name{ font-weight:700; }
+  .step__meta{ font-size:.7rem; opacity:.75; font-weight:400; font-variant-numeric:tabular-nums; }
+  .step--CUTTING{ background:var(--admin-orange-soft); color:var(--admin-orange-fg); border-color:transparent; }
+  .step--SEWING { background:var(--admin-blue-soft);   color:var(--admin-blue-fg);   border-color:transparent; }
+  .step--QC     { background:var(--admin-green-soft);  color:var(--admin-green-fg);  border-color:transparent; }
+  .step--IRONING{ background:#fde2e2;                  color:#9b1c1c;                border-color:transparent; }
+  .step--PACKING{ background:var(--admin-purple-soft); color:var(--admin-purple-fg); border-color:transparent; }
+  .step.is-locked{ background:var(--color-bg-muted); color:var(--color-fg-subtle); border-color:var(--color-border); }
+  .step.is-new{ box-shadow:0 0 0 2px var(--btn-primary-bg); }
+  .step.is-picked{ box-shadow:0 0 0 3px var(--admin-blue); }
+  .step__tag{ font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+              padding:.05rem .3rem; border-radius:var(--radius-sm); background:rgba(255,255,255,.75); }
+  .front{ display:inline-flex; align-items:center; gap:.35rem; height:28px; padding:0 .55rem; border-radius:var(--radius-pill);
+          background:var(--color-warn-soft); color:var(--color-warn-fg); font-size:.7rem; font-weight:700;
+          border:1px dashed var(--color-warn); white-space:nowrap; }
+
+  /* холст правки: слоты-«+» вместо drop-зон (тач) */
+  .canvas{ min-height:104px; border-radius:var(--radius-md); background:var(--color-bg-soft);
+           border:1px dashed var(--color-border-strong); padding:.7rem .6rem; }
+  .lane{ display:flex; flex-wrap:wrap; align-items:center; gap:9px 3px; }
+  .slot{ display:inline-flex; align-items:center; justify-content:center; min-width:26px; height:28px; padding:0 .3rem;
+         border-radius:var(--radius-pill); border:1px dashed var(--admin-blue); color:var(--admin-blue-fg);
+         background:#eef4fb; font-size:.85rem; font-weight:700; cursor:pointer; }
+  .slot--locked{ border-color:var(--color-border-strong); color:var(--color-fg-subtle); background:transparent; cursor:not-allowed; }
+  .slot--target{ min-width:110px; background:var(--admin-blue); border-style:solid; border-color:var(--admin-blue); color:#fff; font-size:.72rem; }
+
+  /* панель-обёртка */
+  .panel{ border:1px solid var(--color-border); border-radius:var(--radius-lg); background:#fff; }
+  .panel__head{ display:flex; align-items:center; justify-content:space-between; gap:.6rem; flex-wrap:wrap;
+                padding:.5rem .7rem; border-bottom:1px solid var(--color-border); }
+  .panel__title{ font-size:var(--title-subsection); font-weight:700; }
+  .panel__hint{ font-size:.76rem; color:var(--color-fg-muted); }
+  .panel__body{ padding:.7rem; }
+
+  .note{ display:flex; gap:6px; align-items:flex-start; font-size:.83rem; padding:8px 10px; border-radius:6px; margin-bottom:10px; }
+  .note--info{ background:#eff6ff; color:#1e40af; }
+  .note--warn{ background:#fffbeb; color:#92400e; }
+  .note--bad{ background:#fef2f2; color:#b91c1c; }
+  .note--ok{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+
+  .changes{ margin-top:.7rem; border:1px solid var(--color-border); border-radius:var(--radius-md); background:var(--color-bg-soft); }
+  .changes h5{ margin:0; padding:.4rem .6rem; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em;
+               color:var(--color-fg-subtle); border-bottom:1px solid var(--color-border); }
+  .changes ul{ list-style:none; margin:0; padding:.45rem .6rem; display:flex; flex-direction:column; gap:.3rem; font-size:.82rem; }
+  .changes li{ display:flex; align-items:center; gap:.4rem; }
+  .tag{ font-size:.68rem; font-weight:700; padding:.05rem .35rem; border-radius:var(--radius-sm); }
+  .tag--ok{ background:var(--admin-green-soft); color:var(--admin-green-fg); }
+  .tag--danger{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+  .tag--info{ background:var(--admin-blue-soft); color:var(--admin-blue-fg); }
+
+  .field{ display:flex; flex-direction:column; gap:.25rem; margin-top:.7rem; }
+  .field label{ font-size:var(--title-label); font-weight:700; }
+  .field input[type=text]{ font:inherit; font-size:.85rem; padding:.45rem .55rem; border:1px solid var(--color-border-strong);
+                           border-radius:var(--radius-sm); }
+  .field .req{ color:var(--color-danger); }
+
+  .totals{ display:flex; gap:.9rem; flex-wrap:wrap; font-size:.8rem; margin-top:.7rem; padding-top:.6rem;
+           border-top:1px solid var(--color-border); }
+  .totals b{ font-variant-numeric:tabular-nums; }
+  .delta{ font-size:.7rem; font-weight:700; padding:.1rem .4rem; border-radius:var(--radius-pill);
+          background:var(--color-ok-soft); color:var(--color-ok-fg); margin-left:.25rem; }
+  .delta--up{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+
+  .btn{ display:inline-flex; align-items:center; justify-content:center; gap:.4rem; font:inherit; font-size:.85rem; font-weight:700;
+        padding:.45rem .85rem; border-radius:var(--radius-md); border:1px solid var(--color-border-strong);
+        background:#fff; color:var(--color-fg); cursor:pointer; }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .btn--ghost{ border-color:transparent; background:transparent; color:var(--color-fg-muted); }
+  .btn--wide{ width:100%; padding:.7rem 1rem; font-size:.95rem; }
+  .btn[disabled]{ opacity:.45; cursor:not-allowed; }
+  .actions{ display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.8rem; }
+
+  .sticky{ position:sticky; bottom:0; background:linear-gradient(#fff0,#fff 22%); padding:.7rem .1rem .1rem; }
+
+  /* нижний лист (bottom sheet) */
+  .sheet{ background:#fff; border-radius:18px 18px 0 0; box-shadow:0 -10px 30px rgba(15,23,42,.18); }
+  .sheet__grip{ width:38px; height:4px; border-radius:999px; background:var(--color-border-strong); margin:8px auto 0; }
+  .sheet__head{ display:flex; justify-content:space-between; align-items:flex-start; padding:10px 14px 8px; }
+  .sheet__title{ font-weight:700; font-size:.98rem; }
+  .sheet__sub{ font-size:.78rem; color:var(--color-fg-muted); margin-top:1px; }
+  .sheet__body{ padding:0 14px 14px; }
+  .sheet__scrim{ background:rgba(15,23,42,.45); padding-top:34px; }
+  .pool__group{ margin-bottom:.55rem; }
+  .pool__group h4{ margin:0 0 .3rem; font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+                   color:var(--color-fg-subtle); display:flex; justify-content:space-between; }
+  .pool__items{ display:flex; flex-wrap:wrap; gap:5px; }
+
+  /* меню действий над шагом */
+  .stepacts{ display:flex; gap:6px; flex-wrap:wrap; }
+  .stepact{ flex:1 1 0; min-width:70px; display:flex; flex-direction:column; align-items:center; gap:2px;
+            padding:.55rem .3rem; border:1px solid var(--color-border-strong); border-radius:var(--radius-md);
+            background:#fff; font:inherit; font-size:.72rem; font-weight:700; color:var(--color-fg); cursor:pointer; }
+  .stepact b{ font-size:1.05rem; font-weight:700; line-height:1; }
+  .stepact--danger{ color:var(--color-danger-fg); border-color:var(--color-danger-soft); background:var(--color-danger-soft); }
+  .stepact[disabled]{ opacity:.4; cursor:not-allowed; }
+
+  /* строка расхождения */
+  .div-row{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:11px 12px; }
+  .div-row__head{ display:flex; justify-content:space-between; font-weight:700; font-size:.92rem; }
+  .div-row__op{ font-size:.83rem; margin-top:.25rem; }
+  .div-row__meta{ font-size:.76rem; color:var(--color-fg-subtle); margin-top:.3rem; display:flex; gap:.6rem; flex-wrap:wrap; }
+
+  /* планшет / десктоп 720px-колонка */
+  .tablet{ width:760px; max-width:100%; border:1px solid var(--color-border-strong); border-radius:var(--radius-xl);
+           background:var(--color-bg-soft); box-shadow:var(--shadow-md); overflow:hidden; }
+  .tablet__bar{ display:flex; align-items:center; gap:.5rem; padding:.5rem .9rem; background:#fff;
+                border-bottom:1px solid var(--color-border); font-size:.78rem; color:var(--color-fg-muted); }
+  .tablet__dots{ display:flex; gap:5px; }
+  .tablet__dots i{ width:9px; height:9px; border-radius:50%; background:var(--color-border-strong); display:block; }
+  .tablet__url{ font-family:ui-monospace,Menlo,monospace; }
+  .rb2{ display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:12px; align-items:start; }
+  @media (max-width:900px){ .rb2{ grid-template-columns:minmax(0,1fr); } }
+
+  /* таблица «что меняем в коде» */
+  table.impl{ width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); overflow:hidden; }
+  table.impl th{ text-align:left; font-size:.76rem; text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-subtle);
+                 background:var(--color-bg-soft); padding:.55rem .7rem; }
+  table.impl td{ padding:.55rem .7rem; border-top:1px solid var(--color-border); font-size:.85rem; vertical-align:top; }
+  table.impl code{ font-family:ui-monospace,Menlo,monospace; font-size:.78rem; background:var(--color-bg-muted); padding:.05rem .3rem; border-radius:4px; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__in">
+    <span class="topnav__brand">Мастер цеха → Заказы и маршруты</span>
+    <a href="#list">1. Список заказов</a>
+    <a href="#order">2. Карточка маршрута</a>
+    <a href="#edit">3. Правка (тач)</a>
+    <a href="#pool">4. Добавить операцию</a>
+    <a href="#result">5. Итог и отказы</a>
+    <a href="#diverg">6. Вход из «Расхождений»</a>
+    <a href="#tablet">7. Планшет</a>
+    <a href="#impl">8. Что меняем в коде</a>
+  </div>
+</nav>
+
+<div class="doc">
+
+  <section class="intro">
+    <h1>Маршруты заказов в кабинете мастера — прототип</h1>
+    <p>
+      Мастер цеха видит заказы, их маршруты и правит маршрут прямо со своего терминала.
+      Механика — <b>та же самая</b>, что во вкладке «Маршрут» drawer-а «Изменить заказ в производстве»
+      (<code>RouteAmendmentTab</code>, <code>PUT /orders/:id/amendments/route</code>): холст-цепочка,
+      замороженный фронт производства, причина правки, пересчёт плана бэкендом. Новый здесь только
+      <b>вход</b> (вкладка «Заказы» на <code>/master</code>) и <b>способ ввода</b> — тап вместо drag&amp;drop.
+    </p>
+    <div class="principles">
+      <div class="principle"><b>Один холст на две роли</b><span>Компонент переиспользуем целиком. У мастера он открывается на 720-пиксельной колонке, где <code>.rb</code> уже раскладывается в одну колонку (медиазапрос 900px).</span></div>
+      <div class="principle"><b>Тач вместо перетаскивания</b><span>HTML5 drag&amp;drop на телефоне не работает. Тап по шагу → панель действий (← → ⇄ ✕), тап по «+» между шагами → палитра операций.</span></div>
+      <div class="principle"><b>Правит только вперёд фронта</b><span>Пройденные шаги серые с замком, слоты левее фронта не принимают вставку. Гейт виден до действия, бэкенд всё равно проверяет (<code>AMENDMENT_ROUTE_FRONTIER_CHANGED</code>).</span></div>
+      <div class="principle"><b>Причина обязательна</b><span>Заказ запущен → правка задевает идущую работу. Причина уходит в журнал правок рядом с «кто и когда».</span></div>
+    </div>
+  </section>
+
+  <!-- ========================= 1. СПИСОК ЗАКАЗОВ ========================= -->
+  <section class="sect" id="list">
+    <h2>1. Новая вкладка «Заказы» <small>/master → tab=orders</small></h2>
+    <p>
+      Шестая вкладка рядом с «Вызовы / Движение тиража / Расхождения / Сотрудники / Корректировки».
+      По умолчанию — заказы в работе своего подразделения, отсортированные по сроку. Карточка сразу
+      показывает маршрут мини-чипами и где стоит фронт: мастеру не нужно открывать заказ, чтобы понять,
+      «а там вообще ОТК есть».
+    </p>
+
+    <div class="row">
+      <div>
+        <div class="phone"><div class="phone__in"><div class="mp">
+          <div class="rolecard">
+            <div class="rolecard__name">Ирина Соколова</div>
+            <div class="rolecard__role">Мастер цеха</div>
+            <div class="rolecard__status">Заказы в работе — маршрут можно поправить, не выходя из цеха</div>
+          </div>
+
+          <div class="mtabs">
+            <button class="mtab">Вызовы · 3</button>
+            <button class="mtab">Тираж</button>
+            <button class="mtab">Расхождения · 1</button>
+            <button class="mtab is-active is-new">Заказы · 4</button>
+          </div>
+
+          <input class="search" type="search" placeholder="Номер заказа, изделие, клиент…" />
+          <div class="filters">
+            <button class="pillbtn is-on">В работе · 4</button>
+            <button class="pillbtn">Ждут запуска · 2</button>
+            <button class="pillbtn">Готовы · 11</button>
+          </div>
+
+          <div>
+            <div class="ocard">
+              <div class="ocard__top">
+                <span class="ocard__num">01-00142</span>
+                <span class="badge badge--info" style="font-size:.68rem;font-weight:700;padding:.15rem .5rem;border-radius:999px;background:var(--admin-blue-soft);color:var(--admin-blue-fg)">в производстве</span>
+              </div>
+              <div class="ocard__name">Футболка print, чёрная · 520 шт</div>
+              <div class="ocard__meta"><span>крой выдан 28.07</span><span>срок 05.08</span><span>паспортов 40</span></div>
+              <div class="ocard__chain">
+                <ul class="chain">
+                  <li><span class="step step--sm step--CUTTING is-locked">Раскрой</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--SEWING is-locked">Оверлок 1</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--SEWING is-locked">Киперка</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--SEWING">Распошив</span></li>
+                  <li><span class="front" style="height:24px">фронт</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--IRONING">ВТО</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--PACKING">Упаковка</span></li>
+                </ul>
+              </div>
+              <div class="ocard__bar"><i style="width:41%"></i></div>
+              <div class="ocard__progress">упаковано 214 из 520 · 6 шагов маршрута</div>
+            </div>
+
+            <div class="ocard">
+              <div class="ocard__top">
+                <span class="ocard__num">01-00139</span>
+                <span style="font-size:.68rem;font-weight:700;padding:.15rem .5rem;border-radius:999px;background:var(--admin-blue-soft);color:var(--admin-blue-fg)">в производстве</span>
+              </div>
+              <div class="ocard__name">Худи оверсайз, серое · 180 шт</div>
+              <div class="ocard__meta"><span>крой выдан 25.07</span><span style="color:var(--color-danger-fg);font-weight:700">срок 02.08 — завтра</span></div>
+              <div class="ocard__chain">
+                <ul class="chain">
+                  <li><span class="step step--sm step--CUTTING is-locked">Раскрой</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--SEWING is-locked">Оверлок 1</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--SEWING is-locked">Распошив</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--QC">ОТК</span></li>
+                  <li><span class="front" style="height:24px">фронт</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--PACKING">Упаковка</span></li>
+                </ul>
+              </div>
+              <div class="ocard__bar"><i style="width:74%"></i></div>
+              <div class="ocard__progress">упаковано 133 из 180 · 5 шагов маршрута</div>
+            </div>
+
+            <div class="ocard">
+              <div class="ocard__top">
+                <span class="ocard__num">01-00145</span>
+                <span style="font-size:.68rem;font-weight:700;padding:.15rem .5rem;border-radius:999px;background:var(--color-warn-soft);color:var(--color-warn-fg)">расчёт</span>
+              </div>
+              <div class="ocard__name">Свитшот базовый, белый · 300 шт</div>
+              <div class="ocard__meta"><span>крой не выдан</span><span>срок 12.08</span></div>
+              <div class="ocard__chain">
+                <ul class="chain">
+                  <li><span class="step step--sm step--CUTTING">Раскрой</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--SEWING">Оверлок 1</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--QC">ОТК</span></li>
+                  <li class="chain__sep">›</li>
+                  <li><span class="step step--sm step--PACKING">Упаковка</span></li>
+                </ul>
+              </div>
+              <div class="ocard__progress" style="margin-top:.5rem">маршрут ещё не запущен — правится целиком, без причины</div>
+            </div>
+          </div>
+        </div></div></div>
+        <p class="cap"><b>Список.</b> Карточка = номер + изделие + срок + мини-цепочка с фронтом + полоса упаковки. Тап по карточке → карточка маршрута.</p>
+      </div>
+
+      <div style="flex:1 1 320px;min-width:300px">
+        <div class="panel">
+          <div class="panel__head"><span class="panel__title">Что показываем и почему</span></div>
+          <div class="panel__body" style="font-size:.87rem;color:var(--color-fg-muted)">
+            <p style="margin:.2rem 0 .6rem"><b style="color:var(--color-fg)">Фильтр по умолчанию — «В работе».</b> Мастеру нужны заказы, по которым сегодня шьют. «Ждут запуска» — вторым фильтром: там маршрут правится свободно и без причины, это удобно сделать заранее.</p>
+            <p style="margin:0 0 .6rem"><b style="color:var(--color-fg)">Подразделение — своё.</b> Список фильтруется тем же подразделением, что и «Движение тиража», чтобы мастер не видел чужой цех.</p>
+            <p style="margin:0 0 .6rem"><b style="color:var(--color-fg)">Мини-цепочка в карточке.</b> Тот же <code>.admin-route-step</code>, уменьшенный. Серые с замком — пройденные, пилюля «фронт» — где стоят паспорта.</p>
+            <p style="margin:0"><b style="color:var(--color-fg)">Полоса упаковки</b> берётся из уже существующего read-model производства — новых считалок не заводим.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================= 2. КАРТОЧКА МАРШРУТА ========================= -->
+  <section class="sect" id="order">
+    <h2>2. Карточка заказа → маршрут <small>/master → заказ 01-00142</small></h2>
+    <p>
+      Экран только про маршрут: цепочка целиком, деньги и время по плану, история правок. Кнопка
+      «Изменить маршрут» — жёлтая CTA, единственное действие на экране.
+    </p>
+
+    <div class="row">
+      <div>
+        <div class="phone"><div class="phone__in"><div class="mp">
+          <div style="display:flex;align-items:center;gap:.5rem">
+            <button class="btn btn--ghost" style="padding:.3rem .5rem">‹ Заказы</button>
+            <div style="flex:1">
+              <div style="font-weight:700">01-00142</div>
+              <div style="font-size:.78rem;color:var(--color-fg-muted)">Футболка print, чёрная · 520 шт</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel__head">
+              <span class="panel__title">Маршрут заказа</span>
+              <span class="panel__hint">6 шагов · снимок заказа</span>
+            </div>
+            <div class="panel__body">
+              <ul class="chain">
+                <li><span class="step step--CUTTING is-locked"><span class="step__num">1</span><span class="step__name">Раскрой</span> 🔒</span></li>
+                <li class="chain__sep">›</li>
+                <li><span class="step step--SEWING is-locked"><span class="step__num">2</span><span class="step__name">Оверлок 1</span> 🔒</span></li>
+                <li class="chain__sep">›</li>
+                <li><span class="step step--SEWING is-locked"><span class="step__num">3</span><span class="step__name">Киперка</span> 🔒</span></li>
+                <li class="chain__sep">›</li>
+                <li><span class="step step--SEWING"><span class="step__num">4</span><span class="step__name">Распошив</span><span class="step__meta">14,00 ₽ · 5:40</span></span></li>
+                <li><span class="front">фронт</span></li>
+                <li class="chain__sep">›</li>
+                <li><span class="step step--IRONING"><span class="step__num">5</span><span class="step__name">ВТО</span><span class="step__meta">6,00 ₽ · 2:10</span></span></li>
+                <li class="chain__sep">›</li>
+                <li><span class="step step--PACKING"><span class="step__num">6</span><span class="step__name">Упаковка</span><span class="step__meta">4,00 ₽ · 1:30</span></span></li>
+              </ul>
+
+              <div class="totals">
+                <span>Операций: <b>6</b></span>
+                <span>Сделка: <b>128,40 ₽/шт</b></span>
+                <span>Норма: <b>41 мин</b></span>
+              </div>
+
+              <div class="note note--warn" style="margin:.75rem 0 0">
+                ⚑ Паспорта дошли до <b>Распошива</b>. Шаги 1–4 заморожены: их нельзя убрать, переставить
+                и нельзя вставить операцию перед ними.
+              </div>
+
+              <div class="actions">
+                <button class="btn btn--primary btn--wide">✎ Изменить маршрут</button>
+              </div>
+              <div class="actions" style="margin-top:.4rem">
+                <button class="btn btn--ghost" style="width:100%">История правок · 2</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel__head"><span class="panel__title">История правок</span></div>
+            <div class="panel__body" style="font-size:.82rem;color:var(--color-fg-muted)">
+              <div style="padding-bottom:.5rem;border-bottom:1px solid var(--color-border)">
+                <b style="color:var(--color-fg)">29.07 14:20 · Ирина Соколова</b><br />
+                + ОТК после Распошив — «клиент требует контроль перед ВТО»
+              </div>
+              <div style="padding-top:.5rem">
+                <b style="color:var(--color-fg)">26.07 09:05 · Пётр Ким</b><br />
+                − Киперка — «нет фурнитуры, шьём без канта»
+              </div>
+            </div>
+          </div>
+        </div></div></div>
+        <p class="cap"><b>Только чтение.</b> Тот же снимок маршрута, который читают гейты паспортов и доска.</p>
+      </div>
+
+      <div style="flex:1 1 320px;min-width:300px">
+        <div class="panel">
+          <div class="panel__head"><span class="panel__title">Когда кнопка недоступна</span></div>
+          <div class="panel__body">
+            <div class="note note--bad" style="margin-bottom:.5rem">Заказ <b>завершён</b> — маршрут закрыт для правки.</div>
+            <div class="note note--bad" style="margin-bottom:.5rem">Заказ <b>отменён</b> (архив) — правка запрещена.</div>
+            <div class="note note--info" style="margin-bottom:0">
+              Кнопка есть, но часть шагов серая: у операции уже есть выработка — шаг остаётся в маршруте
+              даже впереди фронта (иначе выработке некуда деться).
+            </div>
+            <p style="font-size:.85rem;color:var(--color-fg-muted);margin:.8rem 0 0">
+              Все три состояния уже возвращает <code>GET /orders/:id/amendments/operations</code>
+              (<code>editable</code>, <code>started</code>, <code>frontierIndex</code>, <code>movable</code>/<code>removable</code> на шагах) —
+              новых полей не нужно.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================= 3. ПРАВКА (ТАЧ) ========================= -->
+  <section class="sect" id="edit">
+    <h2>3. Правка маршрута — тач-режим <small>тот же холст, другой способ ввода</small></h2>
+    <p>
+      На десктопе шаг тащат мышью. На телефоне мастер <b>тапает</b>: шаг подсвечивается и снизу
+      выезжает панель действий «влево / вправо / связать / убрать». Между шагами — синие «+»,
+      тап по ним открывает палитру операций. Логика в состоянии холста та же самая:
+      порядок массива = порядок шагов, <code>sourceIndex</code> хранит идентичность позиции,
+      флаг связи с предыдущим = параллельная группа.
+    </p>
+
+    <div class="row">
+      <div>
+        <div class="phone"><div class="phone__in"><div class="mp">
+          <div style="display:flex;align-items:center;gap:.5rem">
+            <button class="btn btn--ghost" style="padding:.3rem .5rem">‹</button>
+            <div style="flex:1"><div style="font-weight:700">Изменить маршрут</div>
+            <div style="font-size:.78rem;color:var(--color-fg-muted)">01-00142 · Футболка print</div></div>
+          </div>
+
+          <div class="note note--info">
+            ⓘ Тапните шаг, чтобы передвинуть или убрать. «+» между шагами — вставить операцию.
+            Замок = паспорта уже прошли.
+          </div>
+
+          <div class="canvas">
+            <ul class="lane">
+              <li><span class="slot slot--locked" title="Левее фронта вставка запрещена">+</span></li>
+              <li><span class="step step--CUTTING is-locked"><span class="step__num">1</span><span class="step__name">Раскрой</span> 🔒</span></li>
+              <li><span class="slot slot--locked">+</span></li>
+              <li><span class="step step--SEWING is-locked"><span class="step__num">2</span><span class="step__name">Оверлок 1</span> 🔒</span></li>
+              <li><span class="slot slot--locked">+</span></li>
+              <li><span class="step step--SEWING is-locked"><span class="step__num">3</span><span class="step__name">Киперка</span> 🔒</span></li>
+              <li><span class="slot slot--locked">+</span></li>
+              <li><span class="step step--SEWING is-picked"><span class="step__num">4</span><span class="step__name">Распошив</span></span></li>
+              <li><span class="front">фронт</span></li>
+              <li><span class="slot">+</span></li>
+              <li><span class="step step--QC is-new"><span class="step__num">5</span><span class="step__name">ОТК</span><span class="step__tag">новая</span></span></li>
+              <li><span class="slot">+</span></li>
+              <li><span class="step step--IRONING"><span class="step__num">6</span><span class="step__name">ВТО</span></span></li>
+              <li><span class="slot">+</span></li>
+              <li><span class="step step--PACKING"><span class="step__num">7</span><span class="step__name">Упаковка</span></span></li>
+              <li><span class="slot">+</span></li>
+            </ul>
+          </div>
+
+          <div class="sheet" style="margin-top:-4px">
+            <div class="sheet__grip"></div>
+            <div class="sheet__head">
+              <div>
+                <div class="sheet__title">Шаг 4 · Распошив</div>
+                <div class="sheet__sub">14,00 ₽/шт · норма 5:40 · на шаге 21 паспорт</div>
+              </div>
+              <button class="btn btn--ghost" style="padding:.2rem .45rem">✕</button>
+            </div>
+            <div class="sheet__body">
+              <div class="stepacts">
+                <button class="stepact" disabled title="Левее — замороженный префикс"><b>←</b>влево</button>
+                <button class="stepact"><b>→</b>вправо</button>
+                <button class="stepact"><b>⇄</b>связать<br />с соседом</button>
+                <button class="stepact stepact--danger" disabled title="По операции уже есть выработка"><b>✕</b>убрать</button>
+              </div>
+              <p style="font-size:.76rem;color:var(--color-fg-subtle);margin:.55rem 0 0">
+                «Убрать» недоступно: по Распошиву уже начислена выработка. «Влево» — шаг упрётся
+                в замороженный префикс.
+              </p>
+            </div>
+          </div>
+
+          <div class="changes">
+            <h5>Что будет сохранено</h5>
+            <ul>
+              <li><span class="tag tag--ok">+ добавлено</span> ОТК — после «Распошив»</li>
+            </ul>
+          </div>
+
+          <div class="field">
+            <label>Причина правки <span class="req">*</span></label>
+            <input type="text" value="Клиент требует контроль перед ВТО" />
+          </div>
+
+          <div class="totals">
+            <span>Операций: <b>7</b></span>
+            <span>Сделка: <b>134,40 ₽/шт</b><span class="delta delta--up">+6,00 ₽</span></span>
+            <span>Норма: <b>44 мин</b><span class="delta delta--up">+3:00</span></span>
+          </div>
+
+          <div class="sticky">
+            <button class="btn btn--primary btn--wide">Сохранить маршрут</button>
+            <div class="actions" style="margin-top:.45rem">
+              <button class="btn btn--ghost" style="flex:1">Вернуть как было</button>
+              <button class="btn btn--ghost" style="flex:1">Отмена</button>
+            </div>
+          </div>
+        </div></div></div>
+        <p class="cap"><b>Холст.</b> Замки, «фронт», подсветка выбранного шага, «новая» на добавленном — всё как в drawer-е.</p>
+      </div>
+
+      <div style="flex:1 1 320px;min-width:300px">
+        <div class="panel">
+          <div class="panel__head"><span class="panel__title">Тач-жесты ↔ мышь</span></div>
+          <div class="panel__body">
+            <table class="impl" style="border:none">
+              <tr><td style="border-top:none"><b>Тап по шагу</b></td><td style="border-top:none">= взять чип мышью. Открывает панель действий.</td></tr>
+              <tr><td><b>← / →</b></td><td>= перетащить в соседний слот. Упирается во фронт.</td></tr>
+              <tr><td><b>⇄</b></td><td>= кнопка «связать с предыдущим» на чипе (параллельная группа).</td></tr>
+              <tr><td><b>✕</b></td><td>= бросить чип обратно в палитру (удаление шага).</td></tr>
+              <tr><td><b>Тап по «+»</b></td><td>= drop в слот вставки. Открывает палитру с подписью «вставить сюда».</td></tr>
+            </table>
+            <div class="note note--info" style="margin-top:.8rem">
+              Панель действий — не новый компонент: это тот же <code>PassportActionsSheet</code>-паттерн,
+              которым мастер уже пользуется для паспортов.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================= 4. ПАЛИТРА ========================= -->
+  <section class="sect" id="pool">
+    <h2>4. Добавить операцию — нижний лист <small>палитра справочника</small></h2>
+    <p>
+      На десктопе палитра стоит колонкой справа. На телефоне 300 px под неё нет, поэтому она
+      выезжает нижним листом по тапу на «+» — и <b>знает, куда вставляет</b>: подпись в шапке
+      называет позицию. Группировка по категориям и «×N» на операциях, уже стоящих в маршруте,
+      — как в холсте заказа (повтор операции разрешён).
+    </p>
+
+    <div class="row">
+      <div>
+        <div class="phone"><div class="phone__in">
+          <div class="sheet__scrim">
+            <div class="sheet">
+              <div class="sheet__grip"></div>
+              <div class="sheet__head">
+                <div>
+                  <div class="sheet__title">Добавить операцию</div>
+                  <div class="sheet__sub">вставить после «Распошив» (шаг 4)</div>
+                </div>
+                <button class="btn btn--ghost" style="padding:.2rem .45rem">✕</button>
+              </div>
+              <div class="sheet__body">
+                <input class="search" type="search" placeholder="Поиск операции…" style="margin-bottom:.6rem" />
+
+                <div class="pool__group">
+                  <h4><span>Контроль</span><span>2</span></h4>
+                  <div class="pool__items">
+                    <span class="step step--QC"><span class="step__num">+</span><span class="step__name">ОТК</span><span class="step__meta">6,00 ₽</span></span>
+                    <span class="step step--QC"><span class="step__num">+</span><span class="step__name">Контроль упаковки</span><span class="step__meta">3,00 ₽</span></span>
+                  </div>
+                </div>
+
+                <div class="pool__group">
+                  <h4><span>Пошив</span><span>6</span></h4>
+                  <div class="pool__items">
+                    <span class="step step--SEWING"><span class="step__num">+</span><span class="step__name">Оверлок 1</span><span class="step__meta">12,00 ₽</span><span class="step__tag">×1</span></span>
+                    <span class="step step--SEWING"><span class="step__num">+</span><span class="step__name">Оверлок 2</span><span class="step__meta">12,00 ₽</span></span>
+                    <span class="step step--SEWING"><span class="step__num">+</span><span class="step__name">Киперка</span><span class="step__meta">9,00 ₽</span><span class="step__tag">×1</span></span>
+                    <span class="step step--SEWING"><span class="step__num">+</span><span class="step__name">Распошив</span><span class="step__meta">14,00 ₽</span><span class="step__tag">×1</span></span>
+                    <span class="step step--SEWING"><span class="step__num">+</span><span class="step__name">Окантовка</span><span class="step__meta">11,00 ₽</span></span>
+                    <span class="step step--SEWING"><span class="step__num">+</span><span class="step__name">Подкрой</span><span class="step__meta">—</span></span>
+                  </div>
+                </div>
+
+                <div class="pool__group">
+                  <h4><span>ВТО и упаковка</span><span>2</span></h4>
+                  <div class="pool__items">
+                    <span class="step step--IRONING"><span class="step__num">+</span><span class="step__name">ВТО</span><span class="step__meta">6,00 ₽</span><span class="step__tag">×1</span></span>
+                    <span class="step step--PACKING"><span class="step__num">+</span><span class="step__name">Упаковка</span><span class="step__meta">4,00 ₽</span><span class="step__tag">×1</span></span>
+                  </div>
+                </div>
+
+                <p style="font-size:.76rem;color:var(--color-fg-subtle);margin:.2rem 0 0">
+                  «×1» — операция уже стоит в маршруте. Поставить второй раз можно: чередующиеся
+                  ОТК/ВТО — нормальный маршрут, каждый проход считается отдельно.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <p class="cap"><b>Палитра.</b> Тап по операции — вставляет и закрывает лист, возвращая на холст.</p>
+      </div>
+
+      <div style="flex:1 1 320px;min-width:300px">
+        <div class="panel">
+          <div class="panel__head"><span class="panel__title">Расценка новой операции</span></div>
+          <div class="panel__body" style="font-size:.87rem;color:var(--color-fg-muted)">
+            <p style="margin:.2rem 0 .6rem">
+              Мастер ставит операцию по <b style="color:var(--color-fg)">цене справочника</b> — так же, как холст в заказе.
+              Правка ₽/шт и нормы времени внутри заказа остаётся у менеджера (вкладка «Операции» drawer-а):
+              это деньги, у мастера этой кнопки нет.
+            </p>
+            <div class="note note--warn" style="margin:0">
+              Если у операции нет расценки, чип показывает «—», а после сохранения в сводке появится
+              предупреждение «расценка не задана» — тот же <code>warnings[]</code>, что и сейчас.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================= 5. ИТОГ И ОТКАЗЫ ========================= -->
+  <section class="sect" id="result">
+    <h2>5. Сохранение: итог, отказ, конфликт</h2>
+    <p>
+      Ответ бэкенда уже содержит человекочитаемую сводку (<code>summary</code>) и предупреждения —
+      показываем их как есть. Отказы тоже приходят готовыми кодами, задача экрана — не превратить
+      их в «что-то пошло не так».
+    </p>
+
+    <div class="row">
+      <div style="flex:1 1 300px;min-width:280px">
+        <div class="panel">
+          <div class="panel__head"><span class="panel__title">Успех</span></div>
+          <div class="panel__body">
+            <div class="note note--ok" style="margin-bottom:.6rem">
+              ✓ Маршрут изменён: <b>+ ОТК после «Распошив»</b>
+            </div>
+            <div class="note note--warn" style="margin-bottom:.6rem">
+              ⚑ 21 паспорт уже на «Распошиве» — новая операция встанет им следующим шагом.
+            </div>
+            <p style="font-size:.83rem;color:var(--color-fg-muted);margin:0">
+              План пересчитан: сделка <b>134,40 ₽/шт</b>, норма <b>44 мин</b>.
+              Запись ушла в историю правок заказа с причиной и именем мастера.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:1 1 300px;min-width:280px">
+        <div class="panel">
+          <div class="panel__head"><span class="panel__title">Конфликт: фронт уехал</span></div>
+          <div class="panel__body">
+            <div class="note note--bad" style="margin-bottom:.6rem">
+              ✕ Пока вы правили, паспорта ушли дальше: фронт теперь на «ВТО».
+              Изменения в замороженной части отменены.
+            </div>
+            <div class="actions" style="margin-top:0">
+              <button class="btn btn--primary">Обновить маршрут</button>
+              <button class="btn btn--ghost">Отмена</button>
+            </div>
+            <p style="font-size:.8rem;color:var(--color-fg-subtle);margin:.7rem 0 0">
+              Код <code>AMENDMENT_ROUTE_FRONTIER_CHANGED</code>. Кнопка перечитывает состояние
+              и заново раскладывает холст, сохраняя правки впереди нового фронта.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:1 1 300px;min-width:280px">
+        <div class="panel">
+          <div class="panel__head"><span class="panel__title">Отказы</span></div>
+          <div class="panel__body" style="font-size:.84rem">
+            <div class="note note--bad" style="margin-bottom:.5rem">Укажите причину правки — заказ уже в производстве. <code>AMENDMENT_REASON_REQUIRED</code></div>
+            <div class="note note--bad" style="margin-bottom:.5rem">Маршрут не может быть пустым.</div>
+            <div class="note note--bad" style="margin-bottom:0">Заказ завершён — маршрут больше не правится.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================= 6. ВХОД ИЗ РАСХОЖДЕНИЙ ========================= -->
+  <section class="sect" id="diverg">
+    <h2>6. Вход из «Расхождений» — главный сценарий</h2>
+    <p>
+      Вкладка «Расхождения» показывает пары «заказ × операция», которых нет в маршруте.
+      Сегодня мастер может выписать наряд-допуск. Маршрут заказа — второй,
+      более честный ответ на ту же строку: если операцию делают постоянно, её место в маршруте.
+      Кнопка ведёт прямо на холст с уже наведённой позицией вставки.
+    </p>
+
+    <div class="row">
+      <div>
+        <div class="phone"><div class="phone__in"><div class="mp">
+          <div class="mtabs">
+            <button class="mtab">Вызовы · 3</button>
+            <button class="mtab">Тираж</button>
+            <button class="mtab is-active">Расхождения · 1</button>
+            <button class="mtab">Заказы · 4</button>
+          </div>
+
+          <div class="div-row">
+            <div class="div-row__head"><span>01-00142</span><span style="color:var(--color-danger-fg)">2 дн.</span></div>
+            <div class="div-row__op">Закрывают <b>ОКАНТОВКА</b> — такого шага нет в маршруте заказа</div>
+            <div class="div-row__meta"><span>Паспортов: <b>21</b></span><span>с 30.07</span><span>Зоя Бек, Рита Сан</span></div>
+            <div class="actions">
+              <button class="btn" style="flex:1 1 46%">Наряд-допуск</button>
+              <button class="btn btn--primary is-new" style="flex:1 1 46%">В маршрут →</button>
+            </div>
+            <p style="font-size:.75rem;color:var(--color-fg-subtle);margin:.5rem 0 0">
+              «Наряд-допуск» — разово разрешить работу. «В маршрут» — починить причину:
+              открыть холст заказа с Окантовкой, наведённой на позицию перед фронтом.
+            </p>
+          </div>
+        </div></div></div>
+        <p class="cap"><b>Разбор пятиминутки.</b> Из строки расхождения — сразу в маршрут того же заказа.</p>
+      </div>
+
+      <div style="flex:1 1 320px;min-width:300px">
+        <div class="panel">
+          <div class="panel__head"><span class="panel__title">Почему это важнее самой вкладки «Заказы»</span></div>
+          <div class="panel__body" style="font-size:.87rem;color:var(--color-fg-muted)">
+            <p style="margin:.2rem 0 .6rem">
+              Работа мимо маршрута шесть раз доводила до вставших десятков паспортов
+              (последний раз — 70 паспортов в 8 заказах, лаг 27 дней). Наряд-допуск лечит симптом на один заказ;
+              правка маршрута лечит причину.
+            </p>
+            <p style="margin:0">
+              Оговорка: операция уже сделана «мимо». Вставка её в маршрут <b style="color:var(--color-fg)">впереди фронта</b>
+              не задним числом закрывает сделанное — за прошлые паспорта по-прежнему отвечает допуск
+              либо <code>OperationSubstitution</code>. Экран это проговаривает подписью, а не молчит.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================= 7. ПЛАНШЕТ ========================= -->
+  <section class="sect" id="tablet">
+    <h2>7. Планшет / монитор в цехе <small>та же страница, ширина 720 px</small></h2>
+    <p>
+      Если мастер работает с планшета, вкладка «Заказы» — тот же список, а холст раскрывается
+      двумя колонками: цепочка слева, палитра справа. Никакой отдельной вёрстки: <code>.rb</code>
+      уже переключается медиазапросом на 900 px, тач-панель действий остаётся доступной.
+    </p>
+
+    <div class="tablet">
+      <div class="tablet__bar"><span class="tablet__dots"><i></i><i></i><i></i></span><span class="tablet__url">demo2.teeon.ru/master</span></div>
+      <div style="padding:14px">
+        <div class="mtabs" style="margin-bottom:10px">
+          <button class="mtab">Вызовы · 3</button>
+          <button class="mtab">Движение тиража</button>
+          <button class="mtab">Расхождения · 1</button>
+          <button class="mtab">Сотрудники</button>
+          <button class="mtab is-active is-new">Заказы · 4</button>
+        </div>
+
+        <div class="note note--info">ⓘ 01-00142 · Футболка print, чёрная · 520 шт — правка маршрута. Шаги 1–4 заморожены фронтом.</div>
+
+        <div class="rb2">
+          <div class="panel">
+            <div class="panel__head">
+              <span class="panel__title">Маршрут заказа</span>
+              <span class="panel__hint">перетащите операцию или тапните шаг</span>
+            </div>
+            <div class="panel__body">
+              <div class="canvas">
+                <ul class="lane">
+                  <li><span class="slot slot--locked">+</span></li>
+                  <li><span class="step step--CUTTING is-locked"><span class="step__num">1</span><span class="step__name">Раскрой</span> 🔒</span></li>
+                  <li><span class="slot slot--locked">+</span></li>
+                  <li><span class="step step--SEWING is-locked"><span class="step__num">2</span><span class="step__name">Оверлок 1</span> 🔒</span></li>
+                  <li><span class="slot slot--locked">+</span></li>
+                  <li><span class="step step--SEWING is-locked"><span class="step__num">3</span><span class="step__name">Киперка</span> 🔒</span></li>
+                  <li><span class="slot slot--locked">+</span></li>
+                  <li><span class="step step--SEWING"><span class="step__num">4</span><span class="step__name">Распошив</span><span class="step__meta">14,00 ₽</span></span></li>
+                  <li><span class="front">фронт</span></li>
+                  <li><span class="slot slot--target">вставить сюда</span></li>
+                  <li><span class="step step--QC is-new"><span class="step__num">5</span><span class="step__name">ОТК</span><span class="step__tag">новая</span></span></li>
+                  <li><span class="slot">+</span></li>
+                  <li><span class="step step--IRONING"><span class="step__num">6</span><span class="step__name">ВТО</span><span class="step__meta">6,00 ₽</span></span></li>
+                  <li><span class="slot">+</span></li>
+                  <li><span class="step step--PACKING"><span class="step__num">7</span><span class="step__name">Упаковка</span><span class="step__meta">4,00 ₽</span></span></li>
+                  <li><span class="slot">+</span></li>
+                </ul>
+              </div>
+
+              <div class="changes">
+                <h5>Что будет сохранено</h5>
+                <ul><li><span class="tag tag--ok">+ добавлено</span> ОТК — после «Распошив»</li></ul>
+              </div>
+
+              <div class="field">
+                <label>Причина правки <span class="req">*</span></label>
+                <input type="text" value="Клиент требует контроль перед ВТО" />
+              </div>
+
+              <div class="totals">
+                <span>Операций: <b>7</b></span>
+                <span>Сделка: <b>134,40 ₽/шт</b><span class="delta delta--up">+6,00 ₽</span></span>
+                <span>Норма: <b>44 мин</b><span class="delta delta--up">+3:00</span></span>
+              </div>
+
+              <div class="actions">
+                <button class="btn btn--primary">Сохранить маршрут</button>
+                <button class="btn btn--ghost">Вернуть как было</button>
+                <button class="btn btn--ghost">Отмена</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel__head"><span class="panel__title">Операции справочника</span><span class="panel__hint">10</span></div>
+            <div class="panel__body">
+              <input class="search" type="search" placeholder="Поиск операции…" style="margin-bottom:.5rem" />
+              <div class="pool__group">
+                <h4><span>Контроль</span><span>2</span></h4>
+                <div class="pool__items">
+                  <span class="step step--QC"><span class="step__num">+</span><span class="step__name">ОТК</span><span class="step__tag">×1</span></span>
+                  <span class="step step--QC"><span class="step__num">+</span><span class="step__name">Контроль упаковки</span></span>
+                </div>
+              </div>
+              <div class="pool__group">
+                <h4><span>Пошив</span><span>6</span></h4>
+                <div class="pool__items">
+                  <span class="step step--SEWING"><span class="step__num">+</span><span class="step__name">Оверлок 2</span></span>
+                  <span class="step step--SEWING"><span class="step__num">+</span><span class="step__name">Окантовка</span></span>
+                  <span class="step step--SEWING"><span class="step__num">+</span><span class="step__name">Подкрой</span></span>
+                </div>
+              </div>
+              <p style="font-size:.74rem;color:var(--color-danger-fg);font-weight:700;margin:.3rem 0 0">
+                Бросьте сюда, чтобы убрать операцию из маршрута
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="cap" style="max-width:760px"><b>Планшет.</b> Ровно тот же компонент, что в drawer-е заказа, — просто в 720-пиксельной колонке мастера.</p>
+  </section>
+
+  <!-- ========================= 8. ЧТО МЕНЯЕМ ========================= -->
+  <section class="sect" id="impl">
+    <h2>8. Что меняем в коде</h2>
+    <p>Дельта поверх существующего — новой механики правки маршрута не пишем, переиспользуем.</p>
+
+    <table class="impl">
+      <thead>
+        <tr><th style="width:34%">Место</th><th>Изменение</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>apps/api/.../order-amendments.controller.ts</code></td>
+          <td>На <code>PUT :id/amendments/route</code> добавить роль мастера к <code>@Roles('ADMIN','SHOP_MANAGER')</code>. GET уже открыт любой авторизованной роли. Остальные ручки (количество / размерность / операции с деньгами) мастеру <b>не</b> открываем.</td>
+        </tr>
+        <tr>
+          <td><code>apps/api/.../orders.controller.ts</code></td>
+          <td>Список заказов сейчас под <code>@Roles('SHOP_MANAGER')</code>. Мастеру нужен узкий срез — отдельная ручка <code>GET /master/orders</code> (номер, изделие, статус, срок, прогресс, мини-маршрут) с фильтром по подразделению, а не открытие полного DTO заказа.</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/lib/rbac.ts</code></td>
+          <td>Ничего: мастер остаётся на <code>/master</code>, отдельной страницы заказа не заводим — вкладка внутри того же экрана.</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/app/master/master-page-client.tsx</code></td>
+          <td>Шестая вкладка <code>'orders'</code> + <code>OrdersRoutesView</code> (список → карточка → холст), по образцу <code>DivergencesView</code>.</td>
+        </tr>
+        <tr>
+          <td><code>components/orders/amendments/route-amendment-tab.tsx</code></td>
+          <td>Добавить тач-ввод: выбранный шаг + панель действий (←/→/⇄/✕) и тап по слоту «+» → палитра нижним листом. Мышиный drag&amp;drop остаётся. Правка компонента общая — заодно чинит телефон и в drawer-е заказа.</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/app/master/divergences-view.tsx</code></td>
+          <td>Вторая кнопка в строке расхождения «В маршрут →» — открывает холст заказа с наведённой операцией.</td>
+        </tr>
+        <tr>
+          <td><code>globals.css</code></td>
+          <td>Блок <code>.rb-*</code> уже стакается на 900 px. Новое — стили тач-панели шага и мини-чипов <code>.step--sm</code> в карточке списка.</td>
+        </tr>
+        <tr>
+          <td>Миграции</td>
+          <td>Нет. Ни одной новой таблицы и колонки: правка идёт через существующий <code>OrderRouteStep</code>-снимок и журнал правок.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="principles" style="margin-top:1.2rem">
+      <div class="principle"><b>Открытые вопросы</b><span>1) Ограничивать ли мастера только «своим» подразделением или показывать все заказы цеха? 2) Пускать ли мастера в маршрут заказов <i>до</i> запуска (там правка без причины и без фронта). 3) Нужен ли отдельный флаг фичи, чтобы включить мастеру раздельно от <code>FEATURE_ORDER_AMENDMENTS</code>.</span></div>
+      <div class="principle"><b>Чего сознательно не даём</b><span>Деньги: расценка ₽/шт и норма времени внутри заказа. Количество и размерность тиража. Удаление шага, по которому есть выработка. Правку завершённых заказов.</span></div>
+      <div class="principle"><b>Что уже готово</b><span>Планировщик <code>planRouteAmendment</code>, проверка фронта, журнал правок, пересчёт плана, гейты паспортов. Мастеру достаётся вход и палец вместо мыши.</span></div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

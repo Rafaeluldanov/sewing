@@ -57,12 +57,21 @@ function daysSince(iso: string): number {
   return Math.max(0, Math.floor(ms / (24 * 60 * 60 * 1000)));
 }
 
+/** Куда уводит кнопка «Поправить маршрут» — вкладка «Заказы». */
+export interface RouteFocus {
+  orderId: string;
+  orderNumber: string;
+  operationName: string;
+}
+
 function DivergenceRow({
   item,
   onPermitIssued,
+  onOpenRoute,
 }: {
   item: RouteDivergenceDto;
   onPermitIssued: (message: string) => void;
+  onOpenRoute?: (focus: RouteFocus) => void;
 }) {
   const [formOpen, setFormOpen] = useState(false);
   const age = daysSince(item.firstAt);
@@ -103,6 +112,26 @@ function DivergenceRow({
           >
             Так и должно быть — выдать допуск
           </button>
+          {/* Второй ответ на ту же строку. Допуск закрывает работу,
+              которая УЖЕ сделана; правка маршрута лечит причину — если
+              цех перешёл на другую технологию, операции место в
+              маршруте. Впереди фронта, поэтому прошлые паспорта она не
+              закрывает: это по-прежнему допуск. */}
+          {onOpenRoute && (
+            <button
+              type="button"
+              className="btn btn-sm divergence-row__to-route"
+              onClick={() =>
+                onOpenRoute({
+                  orderId: item.orderId,
+                  orderNumber: item.orderNumber,
+                  operationName: `${item.operationCode} ${item.operationName}`,
+                })
+              }
+            >
+              Поправить маршрут →
+            </button>
+          )}
         </div>
       ) : (
         <PermitForm
@@ -187,7 +216,12 @@ function PermitsSection({
   );
 }
 
-export function DivergencesView() {
+export function DivergencesView({
+  onOpenRoute,
+}: {
+  /** Открыть маршрут заказа во вкладке «Заказы» (см. `RouteFocus`). */
+  onOpenRoute?: (focus: RouteFocus) => void;
+} = {}) {
   const [data, setData] = useState<RouteDivergencesDto | null>(null);
   const [permits, setPermits] = useState<RouteWorkPermitDto[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -279,6 +313,7 @@ export function DivergencesView() {
                 key={`${it.orderId}:${it.operationId}`}
                 item={it}
                 onPermitIssued={afterChange}
+                onOpenRoute={onOpenRoute}
               />
             ))}
           </ul>

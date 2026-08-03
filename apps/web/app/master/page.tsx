@@ -9,7 +9,10 @@ import { getActiveCutReleasePolicy } from '@/lib/cut-release-policy-api';
 import { listSizes } from '@/lib/orders-api';
 import { listMasterDefectTypes } from '@/lib/master-actions-api';
 import { listPendingQtyCorrections } from '@/lib/master-qty-corrections-api';
-import { isQtyCorrectionEnabled } from '@/lib/feature-flags';
+import {
+  isOrderAmendmentsEnabled,
+  isQtyCorrectionEnabled,
+} from '@/lib/feature-flags';
 import { canSeeEmployeeQrButton, canSeeMasterPage } from '@/lib/rbac';
 import { MasterPageClient } from './master-page-client';
 
@@ -97,8 +100,15 @@ export default async function MasterPage() {
     }
   }
 
+  // Вкладка «Заказы» (маршруты заказов + правка холстом) — часть фичи
+  // «Правка заказа в производстве»: правит она существующей ручкой
+  // `PUT /orders/:id/amendments/route`, поэтому и флаг общий, своего не
+  // заводим.
+  const orderRoutesEnabled = isOrderAmendmentsEnabled();
+
   return (
     <MasterPageClient
+      orderRoutesEnabled={orderRoutesEnabled}
       initialItems={initialItems ?? []}
       initialError={initialError}
       initialResolved={initialResolved}

@@ -1003,6 +1003,28 @@ DTO: `@sewing/shared` (`ProductionBoardQuerySchema`,
 
 ---
 
+## 23b. Master orders (заказы и маршруты в кабинете мастера)
+
+Источник: `master-orders/master-orders.controller.ts`.
+Класс-уровень `@Roles('SHOPFLOOR_MASTER', 'SHOP_MANAGER', 'ADMIN')`.
+Вкладка «Заказы» кабинета мастера: список заказов с маршрутом и фронтом
+производства. Read-only — правка маршрута идёт ручкой
+`PUT /api/orders/:id/amendments/route` (см. §«Order amendments»), к
+которой `SHOPFLOOR_MASTER` допущен отдельно; количество, размерность и
+операции остаются менеджеру заказа.
+
+Отдельная ручка, а не общий `GET /api/orders`: тот отдаёт управленческий
+DTO (себестоимость, склад, freshness плана) и закрыт `SHOP_MANAGER`.
+
+| Метод | Путь | RBAC | Описание |
+| ----- | ---- | ---- | -------- |
+| GET   | `/api/master/orders` | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Query `MasterOrdersQuerySchema` (`?tab=production|pending|done[&search=…]`). Возвращает `MasterOrdersDto`. |
+
+DTO: `@sewing/shared/master-orders` (`MasterOrdersQuerySchema`,
+`MasterOrdersDto`, `MasterOrderListItemDto`, `MasterOrderRouteStepDto`).
+
+---
+
 <a id="24-passports"></a>
 ## 23a. Cutting tasks (кабинет раскройщика)
 

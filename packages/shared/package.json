@@ -42,6 +42,7 @@
     "./display-screens": "./src/display-screens.ts",
     "./master-calls": "./src/master-calls.ts",
     "./master-actions": "./src/master-actions.ts",
+    "./master-orders": "./src/master-orders.ts",
     "./employee-qr": "./src/employee-qr.ts",
     "./me-daily": "./src/me-daily.ts",
     "./cut-release-policy": "./src/cut-release-policy.ts",

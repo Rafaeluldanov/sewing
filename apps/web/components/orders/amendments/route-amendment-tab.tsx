@@ -37,7 +37,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import {
+  ArrowLeft,
   ArrowLeftRight,
+  ArrowRight,
   GripVertical,
   Info,
   Lock,
@@ -63,6 +65,20 @@ interface Props {
   orderId: string;
   state: OperationAmendmentStateDto;
   onClose: () => void;
+  /**
+   * Тач-режим (кабинет мастера, `/master` → «Заказы»). HTML5
+   * drag&drop на телефоне не работает вообще: событий `dragstart` у
+   * touch-устройств нет, и холст без этого режима был бы там просто
+   * картинкой. Поэтому в compact-режиме:
+   *   - шаг ВЫБИРАЕТСЯ тапом, а действия (влево/вправо/связать/убрать)
+   *     переезжают в панель под холстом — вместо 18-пиксельных кнопок
+   *     внутри чипа, в которые пальцем не попасть;
+   *   - палитра операций выезжает нижним листом по тапу на слот «+»,
+   *     а не стоит колонкой справа: 300 px под неё на телефоне нет.
+   * Мышиный drag&drop при этом остаётся рабочим — режим ничего не
+   * отключает, только добавляет второй способ ввода.
+   */
+  compact?: boolean;
 }
 
 /** Шаг холста. `key` стабилен на всё время правки (React + фокус). */
@@ -204,8 +220,11 @@ function StepChip({
   onToggleParallel,
   onRemove,
   onKeyDown,
+  onPick,
   parallelWithPrev,
   chipRef,
+  compact = false,
+  picked = false,
 }: {
   step: DraftStep;
   num: number;
@@ -215,8 +234,12 @@ function StepChip({
   onToggleParallel?: () => void;
   onRemove?: () => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
+  /** Тач-режим: тап по чипу выбирает шаг (действия — в панели ниже). */
+  onPick?: () => void;
   parallelWithPrev: boolean;
   chipRef?: (el: HTMLSpanElement | null) => void;
+  compact?: boolean;
+  picked?: boolean;
 }) {
   const Icon = routeStepIcon(step.category);
   const tone = routeStepTone(step.category);
@@ -226,6 +249,8 @@ function StepChip({
     step.frozen ? 'admin-route-step--frozen' : '',
     draggable ? 'admin-route-step--draggable' : '',
     step.isNew ? 'admin-route-step--new' : '',
+    compact ? 'admin-route-step--tap' : '',
+    picked ? 'admin-route-step--picked' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -238,7 +263,10 @@ function StepChip({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onKeyDown={onKeyDown}
-      tabIndex={draggable ? 0 : -1}
+      onClick={compact ? onPick : undefined}
+      role={compact ? 'button' : undefined}
+      aria-pressed={compact ? picked : undefined}
+      tabIndex={compact || draggable ? 0 : -1}
       data-operation-code={step.code}
       data-frozen={step.frozen ? '1' : '0'}
       title={
@@ -269,7 +297,9 @@ function StepChip({
         <span className="admin-route-step__meta">{step.rateRub} ₽</span>
       )}
       {step.isNew && <span className="admin-route-step__tag">новая</span>}
-      {!step.frozen && (
+      {/* В тач-режиме микро-кнопки внутри чипа не рисуем: 18 px — не
+          палец. Те же действия живут в панели под холстом. */}
+      {!step.frozen && !compact && (
         <>
           <button
             type="button"
@@ -318,7 +348,12 @@ function SaveButton({ disabled }: { disabled: boolean }) {
   );
 }
 
-export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
+export function RouteAmendmentTab({
+  orderId,
+  state,
+  onClose,
+  compact = false,
+}: Props) {
   const initial = useMemo(() => toDraft(state.steps), [state.steps]);
   const [draft, setDraft] = useState<DraftStep[]>(initial);
   const [reason, setReason] = useState('');
@@ -328,6 +363,14 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
   const [overPool, setOverPool] = useState(false);
   const [blocked, setBlocked] = useState<string | null>(null);
   const [announce, setAnnounce] = useState('');
+  /**
+   * Тач-режим: выбранный шаг храним по `key`, а не по индексу — после
+   * перестановки индекс уезжает, и панель действий показывала бы уже
+   * соседний шаг.
+   */
+  const [pickedKey, setPickedKey] = useState<string | null>(null);
+  /** Слот, в который откроется палитра нижним листом; `null` — лист закрыт. */
+  const [poolAt, setPoolAt] = useState<number | null>(null);
   const focusKeyRef = useRef<string | null>(null);
   const chipRefs = useRef(new Map<string, HTMLSpanElement>());
 
@@ -354,6 +397,11 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
    * количество и есть минимальный допустимый слот.
    */
   const minSlot = initial.filter((s) => s.frozen).length;
+
+  /** Выбранный тапом шаг (тач-режим); −1 — ничего не выбрано. */
+  const pickedIndex =
+    pickedKey === null ? -1 : draft.findIndex((s) => s.key === pickedKey);
+  const picked = pickedIndex >= 0 ? draft[pickedIndex] : null;
 
   /**
    * Сколько раз операция стоит в текущем черновике маршрута. Операцию из
@@ -533,6 +581,9 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
     const next = draft.slice();
     next.splice(at, 0, restored ? { ...restored, linkedWithPrev: false } : fromOption(op));
     applyRows(next);
+    // Лист палитры закрывается сам: тап по операции — это завершённое
+    // действие «вставить сюда», а не выбор в списке.
+    setPoolAt(null);
     say(`${op.name} — шаг ${at + 1} из ${next.length}`);
   };
 
@@ -540,6 +591,23 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
     const next = draft.slice();
     const [item] = next.splice(from, 1);
     const to = at > from ? at - 1 : at;
+    next.splice(to, 0, item);
+    applyRows(next);
+    say(`${item.name} — шаг ${to + 1} из ${next.length}`);
+  };
+
+  /**
+   * Перестановка шага на соседнюю позицию — общий код для Alt+←/→ и для
+   * кнопок «влево/вправо» тач-панели.
+   */
+  const moveStep = (i: number, to: number) => {
+    if (to < minSlot || to >= draft.length) {
+      if (to < minSlot) reject('Сюда нельзя: шаг уже проходят паспорта');
+      return;
+    }
+    focusKeyRef.current = draft[i].key;
+    const next = draft.slice();
+    const [item] = next.splice(i, 1);
     next.splice(to, 0, item);
     applyRows(next);
     say(`${item.name} — шаг ${to + 1} из ${next.length}`);
@@ -603,6 +671,14 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
   };
 
   const onStepKeyDown = (e: React.KeyboardEvent, i: number) => {
+    // Тач-режим: чип — `role="button"`, но остаётся `<span>`, поэтому
+    // Enter/Space на нём надо обработать руками, иначе с клавиатуры шаг
+    // не выбрать вовсе.
+    if (compact && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      pickStep(i);
+      return;
+    }
     if (e.key === 'Delete') {
       e.preventDefault();
       removeAt(i);
@@ -615,18 +691,35 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
     }
     if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
       e.preventDefault();
-      const to = i + (e.key === 'ArrowLeft' ? -1 : 1);
-      if (to < minSlot || to >= draft.length) {
-        if (to < minSlot) reject('Сюда нельзя: шаг уже проходят паспорта');
-        return;
-      }
-      focusKeyRef.current = draft[i].key;
-      const next = draft.slice();
-      const [item] = next.splice(i, 1);
-      next.splice(to, 0, item);
-      applyRows(next);
-      say(`${item.name} — шаг ${to + 1} из ${next.length}`);
+      moveStep(i, i + (e.key === 'ArrowLeft' ? -1 : 1));
     }
+  };
+
+  /**
+   * Тап по шагу в тач-режиме. Замороженный шаг не выбираем: над ним нет
+   * ни одного доступного действия, и пустая панель действий читалась бы
+   * как «сломалось». Вместо неё — та же причина запрета, что в подсказке
+   * чипа.
+   */
+  const pickStep = (i: number) => {
+    const step = draft[i];
+    if (step.frozen) {
+      reject('Шаг уже проходят паспорта — изменение недоступно');
+      setPickedKey(null);
+      return;
+    }
+    setPickedKey((cur) => (cur === step.key ? null : step.key));
+  };
+
+  /** Тап по слоту «+» в тач-режиме: открыть палитру именно на эту позицию. */
+  const openPoolAt = (at: number) => {
+    if (at < minSlot) {
+      reject('Сюда нельзя: шаг уже проходят паспорта');
+      return;
+    }
+    setPickedKey(null);
+    setQuery('');
+    setPoolAt(at);
   };
 
   // ----------------------------------------------------------------- render
@@ -643,34 +736,59 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
   const slot = (at: number) => {
     const locked = at < minSlot;
     const isOver = overSlot === at;
-    return (
-      <span
-        key={`slot:${at}`}
-        className={`rb-slot${locked ? ' rb-slot--locked' : ''}${
-          isOver ? ' rb-slot--over' : ''
-        }`}
-        data-at={at}
-        onDragOver={(e) => {
-          if (!drag) return;
-          setOverSlot(at);
-          if (locked) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = drag.kind === 'pool' ? 'copy' : 'move';
-        }}
-        onDragLeave={() => setOverSlot((cur) => (cur === at ? null : cur))}
-        onDrop={(e) => {
-          e.preventDefault();
-          setOverSlot(null);
-          dropAt(at);
-        }}
-        aria-hidden
-      >
+    const classes = `rb-slot${locked ? ' rb-slot--locked' : ''}${
+      isOver ? ' rb-slot--over' : ''
+    }${compact ? ' rb-slot--tap' : ''}`;
+    const inner = (
+      <>
         <span className="rb-slot__arrow">
-          {locked ? '✕' : at === draft.length ? '＋' : '→'}
+          {compact ? '+' : locked ? '✕' : at === draft.length ? '＋' : '→'}
         </span>
         <span className="rb-slot__label">
           {locked ? 'нельзя' : 'вставить сюда'}
         </span>
+      </>
+    );
+    const dnd = {
+      onDragOver: (e: React.DragEvent) => {
+        if (!drag) return;
+        setOverSlot(at);
+        if (locked) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = drag.kind === 'pool' ? 'copy' : 'move';
+      },
+      onDragLeave: () => setOverSlot((cur) => (cur === at ? null : cur)),
+      onDrop: (e: React.DragEvent) => {
+        e.preventDefault();
+        setOverSlot(null);
+        dropAt(at);
+      },
+    };
+    // В тач-режиме слот — настоящая кнопка: он единственный способ
+    // вставить операцию пальцем, значит должен быть в табуляции и иметь
+    // имя для screen reader'а (в мышином режиме это чисто визуальная
+    // стрелка цепочки, и она остаётся `aria-hidden`).
+    return compact ? (
+      <button
+        key={`slot:${at}`}
+        type="button"
+        className={classes}
+        data-at={at}
+        onClick={() => openPoolAt(at)}
+        aria-label={
+          locked
+            ? 'Вставка недоступна: шаг уже проходят паспорта'
+            : at === draft.length
+              ? 'Добавить операцию в конец маршрута'
+              : `Добавить операцию перед шагом ${at + 1}`
+        }
+        {...dnd}
+      >
+        {inner}
+      </button>
+    ) : (
+      <span key={`slot:${at}`} className={classes} data-at={at} aria-hidden {...dnd}>
+        {inner}
       </span>
     );
   };
@@ -703,7 +821,16 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
         </div>
       )}
 
-      <div className={`rb${drag ? ' rb--dragging' : ''}`}>
+      {/* `rb--compact` заставляет холст быть одноколоночным независимо от
+          ширины ОКНА: медиазапрос `.rb` смотрит на viewport, а холст
+          мастера живёт в 720-пиксельной колонке `.master-page` — на
+          большом мониторе он иначе оставил бы пустую колонку под
+          палитру, которой в тач-режиме там нет. */}
+      <div
+        className={`rb${drag ? ' rb--dragging' : ''}${
+          compact ? ' rb--compact' : ''
+        }`}
+      >
         <section className="rb-panel">
           <header className="rb-panel__head">
             <span className="rb-panel__title">Маршрут заказа</span>
@@ -723,6 +850,9 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
                         step={s}
                         num={i + 1}
                         draggable={!s.frozen}
+                        compact={compact}
+                        picked={compact && s.key === pickedKey}
+                        onPick={() => pickStep(i)}
                         parallelWithPrev={parallelWithPrev}
                         chipRef={(el) => {
                           if (el) chipRefs.current.set(s.key, el);
@@ -770,10 +900,99 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
               </div>
             </div>
 
+            {/* Тач-режим: действия над выбранным шагом. Недоступные кнопки
+                не прячем, а гасим с объяснением — «почему нельзя» здесь
+                важнее, чем короткий ряд кнопок. */}
+            {compact && picked && (
+              <div className="rb-touch" role="group" aria-label="Действия над шагом">
+                <div className="rb-touch__head">
+                  <span className="rb-touch__title">
+                    Шаг {pickedIndex + 1} · {picked.name}
+                  </span>
+                  <button
+                    type="button"
+                    className="rb-touch__close"
+                    onClick={() => setPickedKey(null)}
+                    aria-label="Снять выделение шага"
+                  >
+                    <X size={16} strokeWidth={1.8} aria-hidden />
+                  </button>
+                </div>
+                <div className="rb-touch__acts">
+                  <button
+                    type="button"
+                    className="rb-touch__act"
+                    onClick={() => moveStep(pickedIndex, pickedIndex - 1)}
+                    disabled={pickedIndex <= minSlot}
+                    title={
+                      pickedIndex <= minSlot
+                        ? 'Левее — шаги, которые уже проходят паспорта'
+                        : 'Передвинуть на шаг влево'
+                    }
+                  >
+                    <ArrowLeft size={18} strokeWidth={1.9} aria-hidden />
+                    влево
+                  </button>
+                  <button
+                    type="button"
+                    className="rb-touch__act"
+                    onClick={() => moveStep(pickedIndex, pickedIndex + 1)}
+                    disabled={pickedIndex >= draft.length - 1}
+                    title="Передвинуть на шаг вправо"
+                  >
+                    <ArrowRight size={18} strokeWidth={1.9} aria-hidden />
+                    вправо
+                  </button>
+                  <button
+                    type="button"
+                    className={`rb-touch__act${
+                      picked.linkedWithPrev ? ' rb-touch__act--on' : ''
+                    }`}
+                    onClick={() => toggleParallel(pickedIndex)}
+                    disabled={pickedIndex <= minSlot}
+                    aria-pressed={picked.linkedWithPrev}
+                    title="Параллельно с предыдущим шагом (порядок внутри группы любой)"
+                  >
+                    <ArrowLeftRight size={18} strokeWidth={1.9} aria-hidden />
+                    {picked.linkedWithPrev ? 'разделить' : 'связать'}
+                  </button>
+                  <button
+                    type="button"
+                    className="rb-touch__act rb-touch__act--danger"
+                    onClick={() => {
+                      removeAt(pickedIndex);
+                      setPickedKey(null);
+                    }}
+                    disabled={
+                      picked.hasWork &&
+                      (countByOperationId.get(picked.operationId) ?? 0) <= 1
+                    }
+                    title={
+                      picked.hasWork
+                        ? 'По операции уже есть выработка — убрать нельзя'
+                        : 'Убрать из маршрута'
+                    }
+                  >
+                    <X size={18} strokeWidth={1.9} aria-hidden />
+                    убрать
+                  </button>
+                </div>
+                {picked.hasWork &&
+                  (countByOperationId.get(picked.operationId) ?? 0) <= 1 && (
+                    <p className="rb-touch__hint">
+                      По операции «{picked.name}» уже есть выработка — из
+                      маршрута её не убрать.
+                    </p>
+                  )}
+              </div>
+            )}
+
             <div className="rb-changes">
               {changes.length === 0 ? (
                 <p className="rb-changes__empty">
-                  Изменений пока нет — перетащите операцию из списка справа.
+                  {compact
+                    ? 'Изменений пока нет — тапните шаг, чтобы передвинуть, или «+», чтобы добавить операцию.'
+                    : 'Изменений пока нет — перетащите операцию из списка справа.'}
                 </p>
               ) : (
                 <>
@@ -842,8 +1061,17 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
           </div>
         </section>
 
+        {/* Палитра. На десктопе — вторая колонка холста; в тач-режиме тот
+            же блок выезжает нижним листом по тапу на слот «+» (см.
+            `openPoolAt`) и знает позицию вставки. */}
+        {(!compact || poolAt !== null) && (
         <section
-          className={`rb-panel rb-pool${overPool ? ' rb-pool--over' : ''}`}
+          className={`rb-panel rb-pool${overPool ? ' rb-pool--over' : ''}${
+            compact ? ' rb-pool--sheet' : ''
+          }`}
+          role={compact ? 'dialog' : undefined}
+          aria-modal={compact ? true : undefined}
+          aria-label={compact ? 'Добавить операцию' : undefined}
           onDragOver={(e) => {
             if (!drag || drag.kind !== 'step') return;
             e.preventDefault();
@@ -859,10 +1087,32 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
           }}
         >
           <header className="rb-panel__head">
-            <span className="rb-panel__title">Операции справочника</span>
-            <span className="rb-panel__hint">
-              {pool.reduce((a, g) => a + g.items.length, 0)}
+            <span className="rb-panel__title">
+              {compact ? 'Добавить операцию' : 'Операции справочника'}
             </span>
+            {compact && poolAt !== null ? (
+              <>
+                <span className="rb-panel__hint">
+                  {poolAt === 0
+                    ? 'в начало маршрута'
+                    : poolAt >= draft.length
+                      ? 'в конец маршрута'
+                      : `после «${draft[poolAt - 1]?.name ?? ''}»`}
+                </span>
+                <button
+                  type="button"
+                  className="rb-touch__close"
+                  onClick={() => setPoolAt(null)}
+                  aria-label="Закрыть список операций"
+                >
+                  <X size={18} strokeWidth={1.8} aria-hidden />
+                </button>
+              </>
+            ) : (
+              <span className="rb-panel__hint">
+                {pool.reduce((a, g) => a + g.items.length, 0)}
+              </span>
+            )}
           </header>
           <div className="rb-panel__body">
             <input
@@ -912,13 +1162,26 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                               e.preventDefault();
-                              insertAt(op, draft.length);
+                              insertAt(op, poolAt ?? draft.length);
                             }
                           }}
+                          // В тач-режиме тап по операции = вставка в тот
+                          // слот, из которого открыт лист. В мышином —
+                          // клика нет: там drag&drop и Enter.
+                          onClick={
+                            compact
+                              ? () => insertAt(op, poolAt ?? draft.length)
+                              : undefined
+                          }
+                          role={compact ? 'button' : undefined}
                           title={
-                            inRoute > 0
-                              ? `${op.name} — уже в маршруте (${inRoute}). Операцию можно поставить ещё раз: перетащите или нажмите Enter`
-                              : `${op.name} — перетащите в маршрут или нажмите Enter, чтобы добавить в конец`
+                            compact
+                              ? inRoute > 0
+                                ? `${op.name} — уже в маршруте (${inRoute}). Тапните, чтобы поставить ещё раз`
+                                : `${op.name} — тапните, чтобы вставить`
+                              : inRoute > 0
+                                ? `${op.name} — уже в маршруте (${inRoute}). Операцию можно поставить ещё раз: перетащите или нажмите Enter`
+                                : `${op.name} — перетащите в маршрут или нажмите Enter, чтобы добавить в конец`
                           }
                         >
                           <span className="admin-route-step__num" aria-hidden>
@@ -957,6 +1220,15 @@ export function RouteAmendmentTab({ orderId, state, onClose }: Props) {
             )}
           </div>
         </section>
+        )}
+        {compact && poolAt !== null && (
+          <button
+            type="button"
+            className="rb-pool__scrim"
+            onClick={() => setPoolAt(null)}
+            aria-label="Закрыть список операций"
+          />
+        )}
       </div>
 
       <p className="rb-live" role="status" aria-live="polite">

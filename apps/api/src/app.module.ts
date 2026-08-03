@@ -39,6 +39,7 @@ import { MasterCallsModule } from './modules/master-calls/master-calls.module.js
 import { MasterActionsModule } from './modules/master-actions/master-actions.module.js';
 import { ProductionBoardModule } from './modules/production-board/production-board.module.js';
 import { MasterEmployeeStatsModule } from './modules/master-employee-stats/master-employee-stats.module.js';
+import { MasterOrdersModule } from './modules/master-orders/master-orders.module.js';
 import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module.js';
 import { CutReleasePolicyModule } from './modules/cut-release-policy/cut-release-policy.module.js';
 import { OrderCutIssueRulesModule } from './modules/order-cut-issue-rules/order-cut-issue-rules.module.js';
@@ -117,6 +118,7 @@ import { IntegrationsModule } from './modules/integrations/integrations.module.j
     MasterActionsModule,
     ProductionBoardModule,
     MasterEmployeeStatsModule,
+    MasterOrdersModule,
     TimeTrackingModule,
     CutReleasePolicyModule,
     OrderCutIssueRulesModule,

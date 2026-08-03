@@ -9365,40 +9365,30 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 
 /* --- Compact grouped table (admin-operations / admin-equipment) ---------
-   ОДНА карточка + ОДИН table header на всю страницу, категории живут
-   как тонкие group-row внутри tbody (см. ТЗ «compact grouped-table
-   layout»). Раньше каждая категория была отдельным `CategorySection`
-   с собственным заголовком/таблицей, и страницы /admin/operations
+   ОДИН table header на всю страницу, категории живут как тонкие
+   group-row внутри tbody (см. ТЗ «compact grouped-table layout»).
+   Раньше каждая категория была отдельным `CategorySection` с
+   собственным заголовком/таблицей, и страницы /admin/operations
    и /admin/equipment имели много вертикального воздуха. Здесь
    уплотняем padding, убираем повторяющиеся header'ы, оставляем
    group-row только как разделитель.
+
+   ВАЖНО (правило каркаса списков): группировка меняет ТОЛЬКО таблицу.
+   Каркас страницы остаётся общим для всей админки (эталон —
+   `/admin/routes`): одна `.admin-card` с обычным padding, внутри неё
+   вкладки архива → поиск → `.admin-section-header` («Активные ·
+   Всего: N») → таблица в рамке `.admin-table-wrap`. Отдельной
+   «компактной карточки» с `padding: 0` и заголовком-полоской во всю
+   ширину больше нет — она выбивалась из остальных списков.
 
    `.admin-compact-grouped-table` наследует `.admin-table` (border,
    радиусы), но переопределяет padding/font-size — поэтому декларации
    ниже идут после базовых правил `.admin-table` в файле.
    ---------------------------------------------------------------------- */
 
-.admin-compact-grouped-card {
-  padding: 0;
-  overflow: hidden;
-  /* Отступы задаёт сам заголовок (правило ниже), а таблица идёт
-     edge-to-edge — общий grid-gap карточки здесь не нужен. */
-  gap: 0;
-}
-
-/* Заголовок-полоска компактной карточки. Карточка обнулила padding
-   ради edge-to-edge таблицы — вместе с ним заголовок терял и свои
-   отступы, из-за чего «Активные / Всего: N» слева и кнопка
-   bulk-архива справа прилипали к углам блока. Возвращаем padding
-   самому заголовку: по горизонтали — ровно как у ячеек компактной
-   таблицы и `.admin-compact-group-row__inner` (0.75rem), чтобы
-   заголовок вставал по одной вертикали с колонками и разделителями
-   категорий. */
-.admin-compact-grouped-card > .admin-section-header {
-  padding: 0.7rem 0.75rem;
-  border-bottom: 1px solid var(--admin-border);
-}
-
+/* Идёт вместе с `.admin-table-wrap` (рамка/радиусы как у AdminTable) и
+   добавляет горизонтальный скролл: у сгруппированной таблицы colspan
+   group-row не даёт коллапсироваться в «карточки» на узком экране. */
 .admin-compact-table-wrap {
   overflow-x: auto;
 }

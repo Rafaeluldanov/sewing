@@ -28,7 +28,9 @@ import { OrderAmendmentsService } from './order-amendments.service.js';
  *
  * GET открыт любой авторизованной роли (drawer читает состояние),
  * write — менеджерам заказа (`ADMIN` / `SHOP_MANAGER`), как у
- * `order-colorways` / `route-overrides`.
+ * `order-colorways` / `route-overrides`. Исключение — правка маршрута
+ * (`PUT route`): к ней допущен ещё и `SHOPFLOOR_MASTER` (см. комментарий
+ * у ручки).
  */
 @Controller('orders/:id/amendments')
 export class OrderAmendmentsController {
@@ -96,9 +98,16 @@ export class OrderAmendmentsController {
    * Применить правку маршрута целиком (вкладка «Маршрут»): состав,
    * порядок и параллельные группы впереди фронта производства. Тело —
    * ВЕСЬ целевой маршрут, дельту считает бэкенд.
+   *
+   * `SHOPFLOOR_MASTER` — единственная write-ручка модуля, открытая
+   * мастеру цеха (вкладка «Заказы» в `/master`, см.
+   * `apps/api/src/modules/master-orders/*`). Состав операций — его
+   * зона: он первым видит, что в заказе не хватает ОТК или что
+   * работу закрывают мимо маршрута. Количество, размерность и
+   * расценки остаются у менеджера заказа — это план и деньги.
    */
   @Put('route')
-  @Roles('ADMIN', 'SHOP_MANAGER')
+  @Roles('ADMIN', 'SHOP_MANAGER', 'SHOPFLOOR_MASTER')
   applyRoute(
     @Param('id') orderId: string,
     @Body(new ZodValidationPipe(ApplyRouteAmendmentSchema))

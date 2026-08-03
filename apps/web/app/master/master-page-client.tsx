@@ -46,6 +46,7 @@ import { CutReleasePolicyCard } from './cut-release-policy-card';
 import { refreshCutReleasePolicyAction } from './cut-release-policy-actions';
 import { ProductionBoardView } from './production-board-view';
 import { DivergencesView } from './divergences-view';
+import { OrdersRoutesView } from './orders-routes-view';
 import { EmployeeStatsView } from './employee-stats-view';
 import { QtyCorrectionsView } from './qty-corrections-view';
 import {
@@ -75,6 +76,12 @@ interface Props {
   qtyCorrectionEnabled: boolean;
   /** SSR-снимок очереди открытых корректировок (для вкладки/бейджа). */
   initialQtyCorrections: PassportQtyCorrectionDto[];
+  /**
+   * Вкладка «Заказы»: маршруты заказов и их правка холстом. Общий флаг
+   * с фичей «Правка заказа в производстве» (`FEATURE_ORDER_AMENDMENTS`)
+   * — правка идёт её же ручкой.
+   */
+  orderRoutesEnabled: boolean;
 }
 
 export function MasterPageClient({
@@ -88,6 +95,7 @@ export function MasterPageClient({
   fullName,
   qtyCorrectionEnabled,
   initialQtyCorrections,
+  orderRoutesEnabled,
 }: Props) {
   const [items, setItems] = useState<MasterCallDto[]>(initialItems);
   const [resolved, setResolved] =
@@ -115,8 +123,19 @@ export function MasterPageClient({
   // (работа мимо маршрута заказа — экран утренней пятиминутки),
   // «Сотрудники» и «Корректировки» (заявки ОТК на правку количества).
   const [tab, setTab] = useState<
-    'calls' | 'board' | 'divergences' | 'employees' | 'corrections'
+    'calls' | 'board' | 'divergences' | 'employees' | 'corrections' | 'orders'
   >('calls');
+  /**
+   * Переход «Расхождения → Заказы»: строка расхождения — это готовая
+   * пара «заказ × операция», и второй ответ на неё (после наряда-допуска)
+   * — поправить маршрут заказа. Фокус живёт здесь, потому что вкладки
+   * — это состояние страницы, а не самих вкладок.
+   */
+  const [routeFocus, setRouteFocus] = useState<{
+    orderId: string;
+    orderNumber: string;
+    operationName: string;
+  } | null>(null);
   const [corrections, setCorrections] = useState<PassportQtyCorrectionDto[]>(
     initialQtyCorrections,
   );
@@ -406,6 +425,19 @@ export function MasterPageClient({
         >
           Расхождения
         </button>
+        {orderRoutesEnabled && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'orders'}
+            className={
+              'master-page__tab' + (tab === 'orders' ? ' is-active' : '')
+            }
+            onClick={() => setTab('orders')}
+          >
+            Заказы
+          </button>
+        )}
         <button
           type="button"
           role="tab"
@@ -447,7 +479,27 @@ export function MasterPageClient({
 
       {tab === 'board' && <ProductionBoardView />}
 
-      {tab === 'divergences' && <DivergencesView />}
+      {tab === 'divergences' && (
+        <DivergencesView
+          onOpenRoute={
+            orderRoutesEnabled
+              ? (focus) => {
+                  setRouteFocus(focus);
+                  setTab('orders');
+                }
+              : undefined
+          }
+        />
+      )}
+
+      {tab === 'orders' && orderRoutesEnabled && (
+        <OrdersRoutesView
+          focusOrderId={routeFocus?.orderId ?? null}
+          focusOrderNumber={routeFocus?.orderNumber ?? null}
+          focusOperationName={routeFocus?.operationName ?? null}
+          onFocusConsumed={() => setRouteFocus(null)}
+        />
+      )}
 
       {tab === 'employees' && <EmployeeStatsView />}
 
