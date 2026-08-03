@@ -175,13 +175,12 @@ describe('Admin UI 2.5 — list pages', () => {
   );
 
   // Страницы с группировкой по категориям рендерят compact grouped
-  // table вместо пагинации: одна карточка, один table header,
-  // категории внутри tbody как тонкие group-row.
+  // table вместо пагинации: один table header, категории внутри tbody
+  // как тонкие group-row.
   test.each([...GROUPED_LIST_PAGES])(
     '%s использует compact grouped-table layout (группировка вместо пагинации)',
     (file) => {
       const src = readSrc(file);
-      expect(src).toMatch(/admin-compact-grouped-card/);
       expect(src).toMatch(/admin-compact-grouped-table/);
       expect(src).toMatch(/admin-compact-group-row/);
       // Старая «карточка на каждую категорию» через CategorySection
@@ -191,6 +190,32 @@ describe('Admin UI 2.5 — list pages', () => {
       // compact layout от старого «по карточке на категорию».
       expect(src.match(/<thead>/g) ?? []).toHaveLength(1);
       expect(src.match(/<table\b/g) ?? []).toHaveLength(1);
+    },
+  );
+
+  /**
+   * Единый каркас списка (эталон — `/admin/routes`).
+   *
+   * Список с вкладками архива = ОДНА `AdminCard`, внутри неё по
+   * порядку: вкладки → поиск → `AdminSectionHeader` («Активные ·
+   * Всего: N») → таблица. Никаких «второй карточки под таблицу» и
+   * никакого `padding: 0` с заголовком-полоской во всю ширину: именно
+   * так /admin/operations и /admin/equipment выбивались из остальных
+   * списков админки.
+   */
+  const TABBED_LIST_PAGES = LIST_PAGES.filter((file) =>
+    readSrc(file).includes('AdminArchiveTabs'),
+  );
+
+  test.each(TABBED_LIST_PAGES)(
+    '%s держит вкладки, «Активные · Всего: N» и таблицу в ОДНОЙ AdminCard',
+    (file) => {
+      const src = readSrc(file);
+      expect(src.match(/<AdminCard\b/g) ?? []).toHaveLength(1);
+      expect(src).toMatch(/<AdminSectionHeader/);
+      // Компактная карточка с обнулённым padding (заголовок-полоска
+      // с border-bottom) — регресс каркаса.
+      expect(src).not.toMatch(/className="admin-compact-grouped-card/);
     },
   );
 

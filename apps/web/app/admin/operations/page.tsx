@@ -135,12 +135,20 @@ function formatTimeNorm(op: OperationSummaryDto): React.ReactNode {
  *   - внутри секции порядок — `sortOrder`, затем `name`.
  *
  * Compact layout (ТЗ «compact grouped-table layout»):
- *   - одна общая AdminCard на всю страницу, один table header;
+ *   - один table header на весь список;
  *   - категории внутри одного tbody как тонкие group-row
  *     разделители (`.admin-compact-group-row`);
  *   - старая «карточка-секция на каждую категорию» сознательно убрана,
  *     чтобы не плодить отдельный header на каждую группу — это
  *     создавало лишний вертикальный воздух (см. ТЗ §1).
+ *
+ * Каркас страницы — стандартный каркас админского списка (эталон —
+ * `/admin/routes`): ОДНА `AdminCard`, внутри неё по порядку вкладки
+ * архива, поиск, `AdminSectionHeader` («Активные · Всего: N») и уже
+ * потом таблица в рамке `.admin-table-wrap`. Раньше таблица жила в
+ * отдельной `.admin-compact-grouped-card` с padding: 0, из-за чего
+ * заголовок секции превращался в полосу с border-bottom во всю
+ * ширину карточки и выбивался из остальных списков админки.
  *
  * Пагинация отключена сознательно: на одной экранной форме менеджеру
  * удобнее видеть весь каталог сгруппированным, чем перелистывать.
@@ -221,57 +229,24 @@ export default async function AdminOperationsListPage({
             preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
           />
         </form>
-      </AdminCard>
 
-      <BulkArchiveProvider
-        mode={tab}
-        allIds={items.map((op) => op.id)}
-        actions={{
-          archive: archiveOperationsAction,
-          restore: restoreOperationsAction,
-          purge: purgeOperationsAction,
-        }}
-        labels={{
-          one: 'операцию',
-          many: 'операций',
-          archiveHint:
-            'Операции пропадут из рабочих списков и подбора в маршрутах. История, ставки и нормы сохранятся.',
-          purgeHint:
-            'Вместе с операцией пропадут её ставки, нормы времени и привязка к станкам. Операции с историей или в маршрутах будут пропущены.',
-        }}
-      >
-        {groups.length === 0 ? (
-        <AdminCard>
-          {search ? (
-            <AdminEmptyState
-              icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
-              title="Данные не найдены"
-              hint="По заданному поиску операций нет. Измените запрос или очистите поиск."
-            />
-          ) : tab === 'archive' ? (
-            <AdminEmptyState
-              icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
-              title="Архив пуст"
-              hint="Сюда попадают операции, отправленные в архив. Из архива их можно вернуть или удалить навсегда."
-            />
-          ) : (
-            <AdminEmptyState
-              icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
-              title="Операций пока нет"
-              actions={
-                <Link
-                  href="/admin/operations/new"
-                  className="admin-btn admin-btn--primary"
-                >
-                  <Plus size={16} strokeWidth={1.6} aria-hidden />
-                  Добавить операцию
-                </Link>
-              }
-            />
-          )}
-        </AdminCard>
-      ) : (
-        <AdminCard className="admin-compact-grouped-card admin-operations-compact-card">
+        <BulkArchiveProvider
+          mode={tab}
+          allIds={items.map((op) => op.id)}
+          actions={{
+            archive: archiveOperationsAction,
+            restore: restoreOperationsAction,
+            purge: purgeOperationsAction,
+          }}
+          labels={{
+            one: 'операцию',
+            many: 'операций',
+            archiveHint:
+              'Операции пропадут из рабочих списков и подбора в маршрутах. История, ставки и нормы сохранятся.',
+            purgeHint:
+              'Вместе с операцией пропадут её ставки, нормы времени и привязка к станкам. Операции с историей или в маршрутах будут пропущены.',
+          }}
+        >
           <AdminSectionHeader
             title={tab === 'archive' ? 'Архив' : 'Активные'}
             hint={
@@ -281,106 +256,136 @@ export default async function AdminOperationsListPage({
             }
             actions={<BulkArchiveHeaderButton />}
           />
-          <div className="admin-compact-table-wrap">
-            <table className="admin-table admin-compact-grouped-table admin-operations-compact-table">
-              <thead>
-                <tr>
-                  <th>
-                    <BulkArchiveSelectAll ids={sortedItems.map((op) => op.id)} />
-                  </th>
-                  <th>Название</th>
-                  <th>Тариф</th>
-                  <th>Ставка</th>
-                  <th>Норма времени</th>
-                  <th>За 8 часов</th>
-                  <th>Статус</th>
-                  <th aria-label="Архив" />
-                  <th aria-label="Действия" />
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map((group) => (
-                  <Fragment key={group.category}>
-                    <tr
-                      className="admin-compact-group-row admin-operations-group-row"
-                      data-category={group.category}
-                    >
-                      <td colSpan={9}>
-                        <div className="admin-compact-group-row__inner">
-                          <span data-category-title={group.category}>
-                            {group.label}
-                          </span>
-                          <span className="admin-compact-group-row__count">
-                            {group.operations.length}
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                    {group.operations.map((op) => (
-                      /*
-                        Кликабельная строка (drill-in): весь ряд ведёт туда же,
-                        куда ссылка «Открыть» справа — на карточку операции.
-                        Клики по чекбоксу bulk-архива, кнопкам и самой ссылке
-                        не перехватываются (см. `AdminTableRow`).
-                      */
-                      <AdminTableRow
-                        key={op.id}
-                        href={`/admin/operations/${op.id}`}
-                        className="admin-compact-row admin-operations-row admin-table__row--clickable"
+
+          {groups.length === 0 ? (
+            search ? (
+              <AdminEmptyState
+                icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
+                title="Данные не найдены"
+                hint="По заданному поиску операций нет. Измените запрос или очистите поиск."
+              />
+            ) : tab === 'archive' ? (
+              <AdminEmptyState
+                icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
+                title="Архив пуст"
+                hint="Сюда попадают операции, отправленные в архив. Из архива их можно вернуть или удалить навсегда."
+              />
+            ) : (
+              <AdminEmptyState
+                icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
+                title="Операций пока нет"
+                actions={
+                  <Link
+                    href="/admin/operations/new"
+                    className="admin-btn admin-btn--primary"
+                  >
+                    <Plus size={16} strokeWidth={1.6} aria-hidden />
+                    Добавить операцию
+                  </Link>
+                }
+              />
+            )
+          ) : (
+            <div className="admin-table-wrap admin-compact-table-wrap">
+              <table className="admin-table admin-compact-grouped-table admin-operations-compact-table">
+                <thead>
+                  <tr>
+                    <th>
+                      <BulkArchiveSelectAll ids={sortedItems.map((op) => op.id)} />
+                    </th>
+                    <th>Название</th>
+                    <th>Тариф</th>
+                    <th>Ставка</th>
+                    <th>Норма времени</th>
+                    <th>За 8 часов</th>
+                    <th>Статус</th>
+                    <th aria-label="Архив" />
+                    <th aria-label="Действия" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map((group) => (
+                    <Fragment key={group.category}>
+                      <tr
+                        className="admin-compact-group-row admin-operations-group-row"
+                        data-category={group.category}
                       >
-                        <td>
-                          <BulkArchiveCheckbox id={op.id} />
+                        <td colSpan={9}>
+                          <div className="admin-compact-group-row__inner">
+                            <span data-category-title={group.category}>
+                              {group.label}
+                            </span>
+                            <span className="admin-compact-group-row__count">
+                              {group.operations.length}
+                            </span>
+                          </div>
                         </td>
-                        <td data-label="Название">
-                          <span className="admin-table__primary">{op.name}</span>
-                          {op.producesFinishedGoods && (
-                            <>
-                              {' '}
-                              {/*
-                                Признак «операция выпускает готовую продукцию»
-                                (см.
-                                `prisma/schema.prisma::Operation.producesFinishedGoods`,
-                                `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`).
-                                Маленький badge даёт менеджеру быструю
-                                ориентацию, какая операция фиксирует выпуск.
-                              */}
-                              <AdminStatusBadge tone="info">
-                                Выпуск ГП
-                              </AdminStatusBadge>
-                            </>
-                          )}
-                        </td>
-                        <td data-label="Тариф">{formatPricingMode(op.pricingMode)}</td>
-                        <td data-label="Ставка">{formatRate(op)}</td>
-                        <td data-label="Норма времени">{formatTimeNorm(op)}</td>
-                        <td data-label="За 8 часов">{formatDailyEarnings(op)}</td>
-                        <td data-label="Статус">
-                          <AdminStatusBadge tone={statusTone(op.isActive)}>
-                            {formatStatus(op.isActive)}
-                          </AdminStatusBadge>
-                        </td>
-                        <td className="admin-table__actions admin-compact-row__actions">
-                          <BulkArchiveRowActions id={op.id} />
-                        </td>
-                        <td className="admin-table__actions admin-compact-row__actions">
-                          <Link
-                            href={`/admin/operations/${op.id}`}
-                            className="admin-table__action-link"
-                          >
-                            Открыть
-                            <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
-                          </Link>
-                        </td>
-                      </AdminTableRow>
-                    ))}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </AdminCard>
-        )}
-      </BulkArchiveProvider>
+                      </tr>
+                      {group.operations.map((op) => (
+                        /*
+                          Кликабельная строка (drill-in): весь ряд ведёт туда же,
+                          куда ссылка «Открыть» справа — на карточку операции.
+                          Клики по чекбоксу bulk-архива, кнопкам и самой ссылке
+                          не перехватываются (см. `AdminTableRow`).
+                        */
+                        <AdminTableRow
+                          key={op.id}
+                          href={`/admin/operations/${op.id}`}
+                          className="admin-compact-row admin-operations-row admin-table__row--clickable"
+                        >
+                          <td>
+                            <BulkArchiveCheckbox id={op.id} />
+                          </td>
+                          <td data-label="Название">
+                            <span className="admin-table__primary">{op.name}</span>
+                            {op.producesFinishedGoods && (
+                              <>
+                                {' '}
+                                {/*
+                                  Признак «операция выпускает готовую продукцию»
+                                  (см.
+                                  `prisma/schema.prisma::Operation.producesFinishedGoods`,
+                                  `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`).
+                                  Маленький badge даёт менеджеру быструю
+                                  ориентацию, какая операция фиксирует выпуск.
+                                */}
+                                <AdminStatusBadge tone="info">
+                                  Выпуск ГП
+                                </AdminStatusBadge>
+                              </>
+                            )}
+                          </td>
+                          <td data-label="Тариф">{formatPricingMode(op.pricingMode)}</td>
+                          <td data-label="Ставка">{formatRate(op)}</td>
+                          <td data-label="Норма времени">{formatTimeNorm(op)}</td>
+                          <td data-label="За 8 часов">{formatDailyEarnings(op)}</td>
+                          <td data-label="Статус">
+                            <AdminStatusBadge tone={statusTone(op.isActive)}>
+                              {formatStatus(op.isActive)}
+                            </AdminStatusBadge>
+                          </td>
+                          <td className="admin-table__actions admin-compact-row__actions">
+                            <BulkArchiveRowActions id={op.id} />
+                          </td>
+                          <td className="admin-table__actions admin-compact-row__actions">
+                            <Link
+                              href={`/admin/operations/${op.id}`}
+                              className="admin-table__action-link"
+                            >
+                              Открыть
+                              <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+                            </Link>
+                          </td>
+                        </AdminTableRow>
+                      ))}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </BulkArchiveProvider>
+      </AdminCard>
     </AdminPageShell>
   );
 }

@@ -47,7 +47,7 @@ export const dynamic = 'force-dynamic';
  *     одна строка в primary-группе + chip-список всех категорий.
  *
  * Compact layout:
- *   - одна общая AdminCard на всю страницу, один table header;
+ *   - один table header на весь список;
  *   - категории внутри одного tbody как тонкие group-row
  *     разделители (`.admin-compact-group-row`);
  *   - старая «карточка-секция на каждую категорию» сознательно убрана —
@@ -55,6 +55,13 @@ export const dynamic = 'force-dynamic';
  *   - оборудование с несколькими категориями встречается в результате
  *     ровно один раз (см. `groupEquipmentByOperationCategory`), все
  *     категории показываются chip-списком в колонке «Категории».
+ *
+ * Каркас страницы — стандартный каркас админского списка (эталон —
+ * `/admin/routes`): ОДНА `AdminCard`, внутри неё вкладки архива,
+ * `AdminSectionHeader` («Активные · Всего: N») и уже потом таблица в
+ * рамке `.admin-table-wrap`. Отдельной карточки с `padding: 0` под
+ * edge-to-edge таблицу больше нет — её заголовок-полоска выбивался из
+ * остальных списков админки.
  *
  * Технический code, как и раньше, виден только на карточке `[id]`
  * внутри AdminTechInfo. Здесь — №, название, chip-категории, число
@@ -133,52 +140,24 @@ export default async function AdminEquipmentListPage({
           activeCount={activeItems.length}
           archiveCount={archivedItems.length}
         />
-      </AdminCard>
 
-      <BulkArchiveProvider
-        mode={tab}
-        allIds={items.map((eq) => eq.id)}
-        actions={{
-          archive: archiveEquipmentAction,
-          restore: restoreEquipmentAction,
-          purge: purgeEquipmentAction,
-        }}
-        labels={{
-          one: 'станок',
-          many: 'станков',
-          archiveHint:
-            'Станки пропадут из подбора рабочего места. История смен и событий сохранится.',
-          purgeHint:
-            'Вместе со станком пропадут его разрешённые операции. Станки с историей (смены, события, вызовы мастера) будут пропущены.',
-        }}
-      >
-      {groups.length === 0 ? (
-        <AdminCard>
-          {tab === 'archive' ? (
-            <AdminEmptyState
-              icon={<Factory size={26} strokeWidth={1.6} aria-hidden />}
-              title="Архив пуст"
-              hint="Сюда попадают станки, отправленные в архив. Из архива их можно вернуть или удалить навсегда."
-            />
-          ) : (
-            <AdminEmptyState
-              icon={<Factory size={26} strokeWidth={1.6} aria-hidden />}
-              title="Оборудования пока нет"
-              hint="Добавьте первый станок — это займёт меньше минуты."
-              actions={
-                <Link
-                  href="/admin/equipment/new"
-                  className="admin-btn admin-btn--primary"
-                >
-                  <Plus size={16} strokeWidth={1.6} aria-hidden />
-                  Добавить оборудование
-                </Link>
-              }
-            />
-          )}
-        </AdminCard>
-      ) : (
-        <AdminCard className="admin-compact-grouped-card admin-equipment-compact-card">
+        <BulkArchiveProvider
+          mode={tab}
+          allIds={items.map((eq) => eq.id)}
+          actions={{
+            archive: archiveEquipmentAction,
+            restore: restoreEquipmentAction,
+            purge: purgeEquipmentAction,
+          }}
+          labels={{
+            one: 'станок',
+            many: 'станков',
+            archiveHint:
+              'Станки пропадут из подбора рабочего места. История смен и событий сохранится.',
+            purgeHint:
+              'Вместе со станком пропадут его разрешённые операции. Станки с историей (смены, события, вызовы мастера) будут пропущены.',
+          }}
+        >
           <AdminSectionHeader
             title={tab === 'archive' ? 'Архив' : 'Активные'}
             hint={
@@ -188,123 +167,148 @@ export default async function AdminEquipmentListPage({
             }
             actions={<BulkArchiveHeaderButton />}
           />
-          <div className="admin-compact-table-wrap">
-            <table className="admin-table admin-compact-grouped-table admin-equipment-compact-table">
-              <thead>
-                <tr>
-                  <th>
-                    <BulkArchiveSelectAll ids={sortedItems.map((eq) => eq.id)} />
-                  </th>
-                  <th>№</th>
-                  <th>Название</th>
-                  <th>Категории</th>
-                  <th>Операций</th>
-                  <th>Статус</th>
-                  <th aria-label="Архив" />
-                  <th aria-label="Действия" />
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map((group) => (
-                  <Fragment key={group.category}>
-                    <tr
-                      className="admin-compact-group-row admin-equipment-group-row"
-                      data-category={group.category}
-                    >
-                      <td colSpan={8}>
-                        <div className="admin-compact-group-row__inner">
-                          <span data-category-title={group.category}>
-                            {group.label}
-                          </span>
-                          <span className="admin-compact-group-row__count">
-                            {group.equipment.length}
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                    {group.equipment.map((eq) => (
-                      /*
-                        Кликабельная строка (drill-in): весь ряд ведёт туда же,
-                        куда ссылка «Настроить» справа — на карточку станка.
-                        Клики по чекбоксу bulk-архива, кнопкам и самой ссылке
-                        не перехватываются (см. `AdminTableRow`).
-                      */
-                      <AdminTableRow
-                        key={eq.id}
-                        href={`/admin/equipment/${eq.id}`}
-                        className="admin-compact-row admin-equipment-row admin-table__row--clickable"
+
+          {groups.length === 0 ? (
+            tab === 'archive' ? (
+              <AdminEmptyState
+                icon={<Factory size={26} strokeWidth={1.6} aria-hidden />}
+                title="Архив пуст"
+                hint="Сюда попадают станки, отправленные в архив. Из архива их можно вернуть или удалить навсегда."
+              />
+            ) : (
+              <AdminEmptyState
+                icon={<Factory size={26} strokeWidth={1.6} aria-hidden />}
+                title="Оборудования пока нет"
+                hint="Добавьте первый станок — это займёт меньше минуты."
+                actions={
+                  <Link
+                    href="/admin/equipment/new"
+                    className="admin-btn admin-btn--primary"
+                  >
+                    <Plus size={16} strokeWidth={1.6} aria-hidden />
+                    Добавить оборудование
+                  </Link>
+                }
+              />
+            )
+          ) : (
+            <div className="admin-table-wrap admin-compact-table-wrap">
+              <table className="admin-table admin-compact-grouped-table admin-equipment-compact-table">
+                <thead>
+                  <tr>
+                    <th>
+                      <BulkArchiveSelectAll ids={sortedItems.map((eq) => eq.id)} />
+                    </th>
+                    <th>№</th>
+                    <th>Название</th>
+                    <th>Категории</th>
+                    <th>Операций</th>
+                    <th>Статус</th>
+                    <th aria-label="Архив" />
+                    <th aria-label="Действия" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map((group) => (
+                    <Fragment key={group.category}>
+                      <tr
+                        className="admin-compact-group-row admin-equipment-group-row"
+                        data-category={group.category}
                       >
-                        <td>
-                          <BulkArchiveCheckbox id={eq.id} />
+                        <td colSpan={8}>
+                          <div className="admin-compact-group-row__inner">
+                            <span data-category-title={group.category}>
+                              {group.label}
+                            </span>
+                            <span className="admin-compact-group-row__count">
+                              {group.equipment.length}
+                            </span>
+                          </div>
                         </td>
-                        <td data-label="№">
-                          {eq.displayNumber ? (
-                            <strong className="admin-equipment-display-number">
-                              №{eq.displayNumber}
-                            </strong>
-                          ) : (
-                            <span className="admin-muted">—</span>
-                          )}
-                        </td>
-                        <td data-label="Название">
-                          <span className="admin-table__primary">{eq.name}</span>
-                        </td>
-                        <td data-label="Категории">
-                          {eq.operationCategories.length === 0 ? (
-                            <span className="admin-muted">—</span>
-                          ) : (
-                            <ul
-                              className="admin-equipment-category-chips"
-                              aria-label="Категории операций"
-                            >
-                              {eq.operationCategories.map((c) => (
-                                <li
-                                  key={c}
-                                  className="admin-equipment-category-chip"
-                                  data-category-chip={c}
-                                >
-                                  {getOperationCategoryLabel(c)}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </td>
-                        <td data-label="Операций">
-                          {eq.allowedOperationsCount === 0 ? (
-                            <AdminStatusBadge tone="warning">
-                              Не настроено
+                      </tr>
+                      {group.equipment.map((eq) => (
+                        /*
+                          Кликабельная строка (drill-in): весь ряд ведёт туда же,
+                          куда ссылка «Настроить» справа — на карточку станка.
+                          Клики по чекбоксу bulk-архива, кнопкам и самой ссылке
+                          не перехватываются (см. `AdminTableRow`).
+                        */
+                        <AdminTableRow
+                          key={eq.id}
+                          href={`/admin/equipment/${eq.id}`}
+                          className="admin-compact-row admin-equipment-row admin-table__row--clickable"
+                        >
+                          <td>
+                            <BulkArchiveCheckbox id={eq.id} />
+                          </td>
+                          <td data-label="№">
+                            {eq.displayNumber ? (
+                              <strong className="admin-equipment-display-number">
+                                №{eq.displayNumber}
+                              </strong>
+                            ) : (
+                              <span className="admin-muted">—</span>
+                            )}
+                          </td>
+                          <td data-label="Название">
+                            <span className="admin-table__primary">{eq.name}</span>
+                          </td>
+                          <td data-label="Категории">
+                            {eq.operationCategories.length === 0 ? (
+                              <span className="admin-muted">—</span>
+                            ) : (
+                              <ul
+                                className="admin-equipment-category-chips"
+                                aria-label="Категории операций"
+                              >
+                                {eq.operationCategories.map((c) => (
+                                  <li
+                                    key={c}
+                                    className="admin-equipment-category-chip"
+                                    data-category-chip={c}
+                                  >
+                                    {getOperationCategoryLabel(c)}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </td>
+                          <td data-label="Операций">
+                            {eq.allowedOperationsCount === 0 ? (
+                              <AdminStatusBadge tone="warning">
+                                Не настроено
+                              </AdminStatusBadge>
+                            ) : (
+                              <span>{eq.allowedOperationsCount}</span>
+                            )}
+                          </td>
+                          <td data-label="Статус">
+                            <AdminStatusBadge tone={statusTone(eq.active)}>
+                              {formatStatus(eq.active)}
                             </AdminStatusBadge>
-                          ) : (
-                            <span>{eq.allowedOperationsCount}</span>
-                          )}
-                        </td>
-                        <td data-label="Статус">
-                          <AdminStatusBadge tone={statusTone(eq.active)}>
-                            {formatStatus(eq.active)}
-                          </AdminStatusBadge>
-                        </td>
-                        <td className="admin-table__actions admin-compact-row__actions">
-                          <BulkArchiveRowActions id={eq.id} />
-                        </td>
-                        <td className="admin-table__actions admin-compact-row__actions">
-                          <Link
-                            href={`/admin/equipment/${eq.id}`}
-                            className="admin-table__action-link"
-                          >
-                            Настроить
-                            <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
-                          </Link>
-                        </td>
-                      </AdminTableRow>
-                    ))}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </AdminCard>
-      )}
-      </BulkArchiveProvider>
+                          </td>
+                          <td className="admin-table__actions admin-compact-row__actions">
+                            <BulkArchiveRowActions id={eq.id} />
+                          </td>
+                          <td className="admin-table__actions admin-compact-row__actions">
+                            <Link
+                              href={`/admin/equipment/${eq.id}`}
+                              className="admin-table__action-link"
+                            >
+                              Настроить
+                              <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+                            </Link>
+                          </td>
+                        </AdminTableRow>
+                      ))}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </BulkArchiveProvider>
+      </AdminCard>
     </AdminPageShell>
   );
 }

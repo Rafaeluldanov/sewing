@@ -199,11 +199,9 @@ describe('UI: /admin/operations — compact grouped table', () => {
     const src = readSrc('apps/web/app/admin/operations/page.tsx');
     expect(src).toMatch(/groupOperationsByCategory/);
     // Compact layout (см. ТЗ «compact grouped-table layout»):
-    // одна общая карточка + один table header, категории живут как
-    // group-row внутри tbody. Старая «большая карточка на каждую
-    // категорию» через `CategorySection` больше не используется на
-    // этой странице.
-    expect(src).toMatch(/admin-compact-grouped-card/);
+    // один table header, категории живут как group-row внутри tbody.
+    // Старая «большая карточка на каждую категорию» через
+    // `CategorySection` больше не используется на этой странице.
     expect(src).toMatch(/admin-compact-grouped-table/);
     expect(src).toMatch(/admin-compact-group-row/);
     expect(src).not.toMatch(/CategorySection/);
@@ -225,8 +223,7 @@ describe('UI: /admin/equipment — compact grouped table + chips', () => {
   test('страница использует groupEquipmentByOperationCategory и единую compact таблицу', () => {
     const src = readSrc('apps/web/app/admin/equipment/page.tsx');
     expect(src).toMatch(/groupEquipmentByOperationCategory/);
-    // Compact layout: одна общая карточка + один table header.
-    expect(src).toMatch(/admin-compact-grouped-card/);
+    // Compact layout: один table header на весь список.
     expect(src).toMatch(/admin-compact-grouped-table/);
     expect(src).toMatch(/admin-compact-group-row/);
     expect(src).not.toMatch(/CategorySection/);

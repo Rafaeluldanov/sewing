@@ -255,7 +255,7 @@ describe('Admin UI Polish — общие компоненты', () => {
     // /admin/employees остался на классическом AdminTable (паджинация).
     // /admin/equipment и /admin/operations перешли на compact grouped
     // table — у них собственный inline `<table>` с group-row внутри
-    // одной общей карточки (см. ТЗ «compact grouped-table layout»),
+    // общего каркаса списка (см. ТЗ «compact grouped-table layout»),
     // и они проверяются ниже отдельным блоком на compact CSS classes.
     const employees = readSrc('apps/web/app/admin/employees/page.tsx');
     expect(employees).toMatch(/AdminTable/);
@@ -274,12 +274,19 @@ describe('Admin UI Polish — общие компоненты', () => {
       expect(src).toMatch(/AdminEmptyState/);
       expect(src).toMatch(/from ['"]@\/components\/admin['"]/);
       // Compact CSS-классы — основной контракт нового layout.
-      expect(src).toMatch(/admin-compact-grouped-card/);
       expect(src).toMatch(/admin-compact-grouped-table/);
       expect(src).toMatch(/admin-compact-group-row/);
+      // Таблица живёт в такой же рамке, как AdminTable на остальных
+      // списках (`.admin-table-wrap`), плюс горизонтальный скролл.
+      expect(src).toMatch(
+        /className="admin-table-wrap admin-compact-table-wrap"/,
+      );
       // Старая «карточка на категорию» с собственным header'ом ушла —
       // защищаем от регресса.
       expect(src).not.toMatch(/CategorySection/);
+      // И отдельная «компактная карточка» с padding: 0 тоже ушла:
+      // каркас списка теперь общий для всей админки (см. /admin/routes).
+      expect(src).not.toMatch(/className="admin-compact-grouped-card/);
     }
     // У equipment-страницы chips категорий имеют отдельный класс,
     // защищаем источник истины (см. ТЗ §5).
@@ -288,7 +295,7 @@ describe('Admin UI Polish — общие компоненты', () => {
 
   test('globals.css содержит compact grouped-table классы', () => {
     const css = readSrc('apps/web/app/globals.css');
-    expect(css).toMatch(/\.admin-compact-grouped-card\s*\{/);
+    expect(css).toMatch(/\.admin-compact-table-wrap\s*\{/);
     expect(css).toMatch(/\.admin-compact-grouped-table\s*\{/);
     expect(css).toMatch(/\.admin-compact-group-row\b/);
     expect(css).toMatch(/\.admin-equipment-category-chips\s*\{/);
