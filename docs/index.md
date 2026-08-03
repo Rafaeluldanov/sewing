@@ -62,6 +62,7 @@
 | `operation-time-norms-recon.md` | OK | Описывает работающую модель норм времени и плана операций. |
 | `payroll-cutter-compensation-recon.md` | OK | Описывает работающий B2B-процент закройщика. |
 | `workshop-needs-recon.md` | OK | Описывает работающий модуль `WorkshopNeed`. |
+| [`order-page-ui-recon.md`](./order-page-ui-recon.md) | **OK** | Аудит UI страницы заказа (`/admin/orders` create / view / edit) от 03.08.2026: две несовместимые конфигурации вкладок и битые ссылки из `/edit`, двойные редакторы расцветок / нанесения / маршрута / статуса, себестоимость в трёх вкладках, ~2 600 строк мёртвых компонентов, находки по стилям. Код не менялся — это чек-лист починок. |
 | `pilot/*` | OK | Pilot Rollout / UAT-комплект. |
 | `adr/0001..0021` | OK | Принятые ADR, исторические решения. Источник истины внутри своего scope. |
 | `adr/0022-tech-cards-and-order-snapshot.md` | OK | Поправлен в PHASE 1 — снят миф «snapshot создаётся только в `OrdersService.start()`». |
