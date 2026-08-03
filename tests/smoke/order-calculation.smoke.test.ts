@@ -444,7 +444,7 @@ describe('/admin/orders/new — НЕ создаёт потребность пр�
 
   test('форма создания не содержит автоматический trigger расчёта', () => {
     const src = read(
-      'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
+      'apps/web/app/admin/orders/new/order-create-wizard.tsx',
     );
     expect(src).not.toMatch(/startCalculationOrderAction/);
     expect(src).not.toMatch(/calculateOrderWorkshopNeedsAction/);

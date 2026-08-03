@@ -260,35 +260,28 @@ describe('AdminDateField — design-system', () => {
 
 describe('/admin/orders/new — Admin Order Form 2.1 + AdminDateField', () => {
   const formSrc = read(
-    'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
+    'apps/web/app/admin/orders/new/order-create-wizard.tsx',
   );
 
-  test('форма использует AdminDateField для orderDate и dueDate', () => {
-    expect(formSrc).toMatch(/AdminDateField[^]*name="orderDate"/);
-    expect(formSrc).toMatch(/AdminDateField[^]*name="dueDate"/);
+  test('шаг «Клиент» использует AdminDateField для срока сдачи', () => {
+    const src = read('apps/web/app/admin/orders/new/order-create-wizard.tsx');
+    expect(src).toMatch(/AdminDateField/);
+    // `orderDate` мастер не спрашивает — подставляет «сегодня» из
+    // серверного пропса `today` (TZ Москвы), поэтому поля в UI нет.
+    expect(src).toMatch(/orderDate: today/);
+    expect(src).toMatch(/name="dueDate"/);
   });
 
-  // Order workspace v2: «Заказ» переехал в hero «Основное», и в
-  // Product tab остались карточки «Изделие / Производство / План /
-  // Нанесение». Поля «Срок сдачи / Подразделение / Клиент / Цена /
-  // Комментарий» теперь редактируются в hero.
-  test('hero содержит управленческие поля и Product tab — карточки «Изделие / Производство / План»', () => {
-    // Hero «Основное» — управленческие поля.
-    expect(formSrc).toMatch(/>Срок сдачи</);
-    expect(formSrc).toMatch(/>Комментарий</);
-    expect(formSrc).toMatch(/>Подразделение</);
-    // Product tab — карточки без сквозной нумерации.
-    expect(formSrc).toMatch(/>Техкарта</);
-    expect(formSrc).toMatch(/>Маршрут</);
-    expect(formSrc).toMatch(/Изделие/);
-    expect(formSrc).toMatch(/Производство/);
-    expect(formSrc).toMatch(/План по размерам/);
-    expect(formSrc).not.toMatch(/2\.\s*Сроки/);
-    expect(formSrc).not.toMatch(/5\.\s*План по размерам/);
-  });
-
-  test('есть селект клиента с name="clientId"', () => {
-    expect(formSrc).toMatch(/name="clientId"/);
+  test('шаг «Клиент» собирает управленческие поля заказа', () => {
+    const src = read('apps/web/app/admin/orders/new/order-create-wizard.tsx');
+    // Клиент обязателен — это первый вопрос мастера.
+    expect(src).toMatch(/setClientId/);
+    expect(src).toMatch(/Выберите клиента/);
+    expect(src).toMatch(/setCompanyDivisionId/);
+    expect(src).toMatch(/setCustomerUnitPrice/);
+    expect(src).toMatch(/setComment/);
+    // Редкие настройки свёрнуты, чтобы не выталкивать выбор изделия.
+    expect(src).toMatch(/Ещё настройки/);
   });
 
   test('маршрут заказа рендерится через AdminRouteSteps (preview)', () => {

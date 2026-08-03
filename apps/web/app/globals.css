@@ -21193,3 +21193,531 @@ input.mcbx__input:disabled {
   background: rgba(15, 23, 42, 0.45);
   cursor: pointer;
 }
+
+/* =============================================================================
+   Мастер создания заказа — `/admin/orders/new`
+   =============================================================================
+   Заменил одностраничную форму `AdminCreateOrderForm`: шаги идут в порядке
+   решений, у каждого шага одна главная кнопка. Разметка —
+   `apps/web/app/admin/orders/new/order-create-wizard.tsx`, конфиг шагов —
+   `wizard-steps.ts`.
+
+   Геометрия и цвет — только токены (`--color-*`, `--radius-*`, `--btn-primary-*`,
+   `--admin-*`): страница обязана читаться как остальная админка. Селекторы
+   полей квалифицированы элементом — базовое правило форм в этом файле
+   задано селектором по атрибуту (`input[type='text']`), и одиночный класс
+   ему проигрывает по специфичности.
+   ============================================================================= */
+
+.order-wizard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--admin-space-md);
+  width: 100%;
+  min-width: 0;
+}
+
+/* --- Полоса «черновик сохранён» ------------------------------------------ */
+/* Появляется с шага 2, когда заказ уже создан в БД. Раньше момент создания
+   заказа был непредсказуем: он мог возникнуть в конце формы либо неявно
+   кнопкой «Сохранить изделие». */
+
+.order-wizard__draft {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md);
+  background: var(--color-ok-soft);
+  color: var(--color-ok-fg);
+  border: 1px solid transparent;
+  font-size: 0.86rem;
+}
+
+.order-wizard__draft-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+/* --- Степпер ------------------------------------------------------------- */
+
+.order-wizard__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.order-wizard__step-item {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.order-wizard__step-sep {
+  color: var(--color-fg-subtle);
+  font-size: 0.8rem;
+  padding: 0 0.1rem;
+  user-select: none;
+}
+
+.order-wizard__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.32rem 0.62rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  font-size: 0.81rem;
+  font-weight: 700;
+  color: var(--color-fg-subtle);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.order-wizard__step:not(:disabled) {
+  cursor: pointer;
+}
+
+.order-wizard__step:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.order-wizard__step--done {
+  background: var(--color-ok-soft);
+  color: var(--color-ok-fg);
+}
+
+.order-wizard__step--done:not(:disabled):hover {
+  background: var(--color-ok);
+  color: #fff;
+}
+
+.order-wizard__step--current {
+  background: var(--color-bg-card);
+  color: var(--color-fg);
+  border-color: var(--btn-primary-edge);
+  box-shadow: inset 0 2px 0 var(--btn-primary-bg), var(--shadow-xs);
+}
+
+.order-wizard__step--skipped {
+  background: var(--color-bg-card);
+  color: var(--color-fg-muted);
+  border-color: var(--color-border);
+}
+
+.order-wizard__step--blocked {
+  opacity: 0.7;
+}
+
+.order-wizard__step-num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  font-size: 0.68rem;
+  flex: none;
+}
+
+.order-wizard__step--done .order-wizard__step-num {
+  background: var(--color-ok);
+  color: #fff;
+  border-color: transparent;
+}
+
+.order-wizard__step-label {
+  min-width: 0;
+}
+
+.order-wizard__step-note {
+  font-weight: 400;
+  font-size: 0.72rem;
+  opacity: 0.8;
+}
+
+@media (max-width: 720px) {
+  .order-wizard__steps {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+}
+
+/* --- Панель шага --------------------------------------------------------- */
+
+.order-wizard__panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.order-wizard__panel-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  font-size: var(--title-section);
+  font-weight: 700;
+}
+
+.order-wizard__panel-icon {
+  display: inline-flex;
+  color: var(--color-fg-muted);
+}
+
+.order-wizard__panel-hint {
+  font-size: 0.78rem;
+  color: var(--color-fg-muted);
+}
+
+.order-wizard__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--admin-space-sm);
+  min-width: 0;
+}
+
+.order-wizard__error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-md);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+  border: 1px solid var(--color-danger);
+  font-size: 0.88rem;
+}
+
+.order-wizard__field-error {
+  font-size: 0.78rem;
+  color: var(--color-danger-fg);
+}
+
+.order-wizard__req {
+  color: var(--color-danger);
+}
+
+.order-wizard__note {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.order-wizard__warn {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-md);
+  background: var(--color-warn-soft);
+  color: var(--color-warn-fg);
+  font-size: 0.85rem;
+}
+
+.order-wizard__total {
+  align-self: flex-start;
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font-size: 0.88rem;
+}
+
+.order-wizard__price-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.order-wizard__price-row input[type='text'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.order-wizard__price-row select {
+  flex: none;
+  width: auto;
+}
+
+/* --- Свёрнутые редкие настройки шага «Клиент» ---------------------------- */
+
+.order-wizard__extras {
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+.order-wizard__extras-toggle {
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+}
+
+.order-wizard__extras-toggle:hover {
+  color: var(--color-fg);
+}
+
+.order-wizard__extras-toggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.order-wizard__extras-body {
+  padding: 0 0.7rem 0.7rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.7rem;
+}
+
+/* --- Ветки шага «Изделие» ------------------------------------------------ */
+
+.order-wizard__branches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.6rem;
+}
+
+.order-wizard__branch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  font: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.order-wizard__branch:hover {
+  border-color: var(--color-border-strong);
+}
+
+.order-wizard__branch:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.order-wizard__branch--active {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
+}
+
+.order-wizard__branch-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--color-fg);
+}
+
+.order-wizard__branch-hint {
+  font-size: 0.79rem;
+  color: var(--color-fg-muted);
+}
+
+.order-wizard__product-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--admin-space-md);
+  align-items: start;
+}
+
+.order-wizard__product-main,
+.order-wizard__product-aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--admin-space-sm);
+  min-width: 0;
+}
+
+@media (max-width: 1199px) {
+  .order-wizard__product-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- Шаг «Проверка» ------------------------------------------------------ */
+
+.order-wizard__review {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.55rem;
+}
+
+.order-wizard__review-item {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.55rem 0.7rem;
+  background: var(--color-bg);
+  min-width: 0;
+}
+
+.order-wizard__review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.order-wizard__review-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-fg-muted);
+}
+
+.order-wizard__review-edit {
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-accent-fg);
+  cursor: pointer;
+  padding: 0;
+}
+
+.order-wizard__review-edit:hover {
+  text-decoration: underline;
+}
+
+.order-wizard__review-edit:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.order-wizard__review-value {
+  margin-top: 0.15rem;
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.order-wizard__review-extra {
+  font-size: 0.78rem;
+  color: var(--color-fg-muted);
+}
+
+/* --- Навигация мастера --------------------------------------------------- */
+
+.order-wizard__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.order-wizard__foot-left {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+/* Индикатор ожидания у главной кнопки шага. */
+.admin-spin {
+  animation: admin-spin 0.8s linear infinite;
+}
+
+@keyframes admin-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-spin {
+    animation: none;
+  }
+}
+
+/* --- Карточки изделия, созданного из формы заказа ------------------------ */
+/* Общие для мастера создания и формы правки — см.
+   `apps/web/app/admin/orders/new/saved-product-cards.tsx`. Раньше стили
+   были инлайновыми (`style={{ border: '1px solid #cbd5e1', … }}`) и
+   хардкодили палитру мимо токенов. */
+
+.saved-product-card {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.85rem;
+  background: var(--color-bg-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.saved-product-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.saved-product-card__title {
+  font-size: 0.95rem;
+  color: var(--color-fg-strong);
+}
+
+.saved-product-card__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.saved-product-card__danger {
+  color: var(--color-danger-fg);
+}
+
+.saved-product-card__list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.88rem;
+}
+
+.saved-product-card__list dt {
+  color: var(--color-fg-muted);
+}
+
+.saved-product-card__list dd {
+  margin: 0;
+}
+
+.saved-product-card__note {
+  font-size: 0.8rem;
+  margin-left: 0.5rem;
+}
+
+.saved-product-card__hint {
+  margin: 0;
+  font-size: 0.8rem;
+}

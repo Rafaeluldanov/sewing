@@ -98,7 +98,7 @@ import {
 import {
   SavedConstructorTaskCard,
   SavedInlineProductCard,
-} from '@/app/admin/orders/new/admin-create-order-form';
+} from '@/app/admin/orders/new/saved-product-cards';
 import {
   OrderColorwaysFieldset,
   makeEmptyColorway,
@@ -123,12 +123,14 @@ import {
   updateAdminOrderAction,
   type FormActionState,
 } from './actions';
+import type { RoutePreview } from '@/app/admin/orders/new/route-preview';
 
-export interface RoutePreview {
-  id: string;
-  name: string;
-  steps: AdminRouteStep[];
-}
+/**
+ * Тип превью маршрута общий с мастером создания — живёт отдельным
+ * модулем, чтобы две формы не тянули друг друга ради типа. Ре-экспорт
+ * оставлен: серверная страница правки импортирует его отсюда.
+ */
+export type { RoutePreview };
 
 interface Props {
   order: OrderDetailDto;

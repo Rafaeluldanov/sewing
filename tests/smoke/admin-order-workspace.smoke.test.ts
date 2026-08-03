@@ -151,88 +151,54 @@ describe('OrderWorkspaceLayout / OrderHeroCard / OrderDetailTabs — components 
 // 2. /admin/orders/new — create mode unified layout
 // ---------------------------------------------------------------------------
 
-describe('/admin/orders/new — использует OrderWorkspaceLayout mode="create"', () => {
+describe('/admin/orders/new — мастер создания вместо одностраничной формы', () => {
   const formSrc = read(
-    'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
+    'apps/web/app/admin/orders/new/order-create-wizard.tsx',
   );
 
-  test('форма импортирует и рендерит OrderWorkspaceLayout / OrderHeroCard / OrderDetailTabs', () => {
-    expect(formSrc).toMatch(/OrderWorkspaceLayout/);
-    expect(formSrc).toMatch(/OrderHeroCard/);
-    expect(formSrc).toMatch(/OrderDetailTabs/);
-    expect(formSrc).toMatch(
-      /from '@\/components\/orders\/order-workspace-layout'/,
-    );
-    expect(formSrc).toMatch(
-      /from '@\/components\/orders\/order-hero-card'/,
-    );
-    expect(formSrc).toMatch(
-      /from '@\/components\/orders\/order-detail-tabs'/,
-    );
-    expect(formSrc).toMatch(
-      /from '@\/components\/orders\/order-detail-tabs-config'/,
-    );
+  test('мастер не использует workspace-обвязку карточки', () => {
+    // `OrderWorkspaceLayout` / `OrderHeroCard` / `OrderDetailTabs` —
+    // каркас карточки и формы правки. Создание больше не притворяется
+    // карточкой: у него степпер и панель шага.
+    expect(formSrc).not.toMatch(/OrderWorkspaceLayout/);
+    expect(formSrc).not.toMatch(/OrderHeroCard/);
+    expect(formSrc).not.toMatch(/OrderDetailTabs/);
+    expect(formSrc).toMatch(/WIZARD_STEPS/);
+    expect(formSrc).toMatch(/from '\.\/wizard-steps'/);
+    expect(formSrc).toMatch(/order-wizard__steps/);
   });
 
-  test('hero «Основное» содержит все управленческие поля (companyDivisionId/dueDate/clientId/price/currency/comment)', () => {
-    expect(formSrc).toMatch(/<OrderHeroCard\s*[\s\S]*?mode="create"/);
-    // Поля «Основное» переехали в hero. Имена FormData-ключей сохранены.
-    // Подразделение — FK на master-справочник `CompanyDivision`.
-    expect(formSrc).toMatch(/name="companyDivisionId"/);
-    expect(formSrc).toMatch(/name="dueDate"/);
-    expect(formSrc).toMatch(/name="clientId"/);
-    expect(formSrc).toMatch(/name="customerUnitPrice"/);
-    expect(formSrc).toMatch(/name="customerCurrency"/);
-    expect(formSrc).toMatch(/name="comment"/);
-    // Submit-кнопка «Создать заказ» (workflow action в hero).
-    expect(formSrc).toMatch(/Создать заказ/);
+  test('управленческие поля собраны на первом шаге', () => {
+    expect(formSrc).toMatch(/setCompanyDivisionId/);
+    expect(formSrc).toMatch(/setDueDate/);
+    expect(formSrc).toMatch(/setClientId/);
+    expect(formSrc).toMatch(/setCustomerUnitPrice/);
+    expect(formSrc).toMatch(/setCustomerCurrency/);
+    expect(formSrc).toMatch(/setComment/);
+    // Редкие настройки — под раскрывашкой, а не первыми полями.
+    expect(formSrc).toMatch(/setExtrasOpen/);
+    expect(formSrc).toMatch(/setFinishedGoodsWarehouseId/);
+    expect(formSrc).toMatch(/setMaterialsPolicy/);
   });
 
-  test('tabs передаются через OrderDetailTabs с orderId={null} и активной "product"', () => {
-    expect(formSrc).toMatch(/<OrderDetailTabs/);
-    expect(formSrc).toMatch(/orderId=\{null\}/);
-    expect(formSrc).toMatch(/activeTab="product"/);
-    expect(formSrc).toMatch(/disabledTabs=\{disabledTabs\}/);
-    expect(formSrc).toMatch(
-      /ORDER_DETAIL_TABS\.filter\([\s\S]*?t\.id !== 'product'/,
-    );
-  });
-
-  test('Product tab content содержит patternItemId / color / size matrix / route / techCard / applications', () => {
-    expect(formSrc).toMatch(/order-product-tab/);
-    expect(formSrc).toMatch(/name="patternItemId"/);
-    expect(formSrc).toMatch(/name="color"/);
-    expect(formSrc).toMatch(/name="techCardId"/);
-    expect(formSrc).toMatch(/name="routeTemplateId"/);
-    // Размерная матрица собирается через hidden inputs (контракт сохранён).
-    expect(formSrc).toMatch(/name=\{`qty\[\$\{s\.id\}\]`\}/);
-    // Нанесения — OrderApplicationsEditor.
+  test('содержимое шагов покрывает прежний Product tab', () => {
+    expect(formSrc).toMatch(/patternItemId/);
+    expect(formSrc).toMatch(/OrderColorwaysFieldset/);
+    expect(formSrc).toMatch(/SizePlanSelector/);
+    expect(formSrc).toMatch(/routeTemplateId/);
+    expect(formSrc).toMatch(/TechCardCombobox/);
     expect(formSrc).toMatch(/OrderApplicationsEditor/);
   });
 
-  test('FormData-контракт createOrderAction не сломан', () => {
-    expect(formSrc).toMatch(/createOrderAction/);
-    expect(formSrc).toMatch(/name="orderDate"/);
-    expect(formSrc).toMatch(/name="dueDate"/);
-    expect(formSrc).toMatch(/name="clientId"/);
-    // Подразделение — FK на master-справочник `CompanyDivision`.
-    expect(formSrc).toMatch(/name="companyDivisionId"/);
-    expect(formSrc).toMatch(/name="patternItemId"/);
-    expect(formSrc).toMatch(/name="techCardId"/);
-    expect(formSrc).toMatch(/name="routeTemplateId"/);
-    expect(formSrc).toMatch(/name="color"/);
-    expect(formSrc).toMatch(/name="comment"/);
-    expect(formSrc).toMatch(/name="customerUnitPrice"/);
-    expect(formSrc).toMatch(/name="customerCurrency"/);
-    expect(formSrc).toMatch(/name=\{`qty\[\$\{s\.id\}\]`\}/);
-    expect(formSrc).toMatch(/value="admin"/);
-  });
-
-  test('всё внутри одного <form action={createOrderAction}>', () => {
-    // Hero и Product tab лежат внутри одного `<form>` — иначе FormData
-    // не соберёт оба набора полей. Проверяем, что в файле один <form>.
-    const formMatches = formSrc.match(/<form\s+action=\{formAction\}/g) ?? [];
-    expect(formMatches.length).toBe(1);
+  test('нет единого <form action={createOrderAction}>', () => {
+    // Прежняя форма собирала весь заказ одним сабмитом. Мастер пишет
+    // по шагам, поэтому общей формы нет — и нет снимка «всей формы»,
+    // который мог бы затереть чужие правки.
+    expect(formSrc).not.toMatch(/action=\{formAction\}/);
+    expect(formSrc).not.toMatch(/useFormState/);
+    expect(formSrc).toMatch(/createOrderDraftAction/);
+    expect(formSrc).toMatch(/patchOrderDraftAction/);
+    expect(formSrc).toMatch(/saveDraftApplicationsAction/);
   });
 });
 
@@ -623,12 +589,12 @@ describe('ORDER_DETAIL_TABS — единственный источник пра
     // живёт на отдельном `ORDER_VIEW_TABS` (5 вкладок) — см. отдельный
     // describe выше; это сознательное разделение, чтобы edit-форма и
     // view-режим не делили один и тот же набор вкладок.
-    const newSrc = read(
-      'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
+    // Мастер создания на этот конфиг больше не завязан — у него свой
+    // `WIZARD_STEPS`. ORDER_DETAIL_TABS остался у формы правки.
+    const editSrc = read(
+      'apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx',
     );
-    expect(newSrc).toMatch(
-      /from '@\/components\/orders\/order-detail-tabs-config'/,
-    );
+    expect(editSrc).toMatch(/OrderDetailTabs/);
   });
 
   test('ни одна страница не дублирует список вкладок руками', () => {
@@ -639,7 +605,7 @@ describe('ORDER_DETAIL_TABS — единственный источник пра
     expect(configSrc).toMatch(/Сводно по заказу/);
 
     const newSrc = read(
-      'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
+      'apps/web/app/admin/orders/new/order-create-wizard.tsx',
     );
     const editSrc = read(
       'apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx',

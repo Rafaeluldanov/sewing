@@ -368,22 +368,27 @@ describe('/admin/orders/[id] — блок «Нанесение»', () => {
 // ---------------------------------------------------------------------------
 
 describe('/admin/orders/new — блок «Нанесение» и atomic-create', () => {
-  const FORM = 'apps/web/app/admin/orders/new/admin-create-order-form.tsx';
+  const FORM = 'apps/web/app/admin/orders/new/order-create-wizard.tsx';
   const ACTIONS = 'apps/web/app/orders/actions.ts';
   const SHARED_ORDERS = 'packages/shared/src/orders.ts';
   const ORDERS_SVC = 'apps/api/src/modules/orders/orders.service.ts';
   const EDITOR =
     'apps/web/components/orders/order-applications-editor.tsx';
 
-  test('admin-create-order-form подключает OrderApplicationsEditor', () => {
+  test('мастер создания подключает OrderApplicationsEditor отдельным шагом', () => {
     const src = read(FORM);
     expect(src).toMatch(/OrderApplicationsEditor/);
     expect(src).toMatch(
       /from '@\/components\/orders\/order-applications-editor'/,
     );
-    // Блок «Нанесение» должен быть видимым в форме создания заказа.
-    expect(src).toMatch(/admin-order-card--applications/);
-    expect(src).toMatch(/>Нанесение</);
+    // Нанесение — самостоятельный шаг мастера (`applications`), а не
+    // карточка в общей простыне: см. `wizard-steps.ts`.
+    expect(src).toMatch(/step === 'applications'/);
+    // Редактор пишет строки в скрытый `applicationsJson`; мастер
+    // читает его через FormData обёртки и шлёт отдельной ручкой
+    // `PUT /orders/:id/applications`.
+    expect(src).toMatch(/applicationsJson/);
+    expect(src).toMatch(/saveDraftApplicationsAction/);
   });
 
   test('OrderApplicationsEditor пишет hidden input applicationsJson', () => {

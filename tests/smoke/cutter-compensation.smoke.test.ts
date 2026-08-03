@@ -237,9 +237,12 @@ describe('frontend — поле «Процент от операций поши�
 describe('frontend — admin-форма заказа использует CompanyDivision-селект', () => {
   test('admin/orders/new и admin/orders/[id]/edit рендерят select companyDivisionId', () => {
     const create = readSrc(
-      'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
+      'apps/web/app/admin/orders/new/order-create-wizard.tsx',
     );
-    expect(create).toMatch(/name="companyDivisionId"/);
+    // Мастер создания не собирает FormData — подразделение живёт в
+    // state шага «Клиент» и уезжает в DTO ключом `companyDivisionId`.
+    expect(create).toMatch(/companyDivisionId/);
+    expect(create).toMatch(/setCompanyDivisionId/);
     expect(create).toMatch(/CompanyDivisionDto/);
 
     const edit = readSrc(

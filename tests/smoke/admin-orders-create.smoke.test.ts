@@ -68,19 +68,16 @@ describe('admin/orders/new — Admin Order Form 2.0 страница созда�
     expect(src).toMatch(/Package/);
   });
 
-  test('OrderHeroCard в форме показывает «Новый заказ» и back-link «К списку»', () => {
+  test('мастер открывается шагом «Клиент» и даёт выход к списку', () => {
     const formPath =
-      'apps/web/app/admin/orders/new/admin-create-order-form.tsx';
+      'apps/web/app/admin/orders/new/order-create-wizard.tsx';
     const src = readSrc(formPath);
-    // Order-workspace unification: hero рендерится client-side,
-    // тексты «Новый заказ» / «Черновик» приходят из `OrderHeroCard`
-    // mode="create". На уровне source формы должны быть видны
-    // импорт OrderHeroCard, OrderDetailTabs и OrderWorkspaceLayout.
-    expect(src).toMatch(/OrderHeroCard/);
-    expect(src).toMatch(/OrderDetailTabs/);
-    expect(src).toMatch(/OrderWorkspaceLayout/);
-    expect(src).toMatch(/mode="create"/);
-    // Back-link к списку перенесён в hero actions.
+    // Order workspace v2 сменился мастером: hero-карточки с «Новым
+    // заказом» больше нет — её роль играет степпер и заголовок шага.
+    expect(src).not.toMatch(/OrderHeroCard/);
+    expect(src).not.toMatch(/OrderWorkspaceLayout/);
+    expect(src).toMatch(/Чей это заказ|WIZARD_STEPS/);
+    // Выход к списку — в подвале мастера, рядом с «Далее».
     expect(src).toMatch(/href="\/admin\/orders"/);
     expect(src).toMatch(/К списку/);
   });
@@ -92,105 +89,72 @@ describe('admin/orders/new — Admin Order Form 2.0 страница созда�
     expect(src).not.toMatch(/<Icon\s+name=/);
   });
 
-  test('AdminCreateOrderForm переиспользует createOrderAction и FormData-ключи', () => {
-    const formPath = 'apps/web/app/admin/orders/new/admin-create-order-form.tsx';
+  test('мастер шлёт DTO через свои server actions, а не один FormData', () => {
+    const formPath = 'apps/web/app/admin/orders/new/order-create-wizard.tsx';
     expect(existsSync(path.join(repoRoot, formPath))).toBe(true);
 
     const src = readSrc(formPath);
-    expect(src).toMatch(/createOrderAction/);
-    expect(src).toMatch(/from '@\/app\/orders\/actions'/);
-    expect(src).toMatch(/name="orderDate"/);
-    expect(src).toMatch(/name="dueDate"/);
-    expect(src).toMatch(/name="clientId"/);
-    // Этап «Номенклатура = Лекала»: главная и единственная видимая
-    // номенклатура — `patternItemId`. Legacy `productId`-select из
-    // UI удалён, в FormData больше не уходит.
-    expect(src).toMatch(/name="patternItemId"/);
+    // Заказ создаётся посреди мастера (`createOrderDraftAction`), а не
+    // одним финальным сабмитом `createOrderAction`. Последний остался
+    // только у легаси `/orders/new`.
+    expect(src).toMatch(/createOrderDraftAction/);
+    expect(src).toMatch(/patchOrderDraftAction/);
+    expect(src).toMatch(/from '\.\/wizard-actions'/);
+    // Поля заказа собираются в DTO, скрытых inputs с ключами заказа нет.
+    expect(src).not.toMatch(/name="orderDate"/);
+    expect(src).not.toMatch(/name="clientId"/);
     expect(src).not.toMatch(/name="productId"/);
-    // Подразделение — FK на master-справочник `CompanyDivision`.
-    expect(src).toMatch(/name="companyDivisionId"/);
-    expect(src).toMatch(/name="color"/);
-    expect(src).toMatch(/name="comment"/);
-    expect(src).toMatch(/name="techCardId"/);
-    expect(src).toMatch(/name="routeTemplateId"/);
-    // Polish-итерация «План по размерам — модалка»: на странице
-    // больше нет видимой сетки `AdminSizeGrid`. Вместо неё —
-    // компактный `SizePlanSelector` (см.
-    // `apps/web/app/admin/orders/new/size-plan-selector.tsx`).
+    expect(src).not.toMatch(/name=\{`qty\[\$\{s\.id\}\]`\}/);
+    expect(src).toMatch(/buildBasicsDto/);
+    expect(src).toMatch(/buildDraftDto/);
+    // Ветка «Создать изделие» по-прежнему ходит в общий action —
+    // backend создаёт лекало и заказ одной транзакцией.
+    expect(src).toMatch(/createOrderForCalculationAction/);
+    expect(src).toMatch(/from '@\/app\/orders\/actions'/);
+    // План по размерам — компактный селектор, видимой сетки нет.
     expect(src).toMatch(/SizePlanSelector/);
     expect(src).not.toMatch(/AdminSizeGrid/);
-    expect(src).toMatch(/name=\{`qty\[\$\{s\.id\}\]`\}/);
     expect(src).not.toMatch(/Добавить строку/);
     expect(src).not.toMatch(/Trash2/);
     expect(src).not.toMatch(/admin-table/);
-
-    expect(src).toMatch(/AdminCard/);
-    expect(src).toMatch(/admin-form\b/);
-    expect(src).toMatch(/admin-order-form\b/);
-    expect(src).toMatch(/admin-form-grid/);
-    expect(src).toMatch(/admin-field/);
-    expect(src).toMatch(/admin-btn--primary/);
-    expect(src).toMatch(/admin-btn--ghost/);
-
-    expect(src).toMatch(/from 'lucide-react'/);
-    expect(src).toMatch(/Save/);
-    expect(src).toMatch(/ArrowLeft/);
-    expect(src).toMatch(/AlertCircle/);
-    expect(src).not.toMatch(/<Icon\s+name=/);
   });
 
-  test('форма содержит карточки «Изделие / Производство / План» в Product tab + hero-карточку превью', () => {
+  test('содержимое разложено по шагам, а не по карточкам одной простыни', () => {
     const src = readSrc(
-      'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
+      'apps/web/app/admin/orders/new/order-create-wizard.tsx',
     );
-    // После Order workspace v2: «Заказ»-блок переехал в hero
-    // (рабочий блок «Основное» с управленческими полями), а
-    // оставшиеся карточки лежат внутри вкладки «Продукция».
-    expect(src).not.toMatch(/admin-order-card--order/);
-    expect(src).toMatch(/admin-order-card--product/);
-    expect(src).toMatch(/admin-order-card--production/);
-    expect(src).toMatch(/admin-order-card--sizes/);
-    // Hero-карточка превью изделия по-прежнему живёт в Product tab.
-    expect(src).toMatch(/admin-order-card--hero/);
-    expect(src).not.toMatch(/admin-order-card--dates/);
-    // Карточки больше не нумерованы 1..N — это focused subset
-    // одной вкладки «Продукция», а нумерованные шаги были у старой
-    // «простыни». Имена карточек простые, без префиксов.
-    expect(src).toMatch(/Изделие/);
-    expect(src).toMatch(/Производство/);
-    expect(src).toMatch(/План по размерам/);
-    expect(src).not.toMatch(/2\.\s*Сроки/);
+    // Карточки старой «простыни» (`admin-order-card--*`) больше не
+    // используются: каждый шаг — отдельная панель мастера.
+    expect(src).not.toMatch(/admin-order-card--/);
+    // Названия шагов приходят из единого конфига.
+    const stepsSrc = readSrc(
+      'apps/web/app/admin/orders/new/wizard-steps.ts',
+    );
+    expect(stepsSrc).toMatch(/Изделие/);
+    expect(stepsSrc).toMatch(/Маршрут/);
+    expect(stepsSrc).toMatch(/Расцветки и размеры/);
+    expect(stepsSrc).toMatch(/Нанесение/);
+    expect(stepsSrc).toMatch(/Проверка/);
   });
 
-  test('форма использует PatternHeroPreview и держит patternItemId как единственное изделие', () => {
+  test('мастер использует PatternHeroPreview и одно лекало как номенклатуру', () => {
     const src = readSrc(
-      'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
+      'apps/web/app/admin/orders/new/order-create-wizard.tsx',
     );
     expect(src).toMatch(/PatternHeroPreview/);
-    expect(src).toMatch(/Превью изделия/);
-    expect(src).toMatch(/name="patternItemId"/);
-    const patternMatches = src.match(/name="patternItemId"/g) ?? [];
-    expect(patternMatches).toHaveLength(1);
-    expect(src).toMatch(/>Номенклатура \/ лекало</);
-    expect(src).toMatch(
-      /Основная карточка изделия: превью, DXF и площади\s+материалов/,
-    );
+    expect(src).toMatch(/Номенклатура \/ лекало/);
+    // Этап «Номенклатура = Лекала»: legacy `productId` в UI нет.
     expect(src).not.toMatch(/name="productId"/);
     expect(src).not.toMatch(/Учётное изделие/);
-    expect(src).not.toMatch(
-      /Используется для текущего учёта/,
-    );
-    expect(src).not.toMatch(/admin-order-card__secondary/);
-    // Срок сдачи теперь редактируется в hero «Основное»,
-    // отдельный admin-order-due-badge больше не нужен —
-    // KPI блок и `<input type="date">` дают тот же сигнал.
-    expect(src).not.toMatch(/admin-order-due-badge/);
+    // Лекало живёт в state шага «Изделие», а не в скрытом input.
+    expect(src).toMatch(/setPatternItemId/);
   });
+
 });
 
-describe('admin/orders/new — компактный «4. План по размерам» с модалкой', () => {
+describe('admin/orders/new — план по размерам через SizePlanSelector', () => {
   const formPath =
-    'apps/web/app/admin/orders/new/admin-create-order-form.tsx';
+    'apps/web/app/admin/orders/new/order-create-wizard.tsx';
   const selectorPath =
     'apps/web/app/admin/orders/new/size-plan-selector.tsx';
 
@@ -206,36 +170,32 @@ describe('admin/orders/new — компактный «4. План по разм�
     expect(src).toMatch(/from '\.\/size-plan-selector'/);
   });
 
-  test('форма рендерит hidden inputs qty[<sizeId>] по всему справочнику Size', () => {
+  test('количества живут в state мастера, скрытых qty-inputs нет', () => {
     const src = readSrc(formPath);
-    // Для всех размеров (даже тех, что не в выбранной номенклатуре)
-    // отправляем `qty[<sizeId>]=<число>` — server action
-    // (`apps/web/app/orders/actions.ts::extractItems`) сам
-    // отфильтрует qty<=0. Это гарантирует, что недоступные размеры
-    // никогда случайно не попадут в заказ.
-    expect(src).toMatch(/sortedSizes\.map\(/);
-    expect(src).toMatch(/type="hidden"/);
-    expect(src).toMatch(/name=\{`qty\[\$\{s\.id\}\]`\}/);
-    // Состояние количеств — client state на форме (а не uncontrolled
-    // input). Без этого не получится сбросить qty при смене лекала.
+    // Мастер не собирает FormData: план по размерам уезжает в DTO
+    // ключом `items` (`itemsPayload`), поэтому скрытые
+    // `qty[<sizeId>]` больше не рендерятся.
+    expect(src).not.toMatch(/name=\{`qty\[\$\{s\.id\}\]`\}/);
+    expect(src).toMatch(/itemsPayload/);
     expect(src).toMatch(/quantities/);
     expect(src).toMatch(/setQuantities/);
   });
 
-  test('форма пересчитывает quantities при смене номенклатуры', () => {
+  test('доступные размеры берутся из выбранного лекала', () => {
     const src = readSrc(formPath);
-    // useEffect, который выкидывает qty по размерам, недоступным
-    // в новой номенклатуре. Без этого UX «выбрал XL → поменял лекало
-    // на S/M/L → отправил» создал бы битый заказ.
-    expect(src).toMatch(/availableSizeIds/);
+    // Размеры предлагаются только те, у которых у лекала есть
+    // активный DXF. Иначе «выбрал XL → сменил лекало на S/M/L»
+    // создал бы битый заказ.
     expect(src).toMatch(/availableSizes/);
     expect(src).toMatch(/selectedPattern\??\.sizes/);
+    // Сумма плана считается по тем же размерам справочника.
+    expect(src).toMatch(/allSizeIds/);
   });
 
-  test('форма показывает «Итого: X шт.» в заголовке карточки', () => {
+  test('мастер показывает итог плана на шаге размеров', () => {
     const src = readSrc(formPath);
-    expect(src).toMatch(/admin-order-card__meta\b/);
-    expect(src).toMatch(/Итого:/);
+    expect(src).toMatch(/Итого по плану/);
+    expect(src).toMatch(/sizesTotal/);
   });
 
   test('SizePlanSelector содержит ключевые UX-надписи и role="dialog"', () => {
@@ -300,7 +260,7 @@ describe('admin/orders/new — Product как сущность скрыт от U
 
   test('форма /admin/orders/new не импортирует ProductDto и не держит products-state', () => {
     const src = readSrc(
-      'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
+      'apps/web/app/admin/orders/new/order-create-wizard.tsx',
     );
     expect(src).not.toMatch(/ProductDto/);
     expect(src).not.toMatch(/products:/);

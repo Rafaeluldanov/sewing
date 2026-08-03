@@ -3,7 +3,7 @@
  * (см. `prisma/schema.prisma::Order.finishedGoodsWarehouseId`,
  *  `apps/api/src/modules/orders/orders.service.ts`,
  *  `packages/shared/src/orders.ts`,
- *  `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+ *  `apps/web/app/admin/orders/new/order-create-wizard.tsx`,
  *  `apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx`,
  *  `apps/web/components/orders/view/order-management-header.tsx`,
  *  `docs/current-state.md §«Склад выпуска готовой продукции»`).
@@ -32,7 +32,7 @@ const SCHEMA = 'prisma/schema.prisma';
 const SHARED_ORDERS = 'packages/shared/src/orders.ts';
 const ORDERS_SERVICE = 'apps/api/src/modules/orders/orders.service.ts';
 const CREATE_FORM =
-  'apps/web/app/admin/orders/new/admin-create-order-form.tsx';
+  'apps/web/app/admin/orders/new/order-create-wizard.tsx';
 const CREATE_PAGE = 'apps/web/app/admin/orders/new/page.tsx';
 const EDIT_FORM =
   'apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx';
@@ -127,10 +127,14 @@ test('OrdersService содержит resolveFinishedGoodsWarehouseIdForOrder', (
 // 6. Order create UI содержит «Склад выпуска готовой продукции».
 // ---------------------------------------------------------------------------
 
-test('Order create form содержит «Склад выпуска готовой продукции»', () => {
+test('Мастер создания содержит «Склад выпуска готовой продукции»', () => {
   const src = read(CREATE_FORM);
   expect(src).toMatch(/Склад выпуска готовой продукции/);
-  expect(src).toMatch(/name="finishedGoodsWarehouseId"/);
+  // Мастер не собирает FormData — поле живёт в состоянии шага
+  // «Клиент» и уезжает в DTO ключом `finishedGoodsWarehouseId`
+  // (см. `buildBasicsDto`).
+  expect(src).toMatch(/finishedGoodsWarehouseId/);
+  expect(src).toMatch(/setFinishedGoodsWarehouseId/);
 });
 
 test('Order create page загружает список warehouses', () => {

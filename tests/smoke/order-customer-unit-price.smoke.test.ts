@@ -3,7 +3,7 @@
  * (см. ТЗ §C, `prisma/schema.prisma::Order.customerUnitPrice`,
  * `apps/api/src/modules/orders/orders.service.ts`,
  * `packages/shared/src/orders.ts`,
- * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+ * `apps/web/app/admin/orders/new/order-create-wizard.tsx`,
  * `apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx`,
  * `apps/web/components/orders/order-cost-estimate-card.tsx`).
  *
@@ -44,7 +44,7 @@ const SCHEMA = 'prisma/schema.prisma';
 const SHARED_ORDERS = 'packages/shared/src/orders.ts';
 const SERVICE = 'apps/api/src/modules/orders/orders.service.ts';
 const ADMIN_NEW =
-  'apps/web/app/admin/orders/new/admin-create-order-form.tsx';
+  'apps/web/app/admin/orders/new/order-create-wizard.tsx';
 const ADMIN_EDIT =
   'apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx';
 const ADMIN_EDIT_ACTIONS =
@@ -162,14 +162,16 @@ describe('OrdersService — пишет и читает customer unit price', () 
 // ---------------------------------------------------------------------------
 
 describe('Admin — /admin/orders/new + /admin/orders/[id]/edit', () => {
-  test('admin-create-order-form содержит цену продажи + select валюты', () => {
-    const src = read(ADMIN_NEW);
-    expect(src).toMatch(/name="customerUnitPrice"/);
-    expect(src).toMatch(/name="customerCurrency"/);
-    // Order workspace v2: компактный лейбл «Цена за 1 шт» в hero.
-    // Длинная подпись «Цена продажи за единицу» осталась в KPI hint
-    // и доке для совместимости со смежными тестами.
-    expect(src).toMatch(/Цена за 1 шт|Цена продажи за единицу/);
+  test('мастер создания содержит цену продажи + select валюты', () => {
+    const src = read(
+      'apps/web/app/admin/orders/new/order-create-wizard.tsx',
+    );
+    expect(src).toMatch(/Цена за 1 шт/);
+    // Мастер не собирает FormData — поля живут в state шага «Клиент»
+    // и уезжают в DTO ключами `customerUnitPrice`/`customerCurrency`.
+    expect(src).toMatch(/customerUnitPrice/);
+    expect(src).toMatch(/setCustomerUnitPrice/);
+    expect(src).toMatch(/customerCurrency/);
     expect(src).toMatch(/MONEY_CURRENCIES/);
   });
 

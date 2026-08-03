@@ -1,24 +1,32 @@
 /**
- * Создание заказа в новом Admin UI 2.7 (`/admin/orders/new`).
+ * Создание заказа — мастер (`/admin/orders/new`).
  *
- * Backend / DTO / Prisma не меняем — это «pretty-wrapper» над тем же
- * `createOrderAction`, что использует старая страница `/orders/new`.
- * Старая страница остаётся как есть (см. комментарий в
- * `apps/web/app/orders/new/page.tsx`), а админка получает форму
- * без raw-id/code в основном UI.
+ * Страница отдаёт справочники и рендерит `OrderCreateWizard`: шесть
+ * шагов в порядке решений («чей заказ» → «что шьём» → всё, что от
+ * изделия зависит). Прежняя одностраничная форма
+ * `AdminCreateOrderForm` удалена — см. аудит
+ * `docs/order-page-ui-recon.md` §4.1 и макет варианта C
+ * `docs/mockups/order-page-variant-c-mockup.html`.
  *
- * Что грузится здесь, чтобы клиентская форма могла рендерить превью
- * без лишних round-trip-ов:
- *   - `routeTemplatesMap` — детальные шаги активных маршрутов
- *     (`getRouteTemplate(id)` для каждого active summary). Превью
- *     `AdminRouteSteps` строится без ожиданий.
- *   - `clients` — активные клиенты для select-а.
- *   - `techCards` — на превью только название/счётчики строк (DTO
- *     `TechCardTemplateSummaryDto` не содержит маршрут — см. TODO
- *     в `admin-create-order-form.tsx`).
+ * Ключевое отличие для этой страницы: заказ создаётся уже на шаге
+ * «Изделие» (`createOrderDraftAction`), а не по финальному сабмиту.
+ * Поэтому здесь нет ни `FormActionState`, ни редиректа после
+ * создания — навигацией управляет сам мастер.
  *
- * Источник правды по полям и FormData-ключам — `createOrderAction`
- * в `apps/web/app/orders/actions.ts`.
+ * Что грузится здесь, чтобы клиент не делал лишних round-trip-ов:
+ *   - `routePreviewMap` — детальные шаги активных маршрутов
+ *     (`getRouteTemplate(id)` для каждого active summary), чтобы шаг
+ *     «Маршрут» рисовал превью `AdminRouteSteps` без ожидания;
+ *   - `clients`, `companyDivisions`, `warehouses` — для select-ов
+ *     шага «Клиент»;
+ *   - `patterns`, `patternCategories`, `techCards`, `sizes` — для
+ *     шага «Изделие» и модалки «Создать изделие».
+ *
+ * Backend / DTO / Prisma не менялись: мастер ходит в те же
+ * `POST /orders`, `PATCH /orders/:id`, `PUT /orders/:id/applications`
+ * и `POST /orders/:id/start-calculation`. Старая страница
+ * `/orders/new` остаётся как есть — на неё полагается легаси-flow
+ * CUTTER_ASSISTANT.
  */
 import { redirect } from 'next/navigation';
 import { Package } from 'lucide-react';
@@ -49,10 +57,8 @@ import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
 import { listTechCards } from '@/lib/tech-cards-api';
 import { listWarehouses } from '@/lib/warehouses-api';
 import { AdminCard, AdminPageShell } from '@/components/admin';
-import {
-  AdminCreateOrderForm,
-  type RoutePreview,
-} from './admin-create-order-form';
+import { OrderCreateWizard } from './order-create-wizard';
+import type { RoutePreview } from './route-preview';
 
 export const dynamic = 'force-dynamic';
 
@@ -132,16 +138,11 @@ export default async function AdminOrderNewPage() {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  // Order-workspace unification (см.
-  // `apps/web/components/orders/order-workspace-layout.tsx`):
-  //   - title секции остаётся «Заказы», чтобы sidebar / breadcrumb
-  //     читались одинаково на /admin/orders, /admin/orders/new и
-  //     /admin/orders/[id];
-  //   - subtitle уточняет состояние («Создание заказа»);
-  //   - конкретный «номер / клиент / лекало» уже показывает
-  //     `OrderHeroCard` внутри формы.
-  // Поэтому actions-слот тут пустой — back-link «К списку» переехал
-  // в hero, чтобы create / view / edit имели одинаковую шапку.
+  // Title секции остаётся «Заказы», чтобы sidebar / breadcrumb читались
+  // одинаково на /admin/orders, /admin/orders/new и /admin/orders/[id];
+  // subtitle уточняет состояние. Back-link «К списку» живёт в подвале
+  // мастера рядом с «Далее» — там, где менеджер и принимает решение
+  // «продолжать или выйти».
   return (
     <AdminPageShell
       icon={<Package size={22} strokeWidth={1.6} aria-hidden />}
@@ -157,11 +158,11 @@ export default async function AdminOrderNewPage() {
       )}
 
       {/* Фича «Варианты просчёта»: в create-mode заказа ещё нет — единственная
-          вкладка «Вариант 1» + disabled-кнопка (по образцу disabled-вкладок
-          OrderDetailTabs). Живой ряд появится на карточке после создания. */}
+          вкладка «Вариант 1» + disabled-кнопка. Живой ряд появится на
+          карточке после создания. */}
       {isOrderCalculationsEnabled() && <OrderCalcTabsCreatePlaceholder />}
 
-      <AdminCreateOrderForm
+      <OrderCreateWizard
         sizes={sizes}
         routeTemplates={routeTemplates}
         routePreviewMap={routePreviewMap}

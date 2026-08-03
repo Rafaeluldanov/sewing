@@ -6,7 +6,7 @@
  *  `apps/api/src/modules/costs/costs.service.ts`,
  *  `apps/api/src/modules/orders/order-cost-estimates.service.ts`,
  *  `packages/shared/src/orders.ts`,
- *  `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+ *  `apps/web/app/admin/orders/new/order-create-wizard.tsx`,
  *  `apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx`,
  *  `apps/web/components/orders/view/order-management-header.tsx`,
  *  `apps/web/components/orders/summary/build-order-summary-rows.ts`,
@@ -44,7 +44,7 @@ const COSTS_SERVICE = 'apps/api/src/modules/costs/costs.service.ts';
 const COST_ESTIMATES_SERVICE =
   'apps/api/src/modules/orders/order-cost-estimates.service.ts';
 const CREATE_FORM =
-  'apps/web/app/admin/orders/new/admin-create-order-form.tsx';
+  'apps/web/app/admin/orders/new/order-create-wizard.tsx';
 const EDIT_FORM =
   'apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx';
 const ORDERS_ACTIONS = 'apps/web/app/orders/actions.ts';

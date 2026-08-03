@@ -81,25 +81,19 @@ describe('admin-labels — formatOrderStatus / getOrderStatusTone', () => {
 // ---------------------------------------------------------------------------
 
 describe('/admin/orders/new — статус «Черновик» через hidden status', () => {
-  const formPath = 'apps/web/app/admin/orders/new/admin-create-order-form.tsx';
+  const formPath = 'apps/web/app/admin/orders/new/order-create-wizard.tsx';
   const formSrc = read(formPath);
 
-  test('форма передаёт hidden status="DRAFT"', () => {
-    // Order workspace v2: visible select «Статус заказа» в create-форме
-    // больше не нужен — заказ всегда создаётся как DRAFT, поле в hero
-    // не показываем. Hidden input гарантирует обратную совместимость
-    // (createOrderAction TODO про status в DTO остался).
-    expect(formSrc).toMatch(/<input type="hidden" name="status" value="DRAFT"/);
-  });
-
-  test('есть name="status"', () => {
-    expect(formSrc).toMatch(/name="status"/);
-  });
-
-  test('форма отправляет hidden redirectTo="admin"', () => {
-    expect(formSrc).toMatch(
-      /<input type="hidden" name="redirectTo" value="admin"/,
-    );
+  test('мастер создаёт заказ черновиком и не шлёт status/redirectTo', () => {
+    // Заказ всегда рождается как DRAFT (Prisma default), мастер
+    // статус не передаёт. Скрытых полей формы у него нет вообще —
+    // шаги шлют DTO своими server actions.
+    expect(formSrc).not.toMatch(/name="status"/);
+    expect(formSrc).not.toMatch(/redirectTo/);
+    expect(formSrc).toMatch(/createOrderDraftAction/);
+    // Переход в расчёт — отдельный шаг «Проверка», а не поле статуса.
+    expect(formSrc).toMatch(/finishOrderDraftAction/);
+    expect(formSrc).toMatch(/Отправить в расчёт/);
   });
 });
 
