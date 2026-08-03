@@ -32,6 +32,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import {
+  hidesMobileNav,
+  isRoleSplitPath,
+  isRoleTerminalPath,
+} from '../../apps/web/lib/app-chrome';
+import {
   canSeeHome,
   canSeeOrders,
   canSeeOrdersMenu,
@@ -404,18 +409,22 @@ describe('legacy /work disabled for QC / IRONING / PACKING', () => {
 describe('cutter-assistant header visibility', () => {
   test('app-header.tsx прячет тёмный header для CUTTER_ASSISTANT на /work* и /orders/:id/passports/new', () => {
     const src = readSrc('apps/web/components/app-header.tsx');
+    // `/work*` ветвится по роли: рабочему — «mobile clean» терминал,
+    // ADMIN — легаси-экран работы, которому шапка нужна. Поэтому
+    // шапка тут по-прежнему режется по роли; подвал же режется у всех
+    // (`hidesMobileNav`), чтобы совместитель не получил снизу выход
+    // в управленческую часть.
+    expect(isRoleSplitPath('/work')).toBe(true);
+    expect(isRoleSplitPath('/work/cut-orders')).toBe(true);
+    expect(hidesMobileNav('/work')).toBe(true);
+    expect(src).toMatch(/role === 'SEAMSTRESS'/);
     expect(src).toMatch(/role === 'CUTTER_ASSISTANT'/);
-    // Условие включает /work* (через usePathname) и шаблон страницы
-    // выпуска паспорта.
-    expect(src).toMatch(/\/work/);
     // Шаблон пути выпуска паспорта зафиксирован константой
     // `PASSPORT_NEW_RE` — её и проверяем по подстроке, чтобы не
     // дублировать regex-эскейпинг в тесте.
     expect(src).toContain('PASSPORT_NEW_RE');
     expect(src).toContain('/orders/');
     expect(src).toContain('/passports/new');
-    // Старое поведение для SEAMSTRESS не сломалось.
-    expect(src).toMatch(/role === 'SEAMSTRESS'/);
   });
 });
 
@@ -532,10 +541,15 @@ describe('QC scan-driven terminal (/qc)', () => {
     expect(src).toMatch(/SeamstressActionsMenu/);
   });
 
-  test('AppHeader скрыт у роли QC на /qc', () => {
+  test('AppHeader скрыт на /qc — теперь у ЛЮБОЙ роли, не только QC', () => {
     const src = readSrc('apps/web/components/app-header.tsx');
-    expect(src).toMatch(/role === 'QC'/);
-    expect(src).toMatch(/hideForQc/);
+    expect(src).toMatch(/hasOwnAppChrome\(pathname\)/);
+    // `/qc` — ролевой терминал: шапка с ссылками в админку не должна
+    // протекать туда и менеджеру, открывшему экран с телефона.
+    // Подстраницы `/qc/passports/:id` — обычные экраны, там навигация
+    // остаётся (поведение до правки сохранено).
+    expect(isRoleTerminalPath('/qc')).toBe(true);
+    expect(isRoleTerminalPath('/qc/passports/abc')).toBe(false);
   });
 });
 
@@ -577,10 +591,14 @@ describe('Packing scan-driven terminal (/packing)', () => {
     expect(src).toMatch(/export async function closeBoxAction/);
   });
 
-  test('AppHeader скрыт у роли PACKING на /packing', () => {
+  test('AppHeader скрыт у роли PACKING на /packing, подвал — у всех', () => {
     const src = readSrc('apps/web/components/app-header.tsx');
+    // `/packing` ветвится по роли: PACKING → терминал, ADMIN →
+    // «Управленческий вид: список коробок». Шапку у ADMIN оставляем,
+    // иначе управленческий вид остаётся без навигации.
     expect(src).toMatch(/role === 'PACKING'/);
-    expect(src).toMatch(/hideForPacking/);
+    expect(isRoleSplitPath('/packing')).toBe(true);
+    expect(hidesMobileNav('/packing')).toBe(true);
   });
 });
 

@@ -35,6 +35,7 @@ import {
   type DisplayProjectionPassport,
   type ProjectionSize,
 } from '../../apps/api/src/modules/shopfloor/shopfloor-projection';
+import { isRoleTerminalPath } from '../../apps/web/lib/app-chrome';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 
@@ -1765,15 +1766,14 @@ describe('UI layout: fullscreen / TV geometry на /shopfloor/display', () => {
     );
   });
 
-  test('Мобильное меню не перекрывает низ витрины', () => {
-    // `.mobile-nav` — fixed, z-index 25 (выше витрины) и на
-    // `/shopfloor/display` единственный способ уйти со страницы у
-    // ADMIN/SHOP_MANAGER с телефона: глобальный header тут скрыт.
-    // Отступ вешаем через `:has()`, чтобы у учётки DISPLAY (меню не
-    // рендерится) на зальном киоске не было пустой полосы снизу.
-    expect(css).toMatch(
-      /@media\s*\(max-width:\s*900px\)\s*\{[\s\S]*?body:has\(\.mobile-nav\)\s+\.display-screen\s*\{[\s\S]*?padding-bottom/,
-    );
+  test('Мобильного меню на витрине нет — и отступа под него тоже', () => {
+    // `/shopfloor/display` — ролевой терминал: `MobileNav` там не
+    // рендерится ни у одной роли (`hasOwnAppChrome`), а глобальный
+    // header скрыт и раньше. Локальный патч «padding-bottom под две
+    // строки пунктов» стал мёртвым и удалён — если он вернётся,
+    // значит подвал снова протёк на витрину.
+    expect(isRoleTerminalPath('/shopfloor/display')).toBe(true);
+    expect(css).not.toMatch(/body:has\(\.mobile-nav\)\s+\.display-screen/);
   });
 
   test('viewportTier в display-board.tsx зеркалит css-слои', () => {

@@ -1576,7 +1576,22 @@ table.data-table th.num { text-align: right; }
 @media (max-width: 900px) {
   .app-header__nav { display: none; }
   .mobile-nav { display: block; }
-  .app-main { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+  /* Резерв под фиксированный подвал вешаем ТОЛЬКО когда он реально
+     отрисован. Безусловный `padding-bottom` тут был неверен с двух
+     сторон сразу: на терминалах, где `MobileNav` не рендерится
+     (`hidesMobileNav` / single-workspace роль), внизу оставалась
+     мёртвая полоса в 96px, а на `/admin/*` и `/master` собственные
+     `body:has(…) .app-main { padding: 0 }` его наоборот обнуляли —
+     и подвал ложился поверх контента. */
+  body:has(.mobile-nav) .app-main {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  }
+  /* 5+ пунктов не влезают в 4 колонки (`.mobile-nav__list`) и уезжают
+     во вторую строку — панель вдвое выше. Пятый `li` и есть признак
+     переноса; у ADMIN пунктов шесть. */
+  body:has(.mobile-nav__list > li:nth-child(5)) .app-main {
+    padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 @media (max-width: 640px) {
@@ -5812,9 +5827,14 @@ button.current-work__head--toggle:focus-visible .current-work__title {
    на мобильном и портит ощущение терминала. Зачищаем его так же,
    как у `/shopfloor/display` (см. `body:has(.display-screen)`):
    `:has()` уже надёжно поддержан во всех современных браузерах,
-   а `MobileNav` для SHOPFLOOR_MASTER скрыт через `singleWorkspace`
-   (см. `apps/web/app/layout.tsx`), так что под `.master-page`
-   ничего не остаётся, кроме самой страницы. */
+   а `MobileNav` на `/master*` не рендерится ни у одной роли
+   (`hidesMobileNav`, см. `apps/web/lib/app-chrome.ts`), так что под
+   `.master-page` ничего не остаётся, кроме самой страницы.
+   ВАЖНО: раньше тут стояла ссылка на `singleWorkspace` — она верна
+   только для роли SHOPFLOOR_MASTER, а `MASTER_PAGE_ALLOWED_ROLES`
+   пускает сюда ещё ADMIN и SHOP_MANAGER, у которых подвал рендерился
+   и ложился поверх контента, потому что `padding: 0` ниже снимал
+   резерв места. */
 body:has(.master-page) .app-main {
   padding: 0;
   max-width: none;
@@ -6932,20 +6952,11 @@ body:has(.display-screen) {
   }
 }
 
-/* Место под нижнюю `.mobile-nav` (fixed, z-index 25 — выше витрины).
-   Она видна у ADMIN/SHOP_MANAGER, открывших монитор с телефона, и это
-   их единственный способ уйти со страницы: глобальный header на
-   `/shopfloor/display` скрыт для всех ролей (см. `app-header.tsx`).
-   У учётки DISPLAY меню не рендерится вовсе — `:has()` не даст лишний
-   отступ на маленьком зальном киоске. */
-@media (max-width: 900px) {
-  body:has(.mobile-nav) .display-screen {
-    /* 120px = две строки пунктов: у ADMIN/SHOP_MANAGER в меню 6 ссылок
-       при сетке в 4 колонки (`.mobile-nav__list`), т.е. панель вдвое
-       выше «стандартных» 96px из `.app-main`. */
-    padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
-  }
-}
+/* Отступа под нижнюю `.mobile-nav` тут больше нет: `/shopfloor/display`
+   — ролевой терминал, подвал на нём не рендерится ни у одной роли
+   (`hidesMobileNav`, см. `apps/web/lib/app-chrome.ts`). Раньше здесь
+   лежал локальный патч на 120px «под две строки пунктов у ADMIN /
+   SHOP_MANAGER» — симптом чинили на одной странице вместо корня. */
 
 /* F. Низкий экран: телефон в ландшафте, узкая панель над станком ----------- */
 @media (max-height: 560px) {

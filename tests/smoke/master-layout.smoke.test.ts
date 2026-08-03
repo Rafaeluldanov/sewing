@@ -5,17 +5,19 @@
  * jsdom + RTL — см. `tests/smoke/frontend-rbac.smoke.test.ts`),
  * поэтому фиксируем инварианты по исходникам:
  *
- *   1. `apps/web/components/app-header.tsx` явно скрывает шапку для
+ *   1. `apps/web/components/app-header.tsx` скрывает шапку для
  *      SHOPFLOOR_MASTER и для любой роли на `/master*` — мобильный
  *      терминал работает как `/shopfloor/display`: fullscreen, без
- *      глобальной навигации.
- *   2. Старые ветки скрытия (SEAMSTRESS / CUTTER_ASSISTANT / QC /
- *      IRONING / PACKING / DISPLAY) остались на месте — мы ничего
- *      не сломали другим ролям.
- *   3. `MobileNav` для SHOPFLOOR_MASTER уже скрыт через
- *      `isSingleWorkspaceRole` в `apps/web/app/layout.tsx`
- *      (роль попадает в `SINGLE_WORKSPACE_ROLES` ещё со Stage 1
- *      «Мастер цеха»).
+ *      глобальной навигации. Решение по пути принимает общий
+ *      `hasOwnAppChrome` (`apps/web/lib/app-chrome.ts`).
+ *   2. Остальные терминалы (`/work`, `/qc`, `/wto`, `/packing`,
+ *      `/cutter`, `/constructor`, `/shopfloor/display`) остались в
+ *      том же списке — мы ничего не сломали другим ролям.
+ *   3. `MobileNav` на `/master*` не рендерится ни у одной роли: для
+ *      SHOPFLOOR_MASTER срабатывает `isSingleWorkspaceRole` в
+ *      `apps/web/app/layout.tsx`, для ADMIN / SHOP_MANAGER (их пускает
+ *      `MASTER_PAGE_ALLOWED_ROLES`) — проверка пути внутри самого
+ *      компонента.
  *   4. Helper `isShopfloorMasterRole` существует и опознаёт роль —
  *      ТЗ просит хелпер `isMasterRole`, у нас он назван длиннее
  *      (`isShopfloorMaster*` повсюду в кодовой базе), но контракт
@@ -30,6 +32,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
+import {
+  hasOwnAppChrome,
+  isRoleTerminalPath,
+} from '../../apps/web/lib/app-chrome';
 import {
   isShopfloorMasterRole,
   isSingleWorkspaceRole,
@@ -46,34 +52,36 @@ function readSrc(relativePath: string): string {
 describe('master fullscreen layout (SHOPFLOOR_MASTER)', () => {
   test('app-header.tsx прячет header для SHOPFLOOR_MASTER и на пути /master', () => {
     const src = readSrc('apps/web/components/app-header.tsx');
+    // Роль — safety net на случай, если редирект middleware отвалится.
     expect(src).toMatch(/role === 'SHOPFLOOR_MASTER'/);
-    expect(src).toMatch(/hideForShopfloorMaster/);
-    // Путь `/master*` обрабатывается отдельной переменной isMasterPath
-    // (по аналогии с isShopfloorDisplayPath / isQcTerminalPath).
-    expect(src).toMatch(/isMasterPath/);
-    expect(src).toMatch(/pathname === '\/master'/);
-    expect(src).toMatch(/pathname\.startsWith\('\/master\/'\)/);
-    // Финальный if включает новую ветку — иначе скрытие не сработает.
-    expect(src).toMatch(/hideForShopfloorMaster/);
-    const ifBlock = src.slice(src.lastIndexOf('if ('));
-    expect(ifBlock).toMatch(/hideForShopfloorMaster/);
+    // Путь `/master*` закрывает общий предикат, а не локальная переменная.
+    expect(src).toMatch(/hasOwnAppChrome\(pathname\)/);
+    expect(isRoleTerminalPath('/master')).toBe(true);
+    expect(isRoleTerminalPath('/master/')).toBe(true);
+    expect(isRoleTerminalPath('/master/calls')).toBe(true);
   });
 
-  test('старые ветки скрытия не сломались (никаких регрессий для других ролей)', () => {
+  test('остальные терминалы не сломались (никаких регрессий для других ролей)', () => {
     const src = readSrc('apps/web/components/app-header.tsx');
-    expect(src).toMatch(/hideForSeamstress/);
-    expect(src).toMatch(/hideForCutterAssistant/);
-    expect(src).toMatch(/hideForQc/);
-    expect(src).toMatch(/hideForIroning/);
-    expect(src).toMatch(/hideForPacking/);
-    expect(src).toMatch(/hideForDisplay/);
-    // Жёстко проверяем, что мы не выпилили ADMIN / SHOP_MANAGER —
-    // под них нет ни одной hideFor*-ветки и быть не должно.
+    // Терминалы, у которых свой каркас у всего раздела.
+    for (const p of ['/cutter', '/cutter/lays/1', '/constructor'])
+      expect(isRoleTerminalPath(p)).toBe(true);
+    // Терминал — ровно корневой путь; подстраницы остаются обычными
+    // экранами менеджера с глобальной навигацией.
+    for (const p of ['/qc', '/wto', '/shopfloor/display'])
+      expect(isRoleTerminalPath(p)).toBe(true);
+    for (const p of ['/qc/passports/1', '/wto/passports/1', '/shopfloor'])
+      expect(isRoleTerminalPath(p)).toBe(false);
+    // Управленческие экраны каркас не теряют.
+    for (const p of ['/orders', '/orders/1', '/earnings', '/production-cost'])
+      expect(hasOwnAppChrome(p)).toBe(false);
+    // Под ADMIN / SHOP_MANAGER в шапке нет и не должно быть ни одной
+    // ветки по роли — решение принимается по пути.
     expect(src).not.toMatch(/role === 'ADMIN'/);
     expect(src).not.toMatch(/role === 'SHOP_MANAGER'/);
   });
 
-  test('MobileNav для SHOPFLOOR_MASTER уже скрыт через isSingleWorkspaceRole', () => {
+  test('MobileNav не рендерится на /master ни у одной роли', () => {
     // Сама матрица — единый источник истины: SHOPFLOOR_MASTER
     // обязан попадать в single-workspace, иначе под master экраном
     // снова появится нижняя навигация.
@@ -84,6 +92,13 @@ describe('master fullscreen layout (SHOPFLOOR_MASTER)', () => {
     const layout = readSrc('apps/web/app/layout.tsx');
     expect(layout).toMatch(/isSingleWorkspaceRole/);
     expect(layout).toMatch(/isStaff && !singleWorkspace/);
+    // Роли ADMIN / SHOP_MANAGER не single-workspace, их `MASTER_PAGE_
+    // ALLOWED_ROLES` пускает на `/master` — им подвал режет уже сам
+    // компонент по пути.
+    expect(isSingleWorkspaceRole('ADMIN')).toBe(false);
+    expect(isSingleWorkspaceRole('SHOP_MANAGER')).toBe(false);
+    const nav = readSrc('apps/web/components/mobile-nav.tsx');
+    expect(nav).toMatch(/if \(hidesMobileNav\(pathname\)\) return null;/);
   });
 
   test('isShopfloorMasterRole опознаёт роль и не задевает соседние', () => {

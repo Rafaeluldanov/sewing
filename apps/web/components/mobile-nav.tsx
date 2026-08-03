@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { hidesMobileNav } from '@/lib/app-chrome';
 import { Icon, type IconName } from './icon';
 
 interface NavItem {
@@ -63,6 +64,22 @@ interface Props {
  * MobileNav — нижняя навигация для маленьких экранов (видна только
  * на ≤ 900 px, скрыта на десктопе через CSS). Намеренно компактная.
  *
+ * ГДЕ рендерится: только там, где `hidesMobileNav` = false (см.
+ * `apps/web/lib/app-chrome.ts`). Подвал всегда ведёт НАРУЖУ текущего
+ * экрана, поэтому его нет:
+ *   - в `/admin/*` — навигация там `AdminSidebar`, на телефоне её
+ *     заменяет drawer «Меню»;
+ *   - на ролевых терминалах (`/qc`, `/wto`, `/cutter`, `/constructor`,
+ *     `/master`, `/shopfloor/display`) — это изолированные экраны
+ *     роли, выход — «⋯ → Выйти» в `SeamstressActionsMenu`;
+ *   - на `/work*` и `/packing`, которые ветвятся по роли: рабочий не
+ *     должен получить снизу выход в управленческую часть, а менеджеру
+ *     на том же URL остаётся верхняя шапка.
+ * До этой правки проверки пути тут не было вообще, и ADMIN /
+ * SHOP_MANAGER (а также любой совместитель с 2+ ролями, которого не
+ * закрывает `singleWorkspace`) получали снизу меню со ссылками
+ * наружу на КАЖДОМ экране приложения.
+ *
  * Состав ссылок зависит от роли (см. матрицу в `apps/web/lib/rbac.ts`):
  *   - «Главная» — только для менеджеров/админов; для производственных
  *     ролей `/` редиректит в их primary workspace, поэтому отдельной
@@ -87,6 +104,7 @@ export function MobileNav({
   showOrders,
 }: Props) {
   const pathname = usePathname() ?? '/';
+  if (hidesMobileNav(pathname)) return null;
   const items: NavItem[] = [];
   if (showHome) items.push(HOME_ITEM);
   if (showWork) items.push(WORK_ITEM);
