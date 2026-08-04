@@ -273,4 +273,64 @@ describeWithDb('integration — passports.completeOperationByEmployee', () => {
     expect(events).toHaveLength(1);
     expect(events[0]!.operationId).toBe(seed.operations.SEW_OVERLOCK_2.id);
   });
+
+  // -------------------------------------------------------------------------
+  // D. смена сменилась между «взял» и «завершил»
+  // -------------------------------------------------------------------------
+
+  test('D. complete закрывает операцию ОТКРЫТОГО НАЗНАЧЕНИЯ, а не операцию новой смены', async () => {
+    // Инцидент 04.08.2026, заказ 02-00001: швея взяла 12 паспортов на
+    // ПРЯМОСТРОЧКЕ, наутро пересканировала смену на ОВЕРЛОК и через 39
+    // секунд пакетно их завершила. Вся дневная выработка записалась на
+    // операцию новой смены — которой в маршруте заказа нет вообще: шаг
+    // маршрута остался незакрытым, а сделка ушла по чужой расценке
+    // (64,10 ₽ вместо 615,40 ₽). Смена — общая на все паспорта на руках
+    // и меняется когда угодно; назначение привязано к паспорту.
+    const { passportId } = await setup({
+      currentOperationCode: 'SEW_OVERLOCK_1',
+      currentRouteStepIndex: 1,
+      shiftOperationCode: 'SEW_OVERLOCK_2',
+    });
+    // Паспорт выдан на SEW_OVERLOCK_1 (вчера), смена уже на _2 (сегодня).
+    await t.prisma.passportEvent.create({
+      data: {
+        passportId,
+        type: 'ISSUED_TO_EMPLOYEE',
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        employeeId: seed.employees.seamstress.id,
+        equipmentId: seed.equipment['overlock-01'].id,
+        qty: 6,
+      },
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/complete-operation`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const events = await t.prisma.passportEvent.findMany({
+      where: { passportId, type: 'OPERATION_FINISHED' },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.operationId).toBe(seed.operations.SEW_OVERLOCK_1.id);
+    expect(events[0]!.operationId).not.toBe(seed.operations.SEW_OVERLOCK_2.id);
+
+    // Паспорт остаётся на своём шаге — complete фиксирует ✔ текущей
+    // операции и не перепрыгивает вперёд на шаг новой смены.
+    const passport = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
+    expect(passport.currentOperationId).toBe(seed.operations.SEW_OVERLOCK_1.id);
+    expect(passport.currentRouteStepIndex).toBe(1);
+
+    // Деньги идут за фактически закрытой операцией, а не за операцией
+    // смены — ровно это и разъехалось в инциденте.
+    const entries = await t.prisma.operationEntry.findMany({
+      where: { passportId },
+    });
+    for (const entry of entries) {
+      expect(entry.operationId).toBe(seed.operations.SEW_OVERLOCK_1.id);
+    }
+  });
 });

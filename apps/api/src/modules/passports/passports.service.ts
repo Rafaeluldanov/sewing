@@ -1857,6 +1857,55 @@ export class PassportsService {
   }
 
   /**
+   * Операция ОТКРЫТОГО НАЗНАЧЕНИЯ паспорта на сотрудника: на что он этот
+   * паспорт взял и ещё не закрыл. `null` — открытого назначения нет.
+   *
+   * Назначение пишут ровно два канала — `issueToEmployee`
+   * (`ISSUED_TO_EMPLOYEE`) и `scanOnOperation` (`OPERATION_SCAN`); оба в
+   * одной транзакции проставляют `currentEmployeeId` и переводят паспорт
+   * на операцию смены. Берём САМОЕ СВЕЖЕЕ такое событие сотрудника: если
+   * по его операции уже есть более поздний `OPERATION_FINISHED` —
+   * назначение закрыто, открытого нет (паспорт лежит в WIP-буфере и
+   * ждёт следующего скана, см. `shopfloor-projection.ts`).
+   *
+   * Зачем отдельно от `Passport.currentOperationId`, который хранит то же
+   * самое: колонка — состояние, её пишут и другие каналы (мастер-экшены,
+   * возвраты), а событие — факт «этот человек взял этот паспорт на эту
+   * операцию». Для атрибуции работы и денег нужен именно факт.
+   */
+  private async findOpenAssignmentOperation(
+    passportId: string,
+    employeeId: string,
+  ): Promise<string | null> {
+    const assignment = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId,
+        employeeId,
+        type: {
+          in: [
+            PassportEventType.ISSUED_TO_EMPLOYEE,
+            PassportEventType.OPERATION_SCAN,
+          ],
+        },
+        operationId: { not: null },
+      },
+      select: { operationId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!assignment?.operationId) return null;
+    const finished = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId,
+        operationId: assignment.operationId,
+        type: PassportEventType.OPERATION_FINISHED,
+        createdAt: { gt: assignment.createdAt },
+      },
+      select: { id: true },
+    });
+    return finished ? null : assignment.operationId;
+  }
+
+  /**
    * Авто-определение операции, которую швея фактически берёт/завершает по
    * этому паспорту.
    *
@@ -1884,11 +1933,31 @@ export class PassportsService {
    * операции (молча закрыть rework на «не той» операции нельзя). Когда
    * смена уже стоит на нужной операции или открытых reworks нет —
    * поведение прежнее (возвращаем `session.operationId`).
+   *
+   * `assignedTo` — сотрудник, чьё ОТКРЫТОЕ НАЗНАЧЕНИЕ по этому паспорту
+   * вытесняет операцию смены (см. `findOpenAssignmentOperation`). Его
+   * передаёт только канал `complete`: завершать надо то, НА ЧТО паспорт
+   * был взят, а не то, на чём швея стоит в момент нажатия «завершить».
+   * Смена — общая на все паспорта на руках и меняется между «взял» и
+   * «завершил»; назначение привязано к конкретному паспорту.
+   * Инцидент 04.08.2026, заказ 02-00001 — см.
+   * `scripts/migrations/20260804_fix_overlock_to_straight_steech_02-00001.sql`.
+   * Канал `issue` его НЕ передаёт: «взять крой = встать на операцию
+   * смены» — там источник истины именно смена.
    */
   private async resolveOperationForPassport(
     passport: { id: string; orderId: string | null },
     session: { operationId: string; equipmentId: string },
+    opts?: { assignedTo?: string },
   ): Promise<string> {
+    // Что закрываем, если открытой переделки нет: своё открытое
+    // назначение, иначе — операция смены (прежнее поведение).
+    const fallbackOperationId = opts?.assignedTo
+      ? (await this.findOpenAssignmentOperation(
+          passport.id,
+          opts.assignedTo,
+        )) ?? session.operationId
+      : session.operationId;
     // Все REWORK_OPENED по паспорту (свежие сверху). Дедупим по операции
     // и оставляем только «открытые» — без последующего OPERATION_FINISHED
     // для той же пары (passport, operation). Зеркалит логику
@@ -1902,7 +1971,7 @@ export class PassportsService {
       select: { operationId: true, createdAt: true },
       orderBy: { createdAt: 'desc' },
     });
-    if (reworks.length === 0) return session.operationId;
+    if (reworks.length === 0) return fallbackOperationId;
 
     const seen = new Set<string>();
     const openOps: string[] = [];
@@ -1921,7 +1990,7 @@ export class PassportsService {
       });
       if (!finished) openOps.push(op);
     }
-    if (openOps.length === 0) return session.operationId;
+    if (openOps.length === 0) return fallbackOperationId;
 
     // Смена уже на нужной операции переделки — ничего не меняем
     // (полностью прежнее поведение).
@@ -2640,15 +2709,35 @@ export class PassportsService {
    * pipeline-driven: следующий сотрудник (или упаковщик) перехватит
    * его штатным `scan`/`issue`, и `currentOperationId` поменяется там.
    *
-   * **Источник истины для завершаемой операции — `activeShift.operationId`,
-   * а НЕ `passport.currentOperationId`.** Это критично для route-WIP
-   * сценария «issue без последующего scan»: после `issueToEmployee`
-   * паспорт может остаться с `currentOperationId = CUT_DIVISION`
-   * (issue не двигает шаг маршрута, см. §F3a), и наивная привязка
-   * `OPERATION_FINISHED.operationId = passport.currentOperationId`
-   * даёт абсурдный лог «завершил CUT_DIVISION» после работы на
-   * Оверлоке. Вместо этого мы:
-   *   1) берём `completedOperationId = session.operationId`;
+   * **Источник истины для завершаемой операции — ОТКРЫТОЕ НАЗНАЧЕНИЕ
+   * паспорта на эту швею (`ISSUED_TO_EMPLOYEE`/`OPERATION_SCAN` без
+   * последующего `OPERATION_FINISHED`), а НЕ операция активной смены.**
+   * Смена общая на все паспорта на руках и свободно меняется между
+   * «взял» и «завершил»; назначение привязано к паспорту и доказывает,
+   * что человек взял именно эту работу.
+   *
+   * Раньше здесь стояла смена, и по делу: `issueToEmployee` тогда не
+   * двигал паспорт на операцию, тот мог остаться на `CUT_DIVISION`, и
+   * наивная привязка к `passport.currentOperationId` давала абсурдный
+   * лог «завершил Деление кроя» после работы на Оверлоке. Но issue
+   * давно переводит паспорт на операцию («взять крой = встать на
+   * операцию», §F3a), а вот смена достоверной так и не стала. Если
+   * открытого назначения нет (паспорт заведён мимо issue/scan) —
+   * поведение прежнее, берём смену.
+   *
+   * Инцидент 04.08.2026, заказ 02-00001: швея взяла 12 паспортов на
+   * ПРЯМОСТРОЧКЕ, наутро пересканировала смену на ОВЕРЛОК и через 39
+   * секунд пакетно их завершила. Вся дневная выработка записалась на
+   * операцию, которой в маршруте заказа нет: шаг маршрута остался
+   * незакрытым, сделка ушла по расценке оверлока (64,10 ₽ вместо
+   * 615,40 ₽ — недоплата 56 232,60 ₽), а `offRouteWorkPolicy = WARN`
+   * ограничился строкой в логе. Разбор и правка данных —
+   * `scripts/migrations/20260804_fix_overlock_to_straight_steech_02-00001.sql`.
+   *
+   * Поэтому мы:
+   *   1) берём `completedOperationId` из открытого назначения
+   *      (переделка ОТК по-прежнему вытесняет его, смена остаётся
+   *      запасным вариантом — см. `resolveOperationForPassport`);
    *   2) ищем соответствующий `OrderRouteStep` (если у заказа есть
    *      snapshot маршрута) — это будет `completedStep`;
    *   3) запрещаем двигать паспорт НАЗАД по маршруту: если
@@ -2703,23 +2792,29 @@ export class PassportsService {
 
     // Активная смена нужна по тем же причинам, что для `issue`/`scan`:
     // начисления и аудит привязаны к сессии оборудования/операции
-    // (см. `docs/flows.md §F8`). Кроме того, именно `session.operationId`
-    // — единственный достоверный источник «что фактически завершалось».
+    // (см. `docs/flows.md §F8`). А вот «что именно завершалось» смена
+    // НЕ определяет — см. доккомментарий выше и инцидент 04.08.2026.
     const session = await this.prisma.shiftSession.findFirst({
       where: { employeeId, endedAt: null },
       select: { operationId: true, equipmentId: true },
     });
     if (!session) throw new ShiftSessionRequiredException();
 
-    // Операцию завершения берём из паспорта, а не вслепую из смены: если
-    // ОТК вернул паспорт на переделку на другой распошив-операции, чем
-    // стоит смена, авто-определяем её по паспорту (см.
-    // `resolveOperationForPassport`). Это убирает «пляску со сменами» при
-    // закрытии переделки и чинит пакетное завершение разнооперационных
-    // паспортов. Для обычного потока возвращает `session.operationId`.
+    // Операцию завершения берём из паспорта, а не вслепую из смены:
+    //   * открытая переделка ОТК задаёт операцию сама (это убирает
+    //     «пляску со сменами» при закрытии rework);
+    //   * иначе закрываем то, НА ЧТО паспорт был взят — своё открытое
+    //     назначение (`ISSUED_TO_EMPLOYEE`/`OPERATION_SCAN` без
+    //     последующего `OPERATION_FINISHED`): смена к моменту нажатия
+    //     «завершить» может быть уже другой (инцидент 04.08.2026,
+    //     заказ 02-00001);
+    //   * смена — запасной вариант, если открытого назначения нет.
+    // Побочно это чинит пакетное завершение разнооперационных паспортов:
+    // каждый закрывает свою операцию, а не общую операцию смены.
     const completedOperationId = await this.resolveOperationForPassport(
       { id: passport.id, orderId: passport.orderId },
       session,
+      { assignedTo: employeeId },
     );
 
     // Та же защита, что в `issueToEmployee`: если по этой паре
