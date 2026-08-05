@@ -46,6 +46,7 @@ import {
   lookupPassportAction,
 } from './actions';
 import { CurrentWorkCard } from './current-work-card';
+import { SEAMSTRESS_WORDING, type WorkWording } from './work-wording';
 import { CutIssueRuleBanner } from './cut-issue-rule-banner';
 import { ReworkPushSetup } from './rework-push-setup';
 import {
@@ -85,6 +86,14 @@ interface Props {
    * после rework нет. Источник — `GET /api/shifts/my-rework`.
    */
   myRework: ReworkPassportDto[];
+  /**
+   * Ролевые подписи панели (см. `work-wording.ts`). По умолчанию —
+   * швейные («Взять крой»). `/packing` в режиме некоробочной операции
+   * («Распаковка» = приёмка сырья) передаёт свой словарь: кроя на том
+   * шаге ещё нет, и кнопка «Взять крой» вводила бы упаковщика в
+   * заблуждение.
+   */
+  wording?: WorkWording;
 }
 
 /**
@@ -119,6 +128,7 @@ export function SeamstressActivePanel({
   currentWork,
   cutIssueBanner,
   myRework,
+  wording = SEAMSTRESS_WORDING,
 }: Props) {
   const router = useRouter();
 
@@ -339,13 +349,13 @@ export function SeamstressActivePanel({
   // -------------------------------------------------------------------
 
   const hasActive = currentWork.length > 0;
-  const primaryLabel = hasActive ? 'Взять следующий крой' : 'Взять крой';
+  const primaryLabel = hasActive ? wording.takeNext : wording.take;
 
   return (
     <div className="seamstress-work">
       <CutIssueRuleBanner banner={cutIssueBanner} />
 
-      <div className="scan-card scan-card--simple" aria-label="Взять крой">
+      <div className="scan-card scan-card--simple" aria-label={wording.take}>
         <div>
           <h2 className="scan-card__title">{primaryLabel}</h2>
           <p className="scan-card__hint">
@@ -450,13 +460,16 @@ export function SeamstressActivePanel({
         )}
       </div>
 
-      {myRework.length > 0 && <ReworkSection items={myRework} />}
+      {myRework.length > 0 && (
+        <ReworkSection items={myRework} takeLabel={wording.take} />
+      )}
 
       <ReworkPushSetup />
 
       <CurrentWorkCard
         items={currentWork}
         shiftOperationId={shift.operationId}
+        emptyText={wording.emptyText}
       />
 
       {scannerOpen && (
@@ -496,6 +509,7 @@ export function SeamstressActivePanel({
       {reworkAlert && reworkAlert.length > 0 && (
         <ReworkAlertModal
           items={reworkAlert}
+          takeLabel={wording.take}
           onAcknowledge={() => setReworkAlert(null)}
         />
       )}
@@ -514,15 +528,21 @@ export function SeamstressActivePanel({
  * крой». После завершения переделки и нового `OPERATION_FINISHED`
  * паспорт автоматически уходит из этой секции.
  */
-function ReworkSection({ items }: { items: ReworkPassportDto[] }) {
+function ReworkSection({
+  items,
+  takeLabel,
+}: {
+  items: ReworkPassportDto[];
+  takeLabel: string;
+}) {
   return (
     <section className="card rework-section" aria-label="К переделке от ОТК">
       <h2 className="card__title">
         ⚠ К переделке от ОТК ({items.length})
       </h2>
       <p className="card__hint">
-        Заберите паспорт у ОТК и сосканируйте у своего станка кнопкой
-        «Взять крой».
+        Заберите паспорт у ОТК и сосканируйте у своего рабочего места
+        кнопкой «{takeLabel}».
       </p>
       <ul className="rework-section__list">
         {items.map((p) => (
@@ -551,9 +571,11 @@ function ReworkSection({ items }: { items: ReworkPassportDto[] }) {
  */
 function ReworkAlertModal({
   items,
+  takeLabel,
   onAcknowledge,
 }: {
   items: ReworkPassportDto[];
+  takeLabel: string;
   onAcknowledge: () => void;
 }) {
   return (
@@ -569,8 +591,8 @@ function ReworkAlertModal({
             ⚠ Пришёл брак от ОТК ({items.length})
           </h2>
           <p className="modal__text">
-            Заберите паспорт у ОТК и сосканируйте у своего станка кнопкой
-            «Взять крой». Сделайте это в первую очередь.
+            Заберите паспорт у ОТК и сосканируйте у своего рабочего места
+            кнопкой «{takeLabel}». Сделайте это в первую очередь.
           </p>
           <ul className="rework-section__list">
             {items.map((p) => (

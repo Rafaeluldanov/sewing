@@ -55,6 +55,7 @@ import type { OrderCutIssueRuleBannerDto } from '@sewing/shared';
 import type {
   CurrentWorkPassportDto,
   EmployeeLiteDto,
+  OperationLiteDto,
   ReworkPassportDto,
   ShiftMetaDto,
   ShiftSessionDto,
@@ -67,6 +68,8 @@ import {
 import { SeamstressShiftStart } from '@/app/work/seamstress-shift-start';
 import { SeamstressActivePanel } from '@/app/work/seamstress-active-panel';
 import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
+import { OperationSwitcher } from '@/app/work/operation-switcher';
+import { PACKING_INTAKE_WORDING } from '@/app/work/work-wording';
 import { Icon } from '@/components/icon';
 import {
   closeBoxTerminalAction,
@@ -114,6 +117,15 @@ interface Props {
    * `addPassport`. `false` (в т.ч. когда смены нет) — коробок не будет.
    */
   activeOperationBoxPacking: boolean;
+  /**
+   * Операции, разрешённые на рабочем месте текущей смены
+   * (`EquipmentOperation`). Если их 2+, рендерим `OperationSwitcher` —
+   * упаковщик переходит с «Упаковки» на «Распаковку» и обратно, не
+   * завершая смену: рабочее место одно и то же, меняется только
+   * операция. Меньше двух — переключать не на что, компонент сам
+   * вернёт `null`.
+   */
+  availableOperations: OperationLiteDto[];
   /**
    * Активные паспорта упаковщика — для режима обычной операции
    * (`SeamstressActivePanel`). В режиме коробок не используется и
@@ -163,6 +175,7 @@ export function PackingTerminal({
   initialShift,
   activeOperationCategory,
   activeOperationBoxPacking,
+  availableOperations,
   currentWork,
   cutIssueBanner,
   myRework,
@@ -190,6 +203,22 @@ export function PackingTerminal({
        */}
       <SeamstressActionsMenu shiftActive={isShiftActive} />
 
+      {/*
+       * Chip «Сменить операцию» — над обеими рабочими ветками. Смысл
+       * именно для упаковщика: «Упаковка» и «Распаковка» живут на ОДНОМ
+       * рабочем месте, и гонять человека через «Завершить смену → снова
+       * сканировать стол» ради переключения незачем. Backend не даст
+       * переключиться, пока на руках есть незакрытые паспорта
+       * (`SHIFT_HAS_ACTIVE_PASSPORTS`), — сообщение компонент покажет
+       * сам. Если на рабочем месте разрешена одна операция, вернёт null.
+       */}
+      {isShiftActive && (
+        <OperationSwitcher
+          shift={initialShift!}
+          availableOperations={availableOperations}
+        />
+      )}
+
       {!isShiftActive ? (
         <SeamstressShiftStart meta={meta} employee={employee} />
       ) : onBoxPackingShift ? (
@@ -211,6 +240,7 @@ export function PackingTerminal({
           currentWork={currentWork}
           cutIssueBanner={cutIssueBanner}
           myRework={myRework}
+          wording={PACKING_INTAKE_WORDING}
         />
       ) : (
         <WrongOperationCard operationName={initialShift!.operationName} />

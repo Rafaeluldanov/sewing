@@ -15,6 +15,7 @@ import {
 } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { ApiRequestError } from '@/lib/api';
+import { operationsForEquipment } from '@/lib/equipment-operations';
 import { TerminalShell } from '@/components/terminal-shell';
 import { CreateBoxForm } from './create-box-form';
 import { PackingTerminal } from './packing-terminal';
@@ -196,6 +197,18 @@ export default async function PackingPage({
         ]
       : [];
 
+    // Операции, разрешённые на рабочем месте текущей смены
+    // (`EquipmentOperation`, ADR-0017). Если их 2+ — терминал отрендерит
+    // chip «Сменить операцию» и упаковщик перейдёт с «Упаковки» на
+    // «Распаковку» не завершая смену: рабочее место-то одно и то же.
+    // Считаем ровно как `/work/page.tsx`, через общий хелпер.
+    const currentEquipment = shift
+      ? meta.equipment.find((e) => e.id === shift.equipmentId)
+      : null;
+    const availableOperations = currentEquipment
+      ? operationsForEquipment(currentEquipment, meta.operations)
+      : [];
+
     return (
       <TerminalShell
         name={employee.fullName}
@@ -214,6 +227,7 @@ export default async function PackingPage({
           initialShift={shift}
           activeOperationCategory={activeOperationCategory}
           activeOperationBoxPacking={activeOperationBoxPacking}
+          availableOperations={availableOperations}
           initialOpenBoxes={initialOpenBoxes}
           initialClosedUnplacedBoxes={initialClosedUnplacedBoxes}
           currentWork={currentWork}

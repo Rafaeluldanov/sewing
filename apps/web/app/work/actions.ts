@@ -24,6 +24,26 @@ import type {
 import type { PassportLookupResponse, WorkFormState } from './state';
 
 /**
+ * Инвалидация ВСЕХ экранов, где живёт швейный scan-flow.
+ *
+ * Долгое время это был один `revalidatePath('/work')`, и он был верен:
+ * панель швеи рендерилась только на `/work`. Теперь `/packing` в режиме
+ * некоробочной операции («Распаковка», см. `packing-terminal.tsx`)
+ * рендерит те же `SeamstressActivePanel` и `OperationSwitcher` и зовёт
+ * ЭТИ ЖЕ actions — значит и маршрут упаковщика обязан инвалидироваться,
+ * иначе после скана он остался бы на старом SSR-снимке (`currentWork`
+ * приходит из server-component, а не из ответа action'а).
+ *
+ * Не экспортируем: в `'use server'`-файле любой экспорт обязан быть
+ * async (см. инцидент с `initialXxxFormState` — падало в рантайме, а
+ * tsc/lint молчали).
+ */
+function revalidateWorkSurfaces(): void {
+  revalidatePath('/work');
+  revalidatePath('/packing');
+}
+
+/**
  * Список API error-кодов, для которых backend уже формирует
  * полностью готовый текст для отображения сотруднику — без префикса
  * `[CODE] ` от UI.
@@ -85,7 +105,7 @@ export async function startShiftAction(
   }
   try {
     await startShift(parsed.data);
-    revalidatePath('/work');
+    revalidateWorkSurfaces();
     return { info: 'Смена начата' };
   } catch (e) {
     return { error: explainApiError(e), errorRequestId: errorRequestId(e) };
@@ -98,7 +118,7 @@ export async function stopShiftAction(
 ): Promise<WorkFormState> {
   try {
     await stopShift();
-    revalidatePath('/work');
+    revalidateWorkSurfaces();
     return { info: 'Смена завершена' };
   } catch (e) {
     return { error: explainApiError(e), errorRequestId: errorRequestId(e) };
@@ -117,7 +137,7 @@ export async function switchShiftOperationAction(
   if (!id) return { error: 'operationId обязателен' };
   try {
     await switchShiftOperation({ operationId: id });
-    revalidatePath('/work');
+    revalidateWorkSurfaces();
     return { info: 'Операция смены изменена' };
   } catch (e) {
     return { error: explainApiError(e), errorRequestId: errorRequestId(e) };
@@ -140,7 +160,7 @@ async function runWithPassport(
     const updated = (await op(passport.id)) as Awaited<
       ReturnType<typeof findPassportByCode>
     >;
-    revalidatePath('/work');
+    revalidateWorkSurfaces();
     revalidatePath(`/passports/${passport.id}`);
     revalidatePath(`/admin/passports/${passport.id}`);
     revalidatePath(`/orders/${passport.orderId}`);
@@ -285,7 +305,7 @@ export async function batchCompletePassportsAction(
   }
   try {
     const result = await completePassportOperationsBatch(ids);
-    revalidatePath('/work');
+    revalidateWorkSurfaces();
     for (const c of result.completed) {
       revalidatePath(`/passports/${c.passportId}`);
       revalidatePath(`/admin/passports/${c.passportId}`);

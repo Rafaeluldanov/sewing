@@ -25,6 +25,7 @@ import type {
 import { ModalPortal } from '@/components/modal-portal';
 import { batchCompletePassportsAction } from './actions';
 import { playOperationCompletedSound } from './feedback';
+import { SEAMSTRESS_WORDING } from './work-wording';
 
 // Швея просила прятать длинный список «Сейчас в работе», чтобы быстрее
 // добираться до кнопки «Взять крой» (которую мы подняли над списком в
@@ -43,6 +44,13 @@ interface Props {
    * `docs/domain.md §«Маршруты производства»`).
    */
   shiftOperationId?: string;
+  /**
+   * Текст пустого состояния. Задаётся ролевым словарём
+   * (`work-wording.ts`): у швеи «нет кроя в работе», у упаковщика на
+   * «Распаковке» кроя ещё не существует — там «нет паспортов».
+   * Умолчание сохраняет прежний текст `/work`.
+   */
+  emptyText?: string;
 }
 
 function formatTime(iso: string | null | undefined): string | null {
@@ -52,7 +60,11 @@ function formatTime(iso: string | null | undefined): string | null {
   return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
-export function CurrentWorkCard({ items, shiftOperationId }: Props) {
+export function CurrentWorkCard({
+  items,
+  shiftOperationId,
+  emptyText = SEAMSTRESS_WORDING.emptyText,
+}: Props) {
   const router = useRouter();
   // Дефолт — раскрыто; читаем сохранённое значение в useEffect, чтобы не
   // ломать гидрацию (server-render всегда стартует с тем же дефолтом).
@@ -172,14 +184,12 @@ export function CurrentWorkCard({ items, shiftOperationId }: Props) {
         aria-label="Сейчас в работе"
       >
         <h3 className="current-work__title">Сейчас в работе</h3>
-        <p className="current-work__empty-text">
-          {/* Нейтральная формулировка: после soft-route MVP крой может
-              приехать из ячейки (legacy/буфер) или из маршрутного потока
-              без ячейки. UX швеи одинаковый — она сканирует QR
-              паспорта и подтверждает. */}
-          Сейчас у вас нет кроя в работе. Отсканируйте QR паспорта,
-          чтобы взять крой.
-        </p>
+        {/* Нейтральная формулировка: после soft-route MVP крой может
+            приехать из ячейки (legacy/буфер) или из маршрутного потока
+            без ячейки. UX швеи одинаковый — она сканирует QR паспорта и
+            подтверждает. Сам текст приходит ролевым словарём: на
+            «Распаковке» у упаковщика кроя ещё нет (см. `work-wording.ts`). */}
+        <p className="current-work__empty-text">{emptyText}</p>
       </section>
     );
   }
