@@ -2157,14 +2157,16 @@ export class WorkshopNeedsService {
     let unit = line.unit;
     /** Почему потребность осталась в единице нормы, а не в закупочной. */
     let conversionNote: string | null = null;
-    if (line.source === 'ORDER_MATERIAL_REQUIREMENT') {
-      // У snapshot totalQty посчитан в момент start() (в БД NOT NULL, так что
-      // ветка `??` сегодня недостижима). Defensive (M3): если инвариант когда-
-      // нибудь сломается, пересчитываем qtyPerUnit×N, как live-ветка ниже, а
-      // не зануляем молча.
-      calculatedQty = (line.totalQty ?? line.qtyPerUnit.mul(totalOrderQty))
-        .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
-    } else if (needsPurchaseConversion(line.normUnit, line.unit)) {
+    // ПОРЯДОК ВЕТОК ВАЖЕН. Расщеплённая строка (норма в одной единице,
+    // закупка в другой) идёт по пересчёту ВНЕ ЗАВИСИМОСТИ от источника.
+    // Раньше проверка источника стояла первой, и для снимка пересчёт был
+    // недостижим: `totalQty` брался как есть, а подписывался закупочной
+    // единицей. Беда в том, что при неудачном пересчёте (нет ширины рулона
+    // или плотности) `OrdersService.computeLineTotalQty` кладёт в `totalQty`
+    // ДЛИНУ (`res.totalNorm`), — и потребность показывала «600 кг» там, где
+    // это 600 метров, то есть втрое завышала закупку и молча расходилась с
+    // экраном спецификации, который честно пишет «не пересчитано».
+    if (needsPurchaseConversion(line.normUnit, line.unit)) {
       // Строка развела норму и закупку: `qtyPerUnit` в погонных метрах, а
       // потребность обязана выйти в закупочной единице. Считаем той же
       // формулой, что и спецификация (`computeNormPurchase` в shared), —
@@ -2188,6 +2190,13 @@ export class WorkshopNeedsService {
         conversionNote = converted.message;
         warnings.push(`«${line.name}»: ${converted.message}`);
       }
+    } else if (line.source === 'ORDER_MATERIAL_REQUIREMENT') {
+      // Нерасщеплённая строка снимка: `totalQty` посчитан в момент start()
+      // (в БД NOT NULL, так что ветка `??` сегодня недостижима). Defensive
+      // (M3): если инвариант когда-нибудь сломается, пересчитываем
+      // qtyPerUnit×N, как live-ветка ниже, а не зануляем молча.
+      calculatedQty = (line.totalQty ?? line.qtyPerUnit.mul(totalOrderQty))
+        .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
     } else {
       // Live техкарта: qtyPerUnit × Σ qtyPlan.
       calculatedQty = line.qtyPerUnit

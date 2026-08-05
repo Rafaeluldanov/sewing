@@ -5183,11 +5183,37 @@ export class OrdersService {
           }));
     const effectiveGroups = groups.filter((g) => g.techCardId && g.qty > 0);
 
-    // Ни одной группы с техкартой → снимок стираем (консистентность с
-    // отсутствием привязки, как раньше при `!order.techCardId`).
+    // Ключ группы: order-level (`null`) и расцветка сводятся к одной строке.
+    // Объявлен ЗДЕСЬ, а не ниже у карт preserve-а: им пользуются ветки
+    // удаления сразу за этой строкой, а `const` в temporal dead zone упал бы
+    // в рантайме — tsc такой промах внутри колбэка `.map` не ловит.
+    const vk = (variantId: string | null) => variantId ?? '';
+
+    // Группа СУЩЕСТВУЕТ (расцветка есть) — даже если шаблонных строк она не
+    // даёт: техкарта не выбрана или тираж ещё не проставлен. Отличать это от
+    // «группы больше нет» обязательно: ручные строки живут в существующей
+    // группе, а вместе с удалённой расцветкой уходят.
+    //
+    // Раньше живыми считались только `effectiveGroups`, и заказ без техкарты
+    // (пустое состояние спецификации прямо предлагает «добавьте материалы
+    // вручную») или расцветка с нулевым тиражом уносили только что заведённые
+    // ручные строки: ответ 200, а введённое исчезало без следа — до 20 строк
+    // за раз с приходом пачки.
+    const existingGroupKeys = new Set(groups.map((g) => vk(g.variantId)));
+
+    // Ни одной группы с техкартой → шаблонных строк в снимке быть не может.
+    // Ручные строки существующих групп при этом остаются: их шаблон не сеял,
+    // значит и снести их пересборка не вправе.
     if (effectiveGroups.length === 0) {
-      if (existing.length > 0) {
-        await tx.orderMaterialRequirement.deleteMany({ where: { orderId } });
+      const orphanIds = existing
+        .filter(
+          (r) => !r.isManual || !existingGroupKeys.has(vk(r.orderVariantId)),
+        )
+        .map((r) => r.id);
+      if (orphanIds.length > 0) {
+        await tx.orderMaterialRequirement.deleteMany({
+          where: { id: { in: orphanIds } },
+        });
       }
       return;
     }
@@ -5198,7 +5224,6 @@ export class OrdersService {
     // Так введённый менеджером цвет на молнии СЕРОЙ расцветки не
     // переезжает на РОЗОВУЮ. Композитный ключ спасает кейс «строка
     // шаблона удалена и создана заново с теми же атрибутами».
-    const vk = (variantId: string | null) => variantId ?? '';
     const prevBySourceId = new Map<string, string>();
     const prevByCompositeKey = new Map<string, string>();
     // Те же два ключа — для ad-hoc привязок параметров, заведённых в заказе.
@@ -5599,7 +5624,9 @@ export class OrdersService {
     // при смене техкарты и при «Обновить из шаблона»: шаблон о них не знает,
     // значит и заменить их собой не может. Исчезла сама группа (удалили
     // расцветку) — уходят вместе с ней, оставлять их сиротами нельзя.
-    const liveGroupKeys = new Set(effectiveGroups.map((g) => vk(g.variantId)));
+    // Живая группа = существующая, а НЕ «дающая шаблонные строки»: иначе
+    // снятая техкарта или обнулённый тираж уносили бы ручные строки.
+    const liveGroupKeys = existingGroupKeys;
     const recomputeKeys = new Set(groupsToRecompute.map((g) => vk(g.variantId)));
     const idsToDelete = existing
       .filter((r) => {
