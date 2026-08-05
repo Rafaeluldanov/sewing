@@ -1,0 +1,1001 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Добавление материалов в расцветке: пачка строк по столбцам, параметры — после</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css.
+     Палитра правится сначала в globals.css, потом копируется сюда. */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --shadow-lg:0 18px 48px rgba(20,20,20,.18);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+    /* высота контролов окна спецификации — из colorway-spec.tsx (--cws-h/--cws-r) */
+    --cws-h:32px; --cws-r:8px;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 80px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1240px; margin:0 auto; padding:0 20px; }
+
+  .topnav{ position:sticky; top:0; z-index:40; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1240px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:700; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; text-wrap:balance; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:88ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:1.25rem; margin:0 0 .3rem; text-wrap:balance; }
+  .sect > h2 small{ font-weight:400; color:var(--color-fg-muted); font-size:.78rem; font-family:ui-monospace,Menlo,monospace; margin-left:.5rem; }
+  .sect > p{ margin:0 0 1.1rem; color:var(--color-fg-muted); max-width:88ch; }
+  .sect > p b{ color:var(--color-fg); }
+
+  .shots{ display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start; }
+  .shot{ flex:1 1 460px; min-width:340px; }
+  .shot--wide{ flex:1 1 100%; min-width:0; }
+  .shot__cap{ font-size:.85rem; font-weight:700; margin:0 0 .5rem; display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; }
+  .shot__cap small{ font-weight:400; color:var(--color-fg-muted); }
+  .tag{ display:inline-flex; align-items:center; padding:1px 8px; border-radius:var(--radius-pill); font-size:.72rem; font-weight:700; }
+  .tag--bad{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+  .tag--good{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .tag--new{ background:var(--btn-primary-bg); color:var(--btn-primary-fg); border:1px solid var(--btn-primary-edge); }
+  .tag--info{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+
+  /* карточка расцветки — блок «Расцветки» в заказе (спецификация раскрыта инлайн) */
+  .card{ background:var(--color-bg-card); border:1px solid var(--color-border); border-radius:var(--radius-lg); box-shadow:var(--shadow-sm); overflow:hidden; }
+  .card__head{ display:flex; align-items:center; gap:.5rem; padding:.7rem .85rem; border-bottom:1px solid var(--color-border); flex-wrap:wrap; }
+  .card__title{ font-size:var(--title-item); font-weight:700; margin:0; display:flex; align-items:center; gap:.4rem; }
+  .card__body{ padding:.85rem; display:flex; flex-direction:column; gap:.7rem; align-items:flex-start; }
+  .card__body > *{ width:100%; }
+  .card__body > .btn{ width:auto; }
+  .swatch{ width:14px; height:14px; border-radius:4px; border:1px solid var(--color-border-strong); display:inline-block; }
+  .cws-tpl{ margin:0; font-size:.8rem; color:var(--color-fg-muted); }
+  .cws-tpl b{ color:var(--color-fg-strong); }
+
+  /* ---- таблица спецификации (.cws-table 1:1) ---- */
+  .spec{ border:1px solid var(--color-border); border-radius:10px; overflow-x:auto; }
+  table.t{ width:100%; border-collapse:collapse; font-size:13px; }
+  table.t th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted);
+    font-weight:700; padding:7px 10px; border-bottom:1px solid var(--color-border); background:var(--color-bg-muted); white-space:nowrap; }
+  table.t th.num, table.t td.num{ text-align:right; white-space:nowrap; }
+  table.t td{ padding:6px 10px; border-bottom:1px solid var(--color-border); vertical-align:middle; }
+  table.t tbody tr:last-child td{ border-bottom:0; }
+  th.grp{ text-align:center; font-size:10px; border-bottom:0; padding-bottom:3px; }
+  th.grp--norm{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  th.grp--buy{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  td.zone--buy, th.zone--buy{ background:rgba(217,232,251,.34); }
+  .arrow{ color:var(--color-accent-fg); font-weight:700; }
+  .total{ font-variant-numeric:tabular-nums; color:var(--color-fg-strong); font-weight:600; }
+
+  /* контролы — копии .cws-cell / .cws-caret / .cws-chip */
+  .cell{ display:inline-flex; align-items:center; width:100%; min-width:70px; height:var(--cws-h); padding:0 8px;
+    border:1px solid var(--color-border-strong); border-radius:var(--cws-r); background:#fff; font-size:13px; }
+  .cell--name{ min-width:150px; font-weight:700; }
+  .cell--num{ min-width:76px; max-width:96px; justify-content:flex-end; font-variant-numeric:tabular-nums; }
+  .cell--sm{ min-width:64px; max-width:110px; width:auto; padding:0 6px; font-size:12.5px; }
+  .cell--ph{ color:var(--color-fg-subtle); font-weight:400; }
+  .cell--focus{ border-color:var(--color-accent); box-shadow:0 0 0 3px var(--color-accent-soft); }
+  .cell--bad{ border-color:var(--color-danger); box-shadow:0 0 0 3px var(--color-danger-soft); }
+  .cell--select::after{ content:'⌄'; margin-left:auto; padding-left:6px; color:var(--color-fg-subtle); }
+  .caret{ flex:none; width:24px; height:var(--cws-h); display:inline-flex; align-items:center; justify-content:center;
+    border:1px solid var(--color-border-strong); border-radius:7px; background:#fff; color:var(--color-fg-muted); font-size:12px; }
+  .caret.is-open{ background:var(--color-bg-tint); border-color:var(--color-accent); color:var(--color-fg-strong); }
+  /* распорка вместо каретки: 24px + gap 6px, иначе поле имени уедет влево на 30px */
+  .caret--ghost{ border-color:transparent; background:transparent; color:transparent; }
+  .nameline{ display:flex; align-items:center; gap:6px; }
+  .flags{ display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:5px; padding-left:30px; }
+  .pill{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; padding:2px 7px;
+    border-radius:var(--radius-pill); background:var(--color-bg-tint); color:var(--color-fg-strong); }
+  .pill--ok{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .chips{ display:flex; flex-wrap:wrap; gap:4px; align-items:center; max-width:270px; }
+  .chip{ display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:var(--radius-pill);
+    background:var(--color-bg-muted); color:var(--color-fg); font-size:11.5px; }
+  .chip--subtype{ font-weight:700; }
+  .chip--slot{ background:var(--color-accent-soft); color:var(--color-accent-fg); font-weight:700; }
+  .chip--empty{ background:#fff; border:1px dashed var(--color-border-strong); color:var(--color-fg-subtle); }
+  /* «параметры ещё не заданы» — приглашение, не ошибка: пунктир акцентом */
+  .chip--todo{ background:#fff; border:1px dashed var(--color-accent); color:var(--color-accent-fg); font-weight:700; }
+  .qty{ display:inline-flex; align-items:center; gap:6px; justify-content:flex-end; }
+  .src{ flex:none; display:inline-flex; align-items:center; justify-content:center; width:19px; height:19px;
+    border-radius:var(--radius-pill); font-size:11px; font-weight:800; }
+  .src--n{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .src--t{ background:var(--color-bg-muted); color:var(--color-fg-muted); }
+  .src--z{ background:var(--color-bg-tint); color:var(--color-warn-fg); }
+  .x{ color:var(--color-fg-subtle); font-size:17px; line-height:1; padding:4px 6px; }
+
+  .btn{ display:inline-flex; align-items:center; justify-content:center; height:var(--cws-h); padding:0 12px;
+    border:1px solid var(--color-border-strong); border-radius:var(--cws-r); background:#fff; color:var(--color-fg-muted);
+    font-size:13px; font-weight:700; white-space:nowrap; cursor:default; }
+  .btn--dash{ border-style:dashed; }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .btn--off{ opacity:.55; }
+  .btn--sm{ height:26px; padding:0 9px; font-size:12px; }
+  .btn--accent{ border-color:var(--color-accent); color:var(--color-accent-fg); }
+  .linkbtn{ font-size:12px; font-weight:700; color:var(--color-accent-fg); }
+  .muted{ font-size:12.5px; color:var(--color-fg-muted); }
+
+  /* «куча»: текущая форма */
+  .form{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px;
+    border:1px dashed var(--color-border-strong); border-radius:10px; }
+  .form .cell{ width:auto; }
+
+  /* черновые строки пачки */
+  tr.draft td{ background:var(--color-bg-tint); }
+  tr.draft td:first-child{ box-shadow:inset 3px 0 0 var(--btn-primary-edge); }
+  tr.draft--empty td{ background:color-mix(in srgb, var(--color-bg-tint) 45%, #fff); }
+  tr.batch-foot td{ background:var(--color-bg-tint); padding-top:2px; box-shadow:inset 3px 0 0 var(--btn-primary-edge); }
+  .batch-foot__in{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .batch-foot__hint{ font-size:12px; color:var(--color-fg-muted); }
+  .batch-foot__hint b{ color:var(--color-fg-strong); }
+  .batch-foot__sp{ margin-left:auto; display:flex; gap:8px; align-items:center; }
+  tr.exp td{ background:var(--color-bg-muted); }
+  /* строка, сохранённая только что: параметры ещё не заданы */
+  tr.fresh td:first-child{ box-shadow:inset 3px 0 0 var(--color-accent); }
+  tr.focusrow td{ background:var(--color-accent-soft); }
+
+  .panel{ display:flex; flex-direction:column; gap:10px; padding:10px; border:1px solid var(--color-border-strong);
+    border-radius:10px; background:#fff; }
+  .panel__head{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .panel__nav{ margin-left:auto; display:flex; gap:8px; align-items:center; }
+  .grouplabel{ font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--color-fg-muted); }
+  .fields{ display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:8px; }
+  .field{ display:flex; flex-direction:column; gap:3px; }
+  .field > span{ font-size:10.5px; font-weight:700; color:var(--color-fg-muted); }
+
+  /* баннер «параметры не заданы» */
+  .banner{ display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; padding:.6rem .8rem; border-radius:var(--radius-md);
+    border:1px solid var(--color-border); border-left:3px solid var(--color-accent); background:var(--color-accent-soft);
+    color:var(--color-fg); font-size:.86rem; }
+  .banner--ok{ border-left-color:var(--color-ok); background:var(--color-ok-soft); }
+  .banner b{ color:var(--color-fg-strong); }
+  .banner .btn{ margin-left:auto; }
+
+  /* клавиши */
+  .kbd{ display:inline-flex; align-items:center; padding:1px 7px; border:1px solid var(--color-border-strong);
+    border-bottom-width:2px; border-radius:6px; background:#fff; font-size:.78rem; font-weight:700;
+    font-family:ui-monospace,Menlo,monospace; }
+  .keys{ display:flex; flex-direction:column; gap:.45rem; margin:0; padding:0; list-style:none; }
+  .keys li{ display:flex; gap:.6rem; align-items:baseline; font-size:.88rem; color:var(--color-fg-muted); }
+  .keys li b{ color:var(--color-fg); }
+  .keys li > span:first-child{ flex:none; width:150px; text-align:right; }
+
+  /* аннотации */
+  .ann{ margin:.7rem 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:.35rem; }
+  .ann li{ display:flex; gap:.5rem; align-items:flex-start; font-size:.86rem; color:var(--color-fg-muted); }
+  .ann b{ color:var(--color-fg); }
+  .n{ flex:none; display:inline-flex; align-items:center; justify-content:center; width:19px; height:19px; margin-top:1px;
+    border-radius:var(--radius-pill); background:var(--color-fg-strong); color:#fff; font-size:11px; font-weight:800; }
+  .n--bad{ background:var(--color-danger); }
+  .n--good{ background:var(--color-ok); }
+  .marker{ display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px; margin-left:6px;
+    border-radius:var(--radius-pill); background:var(--color-danger); color:#fff; font-size:10.5px; font-weight:800; vertical-align:middle; }
+
+  .note{ margin:1rem 0 0; padding:.75rem .9rem; border:1px solid var(--color-border); border-left:3px solid var(--color-accent);
+    border-radius:var(--radius-md); background:#fff; font-size:.88rem; }
+  .note--warn{ border-left-color:var(--btn-primary-edge); background:#fffdf5; }
+  .note--bad{ border-left-color:var(--color-danger); background:#fffafa; }
+  .note b{ display:block; margin-bottom:.2rem; }
+  code{ font-family:ui-monospace,Menlo,monospace; font-size:.82em; background:var(--color-bg-muted); padding:1px 5px; border-radius:5px; }
+
+  table.files{ width:100%; border-collapse:collapse; font-size:.86rem; background:#fff; border:1px solid var(--color-border);
+    border-radius:var(--radius-md); overflow:hidden; }
+  table.files th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted);
+    font-weight:700; padding:8px 10px; background:var(--color-bg-muted); border-bottom:1px solid var(--color-border); }
+  table.files td{ padding:8px 10px; border-bottom:1px solid var(--color-border); vertical-align:top; }
+  table.files tr:last-child td{ border-bottom:0; }
+  table.files code{ white-space:nowrap; }
+
+  .qs{ display:flex; flex-direction:column; gap:.6rem; }
+  .q{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .q b{ display:block; margin-bottom:.25rem; }
+  .q span{ color:var(--color-fg-muted); }
+</style>
+</head>
+<body>
+
+<nav class="topnav"><div class="topnav__in">
+  <span class="topnav__brand">Макет · материалы в расцветке</span>
+  <a href="#now">1. Как сейчас</a>
+  <a href="#batch">2. Пачка строк</a>
+  <a href="#keys">3. С клавиатуры</a>
+  <a href="#after">4. Параметры — после</a>
+  <a href="#split">5. Единицы закупки</a>
+  <a href="#valid">6. Готово / не готово</a>
+  <a href="#header">7. Шапка «Закупка»</a>
+  <a href="#files">8. Что правим</a>
+  <a href="#open">9. Что решить</a>
+</div></nav>
+
+<div class="doc">
+
+<section class="intro">
+  <h1>Материалы заводятся пачкой прямо в таблице, а параметры дозаполняются после</h1>
+  <p>
+    Спецификация расцветки показывает материалы <b>таблицей с колонками</b>: Материал · Параметры · Норма/шт · Ед. · Цвет · Итого.
+    А заводится материал <b>отдельной формой под таблицей</b> — четыре поля подряд во flex-коробке, по одному материалу за раз.
+    Отсюда две жалобы: параметры «забиваются в одну кучу» (форма не знает про колонки) и десять материалов приходится
+    заводить десятью заходами.
+  </p>
+  <p>
+    Предложение: «+ Добавить материал» вставляет <b>черновую строку прямо в таблицу</b>, а нажатие ещё раз — вторую, третью.
+    Пачка заполняется и сохраняется <b>одним действием</b>. Характеристики (плотность, ширина рулона, состав) в момент
+    заведения <b>не требуются</b> — после сохранения строки помечены «параметры не заданы», и по ним можно пройти
+    подряд, не выискивая глазами.
+  </p>
+  <div class="principles">
+    <div class="principle"><b>Одна геометрия</b><span>Поле стоит в своей колонке: «Норма/шт» под «Норма/шт», «Ед.» под «Ед.». Сопоставлять глазами нечего.</span></div>
+    <div class="principle"><b>Пачкой, а не по одному</b><span>Сколько материалов надо — столько черновых строк. Сохранение одно, пересборка снимка одна.</span></div>
+    <div class="principle"><b>Быстрое поле важнее полного</b><span>Заведение требует три вещи: название, норму, единицу. Всё остальное — потом.</span></div>
+    <div class="principle"><b>Долг виден</b><span>Строка без характеристик носит пунктирный чип «задать», и по таким строкам есть проход «дальше».</span></div>
+  </div>
+</section>
+
+<!-- ================================= 1. КАК СЕЙЧАС ================================= -->
+<section class="sect" id="now">
+  <h2>1. Как сейчас <small>colorway-spec.tsx:605-681</small></h2>
+  <p>
+    Таблица наверху, форма внизу. У формы <b>своя</b> раскладка (<code>display:flex; flex-wrap:wrap</code>): поля идут подряд
+    и переносятся по ширине окна. Подписей нет — только плейсхолдеры, которые исчезают при первом же символе.
+    Сохранение закрывает форму, и следующий материал начинается заново.
+  </p>
+
+  <div class="shots"><div class="shot shot--wide">
+    <p class="shot__cap"><span class="tag tag--bad">сейчас</span> «Кулирка 190 · чёрный» — материалы и форма добавления</p>
+    <div class="card">
+      <div class="card__head">
+        <span class="swatch" style="background:#1b1b1b"></span>
+        <h3 class="card__title">Чёрный</h3>
+        <span class="muted">· 500 шт</span>
+      </div>
+      <div class="card__body">
+        <p class="cws-tpl">Из шаблона: <b>TK-KULIRKA-OS</b> — дальше список живёт в заказе, правки шаблона сюда не протекают.</p>
+
+        <div class="spec">
+          <table class="t">
+            <thead>
+              <tr>
+                <th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th>
+                <th class="num">Итого</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Кулирка</span></div></td>
+                <td><span class="chips"><span class="chip chip--subtype">Кулирка</span><span class="chip">Плотность <b>190</b> г/м²</span></span></td>
+                <td class="num"><span class="qty"><span class="cell cell--num">0,34</span><span class="src src--n">Н</span></span></td>
+                <td><span class="cell cell--sm">кг</span></td>
+                <td><span class="cell">чёрный</span></td>
+                <td class="num total">170 кг</td>
+                <td class="num"><span class="x">×</span></td>
+              </tr>
+              <tr>
+                <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Нить 40/2</span></div></td>
+                <td><span class="chips"><span class="chip chip--subtype">Нить</span></span></td>
+                <td class="num"><span class="qty"><span class="cell cell--num">0,02</span><span class="src src--t">Ш</span></span></td>
+                <td><span class="cell cell--sm">боб.</span></td>
+                <td><span class="cell cell--ph">—</span></td>
+                <td class="num total">10 боб.</td>
+                <td class="num"><span class="x">×</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="form">
+          <span class="cell cell--ph" style="min-width:210px">Название (Лента усилительная)<span class="marker">1</span></span>
+          <span class="cell cell--ph" style="min-width:140px">Норма/шт (0.9)<span class="marker">2</span></span>
+          <span class="cell cell--ph" style="min-width:96px">Ед. (м)<span class="marker">3</span></span>
+          <span class="cell cell--ph" style="min-width:180px">Цвет (необязательно)<span class="marker">4</span></span>
+          <span class="btn btn--primary">Добавить</span>
+          <span class="btn">Отмена</span>
+        </div>
+
+        <ul class="ann">
+          <li><span class="n n--bad">1</span><span><b>Поля не под своими колонками.</b> «Название» слева, «Норма/шт» вторым — хотя в таблице она третья: между ними колонка «Параметры».</span></li>
+          <li><span class="n n--bad">2</span><span><b>Число вводится как текст.</b> В таблице норма прижата вправо и моноширинная, в форме — обычное поле слева.</span></li>
+          <li><span class="n n--bad">3</span><span><b>«Ед.» одна и без подписи.</b> Форма шлёт <code>unit</code> — это единица <b>закупки</b>, в ней же считается <code>totalQty</code>. Плейсхолдер «Ед. (м)» об этом не говорит; <code>normUnit</code> форма не шлёт вовсе.</span></li>
+          <li><span class="n n--bad">4</span><span><b>Колонки «Параметры» в форме нет.</b> Строка создаётся с <code>subtypeKey=null</code>, <code>characteristics=null</code> — характеристики можно задать только вторым заходом, найдя строку и раскрыв каретку.</span></li>
+          <li><span class="n n--bad">5</span><span><b>Один материал за заход.</b> Сохранил — форма закрылась. Десять материалов = десять циклов «открыть → заполнить → сохранить», и десять пересборок снимка на бэке.</span></li>
+        </ul>
+
+        <div class="note note--bad">
+          <b>Итог</b>
+          Форма и таблица — два разных представления одной сущности. Заполняешь в одном, проверяешь в другом,
+          половину полей в первом не находишь, и повторяешь это столько раз, сколько материалов надо завести.
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================= 2. ПАЧКА СТРОК ================================= -->
+<section class="sect" id="batch">
+  <h2>2. Стало: пачка черновых строк в таблице</h2>
+  <p>
+    «+ Добавить материал» дописывает строку в конец таблицы. Нажал ещё раз — вторую. Ячейки те же самые:
+    имя с распоркой под каретку, чипы параметров, норма справа, единица, цвет, итог.
+    <b>Подвал у пачки один</b>: сколько строк готово, что мешает остальным, и одна жёлтая кнопка.
+  </p>
+
+  <div class="shots"><div class="shot shot--wide">
+    <p class="shot__cap"><span class="tag tag--good">стало</span><span class="tag tag--new">три черновика</span> заводим фурнитуру на всю расцветку</p>
+    <div class="card">
+      <div class="card__head">
+        <span class="swatch" style="background:#1b1b1b"></span>
+        <h3 class="card__title">Чёрный</h3>
+        <span class="muted">· 500 шт</span>
+      </div>
+      <div class="card__body">
+        <div class="spec">
+          <table class="t">
+            <thead>
+              <tr>
+                <th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th>
+                <th class="num">Итого</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Кулирка</span></div></td>
+                <td><span class="chips"><span class="chip chip--subtype">Кулирка</span><span class="chip">Плотность <b>190</b> г/м²</span></span></td>
+                <td class="num"><span class="qty"><span class="cell cell--num">0,34</span><span class="src src--n">Н</span></span></td>
+                <td><span class="cell cell--sm">кг</span></td>
+                <td><span class="cell">чёрный</span></td>
+                <td class="num total">170 кг</td>
+                <td class="num"><span class="x">×</span></td>
+              </tr>
+
+              <tr class="draft">
+                <td>
+                  <div class="nameline"><span class="caret caret--ghost">›</span><span class="cell cell--name">Лента усилительная</span></div>
+                  <span class="flags"><span class="pill">новая строка</span></span>
+                </td>
+                <td><span class="chips"><span class="chip chip--empty">потом</span></span></td>
+                <td class="num"><span class="qty"><span class="cell cell--num">0,9</span><span class="src src--z">З</span></span></td>
+                <td><span class="cell cell--sm">м</span></td>
+                <td><span class="cell cell--ph">—</span></td>
+                <td class="num muted">450 м</td>
+                <td class="num"><span class="x">×</span></td>
+              </tr>
+              <tr class="draft">
+                <td>
+                  <div class="nameline"><span class="caret caret--ghost">›</span><span class="cell cell--name">Резинка 20 мм</span></div>
+                  <span class="flags"><span class="pill">новая строка</span></span>
+                </td>
+                <td><span class="chips"><span class="chip chip--empty">потом</span></span></td>
+                <td class="num"><span class="qty"><span class="cell cell--num">0,55</span><span class="src src--z">З</span></span></td>
+                <td><span class="cell cell--sm">м</span></td>
+                <td><span class="cell">чёрный</span></td>
+                <td class="num muted">275 м</td>
+                <td class="num"><span class="x">×</span></td>
+              </tr>
+              <tr class="draft draft--empty">
+                <td>
+                  <div class="nameline"><span class="caret caret--ghost">›</span><span class="cell cell--name cell--focus cell--ph">Название материала</span></div>
+                </td>
+                <td><span class="chips"><span class="chip chip--empty">потом</span></span></td>
+                <td class="num"><span class="qty"><span class="cell cell--num cell--ph">0</span></span></td>
+                <td><span class="cell cell--sm cell--ph">ед.</span></td>
+                <td><span class="cell cell--ph">—</span></td>
+                <td class="num muted">—</td>
+                <td class="num"><span class="x">×</span></td>
+              </tr>
+
+              <tr class="batch-foot">
+                <td colspan="7">
+                  <div class="batch-foot__in">
+                    <span class="btn btn--sm btn--dash">+ ещё строка</span>
+                    <span class="batch-foot__hint">Готово <b>2 из 3</b>. Обязательны название, норма и единица — параметры зададите после.</span>
+                    <span class="batch-foot__sp">
+                      <span class="btn btn--sm">Отмена</span>
+                      <span class="btn btn--sm btn--primary">Добавить 2 материала</span>
+                    </span>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <span class="btn btn--dash">+ Добавить материал</span>
+
+        <ul class="ann">
+          <li><span class="n n--good">1</span><span><b>Строк столько, сколько нужно.</b> «+ ещё строка» в подвале и «+ Добавить материал» под таблицей делают одно и то же — дописывают пустой черновик.</span></li>
+          <li><span class="n n--good">2</span><span><b>Кнопка называет число:</b> «Добавить 2 материала». Незаполненная третья строка не блокирует пачку — она просто не считается готовой и останется черновиком.</span></li>
+          <li><span class="n n--good">3</span><span><b>Колонка «Параметры» — чип «потом».</b> Не «+ параметр» с восклицанием: характеристики необязательны, и заведение из-за них не тормозится. Задать сразу тоже можно — клик по чипу раскроет панель.</span></li>
+          <li><span class="n n--good">4</span><span><b>Норма сразу с бейджем</b> <span class="src src--z" style="width:16px;height:16px;font-size:10px">З</span>: сервис жёстко ставит ручной строке <code>qtySource='ORDER'</code>, и «Обновить нормы из номенклатуры» её не трогает. Это видно до сохранения, а не выясняется потом.</span></li>
+          <li><span class="n n--good">5</span><span><b>«Итого» считается на лету</b> (норма × 500 шт): ошибка в норме видна до сохранения. У пустой строки — прочерк.</span></li>
+          <li><span class="n n--good">6</span><span><b>«×» снимает одну строку</b> из пачки, «Отмена» — всю пачку. Колонка действий остаётся ровно тем же «×», что и у сохранённых строк.</span></li>
+        </ul>
+
+        <div class="note note--warn">
+          <b>Почему одно сохранение, а не N подряд</b>
+          <code>createManualLine</code> в конце вызывает <code>resyncTechCardDerived</code> (order-tech-card.service.ts:692):
+          пересобирается снимок материалов, план операций, потребности цеха. Десять материалов десятью запросами —
+          это десять пересборок и десять шансов упасть на середине. Пачке нужна одна ручка (<code>POST …/lines/bulk</code>)
+          с одной транзакцией и одним resync.
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================= 3. С КЛАВИАТУРЫ ================================= -->
+<section class="sect" id="keys">
+  <h2>3. Пачка набирается с клавиатуры</h2>
+  <p>
+    Заведение десяти позиций — это набор, а не редактирование. Мышь нужна только чтобы начать.
+    Раскладка «строка в таблице» это позволяет, форма-коробка — нет.
+  </p>
+
+  <div class="shots">
+    <div class="shot">
+      <p class="shot__cap"><span class="tag tag--new">поведение</span> клавиши</p>
+      <div class="card"><div class="card__body">
+        <ul class="keys">
+          <li><span><span class="kbd">Tab</span></span><span>следующая ячейка строки: <b>Название → Норма → Ед. → Цвет</b></span></li>
+          <li><span><span class="kbd">Enter</span></span><span>в последней ячейке — <b>новая черновая строка</b> и курсор в её название</span></li>
+          <li><span><span class="kbd">Ctrl</span> <span class="kbd">Enter</span></span><span>сохранить пачку (то же, что жёлтая кнопка)</span></li>
+          <li><span><span class="kbd">Esc</span></span><span>убрать текущую строку, если она пустая; иначе — снять фокус</span></li>
+          <li><span>вставка</span><span>несколько строк из буфера (столбцы через <span class="kbd">Tab</span>) раскладываются по ячейкам — по строке на материал</span></li>
+        </ul>
+        <div class="note">
+          <b>Зачем вставка из буфера</b>
+          Список фурнитуры приходит менеджеру таблицей в почте. Сейчас его перебивают по одному полю;
+          построчная вставка превращает это в один <span class="kbd">Ctrl</span>&nbsp;<span class="kbd">V</span>.
+          Это отдельная задача — в первую итерацию можно не брать, но раскладка «строка в таблице» её не запрещает,
+          а форма-коробка запрещала.
+        </div>
+      </div></div>
+    </div>
+
+    <div class="shot">
+      <p class="shot__cap"><span class="tag tag--info">почему так</span> ширины колонок не повторить снаружи</p>
+      <div class="card"><div class="card__body">
+        <p class="muted" style="margin:0">
+          У таблицы спецификации <code>auto</code>-раскладка: ширины колонок определяет содержимое.
+          Форма под таблицей физически не может встать «по столбцам» — она не знает их ширин
+          и разъедется на первом же длинном названии материала.
+        </p>
+        <p class="muted" style="margin:.6rem 0 0">
+          Единственный способ выровнять ввод по колонкам — <b>сделать его строкой той же таблицы</b>.
+          Это не «стилевая» правка, а причина, по которой раскладка переносится внутрь <code>&lt;tbody&gt;</code>.
+        </p>
+        <div class="note">
+          <b>Деталь выравнивания</b>
+          В первой колонке поле имени сдвинуто кареткой: <code>.cws-nameline</code> = flex, gap 6px,
+          каретка 24px. У черновика каретки нет, поэтому нужна распорка тех же 30px —
+          иначе имя черновика уедет левее имён сохранённых строк.
+        </div>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================= 4. ПАРАМЕТРЫ ПОСЛЕ ================================= -->
+<section class="sect" id="after">
+  <h2>4. Сохранили — параметры дозаполняем подряд</h2>
+  <p>
+    После сохранения пачки строки уже настоящие: норма посчитана, снимок пересобран.
+    У новых строк не заданы характеристики — это <b>не ошибка</b>, а долг: он показан баннером и пунктирным чипом,
+    и по нему есть проход, чтобы не выискивать строки глазами.
+  </p>
+
+  <div class="shots"><div class="shot shot--wide">
+    <p class="shot__cap"><span class="tag tag--good">стало</span> сразу после «Добавить 2 материала»</p>
+    <div class="card"><div class="card__body">
+      <div class="banner">
+        <span>Добавлено <b>2 материала</b>. У обоих не заданы параметры — плотность, ширина, состав.</span>
+        <span class="btn btn--sm btn--accent">Заполнить параметры →</span>
+      </div>
+
+      <div class="spec">
+        <table class="t">
+          <thead>
+            <tr>
+              <th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th>
+              <th class="num">Итого</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Кулирка</span></div></td>
+              <td><span class="chips"><span class="chip chip--subtype">Кулирка</span><span class="chip">Плотность <b>190</b> г/м²</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num">0,34</span><span class="src src--n">Н</span></span></td>
+              <td><span class="cell cell--sm">кг</span></td>
+              <td><span class="cell">чёрный</span></td>
+              <td class="num total">170 кг</td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+            <tr class="fresh">
+              <td>
+                <div class="nameline"><span class="caret">›</span><span class="cell cell--name">Лента усилительная</span></div>
+                <span class="flags"><span class="pill">добавлена в заказе</span></span>
+              </td>
+              <td><span class="chips"><span class="chip chip--todo">задать параметры</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num">0,9</span><span class="src src--z">З</span></span></td>
+              <td><span class="cell cell--sm">м</span></td>
+              <td><span class="cell cell--ph">—</span></td>
+              <td class="num total">450 м</td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+            <tr class="fresh">
+              <td>
+                <div class="nameline"><span class="caret">›</span><span class="cell cell--name">Резинка 20 мм</span></div>
+                <span class="flags"><span class="pill">добавлена в заказе</span></span>
+              </td>
+              <td><span class="chips"><span class="chip chip--todo">задать параметры</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num">0,55</span><span class="src src--z">З</span></span></td>
+              <td><span class="cell cell--sm">м</span></td>
+              <td><span class="cell">чёрный</span></td>
+              <td class="num total">275 м</td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ul class="ann">
+        <li><span class="n n--good">1</span><span><b>Баннер живёт, пока долг есть</b>, и не мешает работать: расчёт заказа он не блокирует — обязательность параметров в проекте снята ещё 16.07.</span></li>
+        <li><span class="n n--good">2</span><span><b>Чип «задать параметры» — пунктир акцентом,</b> а не красным: это приглашение, а не ошибка. Клик по нему = клик по каретке, открывается та же панель.</span></li>
+        <li><span class="n n--good">3</span><span><b>Синяя кромка слева</b> помечает строки этой пачки — видно, что добавлено только что, даже если строк в таблице тридцать.</span></li>
+      </ul>
+    </div></div>
+  </div></div>
+
+  <div class="shots" style="margin-top:1.4rem"><div class="shot shot--wide">
+    <p class="shot__cap"><span class="tag tag--good">стало</span><span class="tag tag--new">проход</span> «Заполнить параметры» — панель первой строки с навигацией</p>
+    <div class="card"><div class="card__body">
+      <div class="spec">
+        <table class="t">
+          <thead>
+            <tr>
+              <th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th>
+              <th class="num">Итого</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="fresh focusrow">
+              <td>
+                <div class="nameline"><span class="caret is-open">⌄</span><span class="cell cell--name">Лента усилительная</span></div>
+                <span class="flags"><span class="pill">добавлена в заказе</span></span>
+              </td>
+              <td><span class="chips"><span class="chip chip--subtype">Лента</span><span class="chip">Ширина <b>15</b> мм</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num">0,9</span><span class="src src--z">З</span></span></td>
+              <td><span class="cell cell--sm">м</span></td>
+              <td><span class="cell cell--ph">—</span></td>
+              <td class="num total">450 м</td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+            <tr class="exp">
+              <td colspan="7">
+                <div class="panel">
+                  <div class="panel__head">
+                    <span class="grouplabel">Параметры материала</span>
+                    <span class="chip">роль: TRIM</span>
+                    <span class="panel__nav">
+                      <span class="muted">материал 1 из 2</span>
+                      <span class="btn btn--sm">Пропустить</span>
+                      <span class="btn btn--sm btn--primary">Дальше →</span>
+                    </span>
+                  </div>
+                  <div class="fields">
+                    <label class="field"><span>Характеристика</span><span class="cell cell--select cell--focus">Лента</span></label>
+                    <label class="field"><span>Ширина, мм</span><span class="cell">15</span></label>
+                    <label class="field"><span>Состав</span><span class="cell cell--ph">—</span></label>
+                    <label class="field"><span>Плотность, г/м²</span><span class="cell cell--ph">—</span></label>
+                  </div>
+                </div>
+              </td>
+            </tr>
+            <tr class="fresh">
+              <td>
+                <div class="nameline"><span class="caret">›</span><span class="cell cell--name">Резинка 20 мм</span></div>
+                <span class="flags"><span class="pill">добавлена в заказе</span></span>
+              </td>
+              <td><span class="chips"><span class="chip chip--todo">задать параметры</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num">0,55</span><span class="src src--z">З</span></span></td>
+              <td><span class="cell cell--sm">м</span></td>
+              <td><span class="cell">чёрный</span></td>
+              <td class="num total">275 м</td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ul class="ann">
+        <li><span class="n n--good">1</span><span><b>Панель — существующая</b> <code>LineParams</code>: «Характеристика» задаёт набор полей ниже, значения уходят по <code>onBlur</code>, как и сейчас. Добавлена только навигация справа.</span></li>
+        <li><span class="n n--good">2</span><span><b>«Дальше →» закрывает эту строку и раскрывает следующую</b> из очереди долга — ту, у которой чип «задать параметры». «Пропустить» оставляет долг и идёт дальше.</span></li>
+        <li><span class="n n--good">3</span><span><b>Чипы наполняются на лету:</b> задал «Ширина 15» — чип появился в свёрнутой строке. Долг у строки снят, из очереди она выбыла.</span></li>
+        <li><span class="n n--good">4</span><span><b>Очередь — не модалка.</b> Таблица видна целиком, можно в любой момент уйти мышью в другую строку; проход просто перестанет вести.</span></li>
+      </ul>
+
+      <div class="note">
+        <b>Когда долг считается закрытым</b>
+        У строки есть «Характеристика» (<code>fabricType</code>) — этого достаточно, чтобы убрать чип: она задаёт набор
+        характеристик, а сами значения могут быть неизвестны (состав ленты никто не спрашивает).
+        Гейта на расчёт заказа из этого не делаем — иначе получим обязательные поля, которые сознательно убрали 16.07.
+      </div>
+    </div></div>
+  </div></div>
+</section>
+
+<!-- ================================= 5. ЕДИНИЦЫ ЗАКУПКИ ================================= -->
+<section class="sect" id="split">
+  <h2>5. Когда единица расхода ≠ единицы закупки <small>hasSplitLines</small></h2>
+  <p>
+    Если в группе есть строка с <code>normUnit</code>, таблица разворачивается в 10 колонок: расход слева (зелёная зона),
+    закупка справа (синяя). Черновики выравниваются и здесь — <b>две ячейки единиц вместо одной</b>.
+    Это единственное место, где видно, что <code>unit</code> — закупочная.
+  </p>
+
+  <div class="shots"><div class="shot shot--wide">
+    <p class="shot__cap"><span class="tag tag--good">стало</span> пачка в расщеплённой таблице</p>
+    <div class="card"><div class="card__body">
+      <div class="spec">
+        <table class="t">
+          <thead>
+            <tr>
+              <th colspan="2"></th>
+              <th class="grp grp--norm" colspan="4">Расход — единица техкарты</th>
+              <th></th>
+              <th class="grp grp--buy" colspan="2">Закупка</th>
+              <th></th>
+            </tr>
+            <tr>
+              <th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th>
+              <th class="num">Расход</th><th></th><th class="zone--buy">Ед.</th><th class="num zone--buy">К закупке</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Кулирка</span></div></td>
+              <td><span class="chips"><span class="chip chip--subtype">Кулирка</span><span class="chip chip--slot">Плотность <b>190</b></span><span class="chip">Ширина рулона <b>180</b> см</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num">1,72</span><span class="src src--n">Н</span></span></td>
+              <td><span class="cell cell--sm">м пог.</span></td>
+              <td><span class="cell">чёрный</span></td>
+              <td class="num total">860 м пог.</td>
+              <td class="num arrow">→</td>
+              <td class="zone--buy">кг</td>
+              <td class="num total zone--buy">294,1 кг</td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+
+            <tr class="draft">
+              <td>
+                <div class="nameline"><span class="caret caret--ghost">›</span><span class="cell cell--name">Лента усилительная</span></div>
+                <span class="flags"><span class="pill">новая строка</span></span>
+              </td>
+              <td><span class="chips"><span class="chip chip--empty">потом</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num">0,9</span><span class="src src--z">З</span></span></td>
+              <td><span class="cell cell--sm">м</span></td>
+              <td><span class="cell cell--ph">—</span></td>
+              <td class="num muted">450 м</td>
+              <td class="num arrow">→</td>
+              <td class="zone--buy"><span class="cell cell--sm cell--ph">= м</span></td>
+              <td class="num muted zone--buy">450 м</td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+            <tr class="draft">
+              <td>
+                <div class="nameline"><span class="caret caret--ghost">›</span><span class="cell cell--name">Флизелин</span></div>
+                <span class="flags"><span class="pill">новая строка</span></span>
+              </td>
+              <td><span class="chips"><span class="chip chip--empty">потом</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num">0,4</span><span class="src src--z">З</span></span></td>
+              <td><span class="cell cell--sm">м пог.</span></td>
+              <td><span class="cell cell--ph">—</span></td>
+              <td class="num muted">200 м пог.</td>
+              <td class="num arrow">→</td>
+              <td class="zone--buy"><span class="cell cell--sm">кг</span></td>
+              <td class="num muted zone--buy">— <span style="font-size:11px">нужна ширина</span></td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+
+            <tr class="batch-foot">
+              <td colspan="10">
+                <div class="batch-foot__in">
+                  <span class="btn btn--sm btn--dash">+ ещё строка</span>
+                  <span class="batch-foot__hint">Готово <b>2 из 2</b>. Пустая единица закупки = та же, что у расхода.</span>
+                  <span class="batch-foot__sp">
+                    <span class="btn btn--sm">Отмена</span>
+                    <span class="btn btn--sm btn--primary">Добавить 2 материала</span>
+                  </span>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ul class="ann">
+        <li><span class="n n--good">1</span><span><b>Две ячейки единиц.</b> Левая — единица нормы (<code>normUnit</code>), правая в синей зоне — закупочная (<code>unit</code>). Пустая правая = «та же самая», строка не расщепляется.</span></li>
+        <li><span class="n n--good">2</span><span><b>«К закупке» у флизелина — прочерк с причиной:</b> единицы разошлись (м пог. → кг), а ширины рулона и плотности ещё нет. Молчаливый ноль читался бы как «материал не нужен».</span></li>
+        <li><span class="n n--good">3</span><span><b>Это и есть повод дозаполнить параметры</b> — прочерк уйдёт, как только в панели появятся ширина и плотность. То есть долг по параметрам виден и деньгами, а не только чипом.</span></li>
+        <li><span class="n n--good">4</span><span><b>Правки закупочной единицы у сохранённой строки сейчас нет вовсе</b> — ячейка статичная. У черновика она есть; сделать её редактируемой и у сохранённой строки — отдельное решение (см. §9).</span></li>
+      </ul>
+    </div></div>
+  </div></div>
+</section>
+
+<!-- ================================= 6. ГОТОВО / НЕ ГОТОВО ================================= -->
+<section class="sect" id="valid">
+  <h2>6. Готово, не готово, ошибка сервера</h2>
+  <p>
+    Сейчас кнопка «Добавить» просто гаснет, и почему — не сказано. В пачке молчать нельзя:
+    строк несколько, и надо понимать, какая мешает.
+  </p>
+
+  <div class="shots"><div class="shot shot--wide">
+    <p class="shot__cap"><span class="tag tag--good">стало</span> вторая строка не готова — пачка сохранится без неё</p>
+    <div class="card"><div class="card__body">
+      <div class="spec">
+        <table class="t">
+          <thead>
+            <tr>
+              <th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th>
+              <th class="num">Итого</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="draft">
+              <td>
+                <div class="nameline"><span class="caret caret--ghost">›</span><span class="cell cell--name">Лента усилительная</span></div>
+                <span class="flags"><span class="pill pill--ok">готово</span></span>
+              </td>
+              <td><span class="chips"><span class="chip chip--empty">потом</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num">0,9</span><span class="src src--z">З</span></span></td>
+              <td><span class="cell cell--sm">м</span></td>
+              <td><span class="cell cell--ph">—</span></td>
+              <td class="num muted">450 м</td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+            <tr class="draft">
+              <td>
+                <div class="nameline"><span class="caret caret--ghost">›</span><span class="cell cell--name">Резинка 20 мм</span></div>
+                <span class="flags"><span class="muted" style="color:var(--color-danger-fg)">Норма расхода — положительное число. Укажите единицу измерения.</span></span>
+              </td>
+              <td><span class="chips"><span class="chip chip--empty">потом</span></span></td>
+              <td class="num"><span class="qty"><span class="cell cell--num cell--bad">0</span></span></td>
+              <td><span class="cell cell--sm cell--bad cell--ph">ед.</span></td>
+              <td><span class="cell">чёрный</span></td>
+              <td class="num muted">—</td>
+              <td class="num"><span class="x">×</span></td>
+            </tr>
+            <tr class="batch-foot">
+              <td colspan="7">
+                <div class="batch-foot__in">
+                  <span class="btn btn--sm btn--dash">+ ещё строка</span>
+                  <span class="batch-foot__hint">Готово <b>1 из 2</b>. Строка «Резинка 20 мм» останется черновиком.</span>
+                  <span class="batch-foot__sp">
+                    <span class="btn btn--sm">Отмена</span>
+                    <span class="btn btn--sm btn--primary">Добавить 1 материал</span>
+                  </span>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ul class="ann">
+        <li><span class="n n--good">1</span><span><b>Тексты не новые:</b> дословно из <code>CreateOrderTechCardLineSchema</code> — «Норма расхода — положительное число», «Укажите единицу измерения». Один источник правды на клиента и сервер.</span></li>
+        <li><span class="n n--good">2</span><span><b>Ошибка живёт у своей строки</b> (под названием, где у сохранённых строк пилюли), а не общей плашкой наверху: в пачке иначе не понять, к кому она относится.</span></li>
+        <li><span class="n n--good">3</span><span><b>Неготовая строка не держит пачку.</b> Кнопка сохраняет готовые и называет их число; неготовая остаётся черновиком и не теряется.</span></li>
+        <li><span class="n n--good">4</span><span><b>Отказ сервера</b> (заказ уехал в <code>DONE</code>, ячейка занята параметром) — общей плашкой <code>.cws-error</code> над таблицей, как сейчас. Пачка при этом не сбрасывается: транзакция на бэке либо прошла целиком, либо не прошла вовсе.</span></li>
+      </ul>
+    </div></div>
+  </div></div>
+</section>
+
+<!-- ================================= 7. ШАПКА ================================= -->
+<section class="sect" id="header">
+  <h2>7. Побочная находка: сдвоенная шапка съехала на колонку <small>colorway-spec.tsx:306-318</small></h2>
+  <p>
+    Пока размечал колонки, нашлась несостыковка в существующем коде. В split-режиме в теле строки <b>10</b> ячеек,
+    а в верхней строке шапки — <b>9</b> (<code>2+3+1+2+1</code>). Браузер раскладывает их подряд, и группы промахиваются:
+    «Расход» накрывает Норма/шт · Ед. · <b>Цвет</b> и не накрывает саму колонку «Расход»,
+    «Закупка» встаёт над служебной стрелкой «→» и «Ед.», оставляя «К закупке» без плашки.
+    Тонировка <code>.cws-zone--buy</code> при этом стоит на колонках 8-9 — то есть зона и её заголовок сдвинуты друг относительно друга.
+  </p>
+
+  <div class="shots">
+    <div class="shot">
+      <p class="shot__cap"><span class="tag tag--bad">сейчас</span> «Закупка» над «→» и «Ед.»</p>
+      <div class="card"><div class="card__body">
+        <div class="spec">
+          <table class="t">
+            <thead>
+              <tr>
+                <th colspan="2"></th>
+                <th class="grp grp--norm" colspan="3">Расход — единица техкарты</th>
+                <th></th>
+                <th class="grp grp--buy" colspan="2">Закупка</th>
+                <th></th>
+              </tr>
+              <tr>
+                <th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th>
+                <th class="num">Расход</th><th></th><th class="zone--buy">Ед.</th><th class="num zone--buy">К закупке</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="cell cell--name">Кулирка</span></td>
+                <td><span class="chips"><span class="chip">Плотность <b>190</b></span></span></td>
+                <td class="num"><span class="cell cell--num">1,72</span></td>
+                <td><span class="cell cell--sm">м пог.</span></td>
+                <td><span class="cell">чёрный</span></td>
+                <td class="num total">860 м пог.</td>
+                <td class="num arrow">→</td>
+                <td class="zone--buy">кг</td>
+                <td class="num total zone--buy">294,1 кг</td>
+                <td class="num"><span class="x">×</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="muted" style="margin:.6rem 0 0">Синяя тонировка тела и синяя плашка шапки стоят на разных колонках — видно врозь.</p>
+      </div></div>
+    </div>
+
+    <div class="shot">
+      <p class="shot__cap"><span class="tag tag--good">вариант A</span> Цвет левее, группы неразрывны</p>
+      <div class="card"><div class="card__body">
+        <div class="spec">
+          <table class="t">
+            <thead>
+              <tr>
+                <th colspan="3"></th>
+                <th class="grp grp--norm" colspan="3">Расход — единица техкарты</th>
+                <th></th>
+                <th class="grp grp--buy" colspan="2">Закупка</th>
+                <th></th>
+              </tr>
+              <tr>
+                <th>Материал</th><th>Параметры</th><th>Цвет</th><th class="num">Норма/шт</th><th>Ед.</th>
+                <th class="num">Расход</th><th></th><th class="zone--buy">Ед.</th><th class="num zone--buy">К закупке</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="cell cell--name">Кулирка</span></td>
+                <td><span class="chips"><span class="chip">Плотность <b>190</b></span></span></td>
+                <td><span class="cell">чёрный</span></td>
+                <td class="num"><span class="cell cell--num">1,72</span></td>
+                <td><span class="cell cell--sm">м пог.</span></td>
+                <td class="num total">860 м пог.</td>
+                <td class="num arrow">→</td>
+                <td class="zone--buy">кг</td>
+                <td class="num total zone--buy">294,1 кг</td>
+                <td class="num"><span class="x">×</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="muted" style="margin:.6rem 0 0">
+          <code>3 + 3 + 1 + 2 + 1 = 10</code>. Зелёная группа = Норма · Ед. · Расход, синяя = Ед. · К закупке.
+          Цена — переставленная колонка «Цвет» (и привычка пользователя).
+        </p>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="note note--warn">
+    <b>Вариант B, без перестановки колонок</b>
+    Оставить порядок как есть и растянуть зелёную группу на 4 колонки: <code>2 + 4 + 1 + 2 + 1 = 10</code>.
+    Тогда «Цвет» попадает внутрь группы «Расход» — смысла в этом нет, но заголовки хотя бы встают над своими числами,
+    а тонировка совпадает с плашкой. Правка — один <code>colSpan</code>. Это существующий баг, к пачке материалов
+    отношения не имеет, но чинится по дороге.
+  </div>
+</section>
+
+<!-- ================================= 8. ЧТО ПРАВИМ ================================= -->
+<section class="sect" id="files">
+  <h2>8. Что правим</h2>
+  <p>Новых компонентов нет: черновая строка — та же разметка, что у сохранённой, только значения из локального состояния.</p>
+
+  <table class="files">
+    <thead><tr><th style="width:38%">Файл</th><th>Правка</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Корень.</b> <code>apps/web/components/orders/colorways/colorway-spec.tsx</code> <span class="muted">605-681</span></td>
+        <td>Убрать <code>.cws-form</code>. Состояние <code>newLine</code> (одна строка, 4 поля) заменить на <code>drafts: DraftLine[]</code>; рисовать их <code>&lt;tr&gt;</code>-ами в конце <code>&lt;tbody&gt;</code> + общий подвал <code>&lt;tr&gt;</code> с <code>colSpan={hasSplitLines ? 10 : 7}</code>, как у раскрытой панели.</td>
+      </tr>
+      <tr>
+        <td><code>colorway-spec.tsx</code> <span class="muted">черновик</span></td>
+        <td>Поля черновика: <code>name · qtyPerUnit · normUnit · unit · colorText · fabricType? · characteristics?</code>. Распорка 24+6px вместо каретки в первой колонке. <code>Enter</code> в последней ячейке — новый черновик, <code>Ctrl+Enter</code> — сохранить пачку, <code>Esc</code> — снять пустой.</td>
+      </tr>
+      <tr>
+        <td><code>colorway-spec.tsx</code> <span class="muted">долг по параметрам</span></td>
+        <td>Чип <code>.cws-chip--todo</code> «задать параметры» для строк без <code>fabricType</code>/<code>subtypeKey</code>; баннер со счётчиком после сохранения пачки; очередь дозаполнения — <code>openLine</code> + «Дальше →» по списку должников.</td>
+      </tr>
+      <tr>
+        <td><code>packages/shared/src/order-tech-cards.ts</code> <span class="muted">294-312</span></td>
+        <td>Схема пачки <code>CreateOrderTechCardLinesSchema</code> = <code>{ orderVariantId, lines: CreateOrderTechCardLineSchema[] }</code> (1..50). Заодно добавить в строчную схему <code>subtypeKey</code> и <code>characteristics</code> — как в <code>UpdateOrderTechCardLineSchema</code>, чтобы параметры можно было задать и сразу.</td>
+      </tr>
+      <tr>
+        <td><code>apps/api/.../order-tech-card.controller.ts</code> <span class="muted">92-100</span></td>
+        <td>Ручка <code>POST /orders/:id/tech-card/lines/bulk</code> с той же zod-валидацией (отдельного DTO у контроллера нет).</td>
+      </tr>
+      <tr>
+        <td><b>Один resync.</b> <code>apps/api/.../order-tech-card.service.ts</code> <span class="muted">640-694</span></td>
+        <td><code>createManualLines</code>: создать все строки в одной транзакции, <code>resyncTechCardDerived</code> вызвать <b>один раз</b> в конце (сейчас на каждую строку — 692). Порядок <code>sortOrder</code> продолжать от последней строки группы. Характеристики прогнать через <code>normalizeMaterialLineCells</code>, иначе JSON и legacy-колонки <code>densityGsm</code>/<code>plannedWidthCm</code> разъедутся.</td>
+      </tr>
+      <tr>
+        <td><code>colorway-spec.tsx</code> <span class="muted">306-318</span></td>
+        <td>Сдвоенная шапка: привести к 10 колонкам — вариант A (Цвет левее) или B (<code>colSpan</code> 3 → 4). См. §7.</td>
+      </tr>
+      <tr>
+        <td><span class="muted">опционально</span></td>
+        <td>Живой «Итого» у черновика: тираж брать из соседней строки (<code>totalQty / qtyPerUnit</code>) или добавить план в DTO группы. Без этого в колонке остаётся «—».</td>
+      </tr>
+      <tr>
+        <td><code>tests/smoke</code></td>
+        <td>Сторож: в <code>colorway-spec.tsx</code> нет <code>.cws-form</code> для материалов; в схеме есть <code>lines:</code>; в сервисе <code>resyncTechCardDerived</code> вызывается вне цикла. Миграций нет.</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ================================= 9. ЧТО РЕШИТЬ ================================= -->
+<section class="sect" id="open">
+  <h2>9. Что решить до кода</h2>
+  <div class="qs">
+    <div class="q">
+      <b>1. Пачка сохраняется целиком или частично?</b>
+      <span>На макете — «Добавить 1 материал»: готовые уходят, неготовая остаётся черновиком. Альтернатива — блокировать кнопку,
+      пока не готовы все. Первое быстрее (завёл десять, одна спорная — остальные девять уже в заказе), второе предсказуемее.
+      Транзакция на бэке в обоих случаях одна: уходят только готовые строки.</span>
+    </div>
+    <div class="q">
+      <b>2. Сколько строк в пачке максимум?</b>
+      <span>Схема ограничит массив (<code>1..50</code>?). Пятьдесят строк — это пятьдесят <code>OrderMaterialRequirement</code>
+      в одной транзакции плюс один resync снимка и потребностей; на боевом заказе с 30 расцветками это надо померить.
+      Предлагаю начать с 20 и поднять по факту.</span>
+    </div>
+    <div class="q">
+      <b>3. Правится ли закупочная единица у сохранённой строки?</b>
+      <span>Сейчас ячейка «Ед.» в синей зоне статичная — <code>unit</code> у существующей строки через таблицу не поменять
+      (только <code>normUnit</code>). У черновика поле есть. Оставить асимметрию или заодно открыть правку и у сохранённых —
+      отдельное решение: <code>unit</code> держит <code>totalQty</code>, сметы и остатки.</span>
+    </div>
+    <div class="q">
+      <b>4. Нужна ли вставка из буфера в первой итерации?</b>
+      <span>Список фурнитуры обычно приходит таблицей. Построчная вставка (<span class="kbd">Ctrl</span>&nbsp;<span class="kbd">V</span>
+      → строка на материал) даёт основной выигрыш времени, но требует разбора колонок и правил «что если колонок больше».
+      Раскладка её не запрещает — вопрос только в очерёдности.</span>
+    </div>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
