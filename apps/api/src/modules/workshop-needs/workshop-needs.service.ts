@@ -1420,6 +1420,13 @@ export class WorkshopNeedsService {
         return c;
       };
 
+      // Строки спецификации, ушедшие ОБОГАЩЕНИЕМ в найденную норму: их правки
+      // доезжают через `matchedLine`, и отдельная строка потребности по ним
+      // была бы двойным счётом. Роли для этого недостаточно: `findEnrichmentLine`
+      // матчит ещё и по имени с префиксом, то есть строка с пустой или чужой
+      // ролью тоже может быть уже учтена.
+      const enrichedLineIds = new Set<string>();
+
       // Legacy line-based расчёт (не category-driven): каждая строка
       // источника (снимок / техкарта расцветки) → своя потребность.
       if (!isCategoryDriven) {
@@ -1454,6 +1461,7 @@ export class WorkshopNeedsService {
             labelSnapshot: null,
             sourceLines: g.sourceLines,
           });
+          if (matchedLine) enrichedLineIds.add(matchedLine.id);
           const computedArea = this.computeMaterialAreaByRole({
             role,
             areas,
@@ -1483,6 +1491,7 @@ export class WorkshopNeedsService {
           labelSnapshot: norm.labelSnapshot,
           sourceLines: g.sourceLines,
         });
+        if (matchedLine) enrichedLineIds.add(matchedLine.id);
         // Материал убрали из спецификации заказа → потребности по нему нет.
         // Норма живёт в номенклатуре и одна на все заказы, поэтому без этой
         // проверки удалённая в заказе строка возвращалась в потребность на
@@ -1510,6 +1519,16 @@ export class WorkshopNeedsService {
       // параметр; `calculatedQty = Σ(value × qtyPlan)` по размерам
       // расцветки.
       for (const [categoryParameterId, values] of linearByParam) {
+        // Тот же матч, что делает хелпер внутри: функция чистая, повторный
+        // вызов ничего не стоит, зато строка не посчитается дважды.
+        const linearMatched = values[0]
+          ? this.findEnrichmentLine({
+              roleKey: values[0].roleKey,
+              labelSnapshot: values[0].labelSnapshot,
+              sourceLines: g.sourceLines,
+            })
+          : null;
+        if (linearMatched) enrichedLineIds.add(linearMatched.id);
         const computedLinear = this.computeLinearBySizeParameter({
           categoryParameterId,
           values,
@@ -1524,25 +1543,32 @@ export class WorkshopNeedsService {
         }
       }
 
-      // Материалы, ДОБАВЛЕННЫЕ В ЗАКАЗЕ (усилительная лента, которой нет ни в
-      // шаблоне, ни в номенклатуре). В category-driven расчёте строки заказа
-      // работают только обогащением найденных норм, поэтому такая строка не
-      // давала потребности вообще: параметра с её ролью в номенклатуре нет,
-      // обогащать нечего — материал молча пропадал из закупки, хотя менеджер
-      // завёл его руками именно чтобы купить.
+      // Материалы СПЕЦИФИКАЦИИ ЗАКАЗА, под которые в номенклатуре нормы нет:
+      // нитки, молния, составник, усилительная лента. В category-driven
+      // расчёте строки заказа работают только обогащением найденных норм,
+      // поэтому такая строка не давала потребности вообще: параметра с её
+      // ролью в номенклатуре нет, обогащать нечего — материал молча пропадал
+      // из закупки, хотя в спецификации заказа он стоит.
       //
-      // Считаем ТОЛЬКО `isManual` и ТОЛЬКО с ролью, не закрытой номенклатурой:
-      //   - шаблонные строки, под которые нет площади/нормы, по-прежнему НЕ
-      //     порождают потребность — это осознанное поведение category-driven
-      //     («лишние ткани из техкарты»), и числа живых заказов не двигаются;
-      //   - роль, закрытая параметром, уже посчитана выше.
+      // ПРАВИЛО (05.08): что стоит в спецификации заказа, то и идёт в его
+      // потребность — независимо от того, пришла строка из шаблона или
+      // заведена руками. Раньше ветка считала ТОЛЬКО `isManual`, и шаблонная
+      // фурнитура выпадала: у заказа 02-00010 в потребность не попали Нитки,
+      // Молния и Составник (а «Стропа», заведённая руками, попала). Лишние
+      // строки убираются ИЗ СПЕЦИФИКАЦИИ, а не прячутся в расчёте.
+      //
+      // От двойного счёта защищают два гейта:
+      //   - роль закрыта параметром номенклатуры (`rolesCoveredByPattern`) —
+      //     строка уже посчитана выше, её правка доехала через `matchedLine`;
+      //   - строка уже ушла ОБОГАЩЕНИЕМ в найденную норму (`enrichedLineIds`)
+      //     — совпасть она могла и по имени, при пустой или чужой роли.
       // Для legacy-заказов ветка не нужна: там `!isCategoryDriven` считает
-      // каждую строку источника, включая ручные.
+      // каждую строку источника.
       if (isCategoryDriven) {
         for (const line of g.sourceLines) {
-          if (!line.isManual) continue;
           if (line.materialRole && rolesCoveredByPattern.has(line.materialRole))
             continue;
+          if (enrichedLineIds.has(line.id)) continue;
           const computedManual = this.computeLine({
             line,
             order: {
