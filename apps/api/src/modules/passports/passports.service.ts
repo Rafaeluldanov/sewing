@@ -2101,11 +2101,6 @@ export class PassportsService {
     });
     if (!session) throw new ShiftSessionRequiredException();
 
-    // Гейт «размещение в ячейке обязательно перед уходом с кроя» —
-    // нельзя «получить крой», если паспорт не был размещён в ячейке
-    // (см. `assertPlacedBeforeLeavingCut`, инцидент 16.07.2026).
-    this.assertPlacedBeforeLeavingCut(passport, session.operation.category);
-
     // Операция, на которую встаёт паспорт: по умолчанию — операция смены,
     // но для возвращённого ОТК паспорта берётся операция его переделки
     // (см. `resolveOperationForPassport`). Так распошивщица «принимает»
@@ -2114,6 +2109,18 @@ export class PassportsService {
     const targetOperationId = await this.resolveOperationForPassport(
       { id: passport.id, orderId: passport.orderId },
       session,
+    );
+
+    // Гейт «размещение в ячейке обязательно перед уходом с кроя» —
+    // нельзя «получить крой», если паспорт не был размещён в ячейке
+    // (см. `assertPlacedBeforeLeavingCut`, инцидент 16.07.2026). Стоит
+    // ПОСЛЕ резолва целевой операции: гейт смотрит на позицию операции в
+    // маршруте, и для возврата от ОТК это операция переделки, а не
+    // операция смены.
+    await this.assertPlacedBeforeLeavingCut(
+      passport,
+      session.operation.category,
+      targetOperationId,
     );
 
     // Если операция, на которую встаёт паспорт, уже завершалась по нему —
@@ -2521,8 +2528,15 @@ export class PassportsService {
 
     // Гейт «размещение в ячейке обязательно перед уходом с кроя» —
     // scan-канал не должен быть лазейкой мимо ячеек (см.
-    // `assertPlacedBeforeLeavingCut`, инцидент 16.07.2026).
-    this.assertPlacedBeforeLeavingCut(passport, session.operation.category);
+    // `assertPlacedBeforeLeavingCut`, инцидент 16.07.2026). Целевая
+    // операция здесь — операция смены: scan «принимает» паспорт именно на
+    // неё (в отличие от `issueToEmployee`, где для возврата от ОТК
+    // подставляется операция переделки).
+    await this.assertPlacedBeforeLeavingCut(
+      passport,
+      session.operation.category,
+      session.operationId,
+    );
 
     // QC-gate для входа на ВТО (см. docs/flows.md §F6 / ADR-0013):
     // нельзя «принять» паспорт на операцию категории `IRONING`,
@@ -3413,24 +3427,77 @@ export class PassportsService {
    *     (создаются сразу «в работу», см. `OrderSamplesService`);
    *   - целевая операция НЕ категории `CUTTING` — размещение стоит между
    *     кроем/делением и первой швейной операцией, поэтому скан внутри
-   *     кроя гейт не блокирует.
+   *     кроя гейт не блокирует;
+   *   - целевая операция НЕ является ПЕРВЫМ шагом маршрута заказа — см.
+   *     ниже.
+   *
+   * Про первый шаг маршрута. Гейт писался под одну картину мира: «крой →
+   * ячейка → первая швейная операция», и всё, что не `CUTTING`, считалось
+   * «уже после ячейки». Когда клиент поставил первым шагом маршрута
+   * «Распаковку» (приёмка и распаковка приходящего товара, категория
+   * `PACKING`, см. `Operation.boxPacking`), получился замкнутый круг:
+   * распаковать нельзя, пока не размещено, а размещать нечего, пока не
+   * распаковано. Физически размещение идёт ПОСЛЕ этого шага.
+   *
+   * Поэтому исключение сделано не по категории (это ровно та ошибка, из-за
+   * которой «Распаковка» ломала терминал упаковщика — см.
+   * `PackingService.assertPackingActor`), а по ПОЗИЦИИ: если операция стоит
+   * первым шагом маршрута заказа, то до неё в маршруте нет ничего, откуда
+   * паспорт мог бы «уйти с кроя», и требовать ячейку не за что. Во всех
+   * остальных местах гейт работает как прежде — в том числе ради того,
+   * ради чего писался: между кроем и первой швейной операцией.
+   *
+   * @param targetOperationId — операция, на которую реально встаёт паспорт
+   *   (для возврата от ОТК это операция переделки, а не операция смены;
+   *   см. `resolveOperationForPassport`).
    */
-  private assertPlacedBeforeLeavingCut(
+  private async assertPlacedBeforeLeavingCut(
     passport: {
       status: PassportStatus;
       currentCellId: string | null;
       sampleId: string | null;
+      orderId: string | null;
     },
     targetCategory: OperationCategory,
-  ): void {
+    targetOperationId: string,
+  ): Promise<void> {
     if (
-      passport.status === PassportStatus.CREATED &&
-      passport.currentCellId == null &&
-      passport.sampleId == null &&
-      targetCategory !== OperationCategory.CUTTING
+      passport.status !== PassportStatus.CREATED ||
+      passport.currentCellId != null ||
+      passport.sampleId != null ||
+      targetCategory === OperationCategory.CUTTING
     ) {
-      throw new PassportNotPlacedInCellException();
+      return;
     }
+    // Дорогую проверку делаем последней: сюда доходит только свежий
+    // неразмещённый паспорт, то есть один запрос на первый уход с кроя,
+    // а не на каждый скан в цеху.
+    if (await this.isFirstRouteStep(passport.orderId, targetOperationId)) {
+      return;
+    }
+    throw new PassportNotPlacedInCellException();
+  }
+
+  /**
+   * Является ли операция ПЕРВЫМ шагом маршрута заказа.
+   *
+   * Считаем по минимальному `OrderRouteStep.index` — тому же полю, по
+   * которому порядок читает `evaluateRouteOrder`. Нет заказа или нет
+   * снимка маршрута → `false`: «сравнивать не с чем» не повод ослаблять
+   * гейт (та же трактовка, что у `evaluateRouteOrder`, где такой случай
+   * даёт `none`, а не разрешение).
+   */
+  private async isFirstRouteStep(
+    orderId: string | null,
+    operationId: string,
+  ): Promise<boolean> {
+    if (!orderId) return false;
+    const first = await this.prisma.orderRouteStep.findFirst({
+      where: { orderId },
+      orderBy: { index: 'asc' },
+      select: { operationId: true },
+    });
+    return first?.operationId === operationId;
   }
 
   /**
