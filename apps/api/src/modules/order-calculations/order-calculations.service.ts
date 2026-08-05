@@ -380,6 +380,10 @@ export class OrderCalculationsService {
         parameterBindings: this.toJsonColumn(r.parameterBindings),
         sourceTechCardId: r.sourceTechCardId,
         isManual: r.isManual,
+        // Источник нормы переживает переключение варианта: иначе правленая
+        // в заказе норма переставала быть главнее номенклатуры.
+        qtySource: r.qtySource,
+        qtySourceRef: r.qtySourceRef,
       }));
       if (matRows.length > 0) {
         await tx.orderMaterialRequirement.createMany({ data: matRows });
@@ -603,6 +607,8 @@ export class OrderCalculationsService {
             parameterBindings: true,
             sourceTechCardId: true,
             isManual: true,
+            qtySource: true,
+            qtySourceRef: true,
           },
         },
       },
@@ -740,6 +746,11 @@ export class OrderCalculationsService {
         parameterBindings: r.parameterBindings,
         sourceTechCardId: r.sourceTechCardId,
         isManual: r.isManual,
+        // Источник нормы едет в снимок: `qtySource='ORDER'` = «норму ввели
+        // руками, она главнее номенклатуры». Потеряв его, активация другого
+        // варианта считала бы потребность по номенклатурной норме.
+        qtySource: r.qtySource,
+        qtySourceRef: r.qtySourceRef,
       })),
       workshopNeedValues: needs
         .filter(

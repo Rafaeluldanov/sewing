@@ -93,7 +93,16 @@ export function resolveSubtypeKeyByCharacteristic(
 ): string | null {
   const norm = normalizeMaterialCharacteristicOptionValue(value ?? '');
   if (norm === '') return null;
-  const match = getMaterialSubtypesByGroup(roleKey).find(
+  // Роль не задана (строка, заведённая прямо в заказе, — у неё роли нет)
+  // — ищем по ВСЕМ подтипам. Вранья здесь нет: врать было бы приписывать
+  // «Кашкорсе» строке с ролью PACKAGING, а у безролевой строки роль как раз
+  // и выводится из найденного подтипа. Иначе молния, заведённая в заказе,
+  // навсегда осталась бы без своих полей — размера, типа и материала.
+  const pool =
+    roleKey.trim() === ''
+      ? MATERIAL_SUBTYPES
+      : getMaterialSubtypesByGroup(roleKey);
+  const match = pool.find(
     (s) => normalizeMaterialCharacteristicOptionValue(s.label) === norm,
   );
   return match ? match.subtypeKey : null;

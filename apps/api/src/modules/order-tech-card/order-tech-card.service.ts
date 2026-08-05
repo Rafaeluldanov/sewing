@@ -695,12 +695,20 @@ export class OrderTechCardService {
       // пуст), поэтому проверка занятой ячейки здесь не нужна — нужна только
       // валидация самих значений, как в правке.
       const chars = this.buildCharacteristics(line.characteristics);
+      // Роль выводим из подтипа, если её не прислали: подтип задаёт её
+      // однозначно (ZIPPER → PACKAGING). Без этого `normalizeMaterialLineCells`
+      // вычистила бы у молнии «Размер» и «Материал» — они разрешены только
+      // роли PACKAGING, — то есть характеристики терялись бы молча, с 200 в
+      // ответе.
+      const materialRole =
+        line.materialRole ??
+        (subtypeKey ? (getMaterialSubtype(subtypeKey)?.groupRoleKey ?? null) : null);
       const cells = normalizeMaterialLineCells({
         name: line.name,
         unit: line.unit,
         qtyPerUnit: line.qtyPerUnit,
         note: line.note ?? null,
-        materialRole: line.materialRole ?? null,
+        materialRole,
         fabricType: line.fabricType?.trim() || null,
         // Зеркало `characteristics` ↔ legacy-колонки собирает сама
         // `normalizeMaterialLineCells`: downstream (потребности цеха,
@@ -944,6 +952,11 @@ export class OrderTechCardService {
     // нового набора нет, уносим. Иначе в строке остался бы «размер молнии» на
     // кулирке — невидимый мусор, который поедет в описание потребности.
     let nextSubtypeKey = row.subtypeKey;
+    // Роль строки, заведённой в заказе, пуста — и до появления подтипа взяться
+    // ей неоткуда. Как только подтип известен, роль выводится из него: иначе
+    // `normalizeMaterialLineCells` ниже вычистит характеристики, разрешённые
+    // только «своей» роли (размер и материал у фурнитуры).
+    let nextMaterialRole = row.materialRole;
     if (dto.subtypeKey !== undefined) {
       const raw = dto.subtypeKey?.trim() || null;
       if (raw !== null && !isKnownMaterialSubtype(raw)) {
@@ -964,6 +977,9 @@ export class OrderTechCardService {
         }
       }
       nextSubtypeKey = raw;
+      if (!nextMaterialRole && raw) {
+        nextMaterialRole = getMaterialSubtype(raw)?.groupRoleKey ?? null;
+      }
     }
 
     // Характеристики: пришедший ключ пишем, `null`/пусто — очищаем (вместе с
@@ -1015,7 +1031,7 @@ export class OrderTechCardService {
       unit: dto.unit ?? row.unit,
       qtyPerUnit: dto.qtyPerUnit ?? row.qtyPerUnit.toString(),
       note: row.note,
-      materialRole: row.materialRole,
+      materialRole: nextMaterialRole,
       fabricType: nextFabricType,
       densityGsm: legacy.densityGsm,
       plannedWidthCm: legacy.plannedWidthCm,
@@ -1076,6 +1092,7 @@ export class OrderTechCardService {
           Prisma.DbNull,
         fabricType: cells.fabricType,
         subtypeKey: nextSubtypeKey,
+        materialRole: cells.materialRole,
         ...(qtyEdited ? { qtySource: 'ORDER' } : {}),
         ...colorData,
       },

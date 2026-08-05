@@ -138,16 +138,25 @@ export function CharacteristicCombobox({
     void loadOptions().then(setAll);
   }
 
-  const options = (all ?? []).filter((o) => o.roleKey === roleKey);
+  // Роль не задана — показываем значения ВСЕХ ролей. Это случай строки,
+  // заведённой прямо в заказе: роли у неё нет, и она как раз выводится из
+  // выбранной характеристики. С фильтром по пустой роли список был пуст, и
+  // задать молнии её характеристику было физически нечем.
+  const roleless = roleKey.trim() === '';
+  const options = roleless
+    ? (all ?? [])
+    : (all ?? []).filter((o) => o.roleKey === roleKey);
   const query = normalizeMaterialCharacteristicOptionValue(draft);
   const visible = query
     ? options.filter((o) =>
         normalizeMaterialCharacteristicOptionValue(o.value).includes(query),
       )
     : options;
+  // Пополнять справочник без роли нельзя (значение некуда положить), но своё
+  // значение ввести можно — оно уедет в строку как есть.
   const canAdd =
     query.length > 0 &&
-    roleKey.length > 0 &&
+    !roleless &&
     !options.some(
       (o) => normalizeMaterialCharacteristicOptionValue(o.value) === query,
     );
@@ -306,7 +315,7 @@ export function CharacteristicCombobox({
               ))}
               {visible.length === 0 && !canAdd && (
                 <div className="mcbx__empty">
-                  {roleKey ? 'Список пуст' : 'Сначала выберите роль материала'}
+                  {roleKey ? 'Список пуст' : 'Ничего не нашлось — введите своё значение'}
                 </div>
               )}
               {canAdd && (

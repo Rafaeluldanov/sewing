@@ -137,6 +137,26 @@ const SnapshotMaterialRequirementSchema = z.object({
   parameterBindings: z.unknown().nullable(),
   sourceTechCardId: z.string().nullable(),
   isManual: z.boolean(),
+  /**
+   * Откуда взята норма и к какой норме номенклатуры привязана строка.
+   *
+   * `nullish` по той же причине, что `normUnit`: снимки, снятые до этой
+   * правки, лежат в БД без полей, и обязательные уронили бы их в
+   * `SNAPSHOT_INVALID`.
+   *
+   * Терять их нельзя: `qtySource = 'ORDER'` означает «норму ввели руками, она
+   * главнее номенклатуры». Без него активация другого варианта просчёта
+   * обнуляла признак у ВСЕХ строк, включая заведённые в заказе, и потребность
+   * начинала считаться по номенклатурной норме вместо введённой.
+   */
+  qtySource: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
+  qtySourceRef: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
 });
 
 /**
