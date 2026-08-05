@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Цеховой монитор → настройка окон и подразделения (прототип)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --shadow-lg:0 10px 32px rgba(20,20,20,.16),0 2px 8px rgba(20,20,20,.08);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+
+    /* Дисплейная палитра — блок `--display-*` из globals.css */
+    --display-bg:#f1f1ef; --display-bg-soft:#f7f7f6; --display-bg-card:#fff;
+    --display-fg:#1b1b1b; --display-fg-muted:#5f5f5c; --display-fg-subtle:#8a8a86;
+    --display-accent:#2f7fd1; --display-accent-soft:#d9e8fb;
+    --display-ok:#2e9e4a; --display-ok-soft:#e4f4e6;
+    --display-warn:#f59e0b; --display-warn-soft:#fcecc9;
+    --display-crit:#d23b3b; --display-crit-soft:#fbe3e0;
+    --display-border:#e4e4e1; --display-border-strong:#c7c7c2;
+    /* В мокапе шкалу дисплея фиксируем: макет живёт в узком «телевизоре»
+       на странице документа, а не на всю высоту экрана. */
+    --display-u:11px;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 90px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1320px; margin:0 auto; padding:0 20px; }
+
+  /* ---------- навигация документа ---------- */
+  .topnav{ position:sticky; top:0; z-index:60; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1320px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:600; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:92ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:var(--title-hero); margin:0 0 .3rem; }
+  .sect > p.lead{ margin:0 0 1rem; color:var(--color-fg-muted); max-width:92ch; }
+  .note{ background:var(--color-bg-tint); border:1px solid #e7d9a8; border-radius:var(--radius-md); padding:.6rem .8rem; font-size:.85rem; margin:.8rem 0; max-width:92ch; }
+  .note b{ font-weight:700; }
+
+  /* ---------- «телевизор» ---------- */
+  .tv{ position:relative; border-radius:var(--radius-lg); overflow:hidden; border:2px solid #2a2a28; background:#2a2a28; box-shadow:var(--shadow-md); }
+  .tv__caption{ font-size:.78rem; color:var(--color-fg-subtle); padding:.35rem .1rem .55rem; }
+
+  .display-screen{ background:var(--display-bg); color:var(--display-fg); padding:calc(var(--display-u)*.5); display:flex; flex-direction:column; gap:calc(var(--display-u)*.45); min-height:430px; }
+  .display-screen__header{ display:flex; align-items:center; gap:calc(var(--display-u)*.6); }
+  .display-screen__brand{ font-weight:700; font-size:calc(var(--display-u)*1.3); letter-spacing:.04em; display:flex; align-items:center; gap:.35em; }
+  .display-screen__brand-mark{ color:var(--display-ok); }
+  .display-screen__brand-sub{ color:var(--display-fg-muted); font-weight:400; }
+  .display-screen__clock{ margin-left:auto; font-size:calc(var(--display-u)*1.5); font-weight:700; font-variant-numeric:tabular-nums; }
+  .display-screen__meta{ display:flex; align-items:center; gap:calc(var(--display-u)*.4); font-size:calc(var(--display-u)*.82); color:var(--display-fg-muted); }
+  .display-status{ display:inline-flex; align-items:center; gap:.35em; background:var(--display-ok-soft); color:#14532d; border-radius:var(--radius-pill); padding:.15em .6em; font-weight:700; }
+  .display-status__dot{ width:.5em; height:.5em; border-radius:50%; background:var(--display-ok); }
+  .display-btn-icon{ display:inline-flex; align-items:center; gap:.3em; background:var(--display-bg-card); border:1px solid var(--display-border-strong); border-radius:var(--radius-sm); padding:.25em .5em; font:inherit; font-size:calc(var(--display-u)*.82); color:var(--display-fg-muted); cursor:pointer; }
+  .display-btn-icon--hot{ border-color:var(--display-accent); color:var(--display-accent); box-shadow:0 0 0 3px var(--display-accent-soft); }
+
+  .display-kpi{ display:grid; grid-template-columns:repeat(8,1fr); gap:calc(var(--display-u)*.35); }
+  .display-kpi--short{ grid-template-columns:repeat(4,1fr); }
+  .display-kpi__card{ background:var(--display-bg-card); border:1px solid var(--display-border); border-radius:var(--radius-md); padding:calc(var(--display-u)*.35) calc(var(--display-u)*.45); }
+  .display-kpi__value{ font-size:calc(var(--display-u)*1.9); font-weight:700; line-height:1; font-variant-numeric:tabular-nums; }
+  .display-kpi__label{ font-size:calc(var(--display-u)*.75); color:var(--display-fg-muted); text-transform:uppercase; letter-spacing:.03em; margin-top:.2em; }
+  .display-kpi__card--ok .display-kpi__value{ color:var(--display-ok); }
+  .display-kpi__card--accent .display-kpi__value{ color:var(--display-accent); }
+  .display-kpi__card--crit .display-kpi__value{ color:var(--display-crit); }
+
+  .display-board{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,.42fr); gap:calc(var(--display-u)*.45); flex:1 1 auto; }
+  .display-board--wide{ grid-template-columns:minmax(0,1fr); }
+  .display-block{ background:var(--display-bg-card); border:1px solid var(--display-border); border-radius:var(--radius-md); padding:calc(var(--display-u)*.45); display:flex; flex-direction:column; gap:calc(var(--display-u)*.35); min-width:0; }
+  .display-block__title{ margin:0; font-size:calc(var(--display-u)*.95); text-transform:uppercase; letter-spacing:.05em; color:var(--display-fg-muted); display:flex; align-items:center; gap:.4em; }
+  .display-block__title-badge{ background:var(--display-bg-muted,#f1f1ef); border:1px solid var(--display-border); border-radius:var(--radius-pill); padding:0 .45em; font-size:.9em; }
+
+  table.dmx{ border-collapse:collapse; width:100%; font-size:calc(var(--display-u)*.8); font-variant-numeric:tabular-nums; }
+  table.dmx th, table.dmx td{ border:1px solid var(--display-border); padding:.22em .3em; text-align:center; white-space:nowrap; }
+  table.dmx th{ background:var(--display-bg-soft); color:var(--display-fg-muted); font-size:calc(var(--display-u)*.72); text-transform:uppercase; letter-spacing:.03em; }
+  table.dmx td.lbl, table.dmx th.lbl{ text-align:left; font-weight:700; text-transform:none; letter-spacing:0; }
+  table.dmx tr.tot td{ background:var(--display-bg-soft); font-weight:700; }
+  /* Полоса-разделитель подразделения в раздельном режиме: та же
+     логика, что у цветовых блоков, уровнем выше. */
+  table.dmx tr.band td{ background:var(--display-accent-soft); color:#14395f; font-weight:700; text-align:left; text-transform:uppercase; letter-spacing:.05em; font-size:calc(var(--display-u)*.75); }
+  table.dmx tr.gtot td{ background:var(--display-fg); color:#fff; font-weight:700; }
+  table.dmx td.sew{ background:var(--display-accent-soft); }
+  table.dmx .grp{ border-left:2px solid var(--display-border-strong); }
+  .dim{ opacity:.35; }
+
+  .display-equipment-grid{ list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fill,minmax(calc(var(--display-u)*5),1fr)); gap:calc(var(--display-u)*.4); }
+  .display-equipment-tile{ aspect-ratio:1/1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:calc(var(--display-u)*.18); border-radius:.5rem; background:var(--display-bg-soft); border:1px solid var(--display-border); font-variant-numeric:tabular-nums; }
+  .display-equipment-tile__num{ font-size:calc(var(--display-u)*1.15); font-weight:800; line-height:1; }
+  .display-equipment-tile__sizes{ font-size:calc(var(--display-u)*.95); font-weight:700; line-height:1; }
+  .display-equipment-tile--on{ background:var(--display-ok-soft); border-color:#a9d9b5; color:#14532d; }
+  .display-equipment-tile--warn{ background:var(--display-warn-soft); border-color:#e5c37a; color:#7c4a03; }
+  .display-equipment-tile--off{ background:var(--display-bg-soft); color:var(--display-fg-subtle); }
+  .display-equipment__totals{ display:flex; gap:calc(var(--display-u)*.5); font-size:calc(var(--display-u)*.8); color:var(--display-fg-muted); }
+  .display-equipment__total::before{ content:''; display:inline-block; width:.55em; height:.55em; border-radius:50%; margin-right:.3em; background:currentColor; }
+  .display-equipment__total--online{ color:var(--display-ok); }
+  .display-equipment__total--warning{ color:var(--display-warn); }
+  .display-equipment__total--offline{ color:var(--display-fg-subtle); }
+  .display-orphan-calls{ background:var(--display-crit-soft); border:1px solid #edb9b3; border-radius:var(--radius-md); padding:calc(var(--display-u)*.4); font-size:calc(var(--display-u)*.85); }
+  .display-orphan-calls__title{ margin:0 0 .25em; font-weight:700; color:#8f1d1d; text-transform:uppercase; font-size:calc(var(--display-u)*.75); letter-spacing:.04em; }
+  .display-orphan-calls__item{ display:flex; justify-content:space-between; gap:.6em; }
+
+  /* ---------- панель настроек (drawer поверх дисплея) ---------- */
+  .drawer{ position:absolute; top:0; right:0; bottom:0; width:340px; background:var(--color-bg-card); border-left:1px solid var(--color-border-strong); box-shadow:var(--shadow-lg); display:flex; flex-direction:column; z-index:5; }
+  .drawer__head{ padding:.7rem .85rem; border-bottom:1px solid var(--color-border); display:flex; align-items:center; gap:.5rem; }
+  .drawer__head h3{ margin:0; font-size:var(--title-modal); }
+  .drawer__head .x{ margin-left:auto; color:var(--color-fg-subtle); cursor:pointer; font-size:1.1rem; line-height:1; }
+  .drawer__body{ padding:.7rem .85rem; overflow:auto; flex:1 1 auto; display:flex; flex-direction:column; gap:.85rem; }
+  .drawer__foot{ padding:.6rem .85rem; border-top:1px solid var(--color-border); display:flex; gap:.4rem; align-items:center; background:var(--color-bg-soft); }
+  .drawer__scrim{ position:absolute; inset:0; background:rgba(20,20,20,.18); z-index:4; }
+
+  .field{ display:flex; flex-direction:column; gap:.25rem; }
+  .field > label{ font-size:var(--title-label); font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); }
+  .field select, .field input[type=text]{ font:inherit; font-size:.9rem; padding:.4rem .55rem; border:1px solid var(--color-border-strong); border-radius:var(--radius-sm); background:#fff; color:var(--color-fg); width:100%; }
+  .hint{ font-size:.78rem; color:var(--color-fg-subtle); }
+
+  /* Мультивыбор подразделений: чипы «что выбрано» + список галочек.
+     Селект тут не годится — на ТВ нужно видеть выбор целиком, не
+     раскрывая список. */
+  .chips{ display:flex; flex-wrap:wrap; gap:.3rem; }
+  .chip{ display:inline-flex; align-items:center; gap:.35rem; background:var(--color-accent-soft); color:var(--color-accent-fg); border:1px solid #b9d4f2; border-radius:var(--radius-pill); padding:.15rem .5rem; font-size:.8rem; font-weight:700; }
+  .chip__x{ cursor:pointer; opacity:.6; }
+  .chip--all{ background:var(--color-bg-muted); color:var(--color-fg-muted); border-color:var(--color-border-strong); }
+  .picker{ border:1px solid var(--color-border); border-radius:var(--radius-sm); background:#fff; max-height:190px; overflow:auto; }
+  .picker__item{ display:flex; align-items:center; gap:.5rem; padding:.32rem .5rem; font-size:.87rem; border-bottom:1px solid var(--color-border); }
+  .picker__item:last-child{ border-bottom:0; }
+  .picker__item input{ accent-color:var(--color-accent); width:15px; height:15px; }
+  .picker__item--all{ background:var(--color-bg-soft); font-weight:700; }
+  .picker__code{ font-variant-numeric:tabular-nums; color:var(--color-fg-subtle); font-weight:700; }
+  .picker__item--off{ color:var(--color-fg-subtle); }
+
+  .grp-title{ font-size:var(--title-label); font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); margin:.2rem 0 .1rem; }
+  .row{ display:flex; align-items:center; gap:.5rem; padding:.32rem .45rem; border:1px solid var(--color-border); border-radius:var(--radius-sm); background:#fff; font-size:.9rem; }
+  .row + .row{ margin-top:.25rem; }
+  .row--off{ background:var(--color-bg-soft); color:var(--color-fg-subtle); }
+  .row__name{ flex:1 1 auto; }
+  .row__count{ font-size:.76rem; color:var(--color-fg-subtle); }
+  .sub{ margin:.25rem 0 .25rem 1.35rem; padding-left:.55rem; border-left:2px solid var(--color-border); display:flex; flex-direction:column; gap:.22rem; }
+  .chk{ display:flex; align-items:center; gap:.45rem; font-size:.85rem; }
+  .chk input{ accent-color:var(--color-accent); width:15px; height:15px; }
+  .chk--off{ color:var(--color-fg-subtle); }
+
+  /* тумблер как в ДС: маленький, без анимации-игрушки */
+  .sw{ position:relative; width:34px; height:19px; border-radius:var(--radius-pill); background:var(--color-border-strong); flex:0 0 auto; }
+  .sw::after{ content:''; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:#fff; box-shadow:var(--shadow-sm); }
+  .sw--on{ background:var(--color-ok); }
+  .sw--on::after{ left:auto; right:2px; }
+
+  .btn{ font:inherit; font-size:.85rem; font-weight:700; padding:.4rem .75rem; border-radius:var(--radius-sm); border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg); cursor:pointer; }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .btn--ghost{ border-color:transparent; color:var(--color-accent-fg); background:transparent; }
+  .btn--sm{ font-size:.8rem; padding:.28rem .6rem; }
+
+  /* ---------- админ-карточка ---------- */
+  .admin-shell{ background:var(--color-bg-soft); border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:1rem 1.1rem; }
+  .admin-head{ display:flex; align-items:flex-start; gap:.8rem; margin-bottom:.9rem; }
+  .admin-head h3{ margin:0; font-size:var(--title-page); }
+  .admin-head .sub{ margin:.15rem 0 0; padding:0; border:0; font-size:.85rem; color:var(--color-fg-muted); }
+  .admin-head .acts{ margin-left:auto; display:flex; gap:.4rem; }
+  .admin-card{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:1rem; box-shadow:var(--shadow-sm); }
+  .admin-card + .admin-card{ margin-top:.8rem; }
+  .admin-card > h4{ margin:0 0 .1rem; font-size:var(--title-section); }
+  .admin-card > .cap{ margin:0 0 .75rem; font-size:.83rem; color:var(--color-fg-muted); }
+  .cols2{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:.8rem; }
+  .badge{ display:inline-block; font-size:.75rem; font-weight:700; padding:.1rem .5rem; border-radius:var(--radius-pill); background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .badge--muted{ background:var(--color-bg-muted); color:var(--color-fg-muted); }
+
+  .split{ display:grid; grid-template-columns:minmax(0,1fr); gap:1rem; }
+  @media (min-width:1100px){ .split--2{ grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); } }
+
+  code{ background:var(--color-bg-muted); border-radius:4px; padding:.05em .35em; font-size:.86em; }
+  pre{ background:#1f1f1e; color:#f1f1ef; border-radius:var(--radius-md); padding:.8rem .9rem; overflow:auto; font-size:.82rem; line-height:1.5; }
+  pre .k{ color:#ffd23f; } pre .s{ color:#9fd7a4; } pre .c{ color:#8a8a86; }
+  table.spec{ border-collapse:collapse; width:100%; font-size:.86rem; background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-md); overflow:hidden; }
+  table.spec th, table.spec td{ border-bottom:1px solid var(--color-border); padding:.45rem .6rem; text-align:left; vertical-align:top; }
+  table.spec th{ background:var(--color-bg-soft); font-size:var(--title-label); text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); }
+  table.spec tr:last-child td{ border-bottom:0; }
+</style>
+</head>
+<body>
+
+<nav class="topnav"><div class="topnav__in">
+  <span class="topnav__brand">Цеховой монитор · настройка</span>
+  <a href="#idea">Идея</a>
+  <a href="#drawer">1. Панель на экране</a>
+  <a href="#result">2. Результат</a>
+  <a href="#admin">3. Карточка экрана</a>
+  <a href="#spec">4. Контракт</a>
+</div></nav>
+
+<div class="doc">
+
+  <section class="intro" id="idea">
+    <h1>Цеховой монитор: выбор окон и подразделения</h1>
+    <p>
+      Сейчас <code>/shopfloor/display</code> показывает <b>всё сразу и всем одинаково</b>:
+      8 KPI-плиток, матрицу «цвет × размер» со всеми колонками операций пошива, ОТК, ВТО,
+      упаковкой и готовым, панель оборудования и вызовы мастера. На ТВ у раскройщиков
+      половина этого — шум, у швей — другая половина.
+    </p>
+    <p>
+      Предложение: <b>набор видимых окон становится настройкой экрана</b>, рядом с уже
+      существующей настройкой подразделения. Ничего нового изобретать не нужно —
+      подразделение экрана уже живёт в <code>DisplayScreenConfig.companyDivisionId</code>
+      (админка «Display-экраны»), туда же ложится и список окон.
+    </p>
+    <div class="principles">
+      <div class="principle"><b>Два входа, один источник истины</b><span>Постоянная настройка — карточка экрана в админке (переживает перезагрузку ТВ и чистку кэша). Шестерёнка на самом дисплее — быстрый подбор «здесь и сейчас», результат можно одной кнопкой записать в карточку экрана.</span></div>
+      <div class="principle"><b>Шестерёнку видит не каждый</b><span>Тот же гейт, что и у drill-in: только ADMIN / SHOP_MANAGER. Под учёткой DISPLAY экран остаётся витриной без единой кнопки — в цехе крутить настройки некому.</span></div>
+      <div class="principle"><b>Дефолт не меняется</b><span>Пустая настройка = «показывать всё», как сегодня. Существующие экраны и TV-закладки продолжают работать без миграции данных.</span></div>
+      <div class="principle"><b>Подразделений можно выбрать несколько</b><span>Одно, два, все — набор галочек вместо выпадающего списка. Отдельно решается, складывать выбранные в один итог или показывать раздельными полосами: «ТВ на два потока» и «ТВ общей сводки» — это разные экраны, а не разные фичи.</span></div>
+      <div class="principle"><b>Окна выключаются, раскладка сходится</b><span>Выключили оборудование — матрица занимает всю ширину. Выключили KPI — таблица получает по вертикали ~15 % площади. Никаких дыр на месте скрытых блоков.</span></div>
+    </div>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section class="sect" id="drawer">
+    <h2>1. Панель настроек на самом дисплее</h2>
+    <p class="lead">
+      Шестерёнка в шапке рядом с «Выйти». Клик — выезжает панель справа, дисплей за ней
+      продолжает жить и обновляться, так что видно результат каждого переключателя сразу.
+    </p>
+
+    <div class="tv">
+      <div class="display-screen">
+        <header class="display-screen__header">
+          <div class="display-screen__brand"><span class="display-screen__brand-mark">●</span>ЦЕХ · LIVE<span class="display-screen__brand-sub">· ПОШИВ-1 + ПОШИВ-2</span></div>
+          <div class="display-screen__clock">14:32</div>
+          <div class="display-screen__meta">
+            <span class="display-status"><span class="display-status__dot"></span>онлайн</span>
+            <span>обновлено 3 с назад</span>
+            <button class="display-btn-icon display-btn-icon--hot">⚙ Настроить</button>
+            <button class="display-btn-icon">⇥ Выйти</button>
+          </div>
+        </header>
+
+        <section class="display-kpi">
+          <div class="display-kpi__card display-kpi__card--ok"><div class="display-kpi__value">412</div><div class="display-kpi__label">Выпущено сегодня</div></div>
+          <div class="display-kpi__card display-kpi__card--accent"><div class="display-kpi__value">168</div><div class="display-kpi__label">В работе</div></div>
+          <div class="display-kpi__card"><div class="display-kpi__value">94</div><div class="display-kpi__label">Ждёт</div></div>
+          <div class="display-kpi__card"><div class="display-kpi__value">37</div><div class="display-kpi__label">ОТК</div></div>
+          <div class="display-kpi__card"><div class="display-kpi__value">12</div><div class="display-kpi__label">ВТО</div></div>
+          <div class="display-kpi__card"><div class="display-kpi__value">58</div><div class="display-kpi__label">Упаковка</div></div>
+          <div class="display-kpi__card display-kpi__card--ok"><div class="display-kpi__value">301</div><div class="display-kpi__label">Готово</div></div>
+          <div class="display-kpi__card display-kpi__card--crit"><div class="display-kpi__value">6</div><div class="display-kpi__label">Брак</div></div>
+        </section>
+
+        <div class="display-board">
+          <section class="display-block">
+            <h2 class="display-block__title">Поток производства</h2>
+            <table class="dmx">
+              <tr>
+                <th class="lbl" rowspan="2">Цвет / размер</th>
+                <th rowspan="2">Крой</th>
+                <th colspan="2" class="grp">Стачив.</th>
+                <th colspan="2">Распошив</th>
+                <th colspan="2" class="grp">ОТК</th>
+                <th colspan="2" class="grp">ВТО</th>
+                <th rowspan="2" class="grp">Упак.</th>
+                <th rowspan="2">Готово</th>
+              </tr>
+              <tr>
+                <th class="grp">▶</th><th>✔</th><th>▶</th><th>✔</th>
+                <th class="grp">▶</th><th>✔</th><th class="grp">▶</th><th>✔</th>
+              </tr>
+              <tr><td class="lbl">Белый · S</td><td>40</td><td class="sew grp">12</td><td class="sew">8</td><td class="sew">6</td><td class="sew">4</td><td class="grp">3</td><td>2</td><td class="grp">1</td><td>0</td><td class="grp">5</td><td>28</td></tr>
+              <tr><td class="lbl">Белый · M</td><td>62</td><td class="sew grp">18</td><td class="sew">11</td><td class="sew">9</td><td class="sew">7</td><td class="grp">5</td><td>4</td><td class="grp">2</td><td>1</td><td class="grp">9</td><td>41</td></tr>
+              <tr class="tot"><td class="lbl">Белый · итого</td><td>102</td><td class="grp">30</td><td>19</td><td>15</td><td>11</td><td class="grp">8</td><td>6</td><td class="grp">3</td><td>1</td><td class="grp">14</td><td>69</td></tr>
+              <tr><td class="lbl">Чёрный · M</td><td>55</td><td class="sew grp">14</td><td class="sew">9</td><td class="sew">7</td><td class="sew">5</td><td class="grp">4</td><td>3</td><td class="grp">1</td><td>1</td><td class="grp">6</td><td>33</td></tr>
+              <tr class="tot"><td class="lbl">Итого</td><td>157</td><td class="grp">44</td><td>28</td><td>22</td><td>16</td><td class="grp">12</td><td>9</td><td class="grp">4</td><td>2</td><td class="grp">20</td><td>102</td></tr>
+            </table>
+          </section>
+          <aside class="display-block">
+            <h2 class="display-block__title">Оборудование<span class="display-block__title-badge">18</span></h2>
+            <ul class="display-equipment-grid">
+              <li class="display-equipment-tile display-equipment-tile--on"><span class="display-equipment-tile__num">01</span><span class="display-equipment-tile__sizes">M</span></li>
+              <li class="display-equipment-tile display-equipment-tile--on"><span class="display-equipment-tile__num">02</span><span class="display-equipment-tile__sizes">S</span></li>
+              <li class="display-equipment-tile display-equipment-tile--warn"><span class="display-equipment-tile__num">03</span><span class="display-equipment-tile__sizes">L</span></li>
+              <li class="display-equipment-tile display-equipment-tile--on"><span class="display-equipment-tile__num">04</span><span class="display-equipment-tile__sizes">M</span></li>
+              <li class="display-equipment-tile display-equipment-tile--off"><span class="display-equipment-tile__num">05</span></li>
+              <li class="display-equipment-tile display-equipment-tile--on"><span class="display-equipment-tile__num">06</span><span class="display-equipment-tile__sizes">M</span></li>
+              <li class="display-equipment-tile display-equipment-tile--off"><span class="display-equipment-tile__num">07</span></li>
+              <li class="display-equipment-tile display-equipment-tile--on"><span class="display-equipment-tile__num">08</span><span class="display-equipment-tile__sizes">XL</span></li>
+            </ul>
+            <div class="display-equipment__totals">
+              <span class="display-equipment__total display-equipment__total--online">12 в работе</span>
+              <span class="display-equipment__total display-equipment__total--warning">2 простой</span>
+              <span class="display-equipment__total display-equipment__total--offline">4 выкл.</span>
+            </div>
+            <div class="display-orphan-calls">
+              <p class="display-orphan-calls__title">Вызовы мастера</p>
+              <div class="display-orphan-calls__item"><span>Иванова А. · Распошив</span><span>4 мин</span></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <div class="drawer__scrim"></div>
+      <aside class="drawer">
+        <div class="drawer__head">
+          <h3>Настройка экрана</h3>
+          <span class="x">✕</span>
+        </div>
+        <div class="drawer__body">
+
+          <div class="field">
+            <label>Подразделения</label>
+            <div class="chips">
+              <span class="chip">01 · Пошив-1<span class="chip__x">✕</span></span>
+              <span class="chip">02 · Пошив-2<span class="chip__x">✕</span></span>
+            </div>
+            <div class="picker">
+              <label class="picker__item picker__item--all"><input type="checkbox" /> Все подразделения</label>
+              <label class="picker__item"><input type="checkbox" checked /> <span class="picker__code">01</span> Пошив-1</label>
+              <label class="picker__item"><input type="checkbox" checked /> <span class="picker__code">02</span> Пошив-2</label>
+              <label class="picker__item picker__item--off"><input type="checkbox" /> <span class="picker__code">03</span> Раскрой</label>
+              <label class="picker__item picker__item--off"><input type="checkbox" /> <span class="picker__code">04</span> Упаковка</label>
+            </div>
+            <label class="chk" style="margin-top:.35rem"><input type="checkbox" checked /> Разделять матрицу по подразделениям</label>
+            <span class="hint">
+              Выбрано несколько — экран считает по всем сразу. Без галочки цифры складываются
+              в один итог; с галочкой матрица делится полосами «01 · Пошив-1», «02 · Пошив-2»
+              и внизу общий итог. «Все подразделения» = не фильтровать вообще.
+            </span>
+          </div>
+
+          <div>
+            <div class="grp-title">Окна</div>
+
+            <div class="row"><span class="sw sw--on"></span><span class="row__name">KPI-лента</span><span class="row__count">6 из 8</span></div>
+            <div class="sub">
+              <label class="chk"><input type="checkbox" checked /> Выпущено сегодня</label>
+              <label class="chk"><input type="checkbox" checked /> В работе</label>
+              <label class="chk"><input type="checkbox" checked /> Ждёт</label>
+              <label class="chk"><input type="checkbox" checked /> ОТК</label>
+              <label class="chk chk--off"><input type="checkbox" /> ВТО</label>
+              <label class="chk chk--off"><input type="checkbox" /> Упаковка</label>
+              <label class="chk"><input type="checkbox" checked /> Готово</label>
+              <label class="chk"><input type="checkbox" checked /> Брак</label>
+            </div>
+
+            <div class="row"><span class="sw sw--on"></span><span class="row__name">Поток производства</span></div>
+            <div class="sub">
+              <label class="chk"><input type="checkbox" checked /> Колонки операций пошива (▶/✔)</label>
+              <label class="chk"><input type="checkbox" checked /> ОТК</label>
+              <label class="chk chk--off"><input type="checkbox" /> ВТО</label>
+              <label class="chk"><input type="checkbox" checked /> Упаковка и Готово</label>
+              <label class="chk"><input type="checkbox" checked /> Строки «Итого по цвету»</label>
+            </div>
+
+            <div class="row row--off"><span class="sw"></span><span class="row__name">Оборудование</span></div>
+            <div class="sub">
+              <label class="chk chk--off"><input type="checkbox" disabled checked /> Счётчики «в работе / простой / выкл.»</label>
+              <label class="chk chk--off"><input type="checkbox" disabled checked /> Размеры на плитке станка</label>
+            </div>
+
+            <div class="row"><span class="sw sw--on"></span><span class="row__name">Вызовы мастера</span></div>
+          </div>
+
+          <div class="field">
+            <label for="m-rot">Если окон больше, чем помещается</label>
+            <select id="m-rot">
+              <option selected>Сжимать под экран (как сейчас)</option>
+              <option>Листать окна по очереди, 20 с</option>
+            </select>
+            <span class="hint">Второй режим — на будущее: витрина сама перелистывает включённые окна. В первой версии можно не делать.</span>
+          </div>
+
+        </div>
+        <div class="drawer__foot">
+          <button class="btn btn--primary">Сохранить в карточку экрана</button>
+          <button class="btn btn--ghost btn--sm">Только сейчас</button>
+          <button class="btn btn--ghost btn--sm">Сбросить</button>
+        </div>
+      </aside>
+    </div>
+    <div class="tv__caption">Панель открыта поверх живого экрана. «Только сейчас» — настройка остаётся в URL и уходит при закрытии вкладки; «Сохранить в карточку экрана» — пишется в БД и подхватится этим ТВ после перезагрузки.</div>
+
+    <div class="note">
+      <b>Панель оборудования подразделению не подчиняется.</b> Так сделано сегодня и
+      осознанно (<code>shopfloor.service.ts</code>): станок не принадлежит подразделению —
+      между сменами на нём шьют разные заказы. Значит, при выборе «Пошив-1 + Пошив-2»
+      матрица и KPI сузятся, а плитки станков останутся все. Если на ТВ нужны только «свои»
+      машины — это отдельная задача про привязку оборудования к подразделению, и решать её
+      надо в справочнике оборудования, а не настройкой экрана.
+    </div>
+
+    <div class="note">
+      <b>Почему счётчики внутри выключенного окна залочены:</b> подпункты — это часть окна.
+      Выключили «Оборудование» — его подпункты гаснут вместе с ним, но галочки не теряются:
+      включили обратно — вернулась та же конфигурация.
+    </div>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section class="sect" id="result">
+    <h2>2. Что видит цех после настройки</h2>
+    <p class="lead">
+      Тот же экран с настройками из панели выше: два подразделения раздельными полосами,
+      6 KPI вместо 8, без колонок ВТО, без панели оборудования. Матрица занимает всю
+      ширину и становится читаемой с другого конца зала — это и есть смысл всей затеи.
+      KPI-лента над матрицей всегда суммарная по выбранным подразделениям: восемь плиток
+      × число подразделений — это опять та же массовка, от которой уходим.
+    </p>
+
+    <div class="tv">
+      <div class="display-screen">
+        <header class="display-screen__header">
+          <div class="display-screen__brand"><span class="display-screen__brand-mark">●</span>ЦЕХ · LIVE<span class="display-screen__brand-sub">· ПОШИВ-1 + ПОШИВ-2</span></div>
+          <div class="display-screen__clock">14:32</div>
+          <div class="display-screen__meta">
+            <span class="display-status"><span class="display-status__dot"></span>онлайн</span>
+            <span>обновлено 3 с назад</span>
+          </div>
+        </header>
+
+        <section class="display-kpi display-kpi--short" style="grid-template-columns:repeat(6,1fr)">
+          <div class="display-kpi__card display-kpi__card--ok"><div class="display-kpi__value">412</div><div class="display-kpi__label">Выпущено сегодня</div></div>
+          <div class="display-kpi__card display-kpi__card--accent"><div class="display-kpi__value">168</div><div class="display-kpi__label">В работе</div></div>
+          <div class="display-kpi__card"><div class="display-kpi__value">94</div><div class="display-kpi__label">Ждёт</div></div>
+          <div class="display-kpi__card"><div class="display-kpi__value">37</div><div class="display-kpi__label">ОТК</div></div>
+          <div class="display-kpi__card display-kpi__card--ok"><div class="display-kpi__value">301</div><div class="display-kpi__label">Готово</div></div>
+          <div class="display-kpi__card display-kpi__card--crit"><div class="display-kpi__value">6</div><div class="display-kpi__label">Брак</div></div>
+        </section>
+
+        <div class="display-board display-board--wide">
+          <section class="display-block">
+            <h2 class="display-block__title">Поток производства</h2>
+            <table class="dmx" style="font-size:calc(var(--display-u)*1.05)">
+              <tr>
+                <th class="lbl" rowspan="2">Цвет / размер</th>
+                <th rowspan="2">Крой</th>
+                <th colspan="2" class="grp">Стачивание</th>
+                <th colspan="2">Распошив</th>
+                <th colspan="2" class="grp">ОТК</th>
+                <th rowspan="2" class="grp">Упаковка</th>
+                <th rowspan="2">Готово</th>
+              </tr>
+              <tr><th class="grp">▶</th><th>✔</th><th>▶</th><th>✔</th><th class="grp">▶</th><th>✔</th></tr>
+              <tr class="band"><td colspan="10">01 · Пошив-1</td></tr>
+              <tr><td class="lbl">Белый · S</td><td>40</td><td class="sew grp">12</td><td class="sew">8</td><td class="sew">6</td><td class="sew">4</td><td class="grp">3</td><td>2</td><td class="grp">5</td><td>28</td></tr>
+              <tr><td class="lbl">Белый · M</td><td>62</td><td class="sew grp">18</td><td class="sew">11</td><td class="sew">9</td><td class="sew">7</td><td class="grp">5</td><td>4</td><td class="grp">9</td><td>41</td></tr>
+              <tr class="tot"><td class="lbl">Белый · итого</td><td>102</td><td class="grp">30</td><td>19</td><td>15</td><td>11</td><td class="grp">8</td><td>6</td><td class="grp">14</td><td>69</td></tr>
+              <tr class="tot"><td class="lbl">Пошив-1 · итого</td><td>102</td><td class="grp">30</td><td>19</td><td>15</td><td>11</td><td class="grp">8</td><td>6</td><td class="grp">14</td><td>69</td></tr>
+              <tr class="band"><td colspan="10">02 · Пошив-2</td></tr>
+              <tr><td class="lbl">Чёрный · M</td><td>55</td><td class="sew grp">14</td><td class="sew">9</td><td class="sew">7</td><td class="sew">5</td><td class="grp">4</td><td>3</td><td class="grp">6</td><td>33</td></tr>
+              <tr><td class="lbl">Чёрный · L</td><td>48</td><td class="sew grp">11</td><td class="sew">7</td><td class="sew">6</td><td class="sew">4</td><td class="grp">3</td><td>2</td><td class="grp">5</td><td>29</td></tr>
+              <tr class="tot"><td class="lbl">Чёрный · итого</td><td>103</td><td class="grp">25</td><td>16</td><td>13</td><td>9</td><td class="grp">7</td><td>5</td><td class="grp">11</td><td>62</td></tr>
+              <tr class="tot"><td class="lbl">Пошив-2 · итого</td><td>103</td><td class="grp">25</td><td>16</td><td>13</td><td>9</td><td class="grp">7</td><td>5</td><td class="grp">11</td><td>62</td></tr>
+              <tr class="gtot"><td class="lbl">Итого по 2 подразделениям</td><td>205</td><td class="grp">55</td><td>35</td><td>28</td><td>20</td><td class="grp">15</td><td>11</td><td class="grp">25</td><td>131</td></tr>
+            </table>
+          </section>
+        </div>
+      </div>
+    </div>
+    <div class="tv__caption">Скрытые окна не оставляют пустого места — грид пересобирается на оставшихся.</div>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section class="sect" id="admin">
+    <h2>3. Карточка экрана в админке (постоянная настройка)</h2>
+    <p class="lead">
+      Сегодня в <code>/admin/display-screens</code> есть только список и создание — отредактировать
+      уже созданный экран нельзя вообще. Здесь появляется карточка экрана: та же настройка окон,
+      подразделение, и «Открыть экран» с готовой ссылкой для закладки на ТВ.
+    </p>
+
+    <div class="admin-shell">
+      <div class="admin-head">
+        <div>
+          <h3>ТВ у швейного потока</h3>
+          <p class="sub">Display-экраны → карточка экрана · логин <code>tv-sewing-1</code> · <span class="badge">Активен</span></p>
+        </div>
+        <div class="acts">
+          <button class="btn">Открыть экран ↗</button>
+          <button class="btn">В архив</button>
+          <button class="btn btn--primary">Сохранить</button>
+        </div>
+      </div>
+
+      <div class="split split--2">
+        <div>
+          <div class="admin-card">
+            <h4>Что показывает экран</h4>
+            <p class="cap">Список окон применяется к этому ТВ. Пустой список = показывать всё (поведение по умолчанию).</p>
+
+            <div class="row"><span class="sw sw--on"></span><span class="row__name">KPI-лента</span><span class="row__count">6 из 8</span></div>
+            <div class="sub">
+              <label class="chk"><input type="checkbox" checked /> Выпущено сегодня</label>
+              <label class="chk"><input type="checkbox" checked /> В работе</label>
+              <label class="chk"><input type="checkbox" checked /> Ждёт</label>
+              <label class="chk"><input type="checkbox" checked /> ОТК</label>
+              <label class="chk chk--off"><input type="checkbox" /> ВТО</label>
+              <label class="chk chk--off"><input type="checkbox" /> Упаковка</label>
+              <label class="chk"><input type="checkbox" checked /> Готово</label>
+              <label class="chk"><input type="checkbox" checked /> Брак</label>
+            </div>
+
+            <div class="row"><span class="sw sw--on"></span><span class="row__name">Поток производства</span></div>
+            <div class="sub">
+              <label class="chk"><input type="checkbox" checked /> Колонки операций пошива (▶/✔)</label>
+              <label class="chk"><input type="checkbox" checked /> ОТК</label>
+              <label class="chk chk--off"><input type="checkbox" /> ВТО</label>
+              <label class="chk"><input type="checkbox" checked /> Упаковка и Готово</label>
+              <label class="chk"><input type="checkbox" checked /> Строки «Итого по цвету»</label>
+            </div>
+
+            <div class="row row--off"><span class="sw"></span><span class="row__name">Оборудование</span></div>
+            <div class="row"><span class="sw sw--on"></span><span class="row__name">Вызовы мастера</span></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="admin-card">
+            <h4>Экран</h4>
+            <p class="cap">Имя видно только в админке, на самом ТВ не показывается.</p>
+            <div class="field">
+              <label for="a-name">Название</label>
+              <input id="a-name" type="text" value="ТВ у швейного потока" />
+            </div>
+            <div class="field" style="margin-top:.7rem">
+              <label>Подразделения</label>
+              <div class="chips">
+                <span class="chip">01 · Пошив-1<span class="chip__x">✕</span></span>
+                <span class="chip">02 · Пошив-2<span class="chip__x">✕</span></span>
+              </div>
+              <div class="picker">
+                <label class="picker__item picker__item--all"><input type="checkbox" /> Все подразделения</label>
+                <label class="picker__item"><input type="checkbox" checked /> <span class="picker__code">01</span> Пошив-1</label>
+                <label class="picker__item"><input type="checkbox" checked /> <span class="picker__code">02</span> Пошив-2</label>
+                <label class="picker__item picker__item--off"><input type="checkbox" /> <span class="picker__code">03</span> Раскрой</label>
+                <label class="picker__item picker__item--off"><input type="checkbox" /> <span class="picker__code">04</span> Упаковка</label>
+              </div>
+              <label class="chk" style="margin-top:.35rem"><input type="checkbox" checked /> Разделять матрицу по подразделениям</label>
+              <span class="hint">Ни одного выбранного = все подразделения. Архивная карточка справочника отваливается сама и экран не ломает.</span>
+            </div>
+          </div>
+
+          <div class="admin-card">
+            <h4>Ссылка для ТВ</h4>
+            <p class="cap">Закладка в браузере телевизора. Настройки берутся из карточки, параметры в URL нужны только для отладки и перебивают карточку.</p>
+            <div class="field">
+              <input type="text" readonly value="https://demo2.teeon.ru/shopfloor/display" />
+              <span class="hint">Отладочные перекрытия: <code>?divisionCode=01,02</code>, <code>?panels=matrix,equipment</code></span>
+            </div>
+          </div>
+
+          <div class="admin-card">
+            <h4>Учётка монитора</h4>
+            <p class="cap">Логин <code>tv-sewing-1</code>, PIN не показывается (в БД только хеш). <span class="badge badge--muted">Как сейчас</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section class="sect" id="spec">
+    <h2>4. Контракт и объём работ</h2>
+    <p class="lead">Дельта поверх существующего кода — намеренно узкая.</p>
+
+    <table class="spec">
+      <tr><th style="width:34%">Место</th><th>Что меняется</th></tr>
+      <tr><td><code>prisma/schema.prisma → DisplayScreenConfig</code></td><td>+ поле <code>panels Json?</code>. <code>null</code> = показывать всё (обратная совместимость, миграция без бэкфилла).</td></tr>
+      <tr><td><code>prisma/schema.prisma → DisplayScreenDivision</code> (новая)</td><td>Связка many-to-many «экран ↔ подразделение»: <code>displayScreenConfigId</code>, <code>companyDivisionId</code>, <code>@@unique([displayScreenConfigId, companyDivisionId])</code>, <code>onDelete: Cascade</code> с обеих сторон. Миграция переносит текущий одиночный <code>companyDivisionId</code> в строку связки; само поле оставляем нетронутым до полного переезда, читать перестаём сразу. Пустая связка = все подразделения — ровно тот же смысл, что <code>null</code> сегодня.</td></tr>
+      <tr><td><code>packages/shared/src/display-screens.ts</code></td><td>+ <code>DisplayPanelsSchema</code> (zod) с дефолтами и + <code>resolveDisplayPanels()</code> — одна функция, которая из <code>null | частичный JSON | query-строка</code> собирает полный объект. Клиент дисплея и админка используют её же.</td></tr>
+      <tr><td><code>display-screens.service.ts</code></td><td>+ <code>PATCH /api/display-screens/:id</code> (сейчас есть только list / create / archive). Правит name, список подразделений, panels, isActive. Несуществующая карточка подразделения в списке → тот же <code>400 COMPANY_DIVISION_NOT_FOUND</code>, что и на create.</td></tr>
+      <tr><td><code>shopfloor.service.ts</code></td><td><code>resolveDisplayDivisionCode</code> → <code>resolveDisplayDivisionCodes</code> (возвращает массив), фильтр заказов <code>companyDivision.code</code> → <code>{ in: [...] }</code>. Панели отдаются в <code>GET /api/shopfloor/display</code> тем же ответом, что и данные. Данные <b>не режем на backend'е</b>: агрегаты дешёвые, а резать на клиенте — значит мгновенно переключать окна без ожидания запроса.</td></tr>
+      <tr><td><code>shopfloor-projection.ts</code> <b>← основной объём</b></td><td>Раздельный режим добавляет матрице третье измерение: сегодня проекция группирует <code>цвет × размер</code>, нужно <code>подразделение → цвет × размер</code> плюс итог по подразделению. Значит, в выборку паспортов едет <code>order.companyDivision {code, name}</code>, а <code>ShopfloorDisplayDto</code> получает уровень блоков подразделения. Суммарный режим (галочка снята) — это ровно сегодняшняя проекция с фильтром <code>in</code>, ноль изменений; если хочется сделать фичу в два захода, раздельный режим отделяется вторым шагом.</td></tr>
+      <tr><td><code>apps/web/app/shopfloor/display/display-board.tsx</code></td><td>Условный рендер 4 блоков + подпунктов, панель-drawer (только при <code>drillIn</code>), запись «только сейчас» в URL.</td></tr>
+      <tr><td><code>apps/web/app/admin/display-screens/[id]/</code></td><td>Новая страница-карточка (сейчас её нет вовсе) + server action на PATCH.</td></tr>
+      <tr><td><code>docs/display-board.md</code>, <code>docs/screens.md §10e</code>, <code>docs/api.md §33</code></td><td>Описание поля <code>panels</code>, нового PATCH и приоритета источников.</td></tr>
+    </table>
+
+    <h3 style="font-size:var(--title-section); margin:1.2rem 0 .4rem;">Приоритет источников (сверху вниз)</h3>
+    <table class="spec">
+      <tr><th style="width:34%">Источник</th><th>Когда</th></tr>
+      <tr><td><code>?panels=…</code> / <code>?divisionCode=01,02</code> в URL</td><td>Отладка, «только сейчас» из панели, старые TV-закладки. Перебивает всё. Формат прежний, просто через запятую — одиночный <code>?divisionCode=01</code> продолжает работать без изменений.</td></tr>
+      <tr><td><code>DisplayScreenConfig</code> учётки DISPLAY</td><td>Обычный режим ТВ в цехе. Ровно то, что настроили в админке: связка подразделений + panels.</td></tr>
+      <tr><td>Дефолт «показывать всё»</td><td>Экран без карточки (админ открыл дисплей со своего ноутбука), пустая связка подразделений и все существующие экраны до первой настройки.</td></tr>
+    </table>
+
+    <h3 style="font-size:var(--title-section); margin:1.2rem 0 .4rem;">Формат <code>panels</code></h3>
+<pre><span class="c">// DisplayScreenConfig.panels — все ключи опциональны,
+// отсутствие ключа = значение по умолчанию (true)</span>
+{
+  <span class="k">"kpi"</span>: { <span class="k">"on"</span>: <span class="s">true</span>,
+           <span class="k">"cards"</span>: [<span class="s">"producedToday"</span>,<span class="s">"inWork"</span>,<span class="s">"waiting"</span>,<span class="s">"qc"</span>,<span class="s">"finished"</span>,<span class="s">"defect"</span>] },
+  <span class="k">"matrix"</span>: { <span class="k">"on"</span>: <span class="s">true</span>, <span class="k">"sewing"</span>: <span class="s">true</span>, <span class="k">"qc"</span>: <span class="s">true</span>, <span class="k">"wto"</span>: <span class="s">false</span>,
+              <span class="k">"post"</span>: <span class="s">true</span>, <span class="k">"colorTotals"</span>: <span class="s">true</span>,
+              <span class="c">// раздельные полосы по подразделениям; false = один общий итог</span>
+              <span class="k">"byDivision"</span>: <span class="s">true</span> },
+  <span class="k">"equipment"</span>: { <span class="k">"on"</span>: <span class="s">false</span>, <span class="k">"totals"</span>: <span class="s">true</span>, <span class="k">"sizes"</span>: <span class="s">true</span> },
+  <span class="k">"calls"</span>: { <span class="k">"on"</span>: <span class="s">true</span> }
+}
+
+<span class="c">// сами подразделения — НЕ здесь, а строками DisplayScreenDivision:
+// это FK на справочник, а не настройка вида. Пустая связка = все.</span>
+
+<span class="c">// та же настройка короткой строкой в URL (для закладки/отладки):</span>
+<span class="c">// ?divisionCode=01,02&panels=kpi:producedToday+inWork+waiting+qc+finished+defect,matrix:-wto+byDivision,calls</span>
+</pre>
+
+    <div class="note">
+      <b>Что сознательно НЕ входит в первую версию:</b> перелистывание окон по таймеру
+      (селект в панели показан как задел), фильтр по конкретным заказам или цветам,
+      и разные наборы окон по расписанию (день/ночь). Всё это — надстройки над тем же
+      полем <code>panels</code>, если понадобится.
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

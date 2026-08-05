@@ -5395,8 +5395,12 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   border-radius: inherit;
   cursor: pointer;
 }
+/* Номер станка держим заметно мельче, чем цифры матрицы: плитка
+   квадратная (aspect-ratio 1/1), и крупный номер на 30+ станках
+   упирался в иконку типа и в строку размеров. 1.15 единицы шкалы —
+   номер по-прежнему главный сигнал плитки, но не распирает её. */
 .display-equipment-tile__num {
-  font-size: calc(var(--display-u) * 1.5);
+  font-size: calc(var(--display-u) * 1.15);
   font-weight: 800;
   letter-spacing: 0.02em;
   line-height: 1;
