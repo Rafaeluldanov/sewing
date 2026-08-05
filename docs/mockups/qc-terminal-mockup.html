@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Окно ОТК (/qc) — текущее состояние</title>
+<style>
+/* ---------------------------------------------------------------------------
+   Токены — копия из apps/web/app/globals.css (:root). Макет сознательно НЕ
+   тянет globals.css целиком: он должен открываться двойным кликом без сборки.
+   Любая правка палитры/радиусов — сначала в globals.css, потом сюда.
+   --------------------------------------------------------------------------- */
+:root{
+  --color-bg-soft:#f5f5f3; --color-bg-card:#fff;
+  --color-fg:#1c1c1a; --color-fg-muted:#5f5f5b; --color-fg-subtle:#8a8a86;
+  --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+  --color-accent:#2f7fd1; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+  --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f;
+  --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+  --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+  --color-warn:#9a6f1e; --color-warn-soft:#fcecc9;
+  --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+  --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-pill:999px;
+  --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+  --shadow-md:0 6px 18px rgba(20,20,20,.08);
+  --tap-min:48px;
+  --title-page:1.6rem; --title-hero:1.35rem; --title-item:1.05rem;
+  --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--color-bg-soft); color:var(--color-fg);
+  font-family:'PT Sans',ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:16px; line-height:1.45;
+}
+
+/* Обвязка макета (не часть продукта) ------------------------------------- */
+.mk-head{max-width:1180px;margin:0 auto;padding:1.6rem 1rem .4rem}
+.mk-head h1{font-size:var(--title-page);margin:0 0 .35rem}
+.mk-head p{margin:0;color:var(--color-fg-muted);font-size:.95rem}
+.mk-note{
+  max-width:1180px;margin:1rem auto 0;padding:.7rem .9rem;
+  background:var(--color-accent-soft);border-radius:var(--radius-md);
+  font-size:.9rem;color:#123f6b;
+}
+.mk-grid{
+  max-width:1180px;margin:0 auto;padding:1.2rem 1rem 3rem;
+  display:grid;gap:1.5rem;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));
+  align-items:start;
+}
+.mk-col{min-width:0}
+.mk-cap{
+  display:flex;gap:.5rem;align-items:baseline;margin:0 0 .55rem;
+  font-size:var(--title-label);letter-spacing:.04em;text-transform:uppercase;
+  color:var(--color-fg-subtle);font-weight:700;
+}
+.mk-cap b{
+  font-size:.72rem;background:var(--color-fg);color:#fff;
+  border-radius:var(--radius-pill);padding:.1rem .45rem;letter-spacing:0;
+}
+.mk-sub{margin:0 0 .7rem;font-size:.85rem;color:var(--color-fg-muted)}
+/* Рамка «телефона» — окно ОТК mobile-first */
+.mk-phone{
+  background:var(--color-bg-soft);border:1px solid var(--color-border-strong);
+  border-radius:var(--radius-lg);box-shadow:var(--shadow-md);overflow:hidden;
+}
+
+/* --- TerminalShell: шапка роли ------------------------------------------ */
+.tshell{background:#fff;border-bottom:1px solid var(--color-border);padding:.7rem .85rem}
+.tshell__top{display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem}
+.tshell__name{font-size:var(--title-hero);font-weight:700;line-height:1.2}
+.tshell__role{font-size:.82rem;color:var(--color-fg-muted)}
+.tshell__dots{
+  width:34px;height:34px;flex:none;border:1px solid var(--color-border);
+  border-radius:var(--radius-sm);background:#fff;color:var(--color-fg-muted);
+  font-size:1.1rem;line-height:32px;text-align:center;
+}
+.tshell__fields{display:flex;gap:1.2rem;margin-top:.55rem;flex-wrap:wrap}
+.tshell__f-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;color:var(--color-fg-subtle)}
+.tshell__f-val{font-size:.92rem;font-weight:700}
+.tshell__f-meta{font-size:.78rem;color:var(--color-fg-subtle)}
+.tshell__status{
+  margin-top:.6rem;font-size:.82rem;display:flex;align-items:center;gap:.4rem;
+  color:var(--color-ok-fg);
+}
+.tshell__status--off{color:var(--color-fg-muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--color-ok);flex:none}
+.dot--off{background:var(--color-fg-subtle)}
+
+.tbody{padding:.85rem}
+
+/* --- scan-card ----------------------------------------------------------- */
+.scan-card{
+  background:var(--color-bg-card);border:1px solid var(--color-border);
+  border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);
+  padding:.95rem;display:grid;gap:.75rem;
+}
+.scan-card + .scan-card{margin-top:.8rem}
+.scan-card__title{
+  margin:0;font-size:var(--title-section);font-weight:700;
+  display:flex;align-items:center;
+}
+.scan-card__hint{margin:.15rem 0 0;font-size:.88rem;color:var(--color-fg-muted)}
+.scan-card__manual-toggle{
+  background:none;border:none;padding:0;color:var(--color-accent-fg);
+  font:inherit;font-size:.88rem;text-decoration:underline;text-align:center;
+}
+.scan-card__input{display:grid;gap:.3rem}
+.scan-card__input-label{font-size:.8rem;color:var(--color-fg-muted)}
+.scan-card__input input{
+  width:100%;min-height:var(--tap-min);padding:.5rem .7rem;font:inherit;
+  border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);
+}
+
+/* --- Кнопки -------------------------------------------------------------- */
+.btn{
+  min-height:var(--tap-min);padding:.55rem 1rem;font:inherit;font-weight:700;
+  border:1px solid var(--color-border-strong);border-radius:var(--radius-md);
+  background:#fff;color:var(--color-fg);display:inline-flex;align-items:center;
+  justify-content:center;gap:.4rem;
+}
+.btn-block{display:flex;width:100%}
+.btn-lg{min-height:56px;font-size:1.05rem}
+.btn-primary{
+  background:var(--btn-primary-bg);border-color:var(--btn-primary-edge);
+  color:var(--btn-primary-fg);
+}
+.btn-success{background:var(--color-ok);border-color:var(--color-ok);color:#fff}
+
+/* --- Иконки (inline svg-заглушки квадратом) ------------------------------ */
+.ico{width:22px;height:22px;flex:none;margin-right:.45rem;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ico--sm{width:20px;height:20px;margin-right:.4rem}
+
+/* --- info / error боксы --------------------------------------------------- */
+.info-box{
+  background:var(--color-accent-soft);color:#123f6b;border-radius:var(--radius-md);
+  padding:.55rem .7rem;font-size:.88rem;
+}
+.error-box{
+  background:var(--color-danger-soft);color:var(--color-danger-fg);
+  border-radius:var(--radius-md);padding:.55rem .7rem;font-size:.88rem;
+}
+
+/* --- qc-card: рабочая карточка паспорта ---------------------------------- */
+.qc-card{
+  background:var(--color-bg-card);border:1px solid var(--color-border);
+  border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);
+  padding:.95rem;display:grid;gap:.8rem;
+}
+.qc-card__header{display:flex;justify-content:space-between;align-items:flex-start;gap:.6rem}
+.qc-card__label{font-size:var(--title-label);text-transform:uppercase;letter-spacing:.04em;color:var(--color-fg-subtle);font-weight:700}
+.qc-card__number{font-size:var(--title-hero);font-weight:700;line-height:1.15}
+.badge{
+  font-size:.75rem;font-weight:700;border-radius:var(--radius-pill);
+  padding:.2rem .6rem;background:var(--color-warn-soft);color:var(--color-warn);
+}
+.badge--ok{background:var(--color-ok-soft);color:var(--color-ok-fg)}
+.qc-card__grid{
+  margin:0;display:grid;grid-template-columns:auto 1fr;gap:.3rem .8rem;
+  font-size:.9rem;border-top:1px solid var(--color-border);padding-top:.7rem;
+}
+.qc-card__grid dt{color:var(--color-fg-muted)}
+.qc-card__grid dd{margin:0;font-weight:700;text-align:right}
+.qc-card__qty{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;
+  border-top:1px solid var(--color-border);padding-top:.75rem;
+}
+.qc-card__qty > div{
+  text-align:center;background:var(--color-bg-soft);border-radius:var(--radius-md);
+  padding:.5rem .3rem;
+}
+.qc-card__qty-label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:var(--color-fg-subtle);font-weight:700}
+.qc-card__qty-value{display:block;font-size:1.5rem;line-height:1.2;margin-top:.15rem}
+.qc-card__qty-value--danger{color:var(--color-danger)}
+.qc-card__qty-value--success{color:var(--color-ok-fg)}
+.qc-card__refresh{text-align:center}
+.qc-card__section-title{margin:0 0 .5rem;font-size:var(--title-subsection);font-weight:700}
+.qc-card__defect-form{border-top:1px solid var(--color-border);padding-top:.8rem}
+.form-row{display:grid;gap:.3rem;margin-bottom:.6rem}
+.form-row label{font-size:.8rem;color:var(--color-fg-muted)}
+.form-row select,.form-row input,.form-row textarea{
+  width:100%;min-height:var(--tap-min);padding:.5rem .7rem;font:inherit;
+  border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);background:#fff;
+}
+.form-row textarea{min-height:64px;resize:vertical}
+.hint{font-size:.8rem;color:var(--color-fg-muted);margin:.2rem 0 0}
+.qc-card__history{border-top:1px solid var(--color-border);padding-top:.7rem;font-size:.88rem}
+.qc-card__history summary{cursor:pointer;color:var(--color-accent-fg);font-weight:700}
+.qc-card__history ul{margin:.5rem 0 0;padding-left:1.1rem}
+.qc-card__history-meta{color:var(--color-fg-subtle);font-size:.8rem;display:block}
+.qc-card__sticky-actions{
+  border-top:1px solid var(--color-border);padding-top:.75rem;
+  display:grid;gap:.5rem;position:sticky;bottom:0;background:var(--color-bg-card);
+}
+.rework-list{list-style:none;margin:0;padding:0;display:grid;gap:.4rem}
+.rework-option{
+  display:flex;gap:.55rem;align-items:center;border:1px solid var(--color-border-strong);
+  border-radius:var(--radius-md);padding:.6rem .7rem;font-size:.9rem;
+}
+.rework-option--sel{border-color:var(--color-accent);background:var(--color-accent-soft)}
+
+/* --- Старт смены (SeamstressShiftStart) ---------------------------------- */
+.start-step{font-size:.8rem;color:var(--color-fg-subtle);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.op-pick{display:grid;gap:.45rem}
+.op-pick button{justify-content:flex-start;text-align:left}
+</style>
+</head>
+<body>
+
+<div class="mk-head">
+  <h1>Окно ОТК <code>/qc</code> — как выглядит сейчас</h1>
+  <p>Снято с кода: <code>apps/web/app/qc/qc-terminal.tsx</code> и <code>qc-work-card.tsx</code>. Правки по упаковке этот экран не затрагивали.</p>
+</div>
+
+<div class="mk-note">
+  <strong>Важно про развилку.</strong> Окно ОТК по-прежнему выбирает режим по КАТЕГОРИИ операции
+  (<code>activeOperationCategory === 'QC'</code>, qc-terminal.tsx:128) — так же, как раньше делала упаковка.
+  Пока в категории <code>QC</code> одна операция, это работает. Если в неё заведут вторую
+  (например «ОТК входной» первым шагом), выстрелит ровно тот же баг, что чинили на упаковке.
+</div>
+
+<div class="mk-grid">
+
+  <!-- ============ 1. Смена не начата ============ -->
+  <div class="mk-col">
+    <div class="mk-cap"><b>1</b> Смена не начата</div>
+    <p class="mk-sub">Ветка <code>!isShiftActive</code> → переиспользуется <code>SeamstressShiftStart</code>: скан QR рабочего места, затем выбор операции из allow-листа станка.</p>
+    <div class="mk-phone">
+      <div class="tshell">
+        <div class="tshell__top">
+          <div>
+            <div class="tshell__name">Смирнова А. П.</div>
+            <div class="tshell__role">ОТК</div>
+          </div>
+          <button class="tshell__dots">⋮</button>
+        </div>
+        <div class="tshell__status tshell__status--off"><span class="dot dot--off"></span>Смена не начата — отсканируйте QR рабочего места</div>
+      </div>
+      <div class="tbody">
+        <div class="scan-card">
+          <div class="start-step">Шаг 1 из 2</div>
+          <h2 class="scan-card__title">
+            <svg class="ico" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+            Начать смену
+          </h2>
+          <p class="scan-card__hint">Отсканируйте QR рабочего места ОТК — дальше выберите операцию.</p>
+          <button class="btn btn-primary btn-lg btn-block">
+            <svg class="ico ico--sm" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM19 19h2v2h-2z"/></svg>
+            Сканировать рабочее место
+          </button>
+          <button class="scan-card__manual-toggle">Ввести код вручную</button>
+        </div>
+
+        <div class="scan-card">
+          <div class="start-step">Шаг 2 из 2 · qc-station-01</div>
+          <h2 class="scan-card__title">Выберите операцию</h2>
+          <div class="op-pick">
+            <button class="btn btn-block">ОТК</button>
+          </div>
+          <p class="scan-card__hint">Список берётся из <code>EquipmentOperation</code> этого рабочего места.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 2. Смена активна, ждём скан ============ -->
+  <div class="mk-col">
+    <div class="mk-cap"><b>2</b> Смена активна — ждём скан</div>
+    <p class="mk-sub">Штатное состояние. Сверху — баннер возвратов от мастера (<code>IncomingReworksBanner</code>), если они есть; он пропадает, как только открыта карточка.</p>
+    <div class="mk-phone">
+      <div class="tshell">
+        <div class="tshell__top">
+          <div>
+            <div class="tshell__name">Смирнова А. П.</div>
+            <div class="tshell__role">ОТК</div>
+          </div>
+          <button class="tshell__dots">⋮</button>
+        </div>
+        <div class="tshell__fields">
+          <div><div class="tshell__f-label">Операция</div><div class="tshell__f-val">ОТК</div><div class="tshell__f-meta">QC</div></div>
+          <div><div class="tshell__f-label">Оборудование</div><div class="tshell__f-val">Стол ОТК №1</div><div class="tshell__f-meta">qc-station-01</div></div>
+        </div>
+        <div class="tshell__status"><span class="dot"></span>Смена с 08:12</div>
+      </div>
+      <div class="tbody">
+        <div class="scan-card">
+          <h2 class="scan-card__title">
+            <svg class="ico" viewBox="0 0 24 24"><path d="M12 2 3 6v6c0 5 3.8 8.4 9 10 5.2-1.6 9-5 9-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+            Возвращены на повторную проверку (2)
+          </h2>
+          <p class="scan-card__hint">Отсканируйте QR паспорта, чтобы начать повторную проверку.</p>
+          <ul style="margin:0;padding:.25rem 0 0 1.1rem;font-size:.95rem;line-height:1.4">
+            <li><strong>P-20260805-0114</strong> · Футболка базовая · белый · L</li>
+            <li><strong>P-20260805-0121</strong> · Футболка базовая · чёрный · M</li>
+          </ul>
+        </div>
+
+        <div class="scan-card">
+          <div>
+            <h2 class="scan-card__title">
+              <svg class="ico" viewBox="0 0 24 24"><path d="M12 2 3 6v6c0 5 3.8 8.4 9 10 5.2-1.6 9-5 9-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+              Сканировать паспорт
+            </h2>
+            <p class="scan-card__hint">Сканируйте QR паспорта — откроется рабочая карточка ОТК.</p>
+          </div>
+          <button class="btn btn-primary btn-lg btn-block">
+            <svg class="ico ico--sm" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM19 19h2v2h-2z"/></svg>
+            Сканировать паспорт
+          </button>
+          <label class="scan-card__input">
+            <span class="scan-card__input-label">Код паспорта</span>
+            <input type="text" placeholder="Например, P-20260418-0001">
+          </label>
+          <button class="btn btn-block">Найти паспорт</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 3. Рабочая карточка ============ -->
+  <div class="mk-col">
+    <div class="mk-cap"><b>3</b> Паспорт открыт — рабочая карточка</div>
+    <p class="mk-sub"><code>QcWorkCard</code>: реквизиты → три счётчика → форма брака → история → закреплённая снизу панель действий.</p>
+    <div class="mk-phone">
+      <div class="tshell">
+        <div class="tshell__top">
+          <div>
+            <div class="tshell__name">Смирнова А. П.</div>
+            <div class="tshell__role">ОТК</div>
+          </div>
+          <button class="tshell__dots">⋮</button>
+        </div>
+        <div class="tshell__status"><span class="dot"></span>Смена с 08:12</div>
+      </div>
+      <div class="tbody">
+        <section class="qc-card">
+          <header class="qc-card__header">
+            <div>
+              <div class="qc-card__label">Паспорт</div>
+              <div class="qc-card__number">P-20260805-0114</div>
+            </div>
+            <span class="badge">Возвращён мастером</span>
+          </header>
+
+          <dl class="qc-card__grid">
+            <dt>Изделие</dt><dd>Футболка базовая</dd>
+            <dt>Цвет</dt><dd>белый</dd>
+            <dt>Размер</dt><dd>L</dd>
+            <dt>Заказ</dt><dd>01-00042</dd>
+            <dt>Рулон</dt><dd>R-118</dd>
+            <dt>Операция</dt><dd>ОТК</dd>
+          </dl>
+
+          <div class="qc-card__qty">
+            <div><span class="qc-card__qty-label">Раскроено</span><strong class="qc-card__qty-value">40</strong></div>
+            <div><span class="qc-card__qty-label">Брак</span><strong class="qc-card__qty-value qc-card__qty-value--danger">3</strong></div>
+            <div><span class="qc-card__qty-label">Годных</span><strong class="qc-card__qty-value qc-card__qty-value--success">37</strong></div>
+          </div>
+
+          <div class="qc-card__refresh"><button class="scan-card__manual-toggle">Обновить данные</button></div>
+
+          <form class="qc-card__defect-form">
+            <h3 class="qc-card__section-title">Зафиксировать брак</h3>
+            <div class="form-row">
+              <label for="d1">Тип брака</label>
+              <select id="d1"><option>Пропуск строчки</option><option>Дыра / зацеп</option><option>Пятно</option></select>
+            </div>
+            <div class="form-row">
+              <label for="d2">Количество, шт.</label>
+              <input id="d2" type="number" value="1">
+              <div class="hint">Осталось доступно для брака: <strong>37</strong> шт.</div>
+            </div>
+            <div class="form-row">
+              <label for="d3">Комментарий</label>
+              <textarea id="d3" placeholder="Опционально, до 500 символов"></textarea>
+            </div>
+          </form>
+
+          <details class="qc-card__history">
+            <summary>История брака (2)</summary>
+            <ul>
+              <li><strong>2 шт.</strong> · Пропуск строчки
+                <span class="qc-card__history-meta">05.08.2026, 09:14 · Смирнова А. П.</span></li>
+              <li><strong>1 шт.</strong> · Пятно
+                <span class="qc-card__history-meta">05.08.2026, 09:31 · Смирнова А. П.</span></li>
+            </ul>
+          </details>
+
+          <div class="qc-card__sticky-actions">
+            <button class="btn btn-primary btn-block">Добавить брак</button>
+            <button class="btn btn-block">✎ Корректировка количества</button>
+            <button class="btn btn-block">↺ Вернуть на переделку</button>
+            <button class="btn btn-success btn-block btn-lg">Проверка выполнена</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 4. Вернуть на переделку ============ -->
+  <div class="mk-col">
+    <div class="mk-cap"><b>4</b> «Вернуть на переделку»</div>
+    <p class="mk-sub">Раскрывается вместо панели действий. Цель выбирается из <code>eligibleReworkTargets</code> — операция + конкретная швея-финишёр.</p>
+    <div class="mk-phone">
+      <div class="tbody">
+        <section class="qc-card">
+          <h3 class="qc-card__section-title">Вернуть на переделку</h3>
+          <p class="hint">Выберите операцию и швею, которой возвращаем:</p>
+          <ul class="rework-list">
+            <li class="rework-option rework-option--sel"><input type="radio" checked><span><strong>Распошив</strong> · Иванова М. С.</span></li>
+            <li class="rework-option"><input type="radio"><span><strong>Оверлок 2</strong> · Петрова Л. Н.</span></li>
+            <li class="rework-option"><input type="radio"><span><strong>Киперка</strong> · Сидорова Е. В.</span></li>
+          </ul>
+          <div class="qc-card__sticky-actions">
+            <button class="btn btn-block">Отмена</button>
+            <button class="btn btn-primary btn-block">Вернуть</button>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="mk-cap" style="margin-top:1.4rem"><b>5</b> После «Проверка выполнена»</div>
+    <p class="mk-sub">Карточка остаётся на экране с бейджем; исчезает сама, когда следующая операция подхватит паспорт (<code>removedFromQc</code>, поллинг).</p>
+    <div class="mk-phone">
+      <div class="tbody">
+        <section class="qc-card">
+          <header class="qc-card__header">
+            <div>
+              <div class="qc-card__label">Паспорт</div>
+              <div class="qc-card__number">P-20260805-0114</div>
+            </div>
+            <span class="badge badge--ok">Проверено ОТК</span>
+          </header>
+          <div class="info-box">Проверка отмечена как выполненная</div>
+          <div class="qc-card__qty">
+            <div><span class="qc-card__qty-label">Раскроено</span><strong class="qc-card__qty-value">40</strong></div>
+            <div><span class="qc-card__qty-label">Брак</span><strong class="qc-card__qty-value qc-card__qty-value--danger">3</strong></div>
+            <div><span class="qc-card__qty-label">Годных</span><strong class="qc-card__qty-value qc-card__qty-value--success">37</strong></div>
+          </div>
+          <div class="qc-card__sticky-actions">
+            <button class="btn btn-primary btn-block btn-lg">Сканировать другой паспорт</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 6. Не та операция ============ -->
+  <div class="mk-col">
+    <div class="mk-cap"><b>6</b> Смена не на ОТК</div>
+    <p class="mk-sub">Ветка <code>!onQcShift</code>. Это ровно тот экран, который на упаковке ошибочно НЕ показывался «Распаковке» — там вместо него открывались коробки.</p>
+    <div class="mk-phone">
+      <div class="tshell">
+        <div class="tshell__top">
+          <div>
+            <div class="tshell__name">Смирнова А. П.</div>
+            <div class="tshell__role">ОТК</div>
+          </div>
+          <button class="tshell__dots">⋮</button>
+        </div>
+        <div class="tshell__fields">
+          <div><div class="tshell__f-label">Операция</div><div class="tshell__f-val">ВТО</div><div class="tshell__f-meta">WTO</div></div>
+        </div>
+        <div class="tshell__status"><span class="dot"></span>Смена с 08:12</div>
+      </div>
+      <div class="tbody">
+        <div class="scan-card">
+          <h2 class="scan-card__title">
+            <svg class="ico" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+            Смена не на ОТК
+          </h2>
+          <p class="scan-card__hint">
+            Текущая операция — <strong>ВТО</strong>. Чтобы принимать паспорты на ОТК,
+            завершите смену через меню в правом верхнем углу и начните новую на рабочем месте ОТК.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
