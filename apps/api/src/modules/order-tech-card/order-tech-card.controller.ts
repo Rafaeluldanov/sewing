@@ -1,10 +1,12 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import {
   CreateOrderTechCardLineSchema,
+  CreateOrderTechCardLinesSchema,
   CreateOrderTechCardParameterSchema,
   SetOrderTechCardParameterValueSchema,
   UpdateOrderTechCardLineSchema,
   type CreateOrderTechCardLineDto,
+  type CreateOrderTechCardLinesDto,
   type CreateOrderTechCardParameterDto,
   type OrderTechCardParametersDto,
   type SetOrderTechCardParameterValueDto,
@@ -97,6 +99,22 @@ export class OrderTechCardLinesController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<OrderTechCardParametersDto> {
     return this.service.createManualLine(orderId, dto, user.employeeId);
+  }
+
+  /**
+   * Завести пачку строк одним заходом: одна транзакция и ОДНА пересборка
+   * производных на всю пачку (по строке за запрос это было бы N пересборок
+   * снимка, плана операций и потребностей цеха).
+   */
+  @Post('bulk')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  createMany(
+    @Param('id') orderId: string,
+    @Body(new ZodValidationPipe(CreateOrderTechCardLinesSchema))
+    dto: CreateOrderTechCardLinesDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderTechCardParametersDto> {
+    return this.service.createManualLines(orderId, dto, user.employeeId);
   }
 
   /** Правка полей строки (норма/ед./цвет/название/плотность). */

@@ -15,6 +15,7 @@
 import { revalidatePath } from 'next/cache';
 import {
   CreateOrderTechCardLineSchema,
+  CreateOrderTechCardLinesSchema,
   CreateOrderTechCardParameterSchema,
   SaveOrderTechCardAsTemplateSchema,
   SetOrderTechCardParameterValueSchema,
@@ -26,6 +27,7 @@ import { ApiRequestError, errorText } from '@/lib/api';
 import {
   applyOrderTechCardParameterToAll,
   createOrderTechCardLine,
+  createOrderTechCardLines,
   createOrderTechCardParameter,
   deleteOrderTechCardLine,
   deleteOrderTechCardParameter,
@@ -179,6 +181,37 @@ export async function createTechCardLineAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return { ok: false, error: errorText(e, 'Не удалось добавить материал') };
+    }
+    throw e;
+  }
+}
+
+/**
+ * Завести ПАЧКУ строк материала: заведение идёт черновыми строками прямо в
+ * таблице, и уезжают они одним запросом — на бэке это одна транзакция и одна
+ * пересборка производных вместо N.
+ */
+export async function createTechCardLinesAction(
+  orderId: string,
+  payload: unknown,
+): Promise<TechCardParamsActionResult> {
+  const parsed = CreateOrderTechCardLinesSchema.safeParse(payload);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные строк',
+    };
+  }
+  try {
+    const data = await createOrderTechCardLines(orderId, parsed.data);
+    revalidateOrder(orderId);
+    return { ok: true, data };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        error: errorText(e, 'Не удалось добавить материалы'),
+      };
     }
     throw e;
   }

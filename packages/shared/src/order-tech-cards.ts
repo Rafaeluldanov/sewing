@@ -309,9 +309,60 @@ export const CreateOrderTechCardLineSchema = z.object({
   note: z.string().trim().max(500).nullish(),
   /** Цвет строки: пусто = «не задан» (как `NO_COLOR` в шаблоне). */
   colorText: z.string().trim().max(120).nullish(),
+  /**
+   * Подтип материала — он задаёт НАБОР характеристик. Как и в правке, руками
+   * не выбирается: UI выводит его из `fabricType` и присылает вместе с ним.
+   */
+  subtypeKey: z.string().trim().max(60).nullish(),
+  /**
+   * Значения характеристик: `{ density: 190, rollWidth: '180' }`. Пусто/`null`
+   * — просто не записываем (очищать в новой строке нечего).
+   *
+   * Задавать характеристики при заведении НЕОБЯЗАТЕЛЬНО: строка создаётся
+   * «голой», а параметры дозаполняются после — иначе заведение десяти
+   * материалов упиралось бы в десять панелей характеристик.
+   */
+  characteristics: z
+    .record(z.string(), z.union([z.string(), z.number(), z.null()]))
+    .optional(),
 });
 export type CreateOrderTechCardLineDto = z.infer<
   typeof CreateOrderTechCardLineSchema
+>;
+
+/**
+ * Максимум строк в одной пачке. Ограничение не про БД, а про пересборку:
+ * каждая пачка тянет за собой ОДИН `resyncTechCardDerived` (снимок
+ * материалов + план операций + потребности цеха), и его стоимость растёт
+ * вместе с числом строк. Двадцати хватает на любой реальный список
+ * фурнитуры; упрёмся — поднимем по факту замера.
+ */
+export const ORDER_TECH_CARD_LINES_BATCH_MAX = 20;
+
+/**
+ * Завести НЕСКОЛЬКО строк материала за один заход.
+ *
+ * Раньше материалы добавлялись по одному, и каждый вызов заканчивался
+ * пересборкой производных (`createManualLine` → `resyncTechCardDerived`):
+ * десять материалов = десять пересборок и десять шансов упасть на середине.
+ * Пачка идёт одной транзакцией и одной пересборкой в конце.
+ *
+ * Расцветка — общая на всю пачку: строки заводятся в одной таблице, и
+ * разъезжаться по разным группам им незачем.
+ */
+export const CreateOrderTechCardLinesSchema = z.object({
+  /** null = order-level группа (заказ с 0–1 расцветкой). */
+  orderVariantId: z.string().min(1).nullish(),
+  lines: z
+    .array(CreateOrderTechCardLineSchema.omit({ orderVariantId: true }))
+    .min(1, 'Добавьте хотя бы одну строку')
+    .max(
+      ORDER_TECH_CARD_LINES_BATCH_MAX,
+      `За один раз можно добавить не больше ${ORDER_TECH_CARD_LINES_BATCH_MAX} материалов`,
+    ),
+});
+export type CreateOrderTechCardLinesDto = z.infer<
+  typeof CreateOrderTechCardLinesSchema
 >;
 
 /**

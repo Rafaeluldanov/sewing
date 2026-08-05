@@ -10,6 +10,7 @@
 
 import type {
   CreateOrderTechCardLineDto,
+  CreateOrderTechCardLinesDto,
   CreateOrderTechCardParameterDto,
   OrderTechCardParametersDto,
   SaveOrderTechCardAsTemplateDto,
@@ -80,6 +81,20 @@ export function createOrderTechCardLine(
 ): Promise<OrderTechCardParametersDto> {
   return apiFetch<OrderTechCardParametersDto>(
     `/orders/${encodeURIComponent(orderId)}/tech-card/lines`,
+    { method: 'POST', body },
+  );
+}
+
+/**
+ * Завести ПАЧКУ строк: одна транзакция и одна пересборка производных на
+ * бэке. По строке за запрос — это N пересборок снимка и потребностей.
+ */
+export function createOrderTechCardLines(
+  orderId: string,
+  body: CreateOrderTechCardLinesDto,
+): Promise<OrderTechCardParametersDto> {
+  return apiFetch<OrderTechCardParametersDto>(
+    `/orders/${encodeURIComponent(orderId)}/tech-card/lines/bulk`,
     { method: 'POST', body },
   );
 }

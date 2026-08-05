@@ -23,9 +23,10 @@
  * поднимает его в блок через `onData` — все карточки видят одно состояние.
  */
 
-import { Fragment, useState, useTransition } from 'react';
+import { Fragment, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  ORDER_TECH_CARD_LINES_BATCH_MAX,
   resolveVariantParamsGroup,
   type OrderTechCardLineDto,
   type OrderTechCardParametersDto,
@@ -48,7 +49,7 @@ import { CharacteristicCombobox } from '@/components/materials/characteristic-co
 
 import {
   applyTechCardParamToAllAction,
-  createTechCardLineAction,
+  createTechCardLinesAction,
   createTechCardParamAction,
   deleteTechCardLineAction,
   deleteTechCardParamAction,
@@ -69,7 +70,88 @@ interface Props {
   onData: (data: OrderTechCardParametersDto) => void;
 }
 
-const emptyLine = { name: '', unit: '', qtyPerUnit: '', colorText: '' };
+/**
+ * Черновая строка материала — та, что заполняется ПРЯМО В ТАБЛИЦЕ, ячейка под
+ * ячейкой с сохранёнными строками. Отдельной формы под таблицей больше нет:
+ * у таблицы `auto`-раскладка, ширины колонок задаёт содержимое, и повторить
+ * их снаружи нельзя — форма разъезжалась на первом длинном названии.
+ *
+ * Черновиков может быть сколько угодно (до `ORDER_TECH_CARD_LINES_BATCH_MAX`):
+ * фурнитура заводится списком, а не по одному материалу за заход.
+ */
+interface DraftLine {
+  /** Локальный ключ строки — id появится только после сохранения. */
+  key: string;
+  name: string;
+  qtyPerUnit: string;
+  /** Единица РАСХОДА. Уедет как `normUnit`, если задана отдельная закупочная. */
+  unit: string;
+  /** Единица ЗАКУПКИ. Пусто = совпадает с расходной, строка не расщепляется. */
+  buyUnit: string;
+  colorText: string;
+}
+
+function emptyDraft(seq: number): DraftLine {
+  return {
+    key: `d${seq}`,
+    name: '',
+    qtyPerUnit: '',
+    unit: '',
+    buyUnit: '',
+    colorText: '',
+  };
+}
+
+/** Готова ли строка к отправке: обязательны название, норма и единица. */
+function isDraftReady(d: DraftLine): boolean {
+  const qty = Number(d.qtyPerUnit.trim().replace(',', '.'));
+  return (
+    d.name.trim() !== '' &&
+    d.unit.trim() !== '' &&
+    Number.isFinite(qty) &&
+    qty > 0
+  );
+}
+
+/** Пустая строка — её не считаем ни готовой, ни ошибочной. */
+function isDraftBlank(d: DraftLine): boolean {
+  return (
+    d.name.trim() === '' &&
+    d.qtyPerUnit.trim() === '' &&
+    d.unit.trim() === '' &&
+    d.buyUnit.trim() === '' &&
+    d.colorText.trim() === ''
+  );
+}
+
+/**
+ * Что мешает строке уехать. Тексты — дословно из
+ * `CreateOrderTechCardLineSchema`: один источник правды на клиента и сервер.
+ */
+function draftProblem(d: DraftLine): string | null {
+  const problems: string[] = [];
+  if (d.name.trim() === '') problems.push('Укажите название материала');
+  const qty = Number(d.qtyPerUnit.trim().replace(',', '.'));
+  if (!Number.isFinite(qty) || qty <= 0) {
+    problems.push('Норма расхода — положительное число');
+  }
+  if (d.unit.trim() === '') problems.push('Укажите единицу измерения');
+  return problems.length > 0 ? `${problems.join('. ')}.` : null;
+}
+
+/**
+ * Строка без характеристик — «должник» по параметрам. Это не ошибка:
+ * заведение специально не требует плотность и ширину, они дозаполняются
+ * после. Долг видно чипом в колонке «Параметры» и проходом «Дальше →».
+ *
+ * Достаточно ХАРАКТЕРИСТИКИ (`fabricType`/`subtypeKey`): она задаёт набор
+ * полей, а сами значения могут быть неизвестны (состав ленты никто не
+ * спрашивает). Гейта на расчёт из этого не делаем — обязательность
+ * параметров сняли 16.07.
+ */
+function needsParams(line: OrderTechCardLineDto): boolean {
+  return (line.fabricType ?? '').trim() === '' && !line.subtypeKey;
+}
 
 /**
  * Источник нормы — КОМПАКТНЫЙ индикатор: буква + цвет, расшифровка по
@@ -138,7 +220,23 @@ export function ColorwaySpec({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [newLine, setNewLine] = useState<typeof emptyLine | null>(null);
+  /** Пачка черновых строк: заводим списком, сохраняем одним запросом. */
+  const [drafts, setDrafts] = useState<DraftLine[]>([]);
+  const draftSeq = useRef(0);
+  /**
+   * Строки, добавленные последней пачкой, — для баннера «параметры не
+   * заданы». Именно id, а не счётчик: долг надо считать по СВОИМ строкам,
+   * иначе баннер приплюсовал бы шаблонные строки без характеристик, которые
+   * лежали в таблице и до пачки. Пусто = баннера нет.
+   */
+  const [addedIds, setAddedIds] = useState<string[]>([]);
+  /**
+   * Очередь дозаполнения параметров: список id строк-должников, снятый в
+   * момент нажатия «Заполнить параметры». Список фиксируем, а не считаем на
+   * лету, иначе строка, у которой параметры только что задали, исчезала бы
+   * из очереди и сбивала нумерацию «материал 2 из 3».
+   */
+  const [queue, setQueue] = useState<string[] | null>(null);
   const [adHoc, setAdHoc] = useState<typeof emptyAdHoc | null>(null);
   const [saveAs, setSaveAs] = useState<{ code: string; name: string } | null>(
     null,
@@ -158,10 +256,42 @@ export function ColorwaySpec({
   // пересчитываются best-effort, событие уходит в журнал правок.
   const amendment = params.editMode === 'AMENDMENT';
   // Есть ли в группе строка, у которой расход и закупка в разных единицах.
-  // От этого зависит, показывать таблицу в один блок или в два.
-  const hasSplitLines = (group?.lines ?? []).some(
-    (l) => (l.normUnit ?? '').trim() !== '',
-  );
+  // От этого зависит, показывать таблицу в один блок или в два. Черновик с
+  // разными единицами разворачивает таблицу сразу — иначе его закупочная
+  // ячейка была бы негде.
+  const hasSplitLines =
+    (group?.lines ?? []).some((l) => (l.normUnit ?? '').trim() !== '') ||
+    drafts.some(
+      (d) =>
+        d.buyUnit.trim() !== '' && d.buyUnit.trim() !== d.unit.trim(),
+    );
+  const cols = hasSplitLines ? 10 : 7;
+
+  /**
+   * Тираж расцветки — чтобы показать «Итого» черновика ДО сохранения.
+   * В DTO группы плана нет, но он однозначно выводится из любой сохранённой
+   * строки: `итого / норма`. Ошибка в норме так видна сразу, а не после
+   * пересборки. Не вывелся (строк ещё нет) — показываем прочерк, врать числом
+   * нельзя.
+   */
+  const unitsPlan = (() => {
+    for (const l of group?.lines ?? []) {
+      const per = Number(l.qtyPerUnit);
+      const total = Number(l.normUnit ? (l.totalNorm ?? '') : l.totalQty);
+      if (!Number.isFinite(per) || per <= 0) continue;
+      if (!Number.isFinite(total) || total <= 0) continue;
+      return Math.round(total / per);
+    }
+    return null;
+  })();
+
+  /**
+   * Долг по параметрам — только у строк последней пачки: по чужим строкам
+   * его показывать нечестно, их никто сейчас не заводил.
+   */
+  const paramDebtIds = (group?.lines ?? [])
+    .filter((l) => needsParams(l) && addedIds.includes(l.id))
+    .map((l) => l.id);
 
   function apply(r: TechCardParamsActionResult): void {
     if (!r.ok) {
@@ -214,6 +344,124 @@ export function ColorwaySpec({
       p.targets.length === 0 ||
       p.targets.some((t) => t.field !== 'char:density'),
   );
+
+  // --- пачка черновых строк -------------------------------------------------
+
+  function addDraft(): void {
+    setDrafts((s) => {
+      if (s.length >= ORDER_TECH_CARD_LINES_BATCH_MAX) return s;
+      draftSeq.current += 1;
+      return [...s, emptyDraft(draftSeq.current)];
+    });
+    setAddedIds([]);
+  }
+
+  function patchDraft(key: string, patch: Partial<DraftLine>): void {
+    setDrafts((s) =>
+      s.map((d) => (d.key === key ? { ...d, ...patch } : d)),
+    );
+  }
+
+  function dropDraft(key: string): void {
+    setDrafts((s) => s.filter((d) => d.key !== key));
+  }
+
+  const readyDrafts = drafts.filter((d) => isDraftReady(d));
+
+  /**
+   * Отправить ГОТОВЫЕ строки пачки. Неготовые остаются черновиками и не
+   * теряются: держать из-за одной спорной строки остальные девять — дороже,
+   * чем сохранить их сейчас и дозаполнить спорную потом.
+   */
+  function saveDrafts(): void {
+    if (readyDrafts.length === 0 || pending) return;
+    const payload = {
+      orderVariantId: writeVariantId,
+      lines: readyDrafts.map((d) => {
+        const unit = d.unit.trim();
+        const buyUnit = d.buyUnit.trim();
+        // Единица закупки задана и отличается — строка расщепляется:
+        // `unit` у неё ЗАКУПОЧНАЯ, введённая единица становится нормой.
+        const split = buyUnit !== '' && buyUnit !== unit;
+        return {
+          name: d.name.trim(),
+          unit: split ? buyUnit : unit,
+          normUnit: split ? unit : null,
+          qtyPerUnit: d.qtyPerUnit.trim().replace(',', '.'),
+          colorText: d.colorText.trim() || null,
+        };
+      }),
+    };
+    const keptKeys = new Set(
+      drafts.filter((d) => !isDraftReady(d) && !isDraftBlank(d)).map((d) => d.key),
+    );
+    // Что лежало в группе ДО пачки — чтобы отличить свои новые строки от
+    // чужих: id генерирует бэкенд, заранее их не знаем.
+    const before = new Set(group!.lines.map((l) => l.id));
+    startTransition(async () => {
+      const r = await createTechCardLinesAction(orderId, payload);
+      if (r.ok) {
+        setDrafts((s) => s.filter((d) => keptKeys.has(d.key)));
+        const fresh = r.data
+          ? (resolveVariantParamsGroup(r.data, variantId)?.lines ?? [])
+              .filter((l) => !before.has(l.id))
+              .map((l) => l.id)
+          : [];
+        setAddedIds(fresh);
+        setQueue(null);
+      }
+      apply(r);
+    });
+  }
+
+  /**
+   * Клавиатура пачки: заведение списка — это набор, а не редактирование.
+   * `Enter` в последней ячейке строки продолжает список, `Ctrl+Enter`
+   * сохраняет, `Esc` убирает пустой черновик.
+   */
+  function draftKeyDown(
+    e: React.KeyboardEvent,
+    draft: DraftLine,
+    isLastCell: boolean,
+  ): void {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      (e.target as HTMLInputElement).blur();
+      saveDrafts();
+      return;
+    }
+    if (e.key === 'Enter' && isLastCell) {
+      e.preventDefault();
+      addDraft();
+      return;
+    }
+    if (e.key === 'Escape' && isDraftBlank(draft)) {
+      e.preventDefault();
+      dropDraft(draft.key);
+    }
+  }
+
+  // --- очередь дозаполнения параметров ---------------------------------------
+
+  /** Начать проход по строкам без характеристик — с первой. */
+  function startQueue(): void {
+    if (paramDebtIds.length === 0) return;
+    setQueue(paramDebtIds);
+    setOpenLine(paramDebtIds[0] ?? null);
+  }
+
+  /** Следующая строка очереди; кончилась — проход закрывается. */
+  function queueNext(): void {
+    if (!queue) return;
+    const i = queue.indexOf(openLine ?? '');
+    const next = i >= 0 ? queue[i + 1] : queue[0];
+    if (!next) {
+      setQueue(null);
+      setOpenLine(null);
+      return;
+    }
+    setOpenLine(next);
+  }
 
   function saveLine(
     lineId: string,
@@ -304,9 +552,16 @@ export function ColorwaySpec({
                 показывали бы одно и то же число, а лишняя пара колонок —
                 это шум для всех, у кого расход и закупка в одной единице. */}
             {hasSplitLines && (
+              /* Арифметика колонок: 2 + 4 + 1 + 2 + 1 = 10 — ровно столько
+                 ячеек в теле. Раньше зона расхода стояла на трёх колонках,
+                 строка выходила короче тела на одну, и заголовки съезжали
+                 влево: «Закупка» накрывала служебную стрелку вместо «К
+                 закупке», а тонировка зоны не совпадала со своей плашкой.
+                 «Цвет» попадает внутрь зоны расхода паразитом — это цена
+                 того, что колонки не переставляются местами. */
               <tr>
                 <th colSpan={2}></th>
-                <th className="cws-grp cws-grp--norm" colSpan={3}>
+                <th className="cws-grp cws-grp--norm" colSpan={4}>
                   Расход — единица техкарты
                 </th>
                 <th></th>
@@ -334,11 +589,11 @@ export function ColorwaySpec({
             </tr>
           </thead>
           <tbody>
-            {group.lines.length === 0 && (
+            {group.lines.length === 0 && drafts.length === 0 && (
               <tr>
-                <td colSpan={hasSplitLines ? 10 : 7} className="cws-muted">
+                <td colSpan={cols} className="cws-muted">
                   Пока пусто: выберите техкарту расцветки — материалы придут из
-                  шаблона, — или добавьте материал вручную.
+                  шаблона, — или добавьте материалы вручную.
                 </td>
               </tr>
             )}
@@ -457,9 +712,16 @@ export function ColorwaySpec({
                           {c.def?.unit ? ` ${c.def.unit}` : ''}
                         </span>
                       ))}
+                      {/* Долг по параметрам — приглашение, а не ошибка:
+                          пунктир акцентом, не красный. Заведение специально
+                          не требует характеристик, они дозаполняются после. */}
                       {chips.length === 0 && !characteristicChip && (
-                        <span className="cws-chip cws-chip--empty">
-                          + параметр
+                        <span
+                          className={`cws-chip ${
+                            needsParams(l) ? 'cws-chip--todo' : 'cws-chip--empty'
+                          }`}
+                        >
+                          {needsParams(l) ? 'задать параметры' : '+ параметр'}
                         </span>
                       )}
                     </button>
@@ -585,12 +847,25 @@ export function ColorwaySpec({
                 </tr>
                 {open && (
                   <tr className="cws-exp">
-                    <td colSpan={hasSplitLines ? 10 : 7}>
+                    <td colSpan={cols}>
                       <LineParams
                         line={l}
                         readOnly={ro}
                         pending={pending}
                         onSave={(patch) => saveLine(l.id, patch)}
+                        queue={
+                          queue && queue.includes(l.id)
+                            ? {
+                                index: queue.indexOf(l.id) + 1,
+                                total: queue.length,
+                                onNext: queueNext,
+                                onStop: () => {
+                                  setQueue(null);
+                                  setOpenLine(null);
+                                },
+                              }
+                            : null
+                        }
                       />
                     </td>
                   </tr>
@@ -598,87 +873,236 @@ export function ColorwaySpec({
                 </Fragment>
               );
             })}
+
+            {/* Черновые строки пачки — В ТАБЛИЦЕ, ячейка под ячейкой с
+                сохранёнными. Ширины колонок задаёт содержимое таблицы, снаружи
+                их не повторить: форма под таблицей разъезжалась на первом же
+                длинном названии. */}
+            {drafts.map((d) => {
+              const problem = isDraftBlank(d) ? null : draftProblem(d);
+              const qty = Number(d.qtyPerUnit.trim().replace(',', '.'));
+              const totalPreview =
+                unitsPlan !== null && Number.isFinite(qty) && qty > 0
+                  ? `${Math.round(qty * unitsPlan * 1000) / 1000} ${d.unit.trim() || ''}`
+                  : '—';
+              const buy = d.buyUnit.trim();
+              const split = buy !== '' && buy !== d.unit.trim();
+              return (
+                <tr className="cws-draft" key={d.key}>
+                  <td>
+                    <div className="cws-nameline">
+                      {/* Распорка вместо каретки: у сохранённой строки поле
+                          имени начинается на 30px правее края ячейки, и без
+                          неё черновик встал бы уступом. */}
+                      <span className="cws-caret cws-caret--ghost" aria-hidden />
+                      <input
+                        className="cws-cell cws-cell--name"
+                        autoFocus={isDraftBlank(d)}
+                        placeholder="Название материала"
+                        value={d.name}
+                        disabled={pending}
+                        onChange={(e) => patchDraft(d.key, { name: e.target.value })}
+                        onKeyDown={(e) => draftKeyDown(e, d, false)}
+                      />
+                    </div>
+                    {problem ? (
+                      <span className="cws-flags cws-flags--draft">
+                        <span className="cws-draft-problem">{problem}</span>
+                      </span>
+                    ) : (
+                      <span className="cws-flags cws-flags--draft">
+                        <span className="cws-pill">новая строка</span>
+                      </span>
+                    )}
+                  </td>
+                  {/* Параметры у черновика не спрашиваем: характеристики
+                      дозаполняются после сохранения — иначе десять материалов
+                      упирались бы в десять панелей. */}
+                  <td>
+                    <span className="cws-chips">
+                      <span className="cws-chip cws-chip--empty">потом</span>
+                    </span>
+                  </td>
+                  <td className="num">
+                    <span className="cws-qty">
+                      <input
+                        className={`cws-cell cws-cell--num${
+                          problem && (!Number.isFinite(qty) || qty <= 0)
+                            ? ' cws-cell--bad'
+                            : ''
+                        }`}
+                        inputMode="decimal"
+                        placeholder="0"
+                        value={d.qtyPerUnit}
+                        disabled={pending}
+                        onChange={(e) =>
+                          patchDraft(d.key, { qtyPerUnit: e.target.value })
+                        }
+                        onKeyDown={(e) => draftKeyDown(e, d, false)}
+                      />
+                      {/* Ручной строке сервис жёстко ставит `qtySource=ORDER`
+                          — показываем это сразу, а не после сохранения. */}
+                      <span
+                        className="cws-src cws-src--order"
+                        title={QTY_SOURCE_BADGE.ORDER!.title}
+                        aria-label={QTY_SOURCE_BADGE.ORDER!.title}
+                      >
+                        {QTY_SOURCE_BADGE.ORDER!.letter}
+                      </span>
+                    </span>
+                  </td>
+                  <td>
+                    <input
+                      className={`cws-cell cws-cell--sm${
+                        problem && d.unit.trim() === '' ? ' cws-cell--bad' : ''
+                      }`}
+                      placeholder="ед."
+                      value={d.unit}
+                      disabled={pending}
+                      title={
+                        hasSplitLines
+                          ? 'Единица нормы расхода. Закупочная — в блоке «Закупка».'
+                          : undefined
+                      }
+                      onChange={(e) => patchDraft(d.key, { unit: e.target.value })}
+                      onKeyDown={(e) => draftKeyDown(e, d, false)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="cws-cell"
+                      placeholder="—"
+                      value={d.colorText}
+                      disabled={pending}
+                      onChange={(e) =>
+                        patchDraft(d.key, { colorText: e.target.value })
+                      }
+                      onKeyDown={(e) => draftKeyDown(e, d, !hasSplitLines)}
+                    />
+                  </td>
+                  <td className="num cws-draft-total">{totalPreview}</td>
+                  {hasSplitLines && (
+                    <>
+                      <td className="num cws-arrow">→</td>
+                      <td className="cws-zone--buy">
+                        <input
+                          className="cws-cell cws-cell--sm"
+                          placeholder={d.unit.trim() ? `= ${d.unit.trim()}` : '='}
+                          value={d.buyUnit}
+                          disabled={pending}
+                          title="Единица закупки. Пусто — та же, что у расхода."
+                          onChange={(e) =>
+                            patchDraft(d.key, { buyUnit: e.target.value })
+                          }
+                          onKeyDown={(e) => draftKeyDown(e, d, true)}
+                        />
+                      </td>
+                      <td className="num cws-zone--buy cws-draft-total">
+                        {split ? '—' : totalPreview}
+                      </td>
+                    </>
+                  )}
+                  <td className="num">
+                    <button
+                      type="button"
+                      className="cws-x"
+                      aria-label="Убрать черновую строку"
+                      disabled={pending}
+                      onClick={() => dropDraft(d.key)}
+                    >
+                      ×
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+
+            {/* Подвал у пачки ОДИН: сколько готово, что мешает остальным и
+                одна кнопка. Неготовая строка пачку не держит — она останется
+                черновиком, а готовые уедут. */}
+            {drafts.length > 0 && (
+              <tr className="cws-batch">
+                <td colSpan={cols}>
+                  <div className="cws-batch__in">
+                    <button
+                      type="button"
+                      className="cws-btn cws-btn--sm cws-btn--dash"
+                      disabled={
+                        pending || drafts.length >= ORDER_TECH_CARD_LINES_BATCH_MAX
+                      }
+                      onClick={addDraft}
+                    >
+                      + ещё строка
+                    </button>
+                    <span className="cws-batch__hint">
+                      Готово <strong>{readyDrafts.length}</strong> из{' '}
+                      {drafts.length}. Обязательны название, норма и единица —
+                      параметры зададите после.
+                    </span>
+                    <span className="cws-batch__sp">
+                      <button
+                        type="button"
+                        className="cws-btn cws-btn--sm"
+                        disabled={pending}
+                        onClick={() => setDrafts([])}
+                      >
+                        Отмена
+                      </button>
+                      <button
+                        type="button"
+                        className="cws-btn cws-btn--sm cws-btn--primary"
+                        disabled={pending || readyDrafts.length === 0}
+                        onClick={saveDrafts}
+                      >
+                        {readyDrafts.length > 1
+                          ? `Добавить ${readyDrafts.length} материала`
+                          : 'Добавить материал'}
+                      </button>
+                    </span>
+                  </div>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
 
-      {!ro &&
-        (newLine === null ? (
+      {/* Долг по параметрам после пачки: не гейт, а напоминание с проходом —
+          иначе строки без характеристик пришлось бы выискивать глазами. */}
+      {!ro && paramDebtIds.length > 0 && (
+        <div className="cws-banner">
+          <span>
+            Добавлено: <strong>{addedIds.length}</strong>. Не заданы параметры у{' '}
+            <strong>{paramDebtIds.length}</strong> — плотность, ширина, состав.
+          </span>
           <button
             type="button"
-            className="cws-btn cws-btn--dash"
-            onClick={() => setNewLine({ ...emptyLine })}
+            className="cws-btn cws-btn--sm cws-btn--accent"
+            disabled={pending}
+            onClick={startQueue}
           >
-            + Добавить материал
+            Заполнить параметры →
           </button>
-        ) : (
-          <div className="cws-form">
-            <input
-              type="text"
-              placeholder="Название (Лента усилительная)"
-              value={newLine.name}
-              onChange={(e) =>
-                setNewLine((s) => (s ? { ...s, name: e.target.value } : s))
-              }
-            />
-            <input
-              type="text"
-              placeholder="Норма/шт (0.9)"
-              value={newLine.qtyPerUnit}
-              onChange={(e) =>
-                setNewLine((s) => (s ? { ...s, qtyPerUnit: e.target.value } : s))
-              }
-            />
-            <input
-              type="text"
-              placeholder="Ед. (м)"
-              value={newLine.unit}
-              onChange={(e) =>
-                setNewLine((s) => (s ? { ...s, unit: e.target.value } : s))
-              }
-            />
-            <input
-              type="text"
-              placeholder="Цвет (необязательно)"
-              value={newLine.colorText}
-              onChange={(e) =>
-                setNewLine((s) => (s ? { ...s, colorText: e.target.value } : s))
-              }
-            />
-            <button
-              type="button"
-              className="cws-btn cws-btn--primary"
-              disabled={
-                pending ||
-                !newLine.name.trim() ||
-                !newLine.unit.trim() ||
-                !newLine.qtyPerUnit.trim()
-              }
-              onClick={() =>
-                startTransition(async () => {
-                  const r = await createTechCardLineAction(orderId, {
-                    orderVariantId: writeVariantId,
-                    name: newLine.name.trim(),
-                    unit: newLine.unit.trim(),
-                    qtyPerUnit: newLine.qtyPerUnit.trim().replace(',', '.'),
-                    colorText: newLine.colorText.trim() || null,
-                  });
-                  if (r.ok) setNewLine(null);
-                  apply(r);
-                })
-              }
-            >
-              Добавить
-            </button>
-            <button
-              type="button"
-              className="cws-btn"
-              onClick={() => setNewLine(null)}
-            >
-              Отмена
-            </button>
-          </div>
-        ))}
+          <button
+            type="button"
+            className="cws-x"
+            aria-label="Скрыть напоминание"
+            onClick={() => setAddedIds([])}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {!ro && drafts.length === 0 && (
+        <button
+          type="button"
+          className="cws-btn cws-btn--dash"
+          onClick={addDraft}
+        >
+          + Добавить материал
+        </button>
+      )}
 
       {otherParams.length > 0 && (
         <div className="cws-params">
@@ -915,6 +1339,7 @@ function LineParams({
   readOnly,
   pending,
   onSave,
+  queue,
 }: {
   line: OrderTechCardLineDto;
   readOnly: boolean;
@@ -925,6 +1350,16 @@ function LineParams({
       string | number | null | Record<string, string | number | null>
     >,
   ) => void;
+  /**
+   * Проход по строкам без характеристик: «материал N из M» и переход к
+   * следующей. `null` — панель открыта сама по себе, навигации нет.
+   */
+  queue?: {
+    index: number;
+    total: number;
+    onNext: () => void;
+    onStop: () => void;
+  } | null;
 }) {
   const keys = characteristicKeysForLine(line);
   const values = line.characteristics ?? {};
@@ -946,6 +1381,29 @@ function LineParams({
         <span className="cws-grouplabel">Параметры материала</span>
         {line.materialRole && (
           <span className="cws-chip">роль: {line.materialRole}</span>
+        )}
+        {queue && (
+          <span className="cws-params-panel__nav">
+            <span className="cws-muted">
+              материал {queue.index} из {queue.total}
+            </span>
+            <button
+              type="button"
+              className="cws-btn cws-btn--sm"
+              disabled={pending}
+              onClick={queue.onStop}
+            >
+              Закончить
+            </button>
+            <button
+              type="button"
+              className="cws-btn cws-btn--sm cws-btn--primary"
+              disabled={pending}
+              onClick={queue.onNext}
+            >
+              {queue.index < queue.total ? 'Дальше →' : 'Готово'}
+            </button>
+          </span>
         )}
       </div>
 
@@ -1243,6 +1701,35 @@ select.cws-cell { padding-right:22px; }
 .cws-bysize__cell { display:inline-flex; flex-direction:column; align-items:center; gap:2px; padding:4px 8px;
   border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg-muted); font-size:12px; }
 .cws-bysize__cell > span { font-size:10px; font-weight:700; color:var(--color-fg-muted); }
+/* --- пачка черновых строк ---------------------------------------------------
+   Черновик — строка ТОЙ ЖЕ таблицы: ячейки встают под своими заголовками, а
+   не в отдельной коробке под таблицей, у которой своя раскладка. */
+.cws-draft > td { background:var(--color-bg-tint); }
+.cws-draft > td:first-child { box-shadow:inset 3px 0 0 var(--btn-primary-edge); }
+/* Распорка вместо каретки: 24px кнопки + 6px gap — иначе имя черновика
+   встало бы на 30px левее имён сохранённых строк. */
+.cws-caret--ghost { border-color:transparent; background:none; pointer-events:none; }
+.cws-flags--draft { margin-top:5px; padding-left:30px; }
+.cws-draft-problem { font-size:11.5px; color:var(--color-danger-fg); }
+.cws-cell--bad { border-color:var(--color-danger); }
+.cws-cell--bad:focus { border-color:var(--color-danger); }
+.cws-draft-total { font-variant-numeric:tabular-nums; color:var(--color-fg-muted); }
+.cws-batch > td { background:var(--color-bg-tint); padding-top:2px;
+  box-shadow:inset 3px 0 0 var(--btn-primary-edge); }
+.cws-batch__in { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.cws-batch__hint { font-size:12px; color:var(--color-fg-muted); }
+.cws-batch__hint strong { color:var(--color-fg-strong); }
+.cws-batch__sp { margin-left:auto; display:flex; gap:8px; }
+.cws-btn--sm { height:26px; padding:0 9px; font-size:12px; }
+.cws-btn--accent { border-color:var(--color-accent); color:var(--color-accent-fg); }
+/* Долг по параметрам — приглашение, не ошибка: пунктир акцентом. */
+.cws-chip--todo { background:var(--color-bg-card); border:1px dashed var(--color-accent);
+  color:var(--color-accent-fg); font-weight:700; }
+.cws-banner { display:flex; align-items:center; gap:9px; flex-wrap:wrap; padding:8px 11px;
+  border:1px solid var(--color-border); border-left:3px solid var(--color-accent);
+  border-radius:8px; background:var(--color-accent-soft,var(--color-bg-tint)); font-size:13px; }
+.cws-banner > span:first-child { margin-right:auto; }
+.cws-params-panel__nav { margin-left:auto; display:flex; align-items:center; gap:8px; }
 `}</style>
   );
 }

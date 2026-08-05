@@ -2,6 +2,7 @@ import { ConflictException, Injectable, Logger, NotFoundException } from '@nestj
 import { OrderStatus, Prisma } from '@prisma/client';
 import type {
   CreateOrderTechCardLineDto,
+  CreateOrderTechCardLinesDto,
   CreateOrderTechCardParameterDto,
   OrderTechCardEditMode,
   OrderTechCardLineDto,
@@ -628,18 +629,40 @@ export class OrderTechCardService {
 
   /**
    * Добавить строку материала прямо в заказ (усилительная лента, которой нет в
-   * шаблоне).
-   *
-   * `isManual = true` — такая строка не сносится пересборкой даже при смене
-   * техкарты: шаблон о ней не знает, значит и заменить её собой не может.
-   * Это и есть «что меняем внутри заказа, внутри заказа и остаётся».
-   *
-   * `totalQty` считаем не здесь: `resyncTechCardDerived` сразу пересоберёт
-   * производные и проставит тираж — один путь, без второго калькулятора.
+   * шаблоне). Один материал — частный случай пачки из одного.
    */
   async createManualLine(
     orderId: string,
     dto: CreateOrderTechCardLineDto,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderTechCardParametersDto> {
+    const { orderVariantId, ...line } = dto;
+    return this.createManualLines(
+      orderId,
+      { orderVariantId: orderVariantId ?? null, lines: [line] },
+      actorEmployeeId,
+    );
+  }
+
+  /**
+   * Завести ПАЧКУ строк материала одним заходом.
+   *
+   * `isManual = true` — такие строки не сносятся пересборкой даже при смене
+   * техкарты: шаблон о них не знает, значит и заменить их собой не может.
+   * Это и есть «что меняем внутри заказа, внутри заказа и остаётся».
+   *
+   * Почему пачка, а не N вызовов подряд: каждое создание заканчивается
+   * `resyncTechCardDerived` — пересборкой снимка материалов, плана операций и
+   * потребностей цеха. Десять материалов десятью запросами — это десять
+   * пересборок и десять шансов остановиться на середине с половиной строк в
+   * заказе. Здесь вставка идёт ОДНОЙ транзакцией, пересборка — одна, в конце.
+   *
+   * `totalQty` считаем не здесь: пересборка сразу проставит тираж — один
+   * путь, без второго калькулятора.
+   */
+  async createManualLines(
+    orderId: string,
+    dto: CreateOrderTechCardLinesDto,
     actorEmployeeId?: string | null,
   ): Promise<OrderTechCardParametersDto> {
     await this.assertEditableOrder(orderId);
@@ -654,10 +677,42 @@ export class OrderTechCardService {
       orderBy: { sortOrder: 'desc' },
       select: { sortOrder: true, variantColor: true },
     });
+    const baseSortOrder = last?.sortOrder ?? 0;
 
-    const colorText = dto.colorText?.trim() || null;
-    await this.prisma.orderMaterialRequirement.create({
-      data: {
+    // Ячейки готовим ДО транзакции: характеристики бьются 409-ми, и падать
+    // на середине вставки нельзя — половина пачки уже была бы в заказе.
+    const rows = dto.lines.map((line, index) => {
+      const colorText = line.colorText?.trim() || null;
+      const subtypeKey = line.subtypeKey?.trim() || null;
+      if (subtypeKey !== null && !isKnownMaterialSubtype(subtypeKey)) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'ORDER_TECH_CARD_UNKNOWN_SUBTYPE',
+          message: `Неизвестный подтип материала «${subtypeKey}».`,
+        });
+      }
+      // Новая строка ни под каким параметром не стоит (`parameterBindings`
+      // пуст), поэтому проверка занятой ячейки здесь не нужна — нужна только
+      // валидация самих значений, как в правке.
+      const chars = this.buildCharacteristics(line.characteristics);
+      const cells = normalizeMaterialLineCells({
+        name: line.name,
+        unit: line.unit,
+        qtyPerUnit: line.qtyPerUnit,
+        note: line.note ?? null,
+        materialRole: line.materialRole ?? null,
+        fabricType: line.fabricType?.trim() || null,
+        // Зеркало `characteristics` ↔ legacy-колонки собирает сама
+        // `normalizeMaterialLineCells`: downstream (потребности цеха,
+        // cut-readiness, себестоимость) читает СТАРЫЕ колонки, и строка,
+        // записавшая только JSON, не повлияла бы на закупку.
+        densityGsm: null,
+        plannedWidthCm: null,
+        hardwareSizeText: null,
+        hardwareMaterialText: null,
+        characteristics: Object.keys(chars).length > 0 ? chars : null,
+      });
+      return {
         orderId,
         orderVariantId: variantId,
         variantColor: last?.variantColor ?? null,
@@ -665,18 +720,26 @@ export class OrderTechCardService {
         // Из шаблона не приходила — источника нет.
         sourceTechCardLineId: null,
         sourceTechCardId: null,
-        sortOrder: (last?.sortOrder ?? 0) + 10,
-        name: dto.name,
-        unit: dto.unit,
+        sortOrder: baseSortOrder + 10 * (index + 1),
+        name: cells.name,
+        unit: cells.unit,
         // Ручная строка — частый случай расщепления: норму вводят в метрах, а
         // закупают на вес. Тираж посчитает ближайший resync через
         // `computeLineTotalQty`, поэтому единица нормы нужна уже здесь.
-        normUnit: dto.normUnit?.trim() || null,
-        qtyPerUnit: new Prisma.Decimal(dto.qtyPerUnit),
+        normUnit: line.normUnit?.trim() || null,
+        qtyPerUnit: new Prisma.Decimal(cells.qtyPerUnit),
         totalQty: new Prisma.Decimal(0),
-        note: dto.note ?? null,
-        materialRole: dto.materialRole ?? null,
-        fabricType: dto.fabricType ?? null,
+        note: cells.note ?? null,
+        materialRole: cells.materialRole ?? null,
+        fabricType: cells.fabricType,
+        subtypeKey,
+        densityGsm: cells.densityGsm,
+        plannedWidthCm: cells.plannedWidthCm,
+        hardwareSizeText: cells.hardwareSizeText,
+        hardwareMaterialText: cells.hardwareMaterialText,
+        characteristics:
+          (cells.characteristics as Prisma.InputJsonValue | null) ??
+          Prisma.DbNull,
         // Цвет задаётся прямо здесь: правило `colorRule` — свойство шаблона, а
         // у ручной строки шаблона нет.
         colorRule: colorText ? 'FIXED_COLOR' : 'NO_COLOR',
@@ -685,23 +748,81 @@ export class OrderTechCardService {
         requiresColorSelection: false,
         // Норму ввели прямо здесь — в номенклатуре этой строки нет, брать
         // число неоткуда, пересчёт её не переписывает.
-        qtySource: 'ORDER',
-      },
+        qtySource: 'ORDER' as const,
+      };
     });
 
+    await this.prisma.$transaction(async (tx) => {
+      for (const data of rows) {
+        await tx.orderMaterialRequirement.create({ data });
+      }
+    });
+
+    const first = dto.lines[0]!;
+    const summary =
+      dto.lines.length === 1
+        ? `Добавлен материал «${first.name}» — ${first.qtyPerUnit} ${first.unit}/шт`
+        : `Добавлено материалов: ${dto.lines.length} — ${dto.lines
+            .map((l) => l.name)
+            .join(', ')}`;
     await this.orders.resyncTechCardDerived(orderId, actorEmployeeId, {
-      summary: `Добавлен материал «${dto.name}» — ${dto.qtyPerUnit} ${dto.unit}/шт`,
+      summary,
       details: {
-        name: dto.name,
-        unit: dto.unit,
-        qtyPerUnit: dto.qtyPerUnit,
-        colorText,
+        lines: dto.lines.map((l) => ({
+          name: l.name,
+          unit: l.unit,
+          qtyPerUnit: l.qtyPerUnit,
+          colorText: l.colorText?.trim() || null,
+        })),
       },
     });
     this.logger.log(
-      `event=order_tech_card.manual_line_created order=${orderId} name=${dto.name}`,
+      `event=order_tech_card.manual_lines_created order=${orderId} count=${dto.lines.length}`,
     );
     return this.listForOrder(orderId);
+  }
+
+  /**
+   * Проверить и привести значения характеристик новой строки.
+   *
+   * Зеркало legacy-колонок и роль-зависимую очистку делает
+   * `normalizeMaterialLineCells` — здесь только валидация ключей и чисел,
+   * теми же 409-ми, что и в правке строки.
+   */
+  private buildCharacteristics(
+    raw: CreateOrderTechCardLineDto['characteristics'],
+  ): MaterialCharacteristics {
+    const chars: MaterialCharacteristics = {};
+    if (!raw) return chars;
+    const known = new Set(MATERIAL_CHARACTERISTICS.map((c) => c.key));
+    for (const [key, value] of Object.entries(raw)) {
+      if (!known.has(key)) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'ORDER_TECH_CARD_UNKNOWN_CHARACTERISTIC',
+          message: `Неизвестная характеристика «${key}».`,
+        });
+      }
+      // Пусто в НОВОЙ строке — просто «не задано»: очищать нечего.
+      if (value === null || (typeof value === 'string' && value.trim() === '')) {
+        continue;
+      }
+      const def = getMaterialCharacteristic(key);
+      if (def?.valueType === 'number') {
+        const num = Number(String(value).replace(',', '.'));
+        if (!Number.isFinite(num) || num <= 0) {
+          throw new ConflictException({
+            statusCode: 409,
+            code: 'ORDER_TECH_CARD_CHARACTERISTIC_INVALID',
+            message: `«${def.label}» — положительное число.`,
+          });
+        }
+        chars[key] = num;
+      } else {
+        chars[key] = String(value).trim();
+      }
+    }
+    return chars;
   }
 
   /**
