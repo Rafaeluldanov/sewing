@@ -84,10 +84,13 @@ interface DraftLine {
   key: string;
   name: string;
   qtyPerUnit: string;
-  /** Единица РАСХОДА. Уедет как `normUnit`, если задана отдельная закупочная. */
+  /**
+   * Единица. У новой строки она ЗАКУПОЧНАЯ (`unit`) — в ней же считается
+   * `totalQty`. Расщепление «норма в одной единице, закупка в другой»
+   * задаётся ПОСЛЕ сохранения, правкой `normUnit` в самой строке: пересчёт
+   * требует ширины рулона и плотности, а их на заведении не спрашивают.
+   */
   unit: string;
-  /** Единица ЗАКУПКИ. Пусто = совпадает с расходной, строка не расщепляется. */
-  buyUnit: string;
   colorText: string;
 }
 
@@ -97,7 +100,6 @@ function emptyDraft(seq: number): DraftLine {
     name: '',
     qtyPerUnit: '',
     unit: '',
-    buyUnit: '',
     colorText: '',
   };
 }
@@ -113,13 +115,21 @@ function isDraftReady(d: DraftLine): boolean {
   );
 }
 
+/** «1 материал» / «2 материала» / «5 материалов» — иначе кнопка косноязычит. */
+function pluralMaterials(n: number): string {
+  const d10 = n % 10;
+  const d100 = n % 100;
+  if (d10 === 1 && d100 !== 11) return `${n} материал`;
+  if (d10 >= 2 && d10 <= 4 && (d100 < 12 || d100 > 14)) return `${n} материала`;
+  return `${n} материалов`;
+}
+
 /** Пустая строка — её не считаем ни готовой, ни ошибочной. */
 function isDraftBlank(d: DraftLine): boolean {
   return (
     d.name.trim() === '' &&
     d.qtyPerUnit.trim() === '' &&
     d.unit.trim() === '' &&
-    d.buyUnit.trim() === '' &&
     d.colorText.trim() === ''
   );
 }
@@ -256,15 +266,13 @@ export function ColorwaySpec({
   // пересчитываются best-effort, событие уходит в журнал правок.
   const amendment = params.editMode === 'AMENDMENT';
   // Есть ли в группе строка, у которой расход и закупка в разных единицах.
-  // От этого зависит, показывать таблицу в один блок или в два. Черновик с
-  // разными единицами разворачивает таблицу сразу — иначе его закупочная
-  // ячейка была бы негде.
-  const hasSplitLines =
-    (group?.lines ?? []).some((l) => (l.normUnit ?? '').trim() !== '') ||
-    drafts.some(
-      (d) =>
-        d.buyUnit.trim() !== '' && d.buyUnit.trim() !== d.unit.trim(),
-    );
+  // От этого зависит, показывать таблицу в один блок или в два. Черновики
+  // на это НЕ влияют: расщепление задаётся правкой сохранённой строки, а
+  // «развернуть таблицу собой» черновик не мог бы физически — поле
+  // закупочной единицы рендерится внутри тех самых колонок.
+  const hasSplitLines = (group?.lines ?? []).some(
+    (l) => (l.normUnit ?? '').trim() !== '',
+  );
   const cols = hasSplitLines ? 10 : 7;
 
   /**
@@ -377,20 +385,15 @@ export function ColorwaySpec({
     if (readyDrafts.length === 0 || pending) return;
     const payload = {
       orderVariantId: writeVariantId,
-      lines: readyDrafts.map((d) => {
-        const unit = d.unit.trim();
-        const buyUnit = d.buyUnit.trim();
-        // Единица закупки задана и отличается — строка расщепляется:
-        // `unit` у неё ЗАКУПОЧНАЯ, введённая единица становится нормой.
-        const split = buyUnit !== '' && buyUnit !== unit;
-        return {
-          name: d.name.trim(),
-          unit: split ? buyUnit : unit,
-          normUnit: split ? unit : null,
-          qtyPerUnit: d.qtyPerUnit.trim().replace(',', '.'),
-          colorText: d.colorText.trim() || null,
-        };
-      }),
+      // Единица одна и ЗАКУПОЧНАЯ: расщеплённая строка без ширины рулона и
+      // плотности посчиталась бы в потребности как длина, подписанная
+      // килограммами. Расщепляют уже сохранённую строку, когда параметры есть.
+      lines: readyDrafts.map((d) => ({
+        name: d.name.trim(),
+        unit: d.unit.trim(),
+        qtyPerUnit: d.qtyPerUnit.trim().replace(',', '.'),
+        colorText: d.colorText.trim() || null,
+      })),
     };
     const keptKeys = new Set(
       drafts.filter((d) => !isDraftReady(d) && !isDraftBlank(d)).map((d) => d.key),
@@ -435,13 +438,22 @@ export function ColorwaySpec({
       addDraft();
       return;
     }
-    if (e.key === 'Escape' && isDraftBlank(draft)) {
+    if (e.key === 'Escape') {
+      // Родитель закрывает окно спецификации по Escape из window-слушателя.
+      // Из черновика это стоило бы всей несохранённой пачки, поэтому событие
+      // дальше не пускаем — Esc здесь означает «убрать пустую строку».
+      e.stopPropagation();
       e.preventDefault();
-      dropDraft(draft.key);
+      if (isDraftBlank(draft)) dropDraft(draft.key);
     }
   }
 
   // --- очередь дозаполнения параметров ---------------------------------------
+
+  // Очередь могла пережить удаление строки: держим её живой частью, иначе
+  // «Дальше» открывало бы несуществующую строку, а счётчик «2 из 3» врал.
+  const liveQueue =
+    queue?.filter((id) => group.lines.some((l) => l.id === id)) ?? null;
 
   /** Начать проход по строкам без характеристик — с первой. */
   function startQueue(): void {
@@ -452,9 +464,13 @@ export function ColorwaySpec({
 
   /** Следующая строка очереди; кончилась — проход закрывается. */
   function queueNext(): void {
-    if (!queue) return;
-    const i = queue.indexOf(openLine ?? '');
-    const next = i >= 0 ? queue[i + 1] : queue[0];
+    if (!liveQueue || liveQueue.length === 0) {
+      setQueue(null);
+      setOpenLine(null);
+      return;
+    }
+    const i = liveQueue.indexOf(openLine ?? '');
+    const next = i >= 0 ? liveQueue[i + 1] : liveQueue[0];
     if (!next) {
       setQueue(null);
       setOpenLine(null);
@@ -854,10 +870,10 @@ export function ColorwaySpec({
                         pending={pending}
                         onSave={(patch) => saveLine(l.id, patch)}
                         queue={
-                          queue && queue.includes(l.id)
+                          liveQueue && liveQueue.includes(l.id)
                             ? {
-                                index: queue.indexOf(l.id) + 1,
-                                total: queue.length,
+                                index: liveQueue.indexOf(l.id) + 1,
+                                total: liveQueue.length,
                                 onNext: queueNext,
                                 onStop: () => {
                                   setQueue(null);
@@ -885,8 +901,6 @@ export function ColorwaySpec({
                 unitsPlan !== null && Number.isFinite(qty) && qty > 0
                   ? `${Math.round(qty * unitsPlan * 1000) / 1000} ${d.unit.trim() || ''}`
                   : '—';
-              const buy = d.buyUnit.trim();
-              const split = buy !== '' && buy !== d.unit.trim();
               return (
                 <tr className="cws-draft" key={d.key}>
                   <td>
@@ -961,7 +975,7 @@ export function ColorwaySpec({
                       disabled={pending}
                       title={
                         hasSplitLines
-                          ? 'Единица нормы расхода. Закупочная — в блоке «Закупка».'
+                          ? 'Единица закупки. Расщепить норму и закупку по разным единицам можно у сохранённой строки.'
                           : undefined
                       }
                       onChange={(e) => patchDraft(d.key, { unit: e.target.value })}
@@ -977,28 +991,22 @@ export function ColorwaySpec({
                       onChange={(e) =>
                         patchDraft(d.key, { colorText: e.target.value })
                       }
-                      onKeyDown={(e) => draftKeyDown(e, d, !hasSplitLines)}
+                      onKeyDown={(e) => draftKeyDown(e, d, true)}
                     />
                   </td>
                   <td className="num cws-draft-total">{totalPreview}</td>
+                  {/* Новая строка не расщеплена: закупка идёт в той же
+                      единице. Расщепить (норма в одной, закупка в другой)
+                      можно у сохранённой строки — пересчёт требует ширины
+                      рулона и плотности, а их на заведении не спрашивают. */}
                   {hasSplitLines && (
                     <>
-                      <td className="num cws-arrow">→</td>
-                      <td className="cws-zone--buy">
-                        <input
-                          className="cws-cell cws-cell--sm"
-                          placeholder={d.unit.trim() ? `= ${d.unit.trim()}` : '='}
-                          value={d.buyUnit}
-                          disabled={pending}
-                          title="Единица закупки. Пусто — та же, что у расхода."
-                          onChange={(e) =>
-                            patchDraft(d.key, { buyUnit: e.target.value })
-                          }
-                          onKeyDown={(e) => draftKeyDown(e, d, true)}
-                        />
+                      <td className="num cws-arrow"></td>
+                      <td className="cws-zone--buy cws-muted">
+                        {d.unit.trim() || '—'}
                       </td>
                       <td className="num cws-zone--buy cws-draft-total">
-                        {split ? '—' : totalPreview}
+                        {totalPreview}
                       </td>
                     </>
                   )}
@@ -1054,9 +1062,7 @@ export function ColorwaySpec({
                         disabled={pending || readyDrafts.length === 0}
                         onClick={saveDrafts}
                       >
-                        {readyDrafts.length > 1
-                          ? `Добавить ${readyDrafts.length} материала`
-                          : 'Добавить материал'}
+                        Добавить {pluralMaterials(readyDrafts.length)}
                       </button>
                     </span>
                   </div>
@@ -1383,6 +1389,11 @@ function LineParams({
           <span className="cws-chip">роль: {line.materialRole}</span>
         )}
         {queue && (
+          /* Навигация НЕ гаснет на `pending` и слушает mousedown, а не click:
+             поля панели сохраняются по blur, и к моменту mouseup кнопка уже
+             была бы disabled — браузер не доставил бы click. Ломался ровно
+             тот случай, ради которого проход и сделан: ввёл значение и сразу
+             жмёшь «Дальше». */
           <span className="cws-params-panel__nav">
             <span className="cws-muted">
               материал {queue.index} из {queue.total}
@@ -1390,16 +1401,14 @@ function LineParams({
             <button
               type="button"
               className="cws-btn cws-btn--sm"
-              disabled={pending}
-              onClick={queue.onStop}
+              onMouseDown={queue.onStop}
             >
               Закончить
             </button>
             <button
               type="button"
               className="cws-btn cws-btn--sm cws-btn--primary"
-              disabled={pending}
-              onClick={queue.onNext}
+              onMouseDown={queue.onNext}
             >
               {queue.index < queue.total ? 'Дальше →' : 'Готово'}
             </button>
