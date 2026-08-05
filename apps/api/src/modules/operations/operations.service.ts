@@ -294,6 +294,15 @@ export class OperationsService {
             salaryPlanRubPerShift,
             salaryPlanShiftSeconds,
             producesFinishedGoods: dto.producesFinishedGoods ?? false,
+            // Признак «это коробочная упаковка» — отдельная ось от
+            // `producesFinishedGoods` (тот про финансовый выпуск ГП).
+            // Именно `boxPacking` разводит терминалы упаковщика на
+            // /packing и решает, какой шаг маршрута считать
+            // упаковочным в `PackingService.addPassport`. По умолчанию
+            // `false`: новая операция категории PACKING (например
+            // «Распаковка» — приёмка сырья) ведёт себя как обычная
+            // производственная, коробок не открывает.
+            boxPacking: dto.boxPacking ?? false,
           },
         });
         if (dto.pricingMode === 'BY_SIZE' && dto.ratesBySize?.length) {
@@ -455,6 +464,19 @@ export class OperationsService {
         // на паспорт.
         if (dto.producesFinishedGoods !== undefined) {
           data.producesFinishedGoods = dto.producesFinishedGoods;
+        }
+
+        // Признак «это коробочная упаковка» (см.
+        // `prisma/schema.prisma::Operation.boxPacking`,
+        // `PackingService.assertPackingActor`). Принимает `true` /
+        // `false`; не пришло — поле не трогаем. Это **отдельная ось**
+        // от `producesFinishedGoods`: там про выпуск готовой
+        // продукции, здесь — про то, какой терминал увидит упаковщик
+        // на /packing и какой шаг маршрута считается упаковочным.
+        // Снятие признака не разбирает уже собранные коробки —
+        // влияет только на будущие смены.
+        if (dto.boxPacking !== undefined) {
+          data.boxPacking = dto.boxPacking;
         }
 
         await tx.operation.update({ where: { id }, data });
@@ -1163,6 +1185,7 @@ export class OperationsService {
       salaryPlanRubPerShift: Prisma.Decimal | null;
       salaryPlanShiftSeconds: number | null;
       producesFinishedGoods: boolean;
+      boxPacking: boolean;
     },
     ratesBySizeCount: number,
     timeNormsBySizeCount: number,
@@ -1187,6 +1210,7 @@ export class OperationsService {
         : null,
       salaryPlanShiftSeconds: row.salaryPlanShiftSeconds ?? null,
       producesFinishedGoods: row.producesFinishedGoods,
+      boxPacking: row.boxPacking,
     };
   }
 

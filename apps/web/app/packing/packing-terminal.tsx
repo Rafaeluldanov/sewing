@@ -3,8 +3,29 @@
 /**
  * Mobile-first scan-driven рабочее окно упаковщика (`/packing`).
  *
- * Архитектура повторяет `QcTerminal` / `WtoTerminal` — единое окно
- * с минимумом кликов, всё крутится вокруг физического сканера QR.
+ * У окна ДВА режима, и выбирает их операция активной смены:
+ *
+ *   A. **Коробочная упаковка** (`Operation.boxPacking = true`) — всё,
+ *      что описано ниже: коробка + сканы паспортов в неё + закрытие.
+ *   B. **Обычная производственная операция упаковщика**
+ *      (`boxPacking = false`) — рендерим `SeamstressActivePanel` из
+ *      `/work`: скан паспорта → «взять» / «завершить операцию», без
+ *      коробок и без гейтов ОТК/ВТО.
+ *
+ * Почему признак, а не категория: в маршруте заказа операций категории
+ * `PACKING` бывает несколько — «Распаковка» (приёмка и распаковка
+ * приходящего сырья) стоит ПЕРВЫМ шагом, «Упаковка» (коробки) —
+ * последним. Пока развилка шла по `category === 'PACKING'`, смена на
+ * «Распаковке» открывала окно коробок, и первый же скан валился 409
+ * `PASSPORT_NOT_QC_PASSED`: гейт финальной упаковки в
+ * `PackingService.addPassport` требует пройденных ОТК/ВТО. Теперь
+ * единственный источник истины — `Operation.boxPacking` (он же
+ * определяет `assertPackingActor` и выбор упаковочного шага маршрута).
+ * Не путать с `Operation.producesFinishedGoods` — та ось про финансовый
+ * выпуск готовой продукции (`FinishedGoodsMovement`).
+ *
+ * Архитектура режима A повторяет `QcTerminal` / `WtoTerminal` — единое
+ * окно с минимумом кликов, всё крутится вокруг физического сканера QR.
  * Отличие от ОТК/ВТО — у упаковщика два уровня state:
  *
  *   1. **Коробка** — её надо сначала «открыть» (`createBoxTerminalAction`)
@@ -30,8 +51,11 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import type { BoxDetailDto, BoxListItemDto } from '@sewing/shared/packing';
+import type { OrderCutIssueRuleBannerDto } from '@sewing/shared';
 import type {
+  CurrentWorkPassportDto,
   EmployeeLiteDto,
+  ReworkPassportDto,
   ShiftMetaDto,
   ShiftSessionDto,
 } from '@sewing/shared/shifts';
@@ -41,6 +65,7 @@ import {
   playOperationCompletedSound,
 } from '@/app/work/feedback';
 import { SeamstressShiftStart } from '@/app/work/seamstress-shift-start';
+import { SeamstressActivePanel } from '@/app/work/seamstress-active-panel';
 import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
 import { Icon } from '@/components/icon';
 import {
@@ -75,9 +100,37 @@ interface Props {
    * Категория операции, на которой упаковщик сейчас работает.
    * Если активной смены нет — `null`. Если активная смена есть, но
    * категория не `PACKING` (например, упаковщик случайно начал смену
-   * на другой операции) — терминал покажет баннер.
+   * на другой операции) — терминал покажет `WrongOperationCard`.
+   *
+   * Внутри категории `PACKING` режим выбирает уже не она, а
+   * `activeOperationBoxPacking` (см. блок-комментарий файла).
    */
   activeOperationCategory: string | null;
+  /**
+   * `Operation.boxPacking` операции активной смены — «эта операция
+   * складывает паспорта в коробки». Единственный признак, включающий
+   * окно коробок; он же на бэке решает `PackingService
+   * .assertPackingActor` и поиск упаковочного шага маршрута в
+   * `addPassport`. `false` (в т.ч. когда смены нет) — коробок не будет.
+   */
+  activeOperationBoxPacking: boolean;
+  /**
+   * Активные паспорта упаковщика — для режима обычной операции
+   * (`SeamstressActivePanel`). В режиме коробок не используется и
+   * приезжает пустым (`packing/page.tsx` его не грузит).
+   */
+  currentWork: CurrentWorkPassportDto[];
+  /**
+   * Баннер «Очередь выдачи кроя» для операции смены. Нужен той же
+   * `SeamstressActivePanel`; на «Распаковке» (первый шаг маршрута)
+   * он как раз применим — см. `getCutIssueBanner`.
+   */
+  cutIssueBanner: OrderCutIssueRuleBannerDto;
+  /**
+   * Возвраты от ОТК на переделку — подсказка внутри
+   * `SeamstressActivePanel`. В режиме коробок пустой.
+   */
+  myRework: ReworkPassportDto[];
   /**
    * SSR-снимок незакрытых (`OPEN`) коробок. На Stage 1 терминала
    * (когда нет активной карточки) выводится списком — упаковщик
@@ -109,11 +162,23 @@ export function PackingTerminal({
   employee,
   initialShift,
   activeOperationCategory,
+  activeOperationBoxPacking,
+  currentWork,
+  cutIssueBanner,
+  myRework,
   initialOpenBoxes,
   initialClosedUnplacedBoxes,
 }: Props) {
   const isShiftActive = !!(initialShift && initialShift.active);
-  const onPackingShift = isShiftActive && activeOperationCategory === 'PACKING';
+  // Режим A — коробки. Решает ТОЛЬКО `Operation.boxPacking`: категории
+  // `PACKING` здесь мало, в ней же лежит «Распаковка» (см. шапку файла).
+  const onBoxPackingShift = isShiftActive && activeOperationBoxPacking;
+  // Режим B — обычная производственная операция упаковщика: смена есть,
+  // операция «его» категории, но коробок не собирает.
+  const onPlainPackingShift =
+    isShiftActive &&
+    !activeOperationBoxPacking &&
+    activeOperationCategory === 'PACKING';
 
   return (
     <div className="seamstress-work">
@@ -127,16 +192,28 @@ export function PackingTerminal({
 
       {!isShiftActive ? (
         <SeamstressShiftStart meta={meta} employee={employee} />
-      ) : !onPackingShift ? (
-        <WrongOperationCard
-          operationName={initialShift!.operationName}
-        />
-      ) : (
+      ) : onBoxPackingShift ? (
         <PackingMainTerminal
           shift={initialShift!}
           initialOpenBoxes={initialOpenBoxes}
           initialClosedUnplacedBoxes={initialClosedUnplacedBoxes}
         />
+      ) : onPlainPackingShift ? (
+        /*
+         * Режим B — «Распаковка» и прочие операции упаковщика без
+         * коробок. Экран тот же, что у швеи на `/work`: скан паспорта →
+         * «взять» / «завершить операцию». Отдельного компонента не
+         * заводим сознательно — flow идентичен, а дубль разъехался бы
+         * при первой же правке швейного окна.
+         */
+        <SeamstressActivePanel
+          shift={initialShift!}
+          currentWork={currentWork}
+          cutIssueBanner={cutIssueBanner}
+          myRework={myRework}
+        />
+      ) : (
+        <WrongOperationCard operationName={initialShift!.operationName} />
       )}
     </div>
   );

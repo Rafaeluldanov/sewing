@@ -257,6 +257,15 @@ export async function createOperationAction(
   // создаёт `FinishedGoodsMovement PRODUCTION_RECEIPT IN`.
   const producesFinishedGoods = form.get('producesFinishedGoods') === 'on';
 
+  // Признак «коробочная упаковка» (см.
+  // `prisma/schema.prisma::Operation.boxPacking`,
+  // `apps/api/src/modules/packing/packing.service.ts::assertPackingActor`).
+  // Именно он, а не категория `PACKING`, включает у упаковщика окно
+  // коробок на `/packing` и гейт финальной упаковки в
+  // `PackingService.addPassport`. Отдельная ось от
+  // `producesFinishedGoods` (тот про `FinishedGoodsMovement`).
+  const boxPacking = form.get('boxPacking') === 'on';
+
   let createdId: string | null = null;
   try {
     const created = await createOperation({
@@ -280,6 +289,7 @@ export async function createOperationAction(
         ? { salaryPlanShiftSeconds: salaryPlan.salaryPlanShiftSeconds }
         : {}),
       producesFinishedGoods,
+      boxPacking,
     });
     createdId = created.id;
     revalidatePath('/admin/operations');
@@ -459,6 +469,14 @@ export async function updateOperationAction(
   // Forms send `'on'` для checked checkbox; иначе ключа в FormData нет
   // — отправляем `false` явно, чтобы менеджер мог его выключить.
   dto.producesFinishedGoods = form.get('producesFinishedGoods') === 'on';
+
+  // Признак «коробочная упаковка» (см.
+  // `prisma/schema.prisma::Operation.boxPacking`,
+  // `apps/api/src/modules/packing/packing.service.ts::assertPackingActor`).
+  // Тот же контракт чекбокса, что у соседа: `'on'` либо ключа нет —
+  // шлём `false` явно, иначе снять галочку с уже коробочной операции
+  // было бы нечем. Ось независима от `producesFinishedGoods`.
+  dto.boxPacking = form.get('boxPacking') === 'on';
 
   try {
     await updateOperation(operationId, dto);

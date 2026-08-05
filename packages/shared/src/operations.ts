@@ -567,6 +567,27 @@ export const CreateOperationSchema = z
      * проставит default `false`.
      */
     producesFinishedGoods: z.boolean().optional(),
+    /**
+     * Признак «это коробочная упаковка» (см.
+     * `prisma/schema.prisma::Operation.boxPacking`).
+     *
+     * Разводит два терминала упаковщика на `/packing`: только операция
+     * с `boxPacking = true` («Упаковка», сид-код `PACKING`) открывает
+     * окно коробок и проходит `PackingService.assertPackingActor`;
+     * по ней же `PackingService.addPassport` ищет упаковочный шаг
+     * маршрута и применяет гейт «все ОТК/ВТО пройдены».
+     *
+     * Операции категории `PACKING` **без** этого признака (например,
+     * заведённая клиентом «Распаковка» — приёмка сырья первым шагом
+     * маршрута) работают как обычная производственная операция:
+     * скан паспорта → завершение, без коробок и без гейтов ОТК/ВТО.
+     *
+     * Не путать с `producesFinishedGoods` — тот про финансовый выпуск
+     * готовой продукции (`FinishedGoodsMovement`), это другая ось:
+     * признаки независимы и могут стоять на разных операциях.
+     * Опционально на старых клиентах — backend проставит default `false`.
+     */
+    boxPacking: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.pricingMode === 'FIXED') {
@@ -754,6 +775,17 @@ export const UpdateOperationSchema = z
      * `sourceKey = PACKED_PASSPORT:<passportId>`.
      */
     producesFinishedGoods: z.boolean().optional(),
+    /**
+     * Признак «это коробочная упаковка» (см. в `CreateOperationSchema`).
+     * При смене на `true` упаковщик на смене по этой операции увидит
+     * терминал коробок; при `false` — обычный passport-flow (скан +
+     * завершение операции), которым живёт «Распаковка».
+     *
+     * Уже собранные коробки (`PackingBox`) не переразбираются —
+     * признак влияет только на будущие сессии упаковки и на выбор
+     * упаковочного шага в `PackingService.addPassport`.
+     */
+    boxPacking: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     // Если режим явно указан — валидируем согласованность; иначе
@@ -815,7 +847,8 @@ export const UpdateOperationSchema = z
       obj.timeNormsBySize !== undefined ||
       obj.salaryPlanRubPerShift !== undefined ||
       obj.salaryPlanShiftSeconds !== undefined ||
-      obj.producesFinishedGoods !== undefined,
+      obj.producesFinishedGoods !== undefined ||
+      obj.boxPacking !== undefined,
     'Нечего обновлять: укажите хотя бы одно поле',
   );
 export type UpdateOperationDto = z.infer<typeof UpdateOperationSchema>;
@@ -927,6 +960,20 @@ export interface OperationSummaryDto {
    * не считается выпускной, пока менеджер явно не включит признак.
    */
   producesFinishedGoods: boolean;
+  /**
+   * Признак «это коробочная упаковка» (см.
+   * `prisma/schema.prisma::Operation.boxPacking`).
+   *
+   * Единственный источник истины для развилки терминалов упаковщика:
+   * `/packing` показывает окно коробок и `PackingService` пускает
+   * актора в упаковку только при `true`. Операции категории `PACKING`
+   * с `false` («Распаковка» — приёмка сырья первым шагом маршрута)
+   * идут обычным passport-flow, как у швеи на /work.
+   *
+   * Не путать с `producesFinishedGoods` (финансовый выпуск готовой
+   * продукции) — оси независимы. Default `false`.
+   */
+  boxPacking: boolean;
 }
 
 /** Карточка операции `GET /api/operations/:id`. */

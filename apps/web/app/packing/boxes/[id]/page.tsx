@@ -49,8 +49,14 @@ export default async function BoxDetailPage({
   const shiftOperation = shift
     ? meta.operations.find((o) => o.id === shift.operationId)
     : null;
+  // Как и в терминале, «можно работать с коробкой» решает признак
+  // `Operation.boxPacking`, а не категория: в категории `PACKING` есть и
+  // некоробочная «Распаковка» (приёмка сырья первым шагом маршрута).
+  // По категории формы добавления/закрытия были бы активны и на её
+  // смене, а серверный `PackingService.assertPackingActor` всё равно
+  // вернул бы 409 `PACKING_SHIFT_REQUIRED` — уже после клика.
   const onPackingShift =
-    !!shift && shift.active && shiftOperation?.category === 'PACKING';
+    !!shift && shift.active && (shiftOperation?.boxPacking ?? false);
 
   const isOpen = box.status === 'OPEN';
 

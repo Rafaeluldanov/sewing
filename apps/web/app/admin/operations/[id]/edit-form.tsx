@@ -598,6 +598,45 @@ export function OperationEditForm({ operation }: Props) {
             </span>
           </label>
         </div>
+
+        {/*
+          Признак «коробочная упаковка» (см.
+          `prisma/schema.prisma::Operation.boxPacking`,
+          `apps/api/src/modules/packing/packing.service.ts::assertPackingActor`).
+          Единственный источник истины для разводки упаковщика: какой
+          терминал показать на `/packing`, кого пустить к ручкам коробок
+          и какой шаг маршрута считать упаковочным в
+          `PackingService.addPassport` (там же гейт QC_PASSED/WTO_PASSED).
+          Раньше различали по категории `PACKING` — и вторая операция
+          этой категории, «Распаковка» (приёмка сырья ПЕРВЫМ шагом
+          маршрута), открывала окно коробок и валилась 409
+          `PASSPORT_NOT_QC_PASSED`. Ось независима от соседнего
+          `producesFinishedGoods`: тот про финансовый выпуск
+          (`FinishedGoodsMovement`), этот — про физические коробки.
+        */}
+        <div
+          className="admin-field admin-field--inline"
+          style={{ marginTop: '0.75rem' }}
+        >
+          <input
+            id="op-box-packing"
+            type="checkbox"
+            name="boxPacking"
+            defaultChecked={operation.boxPacking}
+          />
+          <label
+            htmlFor="op-box-packing"
+            style={{ display: 'grid', gap: '0.18rem' }}
+          >
+            <strong>Упаковка в коробки</strong>
+            <span className="admin-muted" style={{ fontSize: '0.82rem' }}>
+              Терминал упаковщика откроет окно коробок только на этой
+              операции. Операции упаковщика без галочки (приёмка,
+              распаковка сырья) работают как обычная операция: скан
+              паспорта → завершить.
+            </span>
+          </label>
+        </div>
       </div>
 
       <div className="admin-actions-row">

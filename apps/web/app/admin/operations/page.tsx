@@ -354,6 +354,25 @@ export default async function AdminOperationsListPage({
                                 </AdminStatusBadge>
                               </>
                             )}
+                            {op.boxPacking && (
+                              <>
+                                {' '}
+                                {/*
+                                  Признак «коробочная упаковка» (см.
+                                  `prisma/schema.prisma::Operation.boxPacking`,
+                                  `apps/api/src/modules/packing/packing.service.ts::assertPackingActor`).
+                                  Отдельный badge рядом с «Выпуск ГП»: оси
+                                  независимы, и менеджеру важно видеть, на
+                                  какой именно операции категории `PACKING`
+                                  у упаковщика откроется окно коробок —
+                                  «Распаковка» (приёмка сырья) остаётся без
+                                  бейджа и идёт обычным passport-flow.
+                                */}
+                                <AdminStatusBadge tone="info">
+                                  Коробки
+                                </AdminStatusBadge>
+                              </>
+                            )}
                           </td>
                           <td data-label="Тариф">{formatPricingMode(op.pricingMode)}</td>
                           <td data-label="Ставка">{formatRate(op)}</td>

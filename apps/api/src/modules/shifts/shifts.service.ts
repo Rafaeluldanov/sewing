@@ -538,6 +538,14 @@ export class ShiftsService {
         active: o.active,
         pricingMode: o.pricingMode,
         fixedRate: o.fixedRate != null ? o.fixedRate.toNumber() : null,
+        // Признак «это коробочная упаковка» (`Operation.boxPacking`).
+        // Отдаём в meta, потому что /packing по операции активной
+        // смены решает, какой терминал показать: окно коробок
+        // (`true`) или обычный passport-flow скан + завершение
+        // (`false` — так работает «Распаковка», операция категории
+        // PACKING первым шагом маршрута). Раньше развилка шла по
+        // `category === 'PACKING'` и ловила обе операции разом.
+        boxPacking: o.boxPacking,
       })),
     };
   }

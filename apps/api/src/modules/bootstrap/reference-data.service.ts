@@ -150,6 +150,14 @@ export class ReferenceDataBootstrapService implements OnApplicationBootstrap {
       active: true,
       pricingMode: op.pricingMode as PricingMode,
       fixedRate,
+      // Коробочная упаковка — явный признак операции (`Operation.boxPacking`),
+      // а не производная от `category = PACKING`: в этой категории живёт и
+      // некоробочная «Распаковка» (приёмка сырья первым шагом маршрута).
+      // Проставляем только при СОЗДАНИИ отсутствующей операции — существующие
+      // строки bootstrap принципиально не перезаписывает (менеджер мог
+      // настроить их в `/admin/operations`); для уже существующих баз признак
+      // расставила миграция `20261009100000_operation_box_packing`.
+      boxPacking: op.boxPacking ?? false,
     };
   }
 }

@@ -58,6 +58,21 @@ export type ReferenceOperationSeed = {
   pricingMode: ReferenceOperationPricingMode;
   /** Только для `FIXED`. Игнорируется иначе. */
   fixedRate?: number;
+  /**
+   * Признак «операция складывает паспорта в коробки» —
+   * `Operation.boxPacking`. Именно он (а не `category = 'PACKING'`)
+   * включает терминал коробок на `/packing` и гейты
+   * `PackingService.assertPackingActor` / `addPassport`: в категории
+   * `PACKING` живут и некоробочные операции (заведённая клиентом
+   * «Распаковка» — приёмка сырья первым шагом маршрута), они идут
+   * обычным passport-flow. В каноническом справочнике признак стоит
+   * ровно у одной строки — `PACKING` («Упаковка»).
+   *
+   * Не путать с `Operation.producesFinishedGoods` (финансовый выпуск,
+   * `FinishedGoodsMovement`) — это другая ось; в справочнике мы её не
+   * сидируем, её включает менеджер в `/admin/operations`.
+   */
+  boxPacking?: boolean;
 };
 
 /**
@@ -87,7 +102,7 @@ export const REFERENCE_OPERATIONS: readonly ReferenceOperationSeed[] = [
   { code: 'SEW_COVERSTITCH',   name: 'Распошив',          category: 'SEWING',  sortOrder: 110, pricingMode: 'FIXED',    fixedRate: 13.5 },
   { code: 'QC',                name: 'ОТК',               category: 'QC',      sortOrder: 120, pricingMode: 'SALARY_ONLY' },
   { code: 'WTO',               name: 'ВТО',               category: 'IRONING', sortOrder: 130, pricingMode: 'SALARY_ONLY' },
-  { code: 'PACKING',           name: 'Упаковка',          category: 'PACKING', sortOrder: 140, pricingMode: 'SALARY_ONLY' },
+  { code: 'PACKING',           name: 'Упаковка',          category: 'PACKING', sortOrder: 140, pricingMode: 'SALARY_ONLY', boxPacking: true },
 ];
 
 /**

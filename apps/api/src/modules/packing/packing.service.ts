@@ -306,15 +306,29 @@ export class PackingService {
       // требуем `WTO_PASSED`. Заказы без соответствующего шага
       // пропускают чек (как `evaluateRouteOrder`).
       //
-      // Заодно выгребаем `operationId` шага PACKING — он попадёт в
+      // Заодно выгребаем `operationId` упаковочного шага — он попадёт в
       // `PACKED.operationId` ниже, чтобы доска мастера могла рисовать
       // «выпущено» на колонке упаковки по тому же `OPERATION_FINISHED`-
       // стайл коду, что и пошив.
+      //
+      // Шаг ищем по признаку `Operation.boxPacking`, а НЕ по
+      // `category === PACKING`: в одном маршруте операций категории
+      // `PACKING` может быть несколько — «Распаковка» (приёмка и
+      // распаковка приходящего сырья) первым шагом и «Упаковка»
+      // (коробки) последним. Поиск по категории брал ПЕРВУЮ подходящую,
+      // то есть «Распаковку», и событие `PACKED` привязывалось к ней —
+      // доска мастера рисовала выпуск не на той колонке. Сюда, к слову,
+      // доходит только настоящая коробочная упаковка: `assertPackingActor`
+      // выше пускает лишь смену с `boxPacking = true`.
       let packingOperationId: string | null = null;
       if (fresh.orderId) {
         const routeSteps = await tx.orderRouteStep.findMany({
           where: { orderId: fresh.orderId },
-          select: { operation: { select: { id: true, category: true } } },
+          select: {
+            operation: {
+              select: { id: true, category: true, boxPacking: true },
+            },
+          },
         });
         // Считаем ШАГИ, а не «есть ли такой»: ОТК и ВТО могут стоять в
         // маршруте несколько раз (проверка между этапами и финальная), и
@@ -327,9 +341,7 @@ export class PackingService {
           (s) => s.operation.category === OperationCategory.IRONING,
         ).length;
         packingOperationId =
-          routeSteps.find(
-            (s) => s.operation.category === OperationCategory.PACKING,
-          )?.operation.id ?? null;
+          routeSteps.find((s) => s.operation.boxPacking)?.operation.id ?? null;
         // После `OPERATION_REWORK_OPENED` (ОТК «вернуть на переделку»,
         // см. `QcService.returnToRework`) старые `QC_PASSED`/`WTO_PASSED`
         // не засчитываются — должен быть свежий, после последнего rework.
@@ -428,7 +440,8 @@ export class PackingService {
         data: {
           passportId: fresh.id,
           type: PassportEventType.PACKED,
-          // operationId шага PACKING заказа: симметрия с
+          // operationId упаковочного шага заказа (шаг с
+          // `Operation.boxPacking`, см. поиск выше): симметрия с
           // `QC_PASSED.operationId` / `WTO_PASSED.operationId`. Используется
           // доской мастера для «выпущено» на колонке упаковки.
           operationId: packingOperationId,
@@ -809,8 +822,24 @@ export class PackingService {
   /**
    * Soft-проверка актёра (см. `PackingShiftRequiredException`):
    * пользователь должен существовать, быть активным и иметь активную
-   * смену с операцией категории `PACKING`. Без полноценного auth это
-   * единственный способ убедиться, что упаковкой занят упаковщик.
+   * смену на операции с признаком `Operation.boxPacking`. Без
+   * полноценного auth это единственный способ убедиться, что коробками
+   * занят именно упаковщик коробок.
+   *
+   * Раньше условие было `operation.category === PACKING`, и это было
+   * неверно: категория `PACKING` — про группировку в UI, а клиент завёл
+   * в ней вторую операцию «Распаковка» (приёмка и распаковка
+   * приходящего сырья) ПЕРВЫМ шагом маршрута. Смена на «Распаковке»
+   * проходила сюда и пускала человека в ручки коробок, где `addPassport`
+   * тут же валился 409 `PASSPORT_NOT_QC_PASSED` — гейт финальной
+   * упаковки требовал уже пройденных ОТК/ВТО на первом же шаге.
+   * Теперь такая смена честно получает `PackingShiftRequiredException`,
+   * а «Распаковка» работает обычным passport-flow (скан → завершить
+   * операцию, как у швеи на `/work`).
+   *
+   * `boxPacking` — отдельная ось от `Operation.producesFinishedGoods`
+   * (тот про финансовый выпуск и `FinishedGoodsMovement`), см. развёрнутый
+   * комментарий у поля в `prisma/schema.prisma::Operation`.
    */
   private async assertPackingActor(employeeId: string): Promise<void> {
     const employee = await this.prisma.employee.findUnique({
@@ -822,9 +851,9 @@ export class PackingService {
 
     const session = await this.prisma.shiftSession.findFirst({
       where: { employeeId, endedAt: null },
-      include: { operation: { select: { category: true } } },
+      include: { operation: { select: { boxPacking: true } } },
     });
-    if (!session || session.operation.category !== OperationCategory.PACKING) {
+    if (!session || !session.operation.boxPacking) {
       throw new PackingShiftRequiredException();
     }
   }
