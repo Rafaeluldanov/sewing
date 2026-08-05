@@ -1901,6 +1901,16 @@ export interface OrderDetailDto
   techCardCode: string | null;
   techCardName: string | null;
   /**
+   * Спецификацию правили, а автопересчёт потребности не прошёл
+   * (`OrdersService.recalcNeedsAndMarkStale`). Отметка ДУБЛИРУЕТСЯ в каждой
+   * строке потребности (`orderNeedsStaleAt`), но строк может не быть вовсе —
+   * тогда единственный носитель отметки этот, иначе отказ пересчёта остаётся
+   * невидимым: вкладка показывает пустоту без объяснения.
+   * Опционально (`?`) для backward-compat.
+   */
+  needsStaleAt?: string | null;
+  needsStaleReason?: string | null;
+  /**
    * Snapshot строк материалов на заказе. Заполняется в
    * `OrdersService.start()` по шаблону `techCardId`; пустой массив =
    * «техкарта не фиксировалась» (заказ либо ещё не запущен, либо

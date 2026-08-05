@@ -224,7 +224,15 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
   // устарели. Отметку ставит бэкенд там же, где ловит отказ пересчёта
   // (`OrdersService.recalcNeedsAndMarkStale`); поле продублировано в каждой
   // строке, поэтому берём из первой.
-  const stale = activeNeeds.find((n) => n.orderNeedsStaleAt) ?? null;
+  // Fallback на сам заказ обязателен: строк может не быть вовсе (расчёт
+  // отбился ещё до записи, вариант пуст) — а именно тогда отметка и нужнее
+  // всего, иначе менеджер видит пустую вкладку без единого слова о причине.
+  const staleFromRows = activeNeeds.find((n) => n.orderNeedsStaleAt) ?? null;
+  const stale: { reason: string | null } | null = staleFromRows
+    ? { reason: staleFromRows.orderNeedsStaleReason ?? null }
+    : order.needsStaleAt
+      ? { reason: order.needsStaleReason ?? null }
+      : null;
   // Фича «Правка потребности на любой стадии»: правка строки сама зовёт
   // пересчёт себестоимости. Если он не прошёл (в строках USD без курса,
   // нет цены / «к закупке»), бэкенд ставит `Order.costEstimateStaleAt` —
@@ -241,7 +249,7 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
                 Спецификация изменилась — потребность устарела
               </b>
               <p className="needs-stale__text">
-                {stale.orderNeedsStaleReason ??
+                {stale.reason ??
                   'Пересчёт потребности после правки спецификации не выполнен.'}
               </p>
               <p className="needs-stale__hint">

@@ -1080,6 +1080,7 @@ export class WorkshopNeedsService {
       rows.map((r) => ({
         source: 'ORDER_MATERIAL_REQUIREMENT',
         id: r.id,
+        isManual: r.isManual,
         name: r.name,
         unit: r.unit,
         normUnit: r.normUnit,
@@ -1118,6 +1119,9 @@ export class WorkshopNeedsService {
       lines.map((l) => ({
         source: 'TECH_CARD_MATERIAL_LINE',
         id: l.id,
+        // Live-техкарта — это и есть шаблон; «заведено в заказе» тут неоткуда
+        // взяться.
+        isManual: false,
         name: l.name,
         unit: l.unit,
         normUnit: l.normUnit,
@@ -1384,6 +1388,23 @@ export class WorkshopNeedsService {
     let methodMaterialArea = 0;
     let methodLinearBySize = 0;
 
+    // Роли, которые УЖЕ закрыты параметрами номенклатуры: площадью, нормой
+    // фурнитуры или погонными метрами. Строка заказа с такой ролью считается
+    // по номенклатуре (а её правка нормы доезжает через `matchedLine` —
+    // `orderEditedNormPerUnit`), поэтому считать её ВТОРОЙ раз нельзя: это
+    // был бы двойной счёт в закупке.
+    const rolesCoveredByPattern = new Set<string>();
+    for (const role of areasByRole.keys()) rolesCoveredByPattern.add(role);
+    // Намеренно `.filter().forEach()`, а не `for … of`: сигнатурой цикла по
+    // нормам smoke-тест находит ГЛАВНЫЙ цикл и проверяет порядок гейта внутри
+    // него — второе вхождение увело бы его сюда, на безобидный сбор ролей.
+    (order.patternItem?.parameterNorms ?? [])
+      .filter((n) => n.inputTypeSnapshot === 'QTY_PER_ITEM')
+      .forEach((n) => rolesCoveredByPattern.add(n.roleKey));
+    for (const values of linearByParam.values()) {
+      for (const v of values) rolesCoveredByPattern.add(v.roleKey);
+    }
+
     // -----------------------------------------------------------------------
     // Фича «Расцветки»: считаем ПО КАЖДОЙ группе-расцветке. Внутри — те
     // же хелперы, но с per-variant количествами (`g.items`/`g.totalQty`),
@@ -1500,6 +1521,43 @@ export class WorkshopNeedsService {
         if (computedLinear) {
           methodLinearBySize++;
           computed.push(stamp(computedLinear));
+        }
+      }
+
+      // Материалы, ДОБАВЛЕННЫЕ В ЗАКАЗЕ (усилительная лента, которой нет ни в
+      // шаблоне, ни в номенклатуре). В category-driven расчёте строки заказа
+      // работают только обогащением найденных норм, поэтому такая строка не
+      // давала потребности вообще: параметра с её ролью в номенклатуре нет,
+      // обогащать нечего — материал молча пропадал из закупки, хотя менеджер
+      // завёл его руками именно чтобы купить.
+      //
+      // Считаем ТОЛЬКО `isManual` и ТОЛЬКО с ролью, не закрытой номенклатурой:
+      //   - шаблонные строки, под которые нет площади/нормы, по-прежнему НЕ
+      //     порождают потребность — это осознанное поведение category-driven
+      //     («лишние ткани из техкарты»), и числа живых заказов не двигаются;
+      //   - роль, закрытая параметром, уже посчитана выше.
+      // Для legacy-заказов ветка не нужна: там `!isCategoryDriven` считает
+      // каждую строку источника, включая ручные.
+      if (isCategoryDriven) {
+        for (const line of g.sourceLines) {
+          if (!line.isManual) continue;
+          if (line.materialRole && rolesCoveredByPattern.has(line.materialRole))
+            continue;
+          const computedManual = this.computeLine({
+            line,
+            order: {
+              color: g.color,
+              patternItemId: order.patternItemId,
+            },
+            items: g.items,
+            materialAreas: order.patternItem?.materialAreas ?? [],
+            totalOrderQty: g.totalQty,
+            warnings,
+          });
+          if (computedManual.calculationMethod === 'AREA_DENSITY')
+            methodAreaDensity++;
+          else methodQtyPerUnit++;
+          computed.push(stamp(computedManual));
         }
       }
     }
@@ -1822,6 +1880,7 @@ export class WorkshopNeedsService {
       ? order.materialRequirements.map((r) => ({
           source: 'TECH_CARD_MATERIAL_LINE',
           id: r.id,
+          isManual: r.isManual,
           name: r.name,
           unit: r.unit,
           normUnit: r.normUnit,
@@ -1845,6 +1904,7 @@ export class WorkshopNeedsService {
       : (order.techCard?.materialLines ?? []).map((l) => ({
           source: 'TECH_CARD_MATERIAL_LINE',
           id: l.id,
+          isManual: false,
           name: l.name,
           unit: l.unit,
           normUnit: l.normUnit,
@@ -3745,6 +3805,15 @@ function mergeOrderWhere(
 interface SourceLine {
   source: 'TECH_CARD_MATERIAL_LINE' | 'ORDER_MATERIAL_REQUIREMENT';
   id: string;
+  /**
+   * Строка ЗАВЕДЕНА В ЗАКАЗЕ (`OrderMaterialRequirement.isManual`), а не
+   * пришла из шаблона. Шаблон о ней не знает, номенклатура — тем более,
+   * поэтому в category-driven расчёте она единственный источник самой себя:
+   * без этого признака добавленный в заказе материал не давал потребности
+   * вовсе (роль в номенклатуре не описана → обогащать нечего → строки нет).
+   * На live-техкарте признака нет — там все строки шаблонные.
+   */
+  isManual: boolean;
   name: string;
   /** Единица ЗАКУПКИ — в ней же лежит `totalQty` и считается смета. */
   unit: string;

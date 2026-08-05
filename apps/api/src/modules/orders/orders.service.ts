@@ -3905,6 +3905,10 @@ export class OrdersService {
       operationPlanWarnings: normalizeOperationPlanWarnings(
         order.operationPlanWarnings,
       ),
+      // Отказ автопересчёта потребности — на самом заказе, а не только в её
+      // строках: при пустой потребности плашке больше не на чем приехать.
+      needsStaleAt: order.needsStaleAt ? order.needsStaleAt.toISOString() : null,
+      needsStaleReason: order.needsStaleReason ?? null,
       // Этап 2 «План операций на заказе» — stale-detection (см.
       // `OrderOperationPlanService.getFreshnessForOrder`). Поля
       // computed-only, в БД не хранятся.
