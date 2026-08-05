@@ -4661,6 +4661,11 @@ export class OrdersService {
         // productId для пересборки агрегата OrderItem (все строки
         // заказа делят один legacy Product заказа).
         items: { select: { productId: true }, take: 1 },
+        // Запасной источник того же productId: заказ мог быть создан БЕЗ
+        // размеров (`sizeIds: []` — «сначала заказ, потом расцветки»), тогда
+        // строк ещё нет и брать productId неоткуда. Лекало заказа знает свой
+        // технический Product (`ensureLegacyProductForPattern`) — берём его.
+        patternItem: { select: { legacyProductId: true } },
         variants: {
           orderBy: { ordinal: 'asc' },
           select: {
@@ -4691,9 +4696,14 @@ export class OrdersService {
 
     // Агрегат OrderItem = Σ OrderVariantSize.qtyPlan по размеру (union
     // размеров всех расцветок; нулевые строки выкидываем). productId
-    // берём из существующих строк (все делят один). Если строк нет или
-    // тираж нулевой — агрегат не трогаем (вырожденный случай, не
-    // затираем заказ вслепую).
+    // берём из существующих строк (все делят один), а если строк ещё нет —
+    // с лекала заказа. Пустой `OrderItem` — не вырожденный случай, а обычный
+    // старт «заказ без размеров → размеры в расцветке»: не создай мы строки
+    // здесь, тираж заказа остался бы нулевым, а снимок материалов —
+    // ПУСТЫМ (`rebuildMaterialRequirementsSnapshot` отбрасывает группы с
+    // `qty = 0`), т.е. «выбрал техкарту, а материалы не подтянулись».
+    // Если тираж расцветок нулевой — агрегат не трогаем (не затираем
+    // заказ вслепую).
     const aggregatedSizeQty = new Map<string, number>();
     for (const v of order.variants) {
       for (const s of v.sizes) {
@@ -4705,7 +4715,10 @@ export class OrdersService {
         }
       }
     }
-    const itemsProductId = order.items[0]?.productId ?? null;
+    const itemsProductId =
+      order.items[0]?.productId ??
+      order.patternItem?.legacyProductId ??
+      null;
 
     await this.prisma.$transaction(async (tx) => {
       if (bridgedTechCardId !== order.techCardId) {
