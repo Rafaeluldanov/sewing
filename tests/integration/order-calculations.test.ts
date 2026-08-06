@@ -635,6 +635,77 @@ describeWithDb('integration — варианты просчёта заказа (
     expect(poBlocked.body.code).toBe('PURCHASE_ORDER_NEED_INACTIVE_CALCULATION');
   });
 
+  test('удаление варианта уносит его потребности — строки не утекают в активный', async () => {
+    const tc = await createTechCard('TC-CALC-DEL', 'Удаление варианта');
+    const orderId = await createOrder(tc);
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
+
+    const calcA = (
+      await t.prisma.orderCalculation.findFirstOrThrow({
+        where: { orderId, isActive: true },
+        select: { id: true },
+      })
+    ).id;
+    await t.prisma.workshopNeed.updateMany({
+      where: { orderId, orderCalculationId: calcA },
+      data: { purchaseQty: '10', quotedPrice: '100', quotedCurrency: 'RUB' },
+    });
+
+    // Вариант B считается, но цены ему не заполняем — именно этим он и
+    // выдаёт себя, если утечёт в активный контур: смета отобьётся
+    // «не указана цена».
+    const cloneRes = await api()
+      .post(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    const calcB = cloneRes.body.items[1].id as string;
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
+    expect(
+      await t.prisma.workshopNeed.count({
+        where: { orderId, orderCalculationId: calcB },
+      }),
+    ).toBeGreaterThan(0);
+
+    await activate(orderId, calcA);
+    await api()
+      .delete(`/api/orders/${orderId}/calculations/${calcB}`)
+      .set('Cookie', manager)
+      .expect(200);
+
+    // Строки ушли вместе с вариантом и не осиротели: `onDelete: SetNull`
+    // оставил бы их с пустым `orderCalculationId`, а канонический скоуп
+    // читает пустое значение как «показывать всем».
+    expect(
+      await t.prisma.workshopNeed.count({
+        where: { orderId, orderCalculationId: calcB },
+      }),
+    ).toBe(0);
+    expect(
+      await t.prisma.workshopNeed.count({
+        where: { orderId, orderCalculationId: null },
+      }),
+    ).toBe(0);
+
+    // Смета считается только по A. До фикса строки B без цен подпадали
+    // под скоуп и роняли расчёт с ORDER_CALCULATION_INCOMPLETE.
+    const rowsACount = await t.prisma.workshopNeed.count({
+      where: { orderId, orderCalculationId: calcA },
+    });
+    const est = await api()
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    expect(Number(est.body.totalCostRub)).toBe(rowsACount * 10 * 100);
+  });
+
   test('гейты: REVIEWED других вариантов НЕ блокируют; первый расчёт при активации; accept-calculated скоуплен; статус/удаление/no-op', async () => {
     const tc = await createTechCard('TC-CALC-GATES', 'Гейты');
     const orderId = await createOrder(tc);

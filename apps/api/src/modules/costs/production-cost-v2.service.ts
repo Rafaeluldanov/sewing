@@ -28,7 +28,7 @@ import {
 import { SHIFT_MINUTES } from '@sewing/shared/costs';
 import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { isSalaryEligible } from '../employees/compensation.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
 
@@ -292,7 +292,7 @@ export class ProductionCostV2Service {
             NOT: { status: 'CANCELLED' },
             // Фича «Варианты просчёта»: fallback-план без сметы — только
             // активный вариант, иначе двойной счёт.
-            AND: [ACTIVE_CALCULATION_NEED_WHERE],
+            AND: [TIRAGE_NEED_WHERE],
           },
           select: {
             orderId: true,

@@ -31,7 +31,7 @@ import type {
 } from './dto/create-material-issue.dto.js';
 import type { ListMaterialIssuesQuery } from './dto/list-material-issues.dto.js';
 import type { ReturnMaterialIssueDto } from './dto/return-material-issue.dto.js';
-import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { normalizeColor } from '@sewing/shared/colors';
 
 /**
@@ -1184,7 +1184,7 @@ export class MaterialIssuesService {
         orderId: passport.orderId,
         status: { not: 'CANCELLED' },
         sourceType: { not: 'ORDER_APPLICATION' },
-        AND: [ACTIVE_CALCULATION_NEED_WHERE],
+        AND: [TIRAGE_NEED_WHERE],
         ...(variantId
           ? { OR: [{ orderVariantId: variantId }, { orderVariantId: null }] }
           : {}),

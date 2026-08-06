@@ -20,7 +20,7 @@ import {
 } from '@sewing/shared/order-applications';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /**
  * Сервис «Готовность к крою» (Этап 8А, MVP).
@@ -73,7 +73,7 @@ export class CutReadinessService {
     // строкам АКТИВНОГО варианта — потребности других вариантов
     // сравнения не должны блокировать крой ложными «материал не пришёл».
     const workshopNeeds = await this.prisma.workshopNeed.findMany({
-      where: { orderId, AND: [ACTIVE_CALCULATION_NEED_WHERE] },
+      where: { orderId, AND: [TIRAGE_NEED_WHERE] },
       include: WORKSHOP_NEED_INCLUDE,
       orderBy: [{ materialRole: 'asc' }, { createdAt: 'asc' }],
     });

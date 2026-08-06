@@ -18,7 +18,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrdersService } from '../orders/orders.service.js';
-import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /** Провалидированные ссылки снимка на справочники (см.
  *  `validateSnapshotRefs`): несуществующие FK при restore зануляются. */
@@ -498,7 +498,37 @@ export class OrderCalculationsService {
       );
     }
 
-    await this.prisma.orderCalculation.delete({ where: { id: calcId } });
+    // Строки потребности удаляемого варианта нельзя оставлять сиротами:
+    // FK объявлен `onDelete: SetNull`, а пустой `orderCalculationId`
+    // канонический скоуп читает как «строка вне контура вариантов» и
+    // показывает её ВСЕМ читателям заказа. Материалы удалённого варианта
+    // складывались бы с активным — сравнение вариантов превращалось в их
+    // сложение.
+    //
+    // Складской остаток защищаем той же логикой, что и пересчёт
+    // (`WorkshopNeedsService.calculateForOrder`): `StockBalance` и
+    // `StockMovement` каскадятся от строки, и удаление снесло бы
+    // физический остаток вместе с журналом движений. Есть движения —
+    // отказываем адресной 409, а не портим склад.
+    const needsWithStock = await this.prisma.workshopNeed.count({
+      where: { orderId, orderCalculationId: calcId, stockMovements: { some: {} } },
+    });
+    if (needsWithStock > 0) {
+      throw this.conflict(
+        ORDER_CALCULATION_ERROR_CODES.CONFLICT,
+        'Нельзя удалить вариант: по его материалам уже есть складские ' +
+          'движения. Сначала отмените приход или расход по этим строкам.',
+      );
+    }
+
+    const removedNeeds = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.workshopNeed.deleteMany({
+        where: { orderId, orderCalculationId: calcId },
+      });
+      await tx.orderCalculation.delete({ where: { id: calcId } });
+      return count;
+    });
+
     await this.audit.log({
       event: 'ORDER_CALCULATION_DELETED',
       entityType: 'ORDER',
@@ -507,6 +537,7 @@ export class OrderCalculationsService {
         calculationId: calcId,
         ordinal: target.ordinal,
         title: target.title,
+        removedNeeds,
       },
       employeeId: actorEmployeeId ?? null,
     });
@@ -627,8 +658,7 @@ export class OrderCalculationsService {
       where: {
         orderId,
         isManual: false,
-        orderSampleId: null,
-        AND: [ACTIVE_CALCULATION_NEED_WHERE],
+        AND: [TIRAGE_NEED_WHERE],
       },
       select: {
         orderVariantId: true,

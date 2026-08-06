@@ -1646,16 +1646,20 @@ export class WorkshopNeedsService {
     // документы приёмки/расхода намеренно переживают удаление (SetNull).
     // Не даём молча стереть остаток: блокируем пересчёт с адресной 409.
     // Скоуп удаления/проверок — строки АКТИВНОЙ калькуляции (см. шаг 2.5).
-    const deleteWhere = force
-      ? { orderId, orderCalculationId: activeCalculationId, isManual: false }
-      : {
-          orderId,
-          orderCalculationId: activeCalculationId,
-          status: 'CALCULATED',
-          isManual: false,
-        };
+    //
+    // Ручные строки (`isManual = true`, этап «Корректировка материалов
+    // после просчёта») пересчёт не трогает даже в force-режиме: их завёл
+    // человек руками под непредвиденный расход. Без `force` сносим только
+    // CALCULATED — REVIEWED/PURCHASE_PLANNED/CANCELLED не трогаем
+    // (см. ADR/ТЗ Этапа 4А).
+    const doomedWhere: Prisma.WorkshopNeedWhereInput = {
+      orderId,
+      orderCalculationId: activeCalculationId,
+      isManual: false,
+      ...(force ? {} : { status: 'CALCULATED' }),
+    };
     const needsWithStock = await this.prisma.workshopNeed.count({
-      where: { ...deleteWhere, stockMovements: { some: {} } },
+      where: { ...doomedWhere, stockMovements: { some: {} } },
     });
     if (needsWithStock > 0) {
       throw new WorkshopNeedsHaveStockException();
@@ -1663,19 +1667,6 @@ export class WorkshopNeedsService {
 
     // 5. Транзакция: удаляем нужные строки и пишем новые.
     const created = await this.prisma.$transaction(async (tx) => {
-      // Ручные строки (`isManual = true`, этап «Корректировка материалов
-      // после просчёта») — НЕ системные, пересчёт их не трогает даже в
-      // force-режиме: их завёл человек руками под непредвиденный расход.
-      //
-      // Без `force` сносим только CALCULATED — REVIEWED/PURCHASE_PLANNED/
-      // CANCELLED не трогаем (см. ADR/ТЗ Этапа 4А).
-      const doomedWhere: Prisma.WorkshopNeedWhereInput = {
-        orderId,
-        orderCalculationId: activeCalculationId,
-        isManual: false,
-        ...(force ? {} : { status: 'CALCULATED' }),
-      };
-
       // Снимаем закупочный блок ДО удаления, чтобы вернуть его на
       // пересозданные строки. Пересчёт меняет спецификацию, а цена
       // поставщика из спецификации не выводится: снести её заодно с

@@ -11,7 +11,7 @@ import { normalizeColorOrNull } from '@sewing/shared/colors';
 import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /** Начисления, считающиеся «фактом» на текущий момент (не отменённые). */
 const FACT_ENTRY_STATUSES: EntryStatus[] = [
@@ -378,7 +378,7 @@ export class OrderProductionDocumentService {
       where: {
         orderId,
         NOT: { status: 'CANCELLED' },
-        AND: [ACTIVE_CALCULATION_NEED_WHERE],
+        AND: [TIRAGE_NEED_WHERE],
       },
       select: {
         id: true,

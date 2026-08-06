@@ -7,7 +7,7 @@ import type {
 } from '@sewing/shared/order-actual-materials';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /** Материальные `sourceType` потребности цеха (для fallback-плана). */
 const MATERIAL_NEED_SOURCE_TYPES = new Set([
@@ -130,7 +130,7 @@ export class OrderActualMaterialsService {
             NOT: { status: 'CANCELLED' },
             // Фича «Варианты просчёта»: fallback-план без сметы — только
             // активный вариант, иначе двойной счёт.
-            AND: [ACTIVE_CALCULATION_NEED_WHERE],
+            AND: [TIRAGE_NEED_WHERE],
           },
           select: {
             orderId: true,

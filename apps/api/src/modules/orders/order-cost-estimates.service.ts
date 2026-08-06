@@ -20,7 +20,7 @@ import {
 } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
-import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /**
  * Сервис «Себестоимость заказа» (см.
@@ -94,7 +94,7 @@ export class OrderCostEstimatesService {
       where: {
         orderId,
         NOT: { status: 'CANCELLED' },
-        AND: [ACTIVE_CALCULATION_NEED_WHERE],
+        AND: [TIRAGE_NEED_WHERE],
       },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       include: {
