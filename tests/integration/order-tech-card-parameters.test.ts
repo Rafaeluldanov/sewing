@@ -302,6 +302,76 @@ describeWithDb('integration — параметры техкарт', () => {
     expect(reloaded.every((r) => r.densityGsm === 190)).toBe(true);
   });
 
+  test('ручные строки переживают добавление второй расцветки и возврат к одной', async () => {
+    const techCardId = await createParametricTechCard();
+    const orderId = await createOrderWithOneColorway(techCardId);
+
+    // Пачка ручных строк при ОДНОЙ расцветке: снимок хранит их
+    // order-level (`orderVariantId = null`).
+    for (const name of ['Лента усилительная', 'Бирка', 'Пакет']) {
+      await request(t.app.getHttpServer())
+        .post(`/api/orders/${orderId}/tech-card/lines`)
+        .set('Cookie', manager)
+        .send({ name, unit: 'шт', qtyPerUnit: '1' })
+        .expect(201);
+    }
+    const before = await t.prisma.orderMaterialRequirement.findMany({
+      where: { orderId, isManual: true },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    expect(before).toHaveLength(3);
+
+    // Добавляем вторую расцветку. Схема группировки снимка меняется с
+    // order-level на «ключ = расцветка» — раньше ручные строки на этом
+    // переходе выглядели осиротевшими и удалялись все три.
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/colorways`)
+      .set('Cookie', manager)
+      .send({
+        color: 'Чёрный',
+        techCardId,
+        sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }],
+      })
+      .expect(201);
+
+    const afterAdd = await t.prisma.orderMaterialRequirement.findMany({
+      where: { orderId, isManual: true },
+      select: { id: true, name: true, orderVariantId: true },
+      orderBy: { name: 'asc' },
+    });
+    expect(afterAdd.map((r) => r.name)).toEqual(before.map((r) => r.name));
+    // Строки не пересозданы, а перепривязаны — id прежние.
+    expect(afterAdd.map((r) => r.id).sort()).toEqual(
+      before.map((r) => r.id).sort(),
+    );
+    // И приехали к главной расцветке, а не остались висеть order-level.
+    const primary = await t.prisma.orderVariant.findFirstOrThrow({
+      where: { orderId },
+      orderBy: { ordinal: 'asc' },
+      select: { id: true },
+    });
+    expect(afterAdd.every((r) => r.orderVariantId === primary.id)).toBe(true);
+
+    // Обратный переход N → 1 симметричен.
+    const black = await t.prisma.orderVariant.findFirstOrThrow({
+      where: { orderId, color: 'Чёрный' },
+      select: { id: true },
+    });
+    await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/colorways/${black.id}`)
+      .set('Cookie', manager)
+      .expect(200);
+
+    const afterRemove = await t.prisma.orderMaterialRequirement.findMany({
+      where: { orderId, isManual: true },
+      select: { id: true, name: true, orderVariantId: true },
+      orderBy: { name: 'asc' },
+    });
+    expect(afterRemove.map((r) => r.name)).toEqual(before.map((r) => r.name));
+    expect(afterRemove.every((r) => r.orderVariantId === null)).toBe(true);
+  });
+
   test('строка, добавленная в заказе, переживает смену техкарты', async () => {
     const techCardId = await createParametricTechCard();
     const other = await request(t.app.getHttpServer())

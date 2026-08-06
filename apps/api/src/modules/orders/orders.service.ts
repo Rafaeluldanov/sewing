@@ -5201,6 +5201,43 @@ export class OrdersService {
     // за раз с приходом пачки.
     const existingGroupKeys = new Set(groups.map((g) => vk(g.variantId)));
 
+    // Схема группировки зависит от ЧИСЛА расцветок: ≤1 → одна order-level
+    // группа с ключом '', ≥2 → ключ на расцветку. Значит при переходе
+    // 1 ↔ N ключ ОДНОЙ И ТОЙ ЖЕ группы меняется, и её строки выглядят
+    // осиротевшими, хотя расцветку никто не удалял. Ветка «группы больше
+    // нет» ниже сносит такие строки БЕЗУСЛОВНО — проверка `isManual` стоит
+    // после неё. Из-за этого добавление второй расцветки стирало ручные
+    // строки материалов, заведённые в заказе, при том что правило прямо
+    // обратное: ручную строку шаблон не сеял и заменить её собой не может.
+    //
+    // Перепривязываем их ДО всех решений. Главная расцветка (ordinal = 0)
+    // — продолжение прежнего order-level состояния, поэтому ручные строки
+    // едут к ней. Шаблонные строки не трогаем: их всё равно пересобирает
+    // шаблон, и лишний переезд только плодил бы дубли.
+    const primaryVariantId = order.variants[0]?.id ?? null;
+    const isOrderLevelScheme =
+      groups.length === 1 && groups[0].variantId === null;
+    if (primaryVariantId) {
+      const [from, to] = isOrderLevelScheme
+        ? [primaryVariantId, null] // N → 1: главная расцветка стала order-level
+        : [null, primaryVariantId]; // 1 → N: order-level строки — это главная
+      const moved = await tx.orderMaterialRequirement.updateMany({
+        where: { orderId, isManual: true, orderVariantId: from },
+        data: { orderVariantId: to },
+      });
+      if (moved.count > 0) {
+        // `existing` дальше кормит и preserve-карты, и решение об
+        // удалении — держим его в согласии с БД.
+        for (const r of existing) {
+          if (r.orderVariantId === from) r.orderVariantId = to;
+        }
+        OrdersService.log.log(
+          `event=order.material_snapshot.manual_rekeyed order=${orderId} ` +
+            `count=${moved.count} scheme=${isOrderLevelScheme ? 'order-level' : 'per-variant'}`,
+        );
+      }
+    }
+
     // Ни одной группы с техкартой → шаблонных строк в снимке быть не может.
     // Ручные строки существующих групп при этом остаются: их шаблон не сеял,
     // значит и снести их пересборка не вправе.
