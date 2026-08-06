@@ -43,9 +43,25 @@ export class OrderActualMaterialsService {
   async getReport(
     query: OrderActualMaterialsQuery = {},
   ): Promise<OrderActualMaterialsReportDto> {
+    // Период (если задан) — ОДНО окно на весь отчёт: и факт, и пул
+    // накладных. Разные окна у пула и базы распределения дают
+    // правдоподобное, но неверное число: накладные за август делились бы
+    // на заказы за всю историю, и заказ, где в августе не двинулось ни
+    // рубля, получал бы долю августовской аренды. Правдоподобная ошибка
+    // хуже абсурдной — её никто не заметит.
+    const overheadPeriod = resolveOverheadPeriod(query);
+
     // 1. Факт: POSTED-строки приёмок (приёмка тоже POSTED) с привязкой к заказу.
     const receiptLines = await this.prisma.purchaseReceiptLine.findMany({
-      where: { status: 'POSTED', purchaseReceipt: { status: 'POSTED' } },
+      where: {
+        status: 'POSTED',
+        purchaseReceipt: {
+          status: 'POSTED',
+          ...(overheadPeriod
+            ? { receivedAt: { gte: overheadPeriod.from, lte: overheadPeriod.to } }
+            : {}),
+        },
+      },
       select: {
         id: true,
         receivedQty: true,
@@ -81,7 +97,7 @@ export class OrderActualMaterialsService {
         totalVarianceDirectRub: '0.00',
         totalOverheadRub: '0.00',
         totalFullCostFactRub: '0.00',
-        overheadPeriod: periodDto(resolveOverheadPeriod(query)),
+        overheadPeriod: periodDto(overheadPeriod),
       };
     }
 
@@ -97,6 +113,9 @@ export class OrderActualMaterialsService {
       where: {
         status: 'APPROVED',
         passport: { orderId: { in: orderIds } },
+        ...(overheadPeriod
+          ? { approvedAt: { gte: overheadPeriod.from, lte: overheadPeriod.to } }
+          : {}),
       },
       select: { amount: true, passport: { select: { orderId: true } } },
     });
@@ -282,19 +301,37 @@ export class OrderActualMaterialsService {
     // Периода нет — накладные не распределяем вовсе. Показать
     // заведомо неверное число хуже, чем не показать: пустая колонка
     // читается как «не задан период», раздутая — как убыток.
-    const overheadPeriod = resolveOverheadPeriod(query);
     let pool = new Prisma.Decimal(0);
     if (overheadPeriod) {
-      const overheadEntries = await this.prisma.cashFlowEntry.findMany({
+      // Окно применяем к ИСХОДНЫМ проводкам (`isStorno = false`), а
+      // сторно учитываем по дате отменяемой проводки, а не своей.
+      // `TreasuryService.storno` пишет отмену с `postedAt = сейчас`
+      // (treasury.service.ts:317), поэтому наивный фильтр по окну
+      // вычел бы отмену прошлогоднего расхода из ЭТОГО месяца: пул
+      // уходил в минус и клэмпом молча превращался в ноль.
+      //
+      // Смысл такой: сторно означает «расхода не было», поэтому оно
+      // уменьшает пул ТОГО периода, в котором стоит исходная проводка.
+      const originals = await this.prisma.cashFlowEntry.findMany({
         where: {
           item: { isOverhead: true },
+          isStorno: false,
           postedAt: { gte: overheadPeriod.from, lte: overheadPeriod.to },
         },
-        select: { direction: true, amount: true },
+        select: {
+          id: true,
+          direction: true,
+          amount: true,
+          reversals: { select: { direction: true, amount: true } },
+        },
       });
-      for (const e of overheadEntries) {
-        // OUT = расход (+), сторно OUT приходит как IN (−) — нетто.
+      for (const e of originals) {
+        // OUT = расход (+), IN по статье накладных (возврат) — (−).
         pool = e.direction === 'OUT' ? pool.add(e.amount) : pool.sub(e.amount);
+        for (const r of e.reversals) {
+          // Отмена гасит исходную проводку своим противоположным знаком.
+          pool = r.direction === 'OUT' ? pool.add(r.amount) : pool.sub(r.amount);
+        }
       }
       if (pool.lessThan(0)) pool = new Prisma.Decimal(0);
       pool = this.okr1c(pool);

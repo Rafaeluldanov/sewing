@@ -118,7 +118,7 @@ export default async function MaterialsFactPage({
           }}
         >
           <label style={{ display: 'grid', gap: 4 }}>
-            <span className="admin-muted">Накладные с</span>
+            <span className="admin-muted">Период с</span>
             <input type="date" name="dateFrom" defaultValue={dateFrom ?? ''} />
           </label>
           <label style={{ display: 'grid', gap: 4 }}>
@@ -132,7 +132,10 @@ export default async function MaterialsFactPage({
         <p className="admin-muted" style={{ marginTop: 0 }}>
           Материалы — фактически принятые по заказу (POSTED-приёмки). Труд —
           фактическая сдельная выработка (APPROVED). Прямая себестоимость =
-          материалы + труд. Показаны заказы с приёмками.
+          материалы + труд. Показаны заказы с приёмками. С заданным
+          периодом отчёт считает и приёмки, и выработку, и накладные за
+          одно окно — иначе накладные за месяц делились бы на заказы за
+          всю историю.
         </p>
         <p className="admin-muted" style={{ marginTop: 0 }}>
           {report.overheadPeriod ? (
@@ -141,7 +144,9 @@ export default async function MaterialsFactPage({
               «накладные») взяты за период{' '}
               {report.overheadPeriod.dateFrom} — {report.overheadPeriod.dateTo}{' '}
               и распределены на показанные заказы пропорционально прямой
-              себестоимости; полная = прямая + накладные.
+              себестоимости того же периода; полная = прямая + накладные.
+              Отменённые проводки уменьшают период исходного расхода, а не
+              тот, в котором нажали «Сторно».
             </>
           ) : (
             <>
