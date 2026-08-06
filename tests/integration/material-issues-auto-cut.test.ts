@@ -294,10 +294,10 @@ describeWithDb('integration — material issues (auto cut issue on issueToEmploy
   });
 
   // ---------------------------------------------------------------------------
-  // 5. unitCost = 0 для USD без курса и для отсутствующей цены
+  // 5. USD: конвертация по курсу сметы заказа; без курса — 0
   // ---------------------------------------------------------------------------
 
-  test('unitCost = 0 при quotedCurrency = USD (конвертация на MVP не делается)', async () => {
+  test('unitCost = 0 при quotedCurrency = USD и отсутствующем курсе сметы', async () => {
     const { passportId } = await prepareOrderAndPassport({
       qtyPlan: 10,
       qtyCut: 5,
@@ -314,6 +314,39 @@ describeWithDb('integration — material issues (auto cut issue on issueToEmploy
     expect(new Prisma.Decimal(auto.lines[0]!.totalCost).toString()).toBe('0');
     // Документ всё равно создан (с нулевой стоимостью и строками).
     expect(auto.status).toBe('POSTED');
+  });
+
+  test('USD-строка конвертируется по курсу активной сметы заказа', async () => {
+    const { orderId, passportId } = await prepareOrderAndPassport({
+      qtyPlan: 10,
+      qtyCut: 5,
+      quotedPrice: '3',
+      quotedCurrency: 'USD',
+    });
+    // Курс задаётся человеком при завершении расчёта и живёт в смете.
+    await t.prisma.orderCostEstimate.create({
+      data: {
+        orderId,
+        version: 1,
+        status: 'COMPLETED',
+        totalCostRub: new Prisma.Decimal(0),
+        usdRateRub: new Prisma.Decimal(90),
+        completedAt: new Date(),
+      },
+    });
+
+    await issue(passportId);
+    const auto = await t.prisma.materialIssue.findFirstOrThrow({
+      where: { passportId, source: 'AUTO_CUT_ISSUE' },
+      include: { lines: true },
+    });
+    expect(auto.lines).toHaveLength(1);
+    // 3 $ × 90 = 270 ₽/кг. Норма 0,5 кг/шт × 5 шт кроя = 2,5 кг.
+    expect(Number(auto.lines[0]!.unitCost)).toBeCloseTo(270, 2);
+    expect(Number(auto.lines[0]!.totalCost)).toBeCloseTo(675, 2);
+    // До фикса здесь был ноль, и план-факт читал это как экономию на
+    // всю плановую сумму.
+    expect(Number(auto.totalCost)).toBeCloseTo(675, 2);
   });
 
   test('unitCost = 0 при отсутствующем quotedPrice', async () => {

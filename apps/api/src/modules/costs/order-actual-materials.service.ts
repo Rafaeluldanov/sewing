@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type {
   MaterialPlanSource,
+  OrderActualMaterialsQuery,
   OrderActualMaterialsReportDto,
   OrderActualMaterialsRowDto,
 } from '@sewing/shared/order-actual-materials';
@@ -39,7 +40,9 @@ export class OrderActualMaterialsService {
     return v.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
   }
 
-  async getReport(): Promise<OrderActualMaterialsReportDto> {
+  async getReport(
+    query: OrderActualMaterialsQuery = {},
+  ): Promise<OrderActualMaterialsReportDto> {
     // 1. Факт: POSTED-строки приёмок (приёмка тоже POSTED) с привязкой к заказу.
     const receiptLines = await this.prisma.purchaseReceiptLine.findMany({
       where: { status: 'POSTED', purchaseReceipt: { status: 'POSTED' } },
@@ -78,6 +81,7 @@ export class OrderActualMaterialsService {
         totalVarianceDirectRub: '0.00',
         totalOverheadRub: '0.00',
         totalFullCostFactRub: '0.00',
+        overheadPeriod: periodDto(resolveOverheadPeriod(query)),
       };
     }
 
@@ -267,19 +271,34 @@ export class OrderActualMaterialsService {
 
     // 6. Накладные (Срез 3): пул OUT-проводок по статьям isOverhead (нетто
     // сторно) распределяем на заказы пропорционально прямой с/с.
-    // TODO: период-версия (распределение по месяцам) — будущее уточнение.
-    const overheadEntries = await this.prisma.cashFlowEntry.findMany({
-      where: { item: { isOverhead: true } },
-      select: { direction: true, amount: true },
-    });
+    //
+    // Пул ОБЯЗАН быть ограничен окном проводок. Без него он
+    // накопительный за всю историю компании, а база распределения —
+    // только заказы с проведёнными приёмками, попавшие в отчёт. Аренда
+    // и АУП за два года падали на горстку заказов, и «полная факт»
+    // раздувалась в разы: заказ с прямой себестоимостью 100 000 ₽
+    // получал 500 000 ₽ накладных и выглядел убыточным вчетверо.
+    //
+    // Периода нет — накладные не распределяем вовсе. Показать
+    // заведомо неверное число хуже, чем не показать: пустая колонка
+    // читается как «не задан период», раздутая — как убыток.
+    const overheadPeriod = resolveOverheadPeriod(query);
     let pool = new Prisma.Decimal(0);
-    for (const e of overheadEntries) {
-      // OUT = расход (+), сторно OUT приходит как IN (−) — нетто.
-      pool =
-        e.direction === 'OUT' ? pool.add(e.amount) : pool.sub(e.amount);
+    if (overheadPeriod) {
+      const overheadEntries = await this.prisma.cashFlowEntry.findMany({
+        where: {
+          item: { isOverhead: true },
+          postedAt: { gte: overheadPeriod.from, lte: overheadPeriod.to },
+        },
+        select: { direction: true, amount: true },
+      });
+      for (const e of overheadEntries) {
+        // OUT = расход (+), сторно OUT приходит как IN (−) — нетто.
+        pool = e.direction === 'OUT' ? pool.add(e.amount) : pool.sub(e.amount);
+      }
+      if (pool.lessThan(0)) pool = new Prisma.Decimal(0);
+      pool = this.okr1c(pool);
     }
-    if (pool.lessThan(0)) pool = new Prisma.Decimal(0);
-    pool = this.okr1c(pool);
 
     let totalOverhead = new Prisma.Decimal(0);
     const base = directList.reduce(
@@ -335,6 +354,29 @@ export class OrderActualMaterialsService {
       totalFullCostFactRub: this.okr1c(
         totalFactDirect.add(totalOverhead),
       ).toFixed(2),
+      overheadPeriod: periodDto(overheadPeriod),
     };
   }
+}
+
+/** Границы окна проводок для пула накладных. Нужны ОБЕ. */
+function resolveOverheadPeriod(
+  query: OrderActualMaterialsQuery,
+): { from: Date; to: Date } | null {
+  if (!query.dateFrom || !query.dateTo) return null;
+  const from = new Date(`${query.dateFrom}T00:00:00.000Z`);
+  const to = new Date(`${query.dateTo}T23:59:59.999Z`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return null;
+  if (from.getTime() > to.getTime()) return null;
+  return { from, to };
+}
+
+function periodDto(
+  period: { from: Date; to: Date } | null,
+): { dateFrom: string; dateTo: string } | null {
+  if (!period) return null;
+  return {
+    dateFrom: period.from.toISOString().slice(0, 10),
+    dateTo: period.to.toISOString().slice(0, 10),
+  };
 }

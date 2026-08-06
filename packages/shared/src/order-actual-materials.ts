@@ -16,6 +16,13 @@
  */
 
 /** Источник плановой стоимости материалов. */
+import { z } from 'zod';
+
+/** Дата без времени, `YYYY-MM-DD`. */
+const DateOnlySchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате ГГГГ-ММ-ДД');
+
 export const MATERIAL_PLAN_SOURCES = [
   'COST_ESTIMATE',
   'WORKSHOP_NEED',
@@ -90,9 +97,35 @@ export interface OrderActualMaterialsReportDto {
   totalVarianceDirectRub: string;
   /**
    * Пул накладных из журнала ДДС (OUT по статьям isOverhead, нетто
-   * сторно), распределённый на показанные заказы.
+   * сторно), распределённый на показанные заказы. `0.00`, если период
+   * не задан — см. `overheadPeriod`.
    */
   totalOverheadRub: string;
   /** Полная фактическая себестоимость по всем заказам. */
   totalFullCostFactRub: string;
+  /**
+   * Окно проводок, за которое взят пул накладных, либо `null` — период
+   * не задан и накладные НЕ распределялись.
+   *
+   * Без окна пул накопительный: сумма аренды и АУП за всю историю
+   * компании падала на горстку заказов, у которых нашлась проведённая
+   * приёмка, и «полная факт» раздувалась в разы. Показывать такое
+   * число хуже, чем не показывать вовсе.
+   */
+  overheadPeriod: { dateFrom: string; dateTo: string } | null;
 }
+
+/**
+ * Query `GET /api/costs/actual-materials`.
+ *
+ * Нужны ОБЕ границы: односторонний период («с 01.01 и по сегодня»)
+ * оставляет пул неограниченным с одного края и возвращает ту же
+ * накопительную сумму.
+ */
+export const OrderActualMaterialsQuerySchema = z.object({
+  dateFrom: DateOnlySchema.optional(),
+  dateTo: DateOnlySchema.optional(),
+});
+export type OrderActualMaterialsQuery = z.infer<
+  typeof OrderActualMaterialsQuerySchema
+>;

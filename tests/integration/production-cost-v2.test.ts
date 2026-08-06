@@ -561,7 +561,11 @@ describeWithDb('integration — production cost v2 (управленческий
       where: { id: seed.employees.qc.id },
       data: {
         compensationType: 'SALARY',
-        salaryPerShift: new Prisma.Decimal(4800),
+        // `salaryPerShift` — LEGACY-колонка (см. schema): с переходом
+        // окладного контура на почасовую оплату в расчёте не участвует,
+        // миграция один раз залила `salaryPerHour = salaryPerShift / 8`.
+        // 4800 ₽/смена = 600 ₽/час = 10 ₽/мин.
+        salaryPerHour: new Prisma.Decimal(600),
       },
     });
     const passport = await createPackedPassport(t, seed, {
@@ -622,7 +626,11 @@ describeWithDb('integration — production cost v2 (управленческий
       where: { id: seed.employees.qc.id },
       data: {
         compensationType: 'SALARY',
-        salaryPerShift: new Prisma.Decimal(4800),
+        // `salaryPerShift` — LEGACY-колонка (см. schema): с переходом
+        // окладного контура на почасовую оплату в расчёте не участвует,
+        // миграция один раз залила `salaryPerHour = salaryPerShift / 8`.
+        // 4800 ₽/смена = 600 ₽/час = 10 ₽/мин.
+        salaryPerHour: new Prisma.Decimal(600),
       },
     });
     // Был на смене в этот день (источник простоя — `SalaryEntry`).
@@ -669,6 +677,79 @@ describeWithDb('integration — production cost v2 (управленческий
     expect(Number(body.totals.salaryWorkingCostRub)).toBeCloseTo(60, 2);
     expect(body.totals.salaryWorkingMinutes).toBeCloseTo(6, 1);
     // Простой = (480 − 6) мин × 10 ₽ = 4740 ₽.
+    expect(body.totals.idleSalaryMinutes).toBeCloseTo(474, 1);
+    expect(Number(body.totals.idleSalaryCostRub)).toBeCloseTo(4740, 2);
+  });
+
+  test('месячный оклад: простой считается по норме часов, а не проваливается в ноль', async () => {
+    const day = utcDay('2026-04-23');
+    // Месячник: часовой ставки у него НЕТ и быть не должно — ₽/час
+    // выводится из оклада и нормы часов месяца.
+    await t.prisma.employee.update({
+      where: { id: seed.employees.qc.id },
+      data: {
+        compensationType: 'SALARY',
+        salaryRateMode: 'MONTHLY',
+        salaryPerMonth: new Prisma.Decimal(96000),
+        salaryPerHour: null,
+      },
+    });
+    // Норма апреля — 160 ч → 96000 / 160 = 600 ₽/час = 10 ₽/мин.
+    await t.prisma.payrollCalendarMonth.upsert({
+      where: {
+        PayrollCalendarMonth_year_month_uniq: { year: 2026, month: 4 },
+      },
+      create: {
+        year: 2026,
+        month: 4,
+        normDays: 20,
+        normHours: new Prisma.Decimal(160),
+      },
+      update: { normHours: new Prisma.Decimal(160) },
+    });
+    await t.prisma.salaryEntry.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        date: day,
+        amount: new Prisma.Decimal(96000),
+      },
+    });
+    const passport = await createPackedPassport(t, seed, {
+      qtyPlan: 5,
+      qtyGood: 5,
+      cutDate: day,
+    });
+    await t.prisma.passportEvent.createMany({
+      data: [
+        {
+          passportId: passport.id,
+          type: 'ISSUED_TO_EMPLOYEE',
+          operationId: seed.operations.QC.id,
+          employeeId: seed.employees.qc.id,
+          createdAt: new Date('2026-04-23T08:00:00.000Z'),
+        },
+        {
+          passportId: passport.id,
+          type: 'OPERATION_FINISHED',
+          operationId: seed.operations.QC.id,
+          employeeId: seed.employees.qc.id,
+          createdAt: new Date('2026-04-23T08:06:00.000Z'),
+        },
+      ],
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/admin/production-cost/v2')
+      .query({ dateFrom: '2026-04-23', dateTo: '2026-04-23' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const body = res.body as ProductionCostReportLike;
+
+    // До фикса простой брал ставку напрямую из `salaryPerHour`, у
+    // месячника пустого, — и весь его простой проваливался в ноль, хотя
+    // рабочая часть по нему считалась через норму часов. Отчёт
+    // противоречил сам себе.
+    expect(Number(body.totals.salaryWorkingCostRub)).toBeCloseTo(60, 2);
     expect(body.totals.idleSalaryMinutes).toBeCloseTo(474, 1);
     expect(Number(body.totals.idleSalaryCostRub)).toBeCloseTo(4740, 2);
   });

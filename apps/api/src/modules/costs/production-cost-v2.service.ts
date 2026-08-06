@@ -30,6 +30,10 @@ import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { isSalaryEligible } from '../employees/compensation.js';
+import {
+  effectiveHourlyRateWithNorm,
+  resolveMonthNormHours,
+} from '../salary/salary-rate.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
 
 /**
@@ -1315,14 +1319,29 @@ export class ProductionCostV2Service {
     );
     const employees = await this.prisma.employee.findMany({
       where: { id: { in: employeeIds } },
-      select: { id: true, compensationType: true, salaryPerHour: true },
+      select: {
+        id: true,
+        compensationType: true,
+        salaryRateMode: true,
+        salaryPerHour: true,
+        salaryPerMonth: true,
+      },
     });
+    // Ставка ₽/час — тем же способом, что и разнос рабочего времени в
+    // этом же отчёте (`PassportRealCostService.apportionSalary`):
+    // `effectiveHourlyRateWithNorm` знает про `SalaryRateMode.MONTHLY`,
+    // где ставка = оклад за месяц ÷ норма часов.
+    //
+    // Раньше здесь брали `salaryPerHour` напрямую. У месячника это поле
+    // пустое (`requiresHourlyRate` его не требует), ставка выходила
+    // нулевой, и он выпадал из простоя и по деньгам, и по минутам — при
+    // том что рабочая часть по нему считалась. Отчёт противоречил сам
+    // себе: время разнесено, а простоя как будто нет.
+    const normHours = await resolveMonthNormHours(this.prisma, from);
     const minuteRate = new Map<string, number>();
     for (const e of employees) {
-      // Повременка: ₽/мин = ставка/час ÷ 60. При бэкфилле
-      // `salaryPerHour = salaryPerShift / 8` (SHIFT_MINUTES = 480)
-      // совпадает с прежним `salaryPerShift / SHIFT_MINUTES`.
-      const perHour = e.salaryPerHour ? Number(e.salaryPerHour) : 0;
+      const perHourDec = effectiveHourlyRateWithNorm(e, normHours);
+      const perHour = perHourDec ? Number(perHourDec) : 0;
       const perMinute = perHour > 0 ? perHour / 60 : 0;
       if (perMinute > 0 && isSalaryEligible(e.compensationType)) {
         minuteRate.set(e.id, perMinute);

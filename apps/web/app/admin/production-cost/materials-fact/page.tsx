@@ -55,7 +55,13 @@ function Money({ value }: { value: string }) {
   );
 }
 
-export default async function MaterialsFactPage() {
+export default async function MaterialsFactPage({
+  searchParams,
+}: {
+  searchParams?: { dateFrom?: string; dateTo?: string };
+}) {
+  const dateFrom = searchParams?.dateFrom?.trim() || undefined;
+  const dateTo = searchParams?.dateTo?.trim() || undefined;
   let report: Awaited<ReturnType<typeof getOrderActualMaterials>> = {
     rows: [],
     totalPlanRub: '0.00',
@@ -68,10 +74,11 @@ export default async function MaterialsFactPage() {
     totalVarianceDirectRub: '0.00',
     totalOverheadRub: '0.00',
     totalFullCostFactRub: '0.00',
+    overheadPeriod: null,
   };
   let error: string | null = null;
   try {
-    report = await getOrderActualMaterials();
+    report = await getOrderActualMaterials({ dateFrom, dateTo });
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -100,13 +107,50 @@ export default async function MaterialsFactPage() {
       )}
       <AdminCard>
         <AdminSectionHeader title="По заказам" hint={`${report.rows.length}`} />
+        <form
+          method="get"
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'flex-end',
+            gap: 12,
+            marginBottom: 12,
+          }}
+        >
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span className="admin-muted">Накладные с</span>
+            <input type="date" name="dateFrom" defaultValue={dateFrom ?? ''} />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span className="admin-muted">по</span>
+            <input type="date" name="dateTo" defaultValue={dateTo ?? ''} />
+          </label>
+          <button type="submit" className="admin-btn">
+            Применить
+          </button>
+        </form>
         <p className="admin-muted" style={{ marginTop: 0 }}>
           Материалы — фактически принятые по заказу (POSTED-приёмки). Труд —
           фактическая сдельная выработка (APPROVED). Прямая себестоимость =
-          материалы + труд. Накладные (OUT-проводки журнала по статьям с
-          признаком «накладные») распределены на заказы пропорционально
-          прямой себестоимости; полная = прямая + накладные. Показаны заказы
-          с приёмками.
+          материалы + труд. Показаны заказы с приёмками.
+        </p>
+        <p className="admin-muted" style={{ marginTop: 0 }}>
+          {report.overheadPeriod ? (
+            <>
+              Накладные (OUT-проводки журнала по статьям с признаком
+              «накладные») взяты за период{' '}
+              {report.overheadPeriod.dateFrom} — {report.overheadPeriod.dateTo}{' '}
+              и распределены на показанные заказы пропорционально прямой
+              себестоимости; полная = прямая + накладные.
+            </>
+          ) : (
+            <>
+              Накладные не распределены: не задан период. Без него пул
+              накопительный за всю историю компании и целиком падает на
+              заказы, попавшие в отчёт, — «полная факт» получается кратно
+              завышенной. Задайте окно проводок выше.
+            </>
+          )}
         </p>
         <MaterialsTable rows={report.rows} />
       </AdminCard>

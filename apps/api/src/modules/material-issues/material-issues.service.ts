@@ -1208,6 +1208,17 @@ export class MaterialIssuesService {
       return { skipped: true, reason: 'no_material_needs' };
     }
 
+    // Курс валюты берём из активной сметы заказа — там он и задаётся
+    // человеком при завершении расчёта. Без него валютная строка уходила
+    // в документ расхода с нулевой суммой, и план-факт читал это как
+    // экономию на всю плановую сумму.
+    const activeEstimate = await tx.orderCostEstimate.findFirst({
+      where: { orderId: passport.orderId, status: 'COMPLETED' },
+      orderBy: { version: 'desc' },
+      select: { usdRateRub: true },
+    });
+    const usdRateRub = activeEstimate?.usdRateRub ?? null;
+
     const passportQtyCut = new Prisma.Decimal(passport.qtyCut);
     const totalQtyDec = new Prisma.Decimal(totalOrderQty);
     const preparedLines: Array<{
@@ -1239,7 +1250,22 @@ export class MaterialIssuesService {
       const unitCost = resolveAutoIssueUnitCost(
         need.quotedPrice,
         need.quotedCurrency,
+        usdRateRub,
       );
+      if (
+        unitCost.isZero() &&
+        need.quotedPrice != null &&
+        need.quotedPrice.greaterThan(0)
+      ) {
+        // Цена есть, а рублёвой стоимости не вышло — единственная
+        // причина — валюта без курса. Молчать нельзя: ноль в документе
+        // расхода неотличим от честно посчитанного нуля.
+        this.logger.warn(
+          `event=material_issue.auto.no_rate passportId=${passportId} ` +
+            `orderId=${passport.orderId} needId=${need.id} ` +
+            `currency=${need.quotedCurrency ?? 'null'}`,
+        );
+      }
       const totalCost = issuedQty
         .mul(unitCost)
         .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
@@ -1397,8 +1423,10 @@ export class MaterialIssuesService {
  *   - `quotedPrice < 0`             → `0` (защита от мусорных данных);
  *   - валюта не задана (`null`)     → считаем рубли, берём `quotedPrice`;
  *   - валюта `RUB`                   → берём `quotedPrice`;
- *   - любая другая валюта (USD, …) → `0` (конвертации на MVP нет,
- *     см. `docs/current-state.md §«Auto cut issue»`).
+ *   - `USD`                          → `quotedPrice × usdRateRub` по курсу
+ *     активной сметы заказа; курса нет → `0` (+ warning в лог у
+ *     вызывающего);
+ *   - любая другая валюта             → `0` (конвертации нет).
  *
  * Возвращаем Decimal сразу с точностью 2 знака — согласовано с
  * `MaterialIssueLine.unitCost` (`Decimal(14,2)`).
@@ -1406,10 +1434,23 @@ export class MaterialIssuesService {
 function resolveAutoIssueUnitCost(
   quotedPrice: Prisma.Decimal | null,
   quotedCurrency: string | null,
+  usdRateRub: Prisma.Decimal | null,
 ): Prisma.Decimal {
   if (quotedPrice == null) return new Prisma.Decimal(0);
   if (quotedPrice.lessThan(0)) return new Prisma.Decimal(0);
   const currency = (quotedCurrency ?? '').trim().toUpperCase();
+  if (currency === 'USD') {
+    // Курс — тот же, по которому посчитана смета заказа: план и факт
+    // обязаны быть в одних деньгах, иначе дельта показывает экономию,
+    // которой не было. Курса нет — вернуть ноль честнее, чем считать по
+    // выдуманному, но вызывающий об этом предупредит в лог.
+    if (usdRateRub == null || usdRateRub.lessThanOrEqualTo(0)) {
+      return new Prisma.Decimal(0);
+    }
+    return quotedPrice
+      .mul(usdRateRub)
+      .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+  }
   if (currency && currency !== 'RUB') return new Prisma.Decimal(0);
   return quotedPrice.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 }
