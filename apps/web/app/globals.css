@@ -18825,21 +18825,55 @@ body:has(.admin-layout) .app-header { display: none !important; }
 
 /* ===========================================================================
  * Кабинет мастера: вкладки + «Доска движения тиража»
- * (apps/web/app/master/production-board-view.tsx,
+ * (apps/web/app/master/master-page-client.tsx,
+ *  apps/web/app/master/production-board-view.tsx,
  *  packages/shared/src/production-board.ts)
  * ======================================================================== */
 
+/* Лента вкладок — горизонтальный свайп на мобильном: пилюли не сжимаются,
+   не влезающие уезжают за край. Обёртка «вытекает» на боковые поля
+   `.master-page` (1rem), внутренний padding возвращает контент на место —
+   лента скроллится до самых краёв экрана. */
+.master-page__tabs-wrap {
+  position: relative;
+  margin: 4px -1rem 12px;
+}
+/* Fade-намёк справа: лента продолжается за краем. Когда все пилюли влезли
+   (≈720px), градиент накрывает пустоту того же цвета и не виден. */
+.master-page__tabs-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 44px;
+  background: linear-gradient(to right, transparent, var(--color-bg-soft));
+  pointer-events: none;
+}
 .master-page__tabs {
   display: flex;
   gap: 6px;
-  margin: 4px 0 12px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px 1rem 6px;
+  scrollbar-width: none;
+}
+.master-page__tabs::-webkit-scrollbar {
+  display: none;
 }
 .master-page__tab {
-  padding: 9px 16px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 44px; /* тап-таргет */
+  padding: 0 16px;
   border-radius: var(--radius-pill);
-  border: 1px solid transparent;
-  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-card);
   color: var(--color-fg-muted);
+  font: inherit;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -18849,6 +18883,25 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 .master-page__tab.is-active {
   background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+/* Счётчик в пилюле («Вызовы 3») — бейдж вместо текстового « · 3». */
+.master-page__tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.3rem;
+  height: 1.3rem;
+  padding: 0 0.3rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-fg);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.master-page__tab.is-active .master-page__tab-count {
+  background: rgba(255, 255, 255, 0.22);
   color: #fff;
 }
 

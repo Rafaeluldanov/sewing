@@ -391,78 +391,90 @@ export function MasterPageClient({
         </div>
       ) : null}
 
-      <div className="master-page__tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'calls'}
-          className={
-            'master-page__tab' + (tab === 'calls' ? ' is-active' : '')
-          }
-          onClick={() => setTab('calls')}
-        >
-          Вызовы{items.length > 0 ? ` · ${items.length}` : ''}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'board'}
-          className={
-            'master-page__tab' + (tab === 'board' ? ' is-active' : '')
-          }
-          onClick={() => setTab('board')}
-        >
-          Движение тиража
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'divergences'}
-          className={
-            'master-page__tab' + (tab === 'divergences' ? ' is-active' : '')
-          }
-          onClick={() => setTab('divergences')}
-        >
-          Расхождения
-        </button>
-        {orderRoutesEnabled && (
+      {/* Обёртка нужна ради fade-намёка справа (::after), что лента вкладок
+          скроллится горизонтально и не влезающие пилюли — за краем экрана. */}
+      <div className="master-page__tabs-wrap">
+        <div className="master-page__tabs" role="tablist">
           <button
             type="button"
             role="tab"
-            aria-selected={tab === 'orders'}
+            aria-selected={tab === 'calls'}
             className={
-              'master-page__tab' + (tab === 'orders' ? ' is-active' : '')
+              'master-page__tab' + (tab === 'calls' ? ' is-active' : '')
             }
-            onClick={() => setTab('orders')}
+            onClick={() => setTab('calls')}
           >
-            Заказы
+            Вызовы
+            {items.length > 0 && (
+              <span className="master-page__tab-count">{items.length}</span>
+            )}
           </button>
-        )}
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'employees'}
-          className={
-            'master-page__tab' + (tab === 'employees' ? ' is-active' : '')
-          }
-          onClick={() => setTab('employees')}
-        >
-          Сотрудники
-        </button>
-        {qtyCorrectionEnabled && (
           <button
             type="button"
             role="tab"
-            aria-selected={tab === 'corrections'}
+            aria-selected={tab === 'board'}
             className={
-              'master-page__tab' + (tab === 'corrections' ? ' is-active' : '')
+              'master-page__tab' + (tab === 'board' ? ' is-active' : '')
             }
-            onClick={() => setTab('corrections')}
+            onClick={() => setTab('board')}
           >
-            Корректировки
-            {corrections.length > 0 ? ` · ${corrections.length}` : ''}
+            Движение тиража
           </button>
-        )}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'divergences'}
+            className={
+              'master-page__tab' + (tab === 'divergences' ? ' is-active' : '')
+            }
+            onClick={() => setTab('divergences')}
+          >
+            Расхождения
+          </button>
+          {orderRoutesEnabled && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'orders'}
+              className={
+                'master-page__tab' + (tab === 'orders' ? ' is-active' : '')
+              }
+              onClick={() => setTab('orders')}
+            >
+              Заказы
+            </button>
+          )}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'employees'}
+            className={
+              'master-page__tab' + (tab === 'employees' ? ' is-active' : '')
+            }
+            onClick={() => setTab('employees')}
+          >
+            Сотрудники
+          </button>
+          {qtyCorrectionEnabled && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'corrections'}
+              className={
+                'master-page__tab' +
+                (tab === 'corrections' ? ' is-active' : '')
+              }
+              onClick={() => setTab('corrections')}
+            >
+              Корректировки
+              {corrections.length > 0 && (
+                <span className="master-page__tab-count">
+                  {corrections.length}
+                </span>
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
