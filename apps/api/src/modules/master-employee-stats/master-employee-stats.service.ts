@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { PassportEventType } from '@prisma/client';
+import { PassportEventType, PassportStatus } from '@prisma/client';
 import type {
+  ForceCloseShiftDto,
+  MasterActiveShiftDto,
+  MasterActiveShiftsDto,
+  MasterCloseShiftResultDto,
   MasterEmployeeDrillDto,
   MasterEmployeeOpStatDto,
   MasterEmployeeStatsDto,
@@ -8,7 +12,14 @@ import type {
   MasterEmployeeStatsQuery,
   MasterEmployeeStatRowDto,
 } from '@sewing/shared';
+import {
+  MasterShiftHasActivePassportsException,
+  ShiftNotActiveException,
+} from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { ShiftsService } from '../shifts/shifts.service.js';
 
 /** Накопитель статистики по одной операции сотрудника. */
 interface OpAcc {
@@ -33,10 +44,18 @@ interface OpAcc {
  * сотни-тысячи строк, поэтому тянем плоский срез событий и сворачиваем
  * в памяти (нужен distinct-count паспортов, которого нет в `groupBy`) —
  * тот же подход, что у `ProductionBoardService`.
+ *
+ * Помимо статистики модуль ведёт режим «Активные»: список открытых смен
+ * (`getActiveShifts`) и единственную мутацию — принудительное завершение
+ * смены мастером (`closeActiveShift`, аудит `MASTER_SHIFT_FORCE_CLOSED`).
  */
 @Injectable()
 export class MasterEmployeeStatsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly shifts: ShiftsService,
+    private readonly audit: AuditService,
+  ) {}
 
   /** UTC-`YYYY-MM-DD` из Date. */
   private dayKey(d: Date): string {
@@ -427,6 +446,161 @@ export class MasterEmployeeStatsService {
       operations: this.sortOps(ops),
       byDay: days,
     };
+  }
+
+  // ===========================================================================
+  // ACTIVE SHIFTS: режим «Активные» (открытые смены прямо сейчас)
+  // ===========================================================================
+
+  /**
+   * Открытые смены (`ShiftSession.endedAt = null`) с контекстом для
+   * мастера: паспорта на руках и активный подкрой. Выборка — тот же
+   * запрос, что у `AdminService` (дашборд «Смены»), но без лимита:
+   * список нужен целиком, а активных смен на цех — десятки, не тысячи.
+   *
+   * `startedAt` ASC — самые давние (то есть забытые) сверху. `now`
+   * считаем один раз на бэке: длительности в UI идут от серверного
+   * времени, а не от часов клиента.
+   */
+  async getActiveShifts(): Promise<MasterActiveShiftsDto> {
+    const now = new Date();
+    const rows = await this.prisma.shiftSession.findMany({
+      where: { endedAt: null },
+      include: {
+        employee: { select: { id: true, fullName: true, role: true } },
+        equipment: {
+          select: { id: true, code: true, name: true, displayNumber: true },
+        },
+        operation: { select: { id: true, name: true } },
+      },
+      orderBy: { startedAt: 'asc' },
+    });
+    const empIds = Array.from(new Set(rows.map((r) => r.employeeId)));
+
+    // Контекст одним батчем на всех: паспорта IN_PROGRESS на руках
+    // (groupBy по владельцу) + активные подкрои (`RecutSession.status =
+    // 'ACTIVE'` — свободная строка по образцу `CuttingTask.status`).
+    const [passportGroups, recuts] =
+      empIds.length === 0
+        ? [[], []]
+        : await Promise.all([
+            this.prisma.passport.groupBy({
+              by: ['currentEmployeeId'],
+              where: {
+                currentEmployeeId: { in: empIds },
+                status: PassportStatus.IN_PROGRESS,
+              },
+              _count: { _all: true },
+            }),
+            this.prisma.recutSession.findMany({
+              where: { employeeId: { in: empIds }, status: 'ACTIVE' },
+              select: { employeeId: true },
+            }),
+          ]);
+    const passportsByEmployee = new Map<string, number>();
+    for (const g of passportGroups) {
+      if (g.currentEmployeeId) {
+        passportsByEmployee.set(g.currentEmployeeId, g._count._all);
+      }
+    }
+    const recutEmployees = new Set(recuts.map((r) => r.employeeId));
+
+    const dtoRows: MasterActiveShiftDto[] = rows.map((r) => ({
+      shiftId: r.id,
+      employeeId: r.employeeId,
+      employeeName: r.employee.fullName,
+      role: r.employee.role,
+      equipmentId: r.equipment.id,
+      equipmentCode: r.equipment.code,
+      equipmentName: r.equipment.name,
+      equipmentDisplayNumber: r.equipment.displayNumber,
+      operationId: r.operation.id,
+      operationName: r.operation.name,
+      startedAt: r.startedAt.toISOString(),
+      passportsInProgress: passportsByEmployee.get(r.employeeId) ?? 0,
+      hasActiveRecut: recutEmployees.has(r.employeeId),
+    }));
+
+    return { now: now.toISOString(), rows: dtoRows };
+  }
+
+  /**
+   * Принудительное завершение смены мастером.
+   *
+   * Правила:
+   *   - смены нет или она уже закрыта → успех-noop `{ closed: false }`
+   *     (сотрудник мог закрыться сам между GET и POST — это не ошибка,
+   *     список у мастера просто обновится);
+   *   - без `force` при паспортах `IN_PROGRESS` на руках →
+   *     `409 SHIFT_HAS_ACTIVE_PASSPORTS` (UI показывает инлайн-
+   *     подтверждение и повторяет с `force: true`) — тот же паттерн,
+   *     что у `MeService.switchWorkplace`;
+   *   - закрытие идёт через `ShiftsService.stop` — тем же путём, что
+   *     самозакрытие (в т.ч. `safeSyncSalary`, оклад выравнивается сам);
+   *   - активный подкрой НЕ трогаем: `RecutSession` — отдельная
+   *     активность раскройщика, мастер видит только флаг в DTO.
+   *
+   * Аудит — `MASTER_SHIFT_FORCE_CLOSED` (`entityType = SHIFT_SESSION`,
+   * `employeeId` = мастер-актор, закрываемый сотрудник в payload).
+   */
+  async closeActiveShift(
+    actor: AuthPrincipal,
+    shiftId: string,
+    dto: ForceCloseShiftDto,
+  ): Promise<MasterCloseShiftResultDto> {
+    const shift = await this.prisma.shiftSession.findUnique({
+      where: { id: shiftId },
+      select: {
+        id: true,
+        employeeId: true,
+        startedAt: true,
+        endedAt: true,
+        employee: { select: { fullName: true } },
+      },
+    });
+    if (!shift || shift.endedAt !== null) {
+      return { closed: false };
+    }
+
+    const passportsInProgress = await this.prisma.passport.count({
+      where: {
+        currentEmployeeId: shift.employeeId,
+        status: PassportStatus.IN_PROGRESS,
+      },
+    });
+    if (!dto.force && passportsInProgress > 0) {
+      throw new MasterShiftHasActivePassportsException(passportsInProgress);
+    }
+
+    // `stop` закрывает АКТИВНУЮ смену сотрудника — по инварианту «не
+    // более одной активной на сотрудника» (partial unique index) это
+    // ровно найденная выше. Гонка «сотрудник закрылся сам между check
+    // и stop» отдаёт `SHIFT_NOT_ACTIVE` — для мастера это тот же noop.
+    try {
+      await this.shifts.stop({ employeeId: shift.employeeId });
+    } catch (e) {
+      if (e instanceof ShiftNotActiveException) {
+        return { closed: false };
+      }
+      throw e;
+    }
+
+    // Вне транзакции (как и сам stop) — fail-soft внутри AuditService.
+    await this.audit.log({
+      event: 'MASTER_SHIFT_FORCE_CLOSED',
+      entityType: 'SHIFT_SESSION',
+      entityId: shift.id,
+      employeeId: actor.employeeId,
+      payload: {
+        targetEmployeeId: shift.employeeId,
+        targetEmployeeName: shift.employee.fullName,
+        startedAt: shift.startedAt.toISOString(),
+        passportsInProgress,
+        force: dto.force,
+      },
+    });
+
+    return { closed: true };
   }
 
   // ===========================================================================

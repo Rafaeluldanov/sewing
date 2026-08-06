@@ -6,6 +6,8 @@
  */
 
 import type {
+  MasterActiveShiftsDto,
+  MasterCloseShiftResultDto,
   MasterEmployeeDrillDto,
   MasterEmployeeStatsDrillQuery,
   MasterEmployeeStatsDto,
@@ -33,4 +35,27 @@ export function getMasterEmployeeStatsDrill(
       employeeId: query.employeeId,
     },
   });
+}
+
+/** Режим «Активные»: открытые смены прямо сейчас, `startedAt` ASC. */
+export function getMasterActiveShifts(): Promise<MasterActiveShiftsDto> {
+  return apiFetch<MasterActiveShiftsDto>(
+    '/master/employee-stats/active-shifts',
+    { cache: 'no-store' },
+  );
+}
+
+/**
+ * Принудительное завершение смены мастером. Без `force` при паспортах
+ * на руках API отвечает `409 SHIFT_HAS_ACTIVE_PASSPORTS` — UI
+ * показывает подтверждение и повторяет с `force: true`.
+ */
+export function closeMasterActiveShift(
+  shiftId: string,
+  body: { force: boolean },
+): Promise<MasterCloseShiftResultDto> {
+  return apiFetch<MasterCloseShiftResultDto>(
+    `/master/employee-stats/active-shifts/${encodeURIComponent(shiftId)}/close`,
+    { method: 'POST', body },
+  );
 }

@@ -1219,6 +1219,26 @@ export class ShiftHasActivePassportsException extends BusinessException {
   }
 }
 
+/**
+ * Мастер завершает чужую смену (`POST /api/master/employee-stats/
+ * active-shifts/:shiftId/close`) без `force`, а у сотрудника на руках
+ * паспорта `IN_PROGRESS`. Код тот же, что у
+ * `ShiftHasActivePassportsException` (UI по нему показывает
+ * подтверждение и повторяет с `force: true`), но текст адресован
+ * мастеру, а не самому сотруднику. Количество паспортов — в message:
+ * тело бизнес-ошибки фиксировано (`{ statusCode, message, code }`),
+ * отдельного payload у механизма нет.
+ */
+export class MasterShiftHasActivePassportsException extends BusinessException {
+  constructor(count: number) {
+    super(
+      'SHIFT_HAS_ACTIVE_PASSPORTS',
+      `У сотрудника ${count} паспортов в работе — подтвердите принудительное завершение смены.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class PassportNotInCellException extends BusinessException {
   constructor() {
     super(

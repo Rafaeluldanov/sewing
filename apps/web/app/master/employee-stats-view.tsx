@@ -14,18 +14,28 @@
  * Брак атрибутируется исполнителю операции («брак, найденный на
  * операциях, которые закрыл сотрудник») — не тому, кто его зафиксировал.
  *
+ * Второй режим вкладки — «Активные»: список открытых смен прямо сейчас
+ * (сотрудники забывают закрываться), самые давние сверху, с кнопкой
+ * принудительного завершения мастером. При паспортах на руках API
+ * отвечает `409 SHIFT_HAS_ACTIVE_PASSPORTS` — показываем инлайн-
+ * подтверждение в карточке и повторяем с `force: true`.
+ *
  * Даты считаем в `Europe/Moscow` (см. memory `feedback_hydration_timezone`)
  * и инициализируем уже после монтирования, чтобы не ловить рассинхрон
  * гидрации server/client.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
+  MasterActiveShiftDto,
+  MasterActiveShiftsDto,
   MasterEmployeeDrillDto,
   MasterEmployeeStatRowDto,
   MasterEmployeeStatsDto,
 } from '@sewing/shared';
 import {
+  closeActiveShiftAction,
+  loadActiveShiftsAction,
   loadEmployeeStatsAction,
   loadEmployeeStatsDrillAction,
 } from './employee-stats-actions';
@@ -68,6 +78,50 @@ function presetRange(days: number): { from: string; to: string } {
   return { from, to };
 }
 
+/** «HH:MM» по Москве для ISO-строки. */
+function moscowTimeHM(iso: string): string {
+  return new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(iso));
+}
+
+/** «DD.MM» по Москве для ISO-строки. */
+function moscowDayMonth(iso: string): string {
+  return new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    day: '2-digit',
+    month: '2-digit',
+  }).format(new Date(iso));
+}
+
+/**
+ * «N ч M мин» между стартом смены и серверным `now` (длительности
+ * считаем от времени бэка, не от часов клиента).
+ */
+function shiftDuration(startedAt: string, now: string): string {
+  const ms = Math.max(
+    0,
+    new Date(now).getTime() - new Date(startedAt).getTime(),
+  );
+  const totalMin = Math.floor(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h} ч ${m} мин` : `${m} мин`;
+}
+
+/** Склонение «паспорт/паспорта/паспортов». */
+function passportsWord(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'паспорт';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return 'паспорта';
+  }
+  return 'паспортов';
+}
+
 function OpsPreview({ row }: { row: MasterEmployeeStatRowDto }) {
   const top = row.operations.slice(0, 3);
   const more = row.operations.length - top.length;
@@ -91,7 +145,108 @@ function OpsPreview({ row }: { row: MasterEmployeeStatRowDto }) {
   );
 }
 
+/**
+ * Карточка одной открытой смены в режиме «Активные». `confirmCount` —
+ * число паспортов для инлайн-подтверждения после
+ * `409 SHIFT_HAS_ACTIVE_PASSPORTS` (`undefined` — обычная кнопка).
+ */
+function ActiveShiftCard({
+  shift,
+  now,
+  confirmCount,
+  closing,
+  onClose,
+  onCancel,
+}: {
+  shift: MasterActiveShiftDto;
+  now: string;
+  confirmCount: number | undefined;
+  closing: boolean;
+  onClose: (force: boolean) => void;
+  onCancel: () => void;
+}) {
+  const nowMs = new Date(now).getTime();
+  const startedDay = moscowDayKey(new Date(shift.startedAt));
+  const today = moscowDayKey(new Date(nowMs));
+  const yesterday = moscowDayKey(new Date(nowMs - 24 * 60 * 60 * 1000));
+  const stale = startedDay < today;
+  return (
+    <div className="mstat__shift">
+      <div className="mstat__shift-main">
+        <div className="mstat__shift-head">
+          <span className="mstat__name">{shift.employeeName}</span>
+          <span className="mstat__shift-role">
+            {ROLE_LABELS[shift.role] ?? shift.role}
+          </span>
+        </div>
+        <div className="mstat__shift-meta">
+          Стол {shift.equipmentDisplayNumber ?? shift.equipmentCode} ·{' '}
+          {shift.equipmentName} · {shift.operationName}
+          {shift.passportsInProgress > 0 && (
+            <> · паспортов на руках: {shift.passportsInProgress}</>
+          )}
+        </div>
+        <div className="mstat__shift-time">
+          Начало {moscowTimeHM(shift.startedAt)} · длится{' '}
+          {shiftDuration(shift.startedAt, now)}
+        </div>
+        {stale && (
+          <div className="mstat__shift-warn">
+            ⚠ Смена открыта{' '}
+            {startedDay === yesterday
+              ? 'со вчерашнего дня'
+              : `с ${moscowDayMonth(shift.startedAt)}`}
+          </div>
+        )}
+        {shift.hasActiveRecut && (
+          <div className="mstat__shift-warn">
+            ⚠ Активный подкрой — время продолжает идти
+          </div>
+        )}
+      </div>
+      <div className="mstat__shift-actions">
+        {confirmCount === undefined ? (
+          <button
+            type="button"
+            className="mstat__shift-close"
+            disabled={closing}
+            onClick={() => onClose(false)}
+          >
+            {closing ? 'Завершение…' : 'Завершить смену'}
+          </button>
+        ) : (
+          <div className="mstat__shift-confirm">
+            <span className="mstat__shift-confirm-text">
+              На руках {confirmCount} {passportsWord(confirmCount)} в работе.
+              Всё равно завершить?
+            </span>
+            <div className="mstat__shift-confirm-btns">
+              <button
+                type="button"
+                className="mstat__shift-force"
+                disabled={closing}
+                onClick={() => onClose(true)}
+              >
+                {closing ? 'Завершение…' : 'Завершить'}
+              </button>
+              <button
+                type="button"
+                className="mstat__shift-cancel"
+                disabled={closing}
+                onClick={onCancel}
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function EmployeeStatsView() {
+  const [mode, setMode] = useState<'stats' | 'active'>('stats');
   const [from, setFrom] = useState<string>('');
   const [to, setTo] = useState<string>('');
   const [activeDays, setActiveDays] = useState<number | null>(DEFAULT_DAYS);
@@ -100,6 +255,30 @@ export function EmployeeStatsView() {
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<MasterEmployeeDrillDto | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+
+  // Режим «Активные»: открытые смены + состояние закрытия.
+  const [activeShifts, setActiveShifts] =
+    useState<MasterActiveShiftsDto | null>(null);
+  const [activeLoading, setActiveLoading] = useState(false);
+  const [closingId, setClosingId] = useState<string | null>(null);
+  // shiftId → число паспортов для инлайн-подтверждения (после 409).
+  const [confirmByShift, setConfirmByShift] = useState<
+    Record<string, number>
+  >({});
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((text: string) => {
+    setToast(text);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3000);
+  }, []);
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    },
+    [],
+  );
 
   const load = useCallback(async (f: string, t: string) => {
     if (!f || !t) return;
@@ -111,14 +290,81 @@ export function EmployeeStatsView() {
     setLoading(false);
   }, []);
 
+  const loadActive = useCallback(async () => {
+    setActiveLoading(true);
+    setError(null);
+    const r = await loadActiveShiftsAction();
+    if (r.ok) {
+      setActiveShifts(r.data);
+      // Пропавшие из списка смены убираем и из инлайн-подтверждений.
+      setConfirmByShift((prev) => {
+        const alive = new Set(r.data.rows.map((s) => s.shiftId));
+        const next: Record<string, number> = {};
+        for (const [id, n] of Object.entries(prev)) {
+          if (alive.has(id)) next[id] = n;
+        }
+        return next;
+      });
+    } else {
+      setError(r.error);
+    }
+    setActiveLoading(false);
+  }, []);
+
   // Инициализация дефолтного периода (сегодня) после монтирования —
   // Date.now недоступен на server-render без риска рассинхрона гидрации.
+  // Активные смены грузим сразу же — счётчик в сегменте «Активные N».
   useEffect(() => {
     const { from: f, to: t } = presetRange(DEFAULT_DAYS);
     setFrom(f);
     setTo(t);
     void load(f, t);
-  }, [load]);
+    void loadActive();
+  }, [load, loadActive]);
+
+  const switchMode = useCallback(
+    (m: 'stats' | 'active') => {
+      setMode(m);
+      if (m === 'active') void loadActive();
+    },
+    [loadActive],
+  );
+
+  const cancelConfirm = useCallback((shiftId: string) => {
+    setConfirmByShift((prev) => {
+      const next = { ...prev };
+      delete next[shiftId];
+      return next;
+    });
+  }, []);
+
+  const closeShift = useCallback(
+    async (shift: MasterActiveShiftDto, force: boolean) => {
+      setClosingId(shift.shiftId);
+      setError(null);
+      const r = await closeActiveShiftAction(shift.shiftId, force);
+      setClosingId(null);
+      if (r.ok) {
+        cancelConfirm(shift.shiftId);
+        showToast(
+          r.data.closed
+            ? `Смена завершена: ${shift.employeeName}`
+            : 'Смена уже закрыта',
+        );
+        void loadActive();
+      } else if (r.needsForce) {
+        // Количество в теле 409 не приезжает — берём из карточки
+        // (свежий GET); минимум 1, раз API отказал из-за паспортов.
+        setConfirmByShift((prev) => ({
+          ...prev,
+          [shift.shiftId]: Math.max(1, shift.passportsInProgress),
+        }));
+      } else {
+        setError(r.error);
+      }
+    },
+    [cancelConfirm, loadActive, showToast],
+  );
 
   const applyPreset = useCallback(
     (days: number) => {
@@ -163,48 +409,87 @@ export function EmployeeStatsView() {
   return (
     <div className="mstat">
       <div className="mstat__bar">
-        <div className="mstat__presets">
-          {PRESETS.map((p) => (
-            <button
-              key={p.days}
-              type="button"
-              className={
-                'pboard__period' + (p.days === activeDays ? ' is-active' : '')
-              }
-              onClick={() => applyPreset(p.days)}
-            >
-              {p.label}
-            </button>
-          ))}
+        <div className="mstat__seg" role="tablist" aria-label="Режим вкладки">
           <button
             type="button"
-            className="pboard__refresh"
-            onClick={() => void load(from, to)}
-            disabled={loading || !from || !to}
+            role="tab"
+            aria-selected={mode === 'stats'}
+            className={
+              'mstat__seg-btn' + (mode === 'stats' ? ' is-active' : '')
+            }
+            onClick={() => switchMode('stats')}
           >
-            {loading ? 'Загрузка…' : '⟳ Обновить'}
+            Статистика
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'active'}
+            className={
+              'mstat__seg-btn' + (mode === 'active' ? ' is-active' : '')
+            }
+            onClick={() => switchMode('active')}
+          >
+            Активные
+            {activeShifts && (
+              <span className="mstat__seg-badge">
+                {activeShifts.rows.length}
+              </span>
+            )}
           </button>
         </div>
-        <div className="mstat__dates">
-          <label className="mstat__date-field">
-            <span className="pboard__muted">с</span>
-            <input
-              type="date"
-              value={from}
-              max={to || undefined}
-              onChange={(e) => onManualDate('from', e.target.value)}
-            />
-          </label>
-          <label className="mstat__date-field">
-            <span className="pboard__muted">по</span>
-            <input
-              type="date"
-              value={to}
-              min={from || undefined}
-              onChange={(e) => onManualDate('to', e.target.value)}
-            />
-          </label>
-        </div>
+        {mode === 'stats' && (
+          <div className="mstat__presets">
+            {PRESETS.map((p) => (
+              <button
+                key={p.days}
+                type="button"
+                className={
+                  'pboard__period' + (p.days === activeDays ? ' is-active' : '')
+                }
+                onClick={() => applyPreset(p.days)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          className="pboard__refresh"
+          onClick={() =>
+            mode === 'stats' ? void load(from, to) : void loadActive()
+          }
+          disabled={
+            mode === 'stats' ? loading || !from || !to : activeLoading
+          }
+        >
+          {(mode === 'stats' ? loading : activeLoading)
+            ? 'Загрузка…'
+            : '⟳ Обновить'}
+        </button>
+        {mode === 'stats' && (
+          <div className="mstat__dates">
+            <label className="mstat__date-field">
+              <span className="pboard__muted">с</span>
+              <input
+                type="date"
+                value={from}
+                max={to || undefined}
+                onChange={(e) => onManualDate('from', e.target.value)}
+              />
+            </label>
+            <label className="mstat__date-field">
+              <span className="pboard__muted">по</span>
+              <input
+                type="date"
+                value={to}
+                min={from || undefined}
+                onChange={(e) => onManualDate('to', e.target.value)}
+              />
+            </label>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -213,13 +498,47 @@ export function EmployeeStatsView() {
         </div>
       )}
 
-      {!error && stats && stats.rows.length === 0 && (
+      {toast && (
+        <div className="master-page__success" role="status" aria-live="polite">
+          {toast}
+        </div>
+      )}
+
+      {mode === 'active' && (
+        <>
+          {activeLoading && !activeShifts && (
+            <div className="pboard__muted">Загрузка…</div>
+          )}
+          {!error && activeShifts && activeShifts.rows.length === 0 && (
+            <div className="master-page__empty">
+              <p>Открытых смен сейчас нет</p>
+            </div>
+          )}
+          {activeShifts && activeShifts.rows.length > 0 && (
+            <div className="mstat__shifts">
+              {activeShifts.rows.map((s) => (
+                <ActiveShiftCard
+                  key={s.shiftId}
+                  shift={s}
+                  now={activeShifts.now}
+                  confirmCount={confirmByShift[s.shiftId]}
+                  closing={closingId === s.shiftId}
+                  onClose={(force) => void closeShift(s, force)}
+                  onCancel={() => cancelConfirm(s.shiftId)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {mode === 'stats' && !error && stats && stats.rows.length === 0 && (
         <div className="master-page__empty">
           <p>За выбранный период никто не закрывал операции</p>
         </div>
       )}
 
-      {stats && stats.rows.length > 0 && (
+      {mode === 'stats' && stats && stats.rows.length > 0 && (
         <table className="mstat__table">
           <thead>
             <tr>

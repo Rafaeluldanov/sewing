@@ -609,6 +609,15 @@ export type AuditEntityType =
   | 'EQUIPMENT'
   | 'PRINTER'
   /**
+   * Смены сотрудников (`prisma/schema.prisma::ShiftSession`). Событие —
+   * `MASTER_SHIFT_FORCE_CLOSED`: мастер принудительно завершил чужую
+   * смену из режима «Активные» вкладки «Сотрудники» кабинета `/master`
+   * (см. `apps/api/src/modules/master-employee-stats/*`). `entityId` —
+   * `ShiftSession.id`; `employeeId` — мастер-актор, закрываемый
+   * сотрудник — в `payload.targetEmployeeId`.
+   */
+  | 'SHIFT_SESSION'
+  /**
    * Значение справочника «Характеристика» строки материала техкарты
    * (см. `apps/api/src/modules/material-characteristic-options/*`,
    * `prisma/schema.prisma::MaterialCharacteristicOption`). События —

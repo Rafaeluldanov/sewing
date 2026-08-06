@@ -19497,6 +19497,187 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-weight: 600;
 }
 
+/* --- Режим «Активные» вкладки «Сотрудники» (mode='active' в
+ * `apps/web/app/master/employee-stats-view.tsx`): сегмент-переключатель
+ * «Статистика | Активные N» (по образцу `.work-tabs` — серый трек,
+ * активная белая пилюля) + карточки открытых смен с принудительным
+ * завершением мастером. --- */
+.mstat__seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--color-bg-muted);
+  padding: 4px;
+  border-radius: var(--radius-pill);
+}
+.mstat__seg-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  min-height: 40px;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.mstat__seg-btn:hover {
+  color: var(--color-fg);
+}
+.mstat__seg-btn.is-active {
+  background: #fff;
+  color: var(--color-accent);
+  box-shadow: var(--shadow-xs);
+}
+.mstat__seg-badge {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-fg);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+.mstat__shifts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mstat__shift {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+}
+.mstat__shift-main {
+  min-width: 0;
+}
+.mstat__shift-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mstat__shift-role {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-fg);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.mstat__shift-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+.mstat__shift-time {
+  margin-top: 4px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.mstat__shift-warn {
+  margin-top: 6px;
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-warn-soft);
+  color: var(--color-warn-fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+.mstat__shift-actions {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+.mstat__shift-close {
+  appearance: none;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-danger-fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.mstat__shift-close:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+.mstat__shift-close:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.mstat__shift-confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 260px;
+  text-align: right;
+}
+.mstat__shift-confirm-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-danger-fg);
+}
+.mstat__shift-confirm-btns {
+  display: flex;
+  gap: 6px;
+}
+.mstat__shift-force {
+  appearance: none;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  background: var(--color-danger);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.mstat__shift-force:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.mstat__shift-force:disabled,
+.mstat__shift-cancel:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.mstat__shift-cancel {
+  appearance: none;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.mstat__shift-cancel:hover:not(:disabled) {
+  background: var(--color-bg-muted);
+}
+
 /* -----------------------------------------------------------------------
  * /admin/employees: row actions + danger zone + hard-delete modal
  * (см. `apps/web/app/admin/employees/row-actions.tsx`,
