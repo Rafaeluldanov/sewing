@@ -202,8 +202,30 @@ export class PurchaseOrdersService {
         n.purchaseItemNameText ??
         n.description;
       const supplierArticleSnapshot = item?.supplierArticle ?? null;
-      const unitSnapshot =
-        (item?.unit && item.unit.trim() !== '' ? item.unit : null) ?? n.unit;
+      // Единица ОБЯЗАНА описывать то число, которое рядом: `qty` — это
+      // `WorkshopNeed.purchaseQty`, посчитанное в единице ПОТРЕБНОСТИ.
+      // Раньше здесь предпочиталась единица позиции каталога, а
+      // количество оставалось прежним, и совместимость нигде не
+      // проверялась: потребность «600 м пог.» уходила поставщику как
+      // «600 кг» — заказ примерно в шесть раз больше нужного.
+      //
+      // Расхождение не глушим 422: закупщик выбрал позицию каталога
+      // осознанно и править справочник поставщика не обязан. Берём
+      // единицу потребности и пишем расхождение в лог, чтобы его было
+      // видно.
+      const catalogUnit =
+        item?.unit && item.unit.trim() !== '' ? item.unit.trim() : null;
+      const unitSnapshot = n.unit;
+      if (
+        catalogUnit &&
+        catalogUnit.toLowerCase() !== (n.unit ?? '').trim().toLowerCase()
+      ) {
+        this.logger.warn(
+          `event=purchase_order.unit_mismatch needId=${n.id} ` +
+            `needUnit=${n.unit} catalogUnit=${catalogUnit} ` +
+            `catalogItemId=${n.selectedSupplierCatalogItemId ?? 'null'}`,
+        );
+      }
       const catalogLastPriceSnapshot = item?.lastPrice ?? null;
       const currency =
         (n.quotedCurrency && n.quotedCurrency.trim() !== ''

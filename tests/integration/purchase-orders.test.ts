@@ -126,6 +126,51 @@ describeWithDb('integration — purchase orders (Этап 6А)', () => {
     expect(byOrder.body[0].id).toBe(r.body.id);
   });
 
+  test('единица строки PO берётся из потребности, а не из каталога поставщика', async () => {
+    const fx = await prepareSingleNeedFixture(t, seed, cookies.manager);
+
+    // Позиция каталога заведена в КИЛОГРАММАХ, а «К закупке» посчитано
+    // в единице потребности (метры). Раньше единица бралась из каталога,
+    // а число оставалось прежним: «25 м» уходило поставщику как «25 кг».
+    const kgItemId = await createCatalogItem(
+      t,
+      cookies.manager,
+      fx.supplierId,
+      {
+        name: 'Кулирка на вес',
+        supplierArticle: 'KUL-KG',
+        unit: 'кг',
+        lastPrice: '500.00',
+        currency: 'RUB',
+      },
+    );
+    await request(t.app.getHttpServer())
+      .patch(`/api/workshop-needs/${fx.needId}`)
+      .set('Cookie', cookies.manager)
+      .send({ selectedSupplierCatalogItemId: kgItemId })
+      .expect(200);
+
+    const need = await request(t.app.getHttpServer())
+      .get(`/api/workshop-needs/${fx.needId}`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    const needUnit = need.body.unit as string;
+    expect(needUnit).not.toBe('кг');
+
+    const r = await request(t.app.getHttpServer())
+      .post('/api/purchase-orders/from-needs')
+      .set('Cookie', cookies.manager)
+      .send({ workshopNeedIds: [fx.needId] })
+      .expect(201);
+
+    const line = r.body.lines[0];
+    // Единица описывает то самое число, что стоит рядом.
+    expect(line.unitSnapshot).toBe(needUnit);
+    expect(line.qty).toBe('25');
+    // Привязка к позиции каталога при этом сохраняется.
+    expect(line.supplierCatalogItemId).toBe(kgItemId);
+  });
+
   // ---------------------------------------------------------------------------
   // 2. Bulk: несколько потребностей в одном PO
   // ---------------------------------------------------------------------------

@@ -354,15 +354,30 @@ export function InlineEditWorkshopNeedRow({
 
   // Кнопки: на backend уходит поштучно. purchaseQty (шт) = упаковок ×
   // шт/упак, quotedPrice (за 1 шт) = цена за упаковку ÷ шт/упак,
-  // packSize = шт/упак. Пустые поля → '' (Zod нормализует в null).
+  // packSize = шт/упак.
+  //
+  // На backend пустое значение означает «очистить поле», а отсутствие
+  // поля — «не трогать» (`trackOptional`: absent → changed=false).
+  // Поэтому различаем два разных «пусто»:
+  //   ''   — закупщик стёр значение сам, очистку передаём;
+  //   null — пересчитать нечем («Шт/упак» пуст), поле не отправляем.
+  //
+  // Раньше скрытые поля рендерились всегда и без «Шт/упак» уходили
+  // пустыми, поэтому ЛЮБОЕ сохранение строки — даже правка одного
+  // поставщика — обнуляло согласованное «К закупке» и цену.
+  const canConvertPacks = packSizeValue.trim() !== '';
   const submitButtonQty =
-    packagesValue.trim() === '' || packSizeValue.trim() === ''
-      ? ''
-      : packagesToPieces(packagesValue, packSizeValue);
+    packagesValue.trim() === ''
+      ? '' // закупщик очистил «Упаковок» — так и передаём
+      : canConvertPacks
+        ? packagesToPieces(packagesValue, packSizeValue)
+        : null; // «Шт/упак» пуст — из упаковок в штуки не перевести
   const submitButtonPrice =
-    packPriceValue.trim() === '' || packSizeValue.trim() === ''
+    packPriceValue.trim() === ''
       ? ''
-      : pricePerPackToPiece(packPriceValue, packSizeValue);
+      : canConvertPacks
+        ? pricePerPackToPiece(packPriceValue, packSizeValue)
+        : null;
 
   // Значения, которые реально уйдут на backend (всегда в метрах /
   // цене за метр). Если поле не редактировали — отправляем исходное
@@ -505,7 +520,13 @@ export function InlineEditWorkshopNeedRow({
               </label>
               {!(isCancelled || isLockedByPo) && (
                 <>
-                  <input type="hidden" name="purchaseQty" value={submitButtonQty} />
+                  {submitButtonQty !== null && (
+                    <input
+                      type="hidden"
+                      name="purchaseQty"
+                      value={submitButtonQty}
+                    />
+                  )}
                   <input type="hidden" name="packSize" value={packSizeValue.trim()} />
                 </>
               )}
@@ -552,7 +573,7 @@ export function InlineEditWorkshopNeedRow({
             {isThread && !isCancelled && (
               <input type="hidden" name="quotedPrice" value={submitQuotedPrice ?? ''} />
             )}
-            {isButton && !isCancelled && (
+            {isButton && !isCancelled && submitButtonPrice !== null && (
               <input type="hidden" name="quotedPrice" value={submitButtonPrice} />
             )}
           </label>

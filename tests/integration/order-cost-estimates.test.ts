@@ -158,6 +158,46 @@ describeWithDb('integration — order cost estimates', () => {
     );
   });
 
+  test('смена политики «давальческое сырьё» пересчитывает зафиксированную смету', async () => {
+    const orderId = await prepareCalculationOrder(t, seed, cookie);
+    const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });
+    for (const n of needs) {
+      await request(t.app.getHttpServer())
+        .patch(`/api/workshop-needs/${n.id}`)
+        .set('Cookie', cookie)
+        .send({ purchaseQty: '10', quotedPrice: '100', quotedCurrency: 'RUB' })
+        .expect(200);
+    }
+    const materialsRub = 10 * 100 * needs.length;
+
+    const v1 = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', cookie)
+      .send({})
+      .expect(201);
+    expect(Number(v1.body.totalCostRub)).toBeCloseTo(materialsRub, 2);
+
+    // Выяснилось, что материалы даёт клиент. Политика меняется на любом
+    // статусе — и себестоимость обязана догнать: раньше `update` писал
+    // только колонку, заказ продолжал показывать сумму по прежней
+    // политике, и отметки «устарела» тоже не появлялось.
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}`)
+      .set('Cookie', cookie)
+      .send({ materialsAndHardwareCostPolicy: 'EXCLUDE' })
+      .expect(200);
+
+    const order = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    expect(order.materialsAndHardwareCostPolicy).toBe('EXCLUDE');
+    // Материалы и фурнитура из итога ушли — остались только услуги.
+    expect(Number(order.costEstimateTotalRub)).toBeCloseTo(0, 2);
+    expect(order.costEstimateVersion).toBe(2);
+    // Пересчёт прошёл, значит отметки «устарела» быть не должно.
+    expect(order.costEstimateStaleAt).toBeNull();
+  });
+
   // -------------------------------------------------------------------------
   // 2. USD без usdRateRub → 422
   // -------------------------------------------------------------------------

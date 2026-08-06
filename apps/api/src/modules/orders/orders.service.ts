@@ -2995,6 +2995,25 @@ export class OrdersService {
       }
     }
 
+    // Политика «давальческое сырьё» прямо задаёт, входят ли материалы и
+    // фурнитура в итог сметы (`assembleEstimatePlan`). Меняется она на
+    // ЛЮБОМ статусе, в том числе когда смета уже зафиксирована, —
+    // значит и себестоимость обязана догнать, как она догоняет правку
+    // потребности. Раньше `update` писал только колонку: заказ
+    // продолжал показывать сумму по прежней политике, и отметки
+    // «устарела» тоже не появлялось.
+    //
+    // Best-effort и после коммита: `syncAfterNeedsChange` сам решит —
+    // пересчитать, промолчать (сметы ещё нет) или поставить видимую
+    // отметку с причиной. Правку заказа он уронить не может.
+    if (
+      policyForUpdate != null &&
+      policyForUpdate !==
+        ((current.materialsAndHardwareCostPolicy as string) ?? 'INCLUDE')
+    ) {
+      await this.costEstimates.syncAfterNeedsChange(id, actorEmployeeId);
+    }
+
     return this.getOne(id);
   }
 
