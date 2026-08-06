@@ -1663,31 +1663,35 @@ export class WorkshopNeedsService {
 
     // 5. Транзакция: удаляем нужные строки и пишем новые.
     const created = await this.prisma.$transaction(async (tx) => {
-      if (force) {
-        // Ручные строки (`isManual = true`, этап «Корректировка
-        // материалов после просчёта») — НЕ системные, пересчёт их не
-        // трогает даже в force-режиме: их завёл человек руками под
-        // непредвиденный расход.
-        await tx.workshopNeed.deleteMany({
-          where: {
-            orderId,
-            orderCalculationId: activeCalculationId,
-            isManual: false,
-          },
-        });
-      } else {
-        // Только CALCULATED — REVIEWED/PURCHASE_PLANNED/CANCELLED не
-        // трогаем (см. ADR/ТЗ Этапа 4А). Ручные строки тоже мимо
-        // (они создаются в статусе REVIEWED и с `isManual = true`).
-        await tx.workshopNeed.deleteMany({
-          where: {
-            orderId,
-            orderCalculationId: activeCalculationId,
-            status: 'CALCULATED',
-            isManual: false,
-          },
-        });
-      }
+      // Ручные строки (`isManual = true`, этап «Корректировка материалов
+      // после просчёта») — НЕ системные, пересчёт их не трогает даже в
+      // force-режиме: их завёл человек руками под непредвиденный расход.
+      //
+      // Без `force` сносим только CALCULATED — REVIEWED/PURCHASE_PLANNED/
+      // CANCELLED не трогаем (см. ADR/ТЗ Этапа 4А).
+      const doomedWhere: Prisma.WorkshopNeedWhereInput = {
+        orderId,
+        orderCalculationId: activeCalculationId,
+        isManual: false,
+        ...(force ? {} : { status: 'CALCULATED' }),
+      };
+
+      // Снимаем закупочный блок ДО удаления, чтобы вернуть его на
+      // пересозданные строки. Пересчёт меняет спецификацию, а цена
+      // поставщика из спецификации не выводится: снести её заодно с
+      // нормой — значит молча уничтожить работу закупщика. Гейт
+      // `hasTouched` от этого не защищает: ввод одной цены намеренно не
+      // ставит `manualEditAt` и не меняет статус (см. `update`), поэтому
+      // строка с проставленной ценой выглядит нетронутой и попадает под
+      // `deleteMany`.
+      const carry = buildPurchaseCarry(
+        await tx.workshopNeed.findMany({
+          where: doomedWhere,
+          select: PURCHASE_CARRY_SELECT,
+        }),
+      );
+
+      await tx.workshopNeed.deleteMany({ where: doomedWhere });
 
       const createdRows: WorkshopNeed[] = [];
       for (const c of computed) {
@@ -1717,9 +1721,14 @@ export class WorkshopNeedsService {
             unit: c.unit,
             calculationMethod: c.calculationMethod,
             calculationNote: c.calculationNote,
-            // status, purchaseQty и т.п. идут по дефолту: status =
-            // CALCULATED, purchaseQty = null. Это и есть инвариант
-            // «закупщик заполняет руками».
+            // `status` идёт по дефолту (CALCULATED) — пересчёт возвращает
+            // строку на начало закупочного цикла. А вот закупочный блок
+            // (цена / валюта / «К закупке» / поставщик) переносим со
+            // старой строки: он к спецификации отношения не имеет.
+            // Ключ включает единицу — если она сменилась (расщепление
+            // «м пог. ↔ кг»), цена за единицу больше не та, и блок
+            // намеренно НЕ переносится.
+            ...takePurchaseCarry(carry, c),
           },
         });
         createdRows.push(row);
@@ -1781,6 +1790,20 @@ export class WorkshopNeedsService {
         `methods=AREA_DENSITY:${methodAreaDensity},QTY_PER_UNIT:${methodQtyPerUnit},LINEAR_M_BY_SIZE:${methodLinearBySize},PATTERN_MATERIAL_AREA:${methodMaterialArea} ` +
         `warnings=${warnings.length}`,
     );
+
+    // Себестоимость обязана догнать пересчёт — ровно как она догоняет
+    // точечную правку строки (`update` / `cancel` / `createManual` /
+    // `deleteManual`). Массовая пересборка — самый частый путь: в неё
+    // ведут правка параметров техкарты, правка расцветок и количества,
+    // amendment-ы в производстве и кнопка «Пересчитать потребность».
+    // Без этого вызова заказ оставался со сметой от прежних материалов,
+    // и `costEstimateStaleAt` тоже никто не ставил — плашки «пересчитайте»
+    // не появлялось, хотя `needsStaleAt` пересчёт только что снял.
+    //
+    // Best-effort и никогда не бросает: невозможность пересчёта (нет
+    // курса USD, нет цены) — это отметка «себестоимость устарела», а не
+    // отказ пересчёта потребности.
+    await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
 
     // Перечитываем для DTO — нужен include на order.
     const needs = await this.list({ orderId });
@@ -3823,6 +3846,123 @@ function mergeOrderWhere(
   if (!current) return extra;
   if (typeof current !== 'object') return extra;
   return { ...current, ...extra } as Prisma.WorkshopNeedWhereInput['order'];
+}
+
+// ---------------------------------------------------------------------------
+// Перенос закупочного блока через пересчёт
+// ---------------------------------------------------------------------------
+
+/**
+ * Поля, которые заполняет ЗАКУПЩИК, а не расчёт. Пересчёт потребности
+ * пересобирает спецификацию, но цена поставщика, согласованное
+ * «К закупке» и выбранный поставщик из спецификации не выводятся —
+ * значит и терять их при пересборке нельзя.
+ */
+const PURCHASE_CARRY_SELECT = {
+  sourceType: true,
+  sourceId: true,
+  orderVariantId: true,
+  materialRole: true,
+  unit: true,
+  purchaseQty: true,
+  packSize: true,
+  quotedPrice: true,
+  quotedCurrency: true,
+  selectedSupplierId: true,
+  selectedSupplierCatalogItemId: true,
+  supplierNameText: true,
+  purchaseItemNameText: true,
+} as const;
+
+type PurchaseCarryRow = Prisma.WorkshopNeedGetPayload<{
+  select: typeof PURCHASE_CARRY_SELECT;
+}>;
+
+/** Только закупочная часть строки — без ключа идентичности. */
+type PurchaseCarryFields = Omit<
+  PurchaseCarryRow,
+  'sourceType' | 'sourceId' | 'orderVariantId' | 'materialRole' | 'unit'
+>;
+
+/**
+ * Ключ идентичности строки потребности ПОПЕРЁК пересчёта.
+ *
+ * Берём то, что расчёт воспроизводит стабильно: источник (`sourceType` +
+ * `sourceId` — id строки снимка либо параметра номенклатуры), расцветку
+ * и роль. Описание в ключ НЕ входит: в него подставлены плотность и
+ * ширина, поэтому правка параметра меняла бы ключ и цена терялась бы
+ * ровно в том сценарии, ради которого перенос и делается.
+ *
+ * Единица, наоборот, в ключ входит. Она задаёт СМЫСЛ цены: 620 ₽/кг
+ * после расщепления «кг → м пог.» — уже не та цена. Сменилась единица —
+ * строка считается новой и закупочный блок не переносится.
+ */
+function purchaseCarryKey(parts: {
+  sourceType: string | null;
+  sourceId: string | null;
+  orderVariantId: string | null;
+  materialRole: string | null;
+  unit: string | null;
+}): string {
+  return [
+    parts.sourceType ?? '',
+    parts.sourceId ?? '',
+    parts.orderVariantId ?? '',
+    parts.materialRole ?? '',
+    parts.unit ?? '',
+  ].join(' ');
+}
+
+/**
+ * Карта «ключ → закупочный блок» по строкам, которые пересчёт снесёт.
+ *
+ * Неуникальный ключ (две строки одного источника, роли и единицы)
+ * маппится в `null` — то есть перенос для него отключается. Угадывать,
+ * какой из двух цен место на новой строке, нельзя: молча приписать
+ * чужую цену хуже, чем попросить ввести её заново.
+ */
+function buildPurchaseCarry(
+  rows: PurchaseCarryRow[],
+): Map<string, PurchaseCarryFields | null> {
+  const map = new Map<string, PurchaseCarryFields | null>();
+  for (const row of rows) {
+    const key = purchaseCarryKey(row);
+    if (map.has(key)) {
+      map.set(key, null);
+      continue;
+    }
+    const {
+      sourceType: _st,
+      sourceId: _sid,
+      orderVariantId: _vid,
+      materialRole: _role,
+      unit: _unit,
+      ...carry
+    } = row;
+    map.set(key, carry);
+  }
+  return map;
+}
+
+/**
+ * Закупочный блок для пересозданной строки. Пусто — если старой строки
+ * с таким ключом не было, ключ оказался неоднозначным или у строки
+ * закупочных данных и не было.
+ */
+function takePurchaseCarry(
+  carry: Map<string, PurchaseCarryFields | null>,
+  computed: ComputedNeed,
+): PurchaseCarryFields | Record<string, never> {
+  const found = carry.get(
+    purchaseCarryKey({
+      sourceType: computed.sourceType,
+      sourceId: computed.sourceId,
+      orderVariantId: computed.orderVariantId ?? null,
+      materialRole: computed.materialRole,
+      unit: computed.unit,
+    }),
+  );
+  return found ?? {};
 }
 
 // ---------------------------------------------------------------------------

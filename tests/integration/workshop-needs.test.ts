@@ -331,6 +331,85 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
     expect(gone.status).toBe(404);
   });
 
+  test('Пересчёт переносит цену и поставщика на пересозданную строку', async () => {
+    const orderId = await prepareSimpleQtyPerUnitOrder(t, seed, cookies.manager);
+    const first = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    const firstId = first.body.needs[0].id;
+
+    // Закупщик заполняет ТОЛЬКО закупочный блок и не трогает статус —
+    // ровно так работает инлайн-редактор на /admin/workshop-needs.
+    // Строка остаётся `CALCULATED` с `manualEditAt = null`, то есть для
+    // гейта `hasTouched` выглядит нетронутой и попадает под пересчёт.
+    await request(t.app.getHttpServer())
+      .patch(`/api/workshop-needs/${firstId}`)
+      .set('Cookie', cookies.manager)
+      .send({
+        purchaseQty: '12.5',
+        quotedPrice: '450.00',
+        quotedCurrency: 'RUB',
+        supplierNameText: 'ООО «Поставщик»',
+        purchaseItemNameText: 'Кулирка чёрная, рулон 50 м',
+      })
+      .expect(200);
+
+    // Пересчёт без force проходит (409 не бросается — строка «нетронута»).
+    const second = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+
+    expect(second.body.count).toBe(1);
+    const row = second.body.needs[0];
+    // Строка действительно пересоздана — id новый.
+    expect(row.id).not.toBe(firstId);
+    // …но работа закупщика на ней сохранилась.
+    expect(row.quotedPrice).toBe('450');
+    expect(row.quotedCurrency).toBe('RUB');
+    expect(row.purchaseQty).toBe('12.5');
+    expect(row.supplierNameText).toBe('ООО «Поставщик»');
+    expect(row.purchaseItemNameText).toBe('Кулирка чёрная, рулон 50 м');
+  });
+
+  test('Пересчёт с force тоже сохраняет цену, но возвращает статус в CALCULATED', async () => {
+    const orderId = await prepareSimpleQtyPerUnitOrder(t, seed, cookies.manager);
+    const first = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    const firstId = first.body.needs[0].id;
+
+    await request(t.app.getHttpServer())
+      .patch(`/api/workshop-needs/${firstId}`)
+      .set('Cookie', cookies.manager)
+      .send({
+        status: 'REVIEWED',
+        quotedPrice: '450.00',
+        quotedCurrency: 'RUB',
+        supplierNameText: 'ООО «Поставщик»',
+      })
+      .expect(200);
+
+    const forced = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', cookies.manager)
+      .send({ force: true })
+      .expect(201);
+
+    const row = forced.body.needs[0];
+    // `force` — это «пересчитай нормы заново», а не «сотри цены»:
+    // статус возвращается в начало закупочного цикла, цена остаётся.
+    expect(row.status).toBe('CALCULATED');
+    expect(row.quotedPrice).toBe('450');
+    expect(row.quotedCurrency).toBe('RUB');
+    expect(row.supplierNameText).toBe('ООО «Поставщик»');
+  });
+
   // ---------------------------------------------------------------------------
   // 5. Update / cancel
   // ---------------------------------------------------------------------------
