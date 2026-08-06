@@ -221,6 +221,21 @@ export function ProductionBoardView() {
     [],
   );
 
+  // Видимые колонки десктоп-матрицы: колонки доски — объединение
+  // маршрутов ВСЕХ заказов окна, поэтому колонку прячем целиком, только
+  // если она не в маршруте НИ у одной когорты (`inRoute === false` во
+  // всех бакетах; отсутствие поля = старый API = видима). ВАЖНО: шапку
+  // и ячейки строк фильтровать ОДНИМ этим Set-ом, иначе поедет
+  // выравнивание колонок.
+  const visibleStageCodes = new Set<string>();
+  if (board) {
+    for (const c of board.cohorts) {
+      for (const b of c.stages) {
+        if (b.inRoute !== false) visibleStageCodes.add(b.code);
+      }
+    }
+  }
+
   return (
     <div className={'pboard' + (expanded ? ' pboard--wide' : '')}>
       <div className="pboard__bar">
@@ -280,14 +295,16 @@ export function ProductionBoardView() {
               <thead>
                 <tr>
                   <th className="pboard__rowhead">Дата выдачи</th>
-                  {board.stages.map((s) => (
-                    <th key={s.code}>
-                      {s.label}
-                      {s.code === 'QC' && (
-                        <span className="pboard__muted"> (брак)</span>
-                      )}
-                    </th>
-                  ))}
+                  {board.stages
+                    .filter((s) => visibleStageCodes.has(s.code))
+                    .map((s) => (
+                      <th key={s.code}>
+                        {s.label}
+                        {s.code === 'QC' && (
+                          <span className="pboard__muted"> (брак)</span>
+                        )}
+                      </th>
+                    ))}
                   <th className="pboard__th-released">Выпущено</th>
                 </tr>
               </thead>
@@ -299,11 +316,28 @@ export function ProductionBoardView() {
                       <div className="pboard__order">{c.orderLabel}</div>
                       <ReconBlock c={c} />
                     </td>
-                    {c.stages.map((b) => (
-                      <td key={b.code}>
-                        <StageCell c={c} bucket={b} onOpen={openDrill} />
-                      </td>
-                    ))}
+                    {c.stages
+                      .filter((b) => visibleStageCodes.has(b.code))
+                      .map((b) =>
+                        // Колонка видима из-за другой когорты, а у этой
+                        // операции в маршруте нет — нейтральная ячейка
+                        // вместо «—», чтобы мастер отличал «не наш шаг»
+                        // от «сюда ещё не дошло».
+                        b.inRoute === false ? (
+                          <td key={b.code}>
+                            <div
+                              className="pboard__cell pboard__cell--na"
+                              title="Операции нет в маршруте заказов этой даты"
+                            >
+                              ·
+                            </div>
+                          </td>
+                        ) : (
+                          <td key={b.code}>
+                            <StageCell c={c} bucket={b} onOpen={openDrill} />
+                          </td>
+                        ),
+                      )}
                     <td>
                       <ReleasedCell c={c} onOpen={openDrill} />
                     </td>
@@ -338,22 +372,26 @@ export function ProductionBoardView() {
                   </button>
                   {isOpen && (
                     <div className="pboard__acc-body">
-                      {c.stages.map((b) => (
-                        <div key={b.code} className="pboard__stagecard">
-                          <div className="pboard__stagecard-h">
-                            <span>
-                              {board.stages.find(
-                                (s) => s.code === b.code,
-                              )?.label ?? b.code}
-                            </span>
+                      {/* Фантомные карточки (операция из маршрута заказа
+                          другой даты) в аккордеон не попадают вовсе. */}
+                      {c.stages
+                        .filter((b) => b.inRoute !== false)
+                        .map((b) => (
+                          <div key={b.code} className="pboard__stagecard">
+                            <div className="pboard__stagecard-h">
+                              <span>
+                                {board.stages.find(
+                                  (s) => s.code === b.code,
+                                )?.label ?? b.code}
+                              </span>
+                            </div>
+                            <StageCell
+                              c={c}
+                              bucket={b}
+                              onOpen={openDrill}
+                            />
                           </div>
-                          <StageCell
-                            c={c}
-                            bucket={b}
-                            onOpen={openDrill}
-                          />
-                        </div>
-                      ))}
+                        ))}
                       <div className="pboard__stagecard pboard__stagecard--released">
                         <div className="pboard__stagecard-h">
                           <span>Выпущено</span>

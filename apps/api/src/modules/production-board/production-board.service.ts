@@ -562,6 +562,18 @@ export class ProductionBoardService {
     const cohortDtos: ProductionBoardCohortDto[] = [...cohorts.values()]
       .sort((x, y) => (x.issueDate < y.issueDate ? 1 : -1))
       .map((a) => {
+        // Операции маршрутов заказов ИМЕННО этой когорты. `orderedCols` —
+        // объединение маршрутов ВСЕХ заказов окна, поэтому когорте
+        // достаются и «чужие» колонки: проход по паспортам ниже отсекает
+        // их данные (`colIdxInOrder === undefined`), но пустой бакет
+        // оставался — UI рисовал вечный прочерк. Флаг `inRoute` даёт UI
+        // отличить «не наш шаг» от «сюда ещё не дошло».
+        const cohortOps = new Set<string>();
+        for (const oid of a.orderIds) {
+          for (const opId of opIndexByOrder.get(oid)?.keys() ?? []) {
+            cohortOps.add(opId);
+          }
+        }
         const stages: ProductionBoardStageBucketDto[] = orderedCols.map(
           (col) => {
             // Единый проход по снимку когорты: и накопительные
@@ -689,6 +701,7 @@ export class ProductionBoardService {
               employees,
               received,
               released,
+              inRoute: cohortOps.has(col.id),
             };
           },
         );

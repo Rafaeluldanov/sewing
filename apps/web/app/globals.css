@@ -19020,6 +19020,17 @@ body:has(.admin-layout) .app-header { display: none !important; }
   align-items: center;
   justify-content: center;
 }
+/* «Не наш шаг»: операции нет в маршруте заказов этой даты (колонка
+   видима из-за другой когорты) — нейтральная точка вместо «—». */
+.pboard__cell--na {
+  background: transparent;
+  border: none;
+  cursor: default;
+  color: var(--color-fg-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .pboard__cell--released {
   background: var(--color-ok-soft);
   border-color: var(--color-ok-soft);
