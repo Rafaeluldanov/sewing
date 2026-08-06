@@ -34,6 +34,7 @@ import type {
 import { ModalPortal } from '@/components/modal-portal';
 import { QrScannerModal } from '@/app/work/qr-scanner-modal';
 import {
+  applyMasterQtyCorrectionAction,
   fetchMasterQcDetailAction,
   masterReturnToCellAction,
   masterSetRouteStepAction,
@@ -49,7 +50,7 @@ type ActionId = 'unassign' | 'transfer' | 'returnToCell' | 'setRouteStep';
 
 /** ОТК-действия мастера — отдельная ветка рендера (`QcActionBody`),
  *  без поля «причина», с подгрузкой ОТК-карточки паспорта. */
-type QcActionId = 'recordDefect' | 'returnToRework';
+type QcActionId = 'recordDefect' | 'returnToRework' | 'qtyCorrection';
 
 /**
  * `history` — отдельный «псевдо-action» в sheet'е: вместо формы
@@ -66,6 +67,12 @@ interface Props {
   ownerFullName: string;
   /** Справочник видов брака для формы «зафиксировать брак». */
   defectTypes: DefectTypeDto[];
+  /**
+   * Показывать ли пункт «Корректировка количества» (одношаговая
+   * корректировка мастером, `applyMasterQtyCorrectionAction`).
+   * По умолчанию выключен — контейнер включает его явно.
+   */
+  qtyCorrectionEnabled?: boolean;
   onClose: () => void;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
@@ -81,6 +88,7 @@ const ACTION_LABELS: Record<ActionId, string> = {
 const QC_ACTION_LABELS: Record<QcActionId, string> = {
   recordDefect: 'Зафиксировать брак',
   returnToRework: 'Вернуть на доработку',
+  qtyCorrection: 'Корректировка количества',
 };
 
 const QC_ACTION_HINTS: Record<QcActionId, string> = {
@@ -88,6 +96,8 @@ const QC_ACTION_HINTS: Record<QcActionId, string> = {
     'Отметить брак по паспорту: вид брака, количество и комментарий. «Годных» уменьшится, сдельная выработка пересчитается. Паспорт должен быть в работе.',
   returnToRework:
     'Вернуть паспорт на пошив — выберите операцию (например КИПЕРКА или ОВЕРЛОК) и швею, которая её делала. Её невыплаченное начисление за эту операцию будет отозвано (оплатится при повторном завершении).',
+  qtyCorrection:
+    'Увеличить или уменьшить фактическое количество по паспорту. Применяется сразу, без заявки: изменит «раскроено»/«годных» и пересчитает сдельные начисления. Паспорт должен быть в работе.',
 };
 
 const ACTION_HINTS: Record<ActionId, string> = {
@@ -105,6 +115,7 @@ export function PassportActionsSheet({
   passport,
   ownerFullName,
   defectTypes,
+  qtyCorrectionEnabled = false,
   onClose,
   onSuccess,
   onError,
@@ -173,8 +184,15 @@ export function PassportActionsSheet({
             </button>
             {/* ОТК-действия мастера — логически перед маршрутными:
                 это «контроль качества на месте» (брак / возврат на
-                пошив), а не правка владельца/шага. */}
-            {(['recordDefect', 'returnToRework'] as QcActionId[]).map((id) => (
+                пошив / корректировка количества), а не правка
+                владельца/шага. */}
+            {(
+              [
+                'recordDefect',
+                'returnToRework',
+                ...(qtyCorrectionEnabled ? (['qtyCorrection'] as const) : []),
+              ] as QcActionId[]
+            ).map((id) => (
               <button
                 key={id}
                 type="button"
@@ -217,7 +235,9 @@ export function PassportActionsSheet({
           />
         )}
 
-        {(mode === 'recordDefect' || mode === 'returnToRework') && (
+        {(mode === 'recordDefect' ||
+          mode === 'returnToRework' ||
+          mode === 'qtyCorrection') && (
           <QcActionBody
             action={mode}
             passport={passport}
@@ -232,7 +252,8 @@ export function PassportActionsSheet({
         {mode !== null &&
           mode !== 'history' &&
           mode !== 'recordDefect' &&
-          mode !== 'returnToRework' && (
+          mode !== 'returnToRework' &&
+          mode !== 'qtyCorrection' && (
             <ActionBody
               action={mode}
               passport={passport}
@@ -631,7 +652,8 @@ interface QcActionBodyProps {
 }
 
 /**
- * ОТК-действия мастера — «зафиксировать брак» / «вернуть на доработку».
+ * ОТК-действия мастера — «зафиксировать брак» / «вернуть на доработку» /
+ * «корректировка количества».
  *
  * Отдельная от `ActionBody` ветка: здесь нет поля «причина» (как и на
  * `/qc`), но есть подгрузка ОТК-карточки паспорта
@@ -640,6 +662,13 @@ interface QcActionBodyProps {
  * Бизнес-логика — `QcService.recordDefect` / `returnToRework` (тот же
  * код, что у роли QC); UI зеркалит форму брака и `ReworkPicker` из
  * `apps/web/app/qc/qc-work-card.tsx`.
+ *
+ * Корректировка количества зеркалит `QtyCorrectionSheet` оттуда же, но
+ * в отличие от ОТК применяется одним шагом без заявки
+ * (`applyMasterQtyCorrectionAction` → `applyByMaster` на бэке): мастер
+ * сам аппрувер. Если по паспорту уже висит `PENDING`-заявка ОТК
+ * (`detail.pendingQtyCorrection`) — вместо формы отсылаем во вкладку
+ * «Корректировки».
  */
 function QcActionBody({
   action,
@@ -663,6 +692,10 @@ function QcActionBody({
   // Rework picker
   const [reworkPicked, setReworkPicked] = useState<string | null>(null);
 
+  // Qty correction form
+  const [qtyAfter, setQtyAfter] = useState<string>('');
+  const [qtyReason, setQtyReason] = useState('');
+
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -672,6 +705,8 @@ function QcActionBody({
       setReworkPicked(
         res.detail.eligibleReworkTargets[0]?.operationId ?? null,
       );
+      // Дефолт формы корректировки — текущие годные (как на /qc).
+      setQtyAfter(String(res.detail.qtyGood));
     } else {
       setLoadError(res.error);
     }
@@ -755,6 +790,58 @@ function QcActionBody({
       onError(res.error);
     }
   }, [busy, detail, onClose, onError, onSuccess, passport.number, passport.id, reworkPicked]);
+
+  // --- Корректировка количества (зеркало QtyCorrectionSheet с /qc) ---
+  const qtyAfterNum = Number(qtyAfter);
+  const qtyAfterValid =
+    qtyAfter.trim() !== '' && Number.isInteger(qtyAfterNum) && qtyAfterNum >= 0;
+  const qtyDelta =
+    detail && qtyAfterValid ? qtyAfterNum - detail.qtyGood : 0;
+  const qtyDeltaLabel = qtyDelta > 0 ? `+${qtyDelta}` : String(qtyDelta);
+  const qtyChanged = qtyAfterValid && qtyDelta !== 0;
+  // Больше, чем раскроено — не запрещаем, но предупреждаем (как на /qc).
+  const qtyAboveCut = !!detail && qtyAfterValid && qtyAfterNum > detail.qtyCut;
+  const canApplyQtyCorrection =
+    !!detail &&
+    detail.status === 'IN_PROGRESS' &&
+    !detail.pendingQtyCorrection &&
+    qtyChanged;
+
+  const submitQtyCorrection = useCallback(async () => {
+    if (!canApplyQtyCorrection || busy) return;
+    setBusy(true);
+    let res: Awaited<ReturnType<typeof applyMasterQtyCorrectionAction>>;
+    try {
+      res = await applyMasterQtyCorrectionAction(
+        passport.id,
+        qtyAfterNum,
+        qtyReason.trim() ? qtyReason.trim() : undefined,
+      );
+    } finally {
+      setBusy(false);
+    }
+    if (res.ok) {
+      const skipped = res.result.salarySkipped;
+      onSuccess(
+        `Количество обновлено: годных ${res.result.qtyGood}` +
+          (skipped > 0
+            ? `. ${skipped} строк ЗП уже выплачены — разберите вручную.`
+            : ''),
+      );
+      onClose();
+    } else {
+      onError(res.error);
+    }
+  }, [
+    busy,
+    canApplyQtyCorrection,
+    onClose,
+    onError,
+    onSuccess,
+    passport.id,
+    qtyAfterNum,
+    qtyReason,
+  ]);
 
   return (
     <div className="master-actions-sheet__body">
@@ -935,6 +1022,95 @@ function QcActionBody({
                 Возвращать некуда: по паспорту нет завершённых операций
                 пошива, доступных для возврата.
               </p>
+            ))}
+
+          {action === 'qtyCorrection' &&
+            (detail.status !== 'IN_PROGRESS' ? (
+              <p className="master-actions-sheet__error" role="alert">
+                Паспорт ещё не в работе или уже завершён — корректировать
+                количество нельзя.
+              </p>
+            ) : detail.pendingQtyCorrection ? (
+              <p className="master-actions-sheet__error" role="alert">
+                По паспорту уже есть заявка ОТК (
+                {detail.pendingQtyCorrection.qtyBefore} →{' '}
+                {detail.pendingQtyCorrection.qtyAfter}) — подтвердите её во
+                вкладке «Корректировки».
+              </p>
+            ) : (
+              <>
+                <div className="master-actions-sheet__field">
+                  <label
+                    className="master-actions-sheet__label"
+                    htmlFor="qc-qty-after"
+                  >
+                    Фактическое количество, шт.{' '}
+                    <span className="master-actions-sheet__required">*</span>
+                  </label>
+                  <input
+                    id="qc-qty-after"
+                    type="number"
+                    className="master-actions-sheet__input"
+                    min={0}
+                    step={1}
+                    value={qtyAfter}
+                    onChange={(e) => setQtyAfter(e.target.value)}
+                    disabled={busy}
+                  />
+                  <p className="master-actions-sheet__action-hint">
+                    {qtyChanged ? (
+                      <>
+                        Было <strong>{detail.qtyGood}</strong> → станет{' '}
+                        <strong>{qtyAfterNum}</strong> ({qtyDeltaLabel}).
+                      </>
+                    ) : (
+                      'Введите число, отличное от текущих годных.'
+                    )}
+                    {qtyAboveCut && (
+                      <>
+                        {' '}
+                        <strong>
+                          Больше, чем раскроено ({detail.qtyCut}).
+                        </strong>{' '}
+                        Проверьте.
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                <div className="master-actions-sheet__field">
+                  <label
+                    className="master-actions-sheet__label"
+                    htmlFor="qc-qty-reason"
+                  >
+                    Причина (необязательно)
+                  </label>
+                  <textarea
+                    id="qc-qty-reason"
+                    className="master-actions-sheet__textarea"
+                    rows={2}
+                    maxLength={280}
+                    value={qtyReason}
+                    onChange={(e) => setQtyReason(e.target.value)}
+                    placeholder="Например: пересчитали партию — недостача"
+                    disabled={busy}
+                  />
+                </div>
+
+                <p className="master-actions-sheet__action-hint">
+                  Применится сразу: изменит раскроено/годных и пересчитает
+                  сдельные начисления.
+                </p>
+
+                <button
+                  type="button"
+                  className="master-actions-sheet__confirm"
+                  onClick={submitQtyCorrection}
+                  disabled={!canApplyQtyCorrection || busy}
+                >
+                  {busy ? 'Применяем…' : 'Применить корректировку'}
+                </button>
+              </>
             ))}
         </>
       )}

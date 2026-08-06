@@ -49,6 +49,10 @@ type CorrectionRow = Prisma.PassportQtyCorrectionGetPayload<{
  * раскройщик через `recomputeCutterForPassport`), пишем
  * `PassportEvent(QTY_CORRECTED)` и аудит. Фаза 1 — только паспорта
  * `IN_PROGRESS` (до упаковки).
+ *
+ * Отдельный одношаговый путь — `applyByMaster`: мастер цеха корректирует
+ * сам (он же аппрувер), заявка создаётся и применяется одной транзакцией
+ * (см. `master-actions.controller.ts`).
  */
 @Injectable()
 export class PassportQtyCorrectionsService {
@@ -187,101 +191,12 @@ export class PassportQtyCorrectionsService {
         throw new QtyCorrectionNotPendingException();
       }
 
-      const passport = await tx.passport.findUnique({
-        where: { id: correction.passportId },
-        select: {
-          id: true,
-          status: true,
-          qtyCut: true,
-          qtyDefect: true,
-          qtyGood: true,
-          currentOperationId: true,
-        },
-      });
-      if (!passport) throw this.passportNotFound();
-      if (passport.status !== PassportStatus.IN_PROGRESS) {
-        throw new QtyCorrectionPassportNotEditableException();
-      }
-
-      const qtyBefore = passport.qtyGood;
-      const delta = correction.qtyAfter - qtyBefore;
-      const nextQtyGood = correction.qtyAfter;
-      const nextQtyCut = passport.qtyCut + delta;
-      if (nextQtyCut - passport.qtyDefect < 0) {
-        throw new QtyCorrectionBelowDefectException(passport.qtyDefect);
-      }
-
-      // 1. Двигаем и раскрой, и годных на одну и ту же разницу (qtyDefect
-      //    не трогаем). qtyPlan оставляем как есть — это план, а не факт.
-      await tx.passport.update({
-        where: { id: passport.id },
-        data: { qtyCut: nextQtyCut, qtyGood: nextQtyGood },
-      });
-
-      // 2. Событие истории паспорта.
-      await tx.passportEvent.create({
-        data: {
-          passportId: passport.id,
-          type: PassportEventType.QTY_CORRECTED,
-          employeeId: reviewerEmployeeId,
-          operationId: passport.currentOperationId,
-          qty: nextQtyGood,
-          payload: {
-            correctionId: correction.id,
-            qtyBefore,
-            qtyAfter: correction.qtyAfter,
-            delta,
-            reviewedByEmployeeId: reviewerEmployeeId,
-          },
-        },
-      });
-
-      // 3. Пересчёт сдельной ЗП: швеи/ВТО по qtyGood + раскройщик по qtyCut.
-      const sewing = await this.earnings.reconcileToQtyGood(tx, passport.id);
-      const cutter = await this.earnings.recomputeCutterForPassport(
+      return this.applyCorrectionTx(
         tx,
-        passport.id,
+        correction,
+        reviewerEmployeeId,
+        dto.note ?? null,
       );
-
-      // 4. Фиксируем решение по заявке.
-      const updated = await tx.passportQtyCorrection.update({
-        where: { id },
-        data: {
-          status: PassportQtyCorrectionStatus.APPROVED,
-          reviewedAt: new Date(),
-          reviewedByEmployeeId: reviewerEmployeeId,
-          reviewerNote: dto.note ?? null,
-        },
-        include: this.includeAll(),
-      });
-
-      await this.audit.log(
-        {
-          event: 'PASSPORT_QTY_CORRECTED',
-          entityType: 'PASSPORT',
-          entityId: passport.id,
-          employeeId: reviewerEmployeeId,
-          payload: {
-            correctionId: correction.id,
-            qtyBefore,
-            qtyAfter: correction.qtyAfter,
-            delta,
-            qtyCut: nextQtyCut,
-            qtyGood: nextQtyGood,
-            salaryAdjusted: sewing.updated + cutter.updated,
-            salarySkipped: sewing.skipped.length + cutter.skipped,
-          },
-        },
-        tx,
-      );
-
-      return {
-        correction: this.toDto(updated),
-        qtyCut: nextQtyCut,
-        qtyGood: nextQtyGood,
-        salaryAdjusted: sewing.updated + cutter.updated,
-        salarySkipped: sewing.skipped.length + cutter.skipped,
-      } satisfies ApprovePassportQtyCorrectionResultDto;
     });
 
     this.logger.log(
@@ -289,6 +204,189 @@ export class PassportQtyCorrectionsService {
         `salaryAdjusted=${result.salaryAdjusted} salarySkipped=${result.salarySkipped} by=${reviewerEmployeeId}`,
     );
     return result;
+  }
+
+  // -------------------------------------------------------------------------
+  // APPLY BY MASTER (мастер корректирует сам — один шаг)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Одношаговая корректировка мастером цеха: мастер сам аппрувер,
+   * поэтому заявка создаётся и применяется в одной транзакции
+   * (`requestedBy = reviewedBy = мастер`, `reviewedAt = now`). Push
+   * мастерам (`notifyMasters`) здесь не шлём — уведомлять некого.
+   *
+   * Если по паспорту уже висит `PENDING`-заявка ОТК — кидаем
+   * `QTY_CORRECTION_ALREADY_PENDING`: мастер подтверждает/отклоняет её
+   * во вкладке «Корректировки», а не создаёт параллельную.
+   */
+  async applyByMaster(
+    passportId: string,
+    dto: CreatePassportQtyCorrectionDto,
+    employeeId: string,
+  ): Promise<ApprovePassportQtyCorrectionResultDto> {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const passport = await tx.passport.findUnique({
+        where: { id: passportId },
+        select: { id: true, status: true, qtyGood: true },
+      });
+      if (!passport) throw this.passportNotFound();
+      if (passport.status !== PassportStatus.IN_PROGRESS) {
+        throw new QtyCorrectionPassportNotEditableException();
+      }
+
+      // Быстрый pre-check + жёсткая защита от гонок на partial unique
+      // index (как в `create`): строка рождается `PENDING` и в этой же
+      // транзакции переводится хелпером в `APPROVED` — снаружи видна
+      // только итоговая `APPROVED`.
+      const existingPending = await tx.passportQtyCorrection.findFirst({
+        where: { passportId, status: PassportQtyCorrectionStatus.PENDING },
+        select: { id: true },
+      });
+      if (existingPending) throw new QtyCorrectionAlreadyPendingException();
+
+      let created: { id: string; passportId: string; qtyAfter: number };
+      try {
+        created = await tx.passportQtyCorrection.create({
+          data: {
+            passportId,
+            qtyBefore: passport.qtyGood,
+            qtyAfter: dto.qtyAfter,
+            reason: dto.reason ?? null,
+            requestedByEmployeeId: employeeId,
+            status: PassportQtyCorrectionStatus.PENDING,
+          },
+          select: { id: true, passportId: true, qtyAfter: true },
+        });
+      } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          throw new QtyCorrectionAlreadyPendingException();
+        }
+        throw err;
+      }
+
+      return this.applyCorrectionTx(tx, created, employeeId, null);
+    });
+
+    this.logger.log(
+      `event=qty-correction.master-apply passportId=${passportId} ` +
+        `qtyGood=${result.qtyGood} salaryAdjusted=${result.salaryAdjusted} ` +
+        `salarySkipped=${result.salarySkipped} by=${employeeId}`,
+    );
+    return result;
+  }
+
+  /**
+   * Общее транзакционное тело применения корректировки: ре-валидация
+   * инварианта (`qtyCut − qtyDefect >= 0`), сдвиг `qtyCut`/`qtyGood`,
+   * `PassportEvent(QTY_CORRECTED)`, пересчёт сдельной ЗП, перевод заявки
+   * в `APPROVED` и аудит. Используется и в `approve` (двухшаговый путь
+   * ОТК → мастер), и в `applyByMaster` (одношаговый путь мастера).
+   */
+  private async applyCorrectionTx(
+    tx: Prisma.TransactionClient,
+    correction: { id: string; passportId: string; qtyAfter: number },
+    reviewerEmployeeId: string,
+    reviewerNote: string | null,
+  ): Promise<ApprovePassportQtyCorrectionResultDto> {
+    const passport = await tx.passport.findUnique({
+      where: { id: correction.passportId },
+      select: {
+        id: true,
+        status: true,
+        qtyCut: true,
+        qtyDefect: true,
+        qtyGood: true,
+        currentOperationId: true,
+      },
+    });
+    if (!passport) throw this.passportNotFound();
+    if (passport.status !== PassportStatus.IN_PROGRESS) {
+      throw new QtyCorrectionPassportNotEditableException();
+    }
+
+    const qtyBefore = passport.qtyGood;
+    const delta = correction.qtyAfter - qtyBefore;
+    const nextQtyGood = correction.qtyAfter;
+    const nextQtyCut = passport.qtyCut + delta;
+    if (nextQtyCut - passport.qtyDefect < 0) {
+      throw new QtyCorrectionBelowDefectException(passport.qtyDefect);
+    }
+
+    // 1. Двигаем и раскрой, и годных на одну и ту же разницу (qtyDefect
+    //    не трогаем). qtyPlan оставляем как есть — это план, а не факт.
+    await tx.passport.update({
+      where: { id: passport.id },
+      data: { qtyCut: nextQtyCut, qtyGood: nextQtyGood },
+    });
+
+    // 2. Событие истории паспорта.
+    await tx.passportEvent.create({
+      data: {
+        passportId: passport.id,
+        type: PassportEventType.QTY_CORRECTED,
+        employeeId: reviewerEmployeeId,
+        operationId: passport.currentOperationId,
+        qty: nextQtyGood,
+        payload: {
+          correctionId: correction.id,
+          qtyBefore,
+          qtyAfter: correction.qtyAfter,
+          delta,
+          reviewedByEmployeeId: reviewerEmployeeId,
+        },
+      },
+    });
+
+    // 3. Пересчёт сдельной ЗП: швеи/ВТО по qtyGood + раскройщик по qtyCut.
+    const sewing = await this.earnings.reconcileToQtyGood(tx, passport.id);
+    const cutter = await this.earnings.recomputeCutterForPassport(
+      tx,
+      passport.id,
+    );
+
+    // 4. Фиксируем решение по заявке.
+    const updated = await tx.passportQtyCorrection.update({
+      where: { id: correction.id },
+      data: {
+        status: PassportQtyCorrectionStatus.APPROVED,
+        reviewedAt: new Date(),
+        reviewedByEmployeeId: reviewerEmployeeId,
+        reviewerNote,
+      },
+      include: this.includeAll(),
+    });
+
+    await this.audit.log(
+      {
+        event: 'PASSPORT_QTY_CORRECTED',
+        entityType: 'PASSPORT',
+        entityId: passport.id,
+        employeeId: reviewerEmployeeId,
+        payload: {
+          correctionId: correction.id,
+          qtyBefore,
+          qtyAfter: correction.qtyAfter,
+          delta,
+          qtyCut: nextQtyCut,
+          qtyGood: nextQtyGood,
+          salaryAdjusted: sewing.updated + cutter.updated,
+          salarySkipped: sewing.skipped.length + cutter.skipped,
+        },
+      },
+      tx,
+    );
+
+    return {
+      correction: this.toDto(updated),
+      qtyCut: nextQtyCut,
+      qtyGood: nextQtyGood,
+      salaryAdjusted: sewing.updated + cutter.updated,
+      salarySkipped: sewing.skipped.length + cutter.skipped,
+    } satisfies ApprovePassportQtyCorrectionResultDto;
   }
 
   // -------------------------------------------------------------------------

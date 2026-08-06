@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { OrderCutIssueRulesModule } from '../order-cut-issue-rules/order-cut-issue-rules.module.js';
 import { WorkInProgressModule } from '../work-in-progress/work-in-progress.module.js';
 import { QcModule } from '../qc/qc.module.js';
+import { PassportQtyCorrectionsModule } from '../passport-qty-corrections/passport-qty-corrections.module.js';
 import { MasterActionsController } from './master-actions.controller.js';
 import { MasterActionsService } from './master-actions.service.js';
 
@@ -22,9 +23,19 @@ import { MasterActionsService } from './master-actions.service.js';
  * `master-actions.controller.ts`) переиспользуют ту же бизнес-логику,
  * что и роль `QC` на `/qc`, — единый источник правды по дефектам и
  * возвратам (`QcService.recordDefect` / `returnToRework`).
+ *
+ * `PassportQtyCorrectionsModule` — ради `PassportQtyCorrectionsService`:
+ * одношаговая корректировка количества мастером
+ * (`applyByMaster`) применяет те же транзакционные шаги, что и approve
+ * заявки ОТК.
  */
 @Module({
-  imports: [OrderCutIssueRulesModule, WorkInProgressModule, QcModule],
+  imports: [
+    OrderCutIssueRulesModule,
+    WorkInProgressModule,
+    QcModule,
+    PassportQtyCorrectionsModule,
+  ],
   controllers: [MasterActionsController],
   providers: [MasterActionsService],
   exports: [MasterActionsService],

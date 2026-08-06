@@ -17,7 +17,11 @@
  *   - approve «вверх» (10→12): reconcile поднимает ЗП швеи обратно;
  *   - гард «только IN_PROGRESS» (PACKED → 409);
  *   - reject не меняет количеств;
- *   - RBAC: подтвердить может только мастер/менеджер (роль QC → 403).
+ *   - RBAC: подтвердить может только мастер/менеджер (роль QC → 403);
+ *   - одношаговая корректировка мастера
+ *     (`POST /api/master-actions/passports/:id/qty-correction`):
+ *     создаётся сразу APPROVED и применяется в одной транзакции; при
+ *     висящей PENDING-заявке ОТК → 409; роль QC → 403.
  *
  * Сознательно НЕ покрываем «уже выплаченную строку ЗП пропускаем»
  * (`salarySkipped`) — требует scaffolding `PayrollPayout`; логика skip'а
@@ -294,6 +298,79 @@ describeWithDb('integration — passport qty corrections (ОТК → масте�
       .post(`/api/master-qty-corrections/${id}/approve`)
       .set('Cookie', qcCookie)
       .send({});
+    expect(res.status).toBe(403);
+  });
+
+  test('мастер применяет корректировку одним запросом: сразу APPROVED, количества и ЗП сдвинуты', async () => {
+    const { passportId } = await setup(10);
+
+    const res = await http()
+      .post(`/api/master-actions/passports/${passportId}/qty-correction`)
+      .set('Cookie', masterCookie)
+      .send({ qtyAfter: 8, reason: 'пересчитали партию' });
+    expect(res.status).toBe(201);
+    expect(res.body.qtyCut).toBe(8);
+    expect(res.body.qtyGood).toBe(8);
+    expect(res.body.correction.status).toBe('APPROVED');
+    // Мастер сам и податель, и аппрувер.
+    expect(res.body.correction.requestedByEmployeeId).toBe(
+      seed.employees.master.id,
+    );
+    expect(res.body.correction.reviewedByEmployeeId).toBe(
+      seed.employees.master.id,
+    );
+    expect(res.body.correction.reviewedAt).not.toBeNull();
+
+    const passport = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
+    expect(passport.qtyCut).toBe(8);
+    expect(passport.qtyGood).toBe(8);
+
+    const sew = await seamstressEntry(passportId);
+    expect(sew.qty).toBe(8);
+    const cut = await cutterEntry(passportId);
+    expect(cut.qty).toBe(8);
+
+    const ev = await t.prisma.passportEvent.findFirstOrThrow({
+      where: { passportId, type: 'QTY_CORRECTED' },
+    });
+    expect(ev.qty).toBe(8);
+
+    // В БД ровно одна строка — сразу APPROVED, PENDING снаружи не видна.
+    const rows = await t.prisma.passportQtyCorrection.findMany({
+      where: { passportId },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('APPROVED');
+  });
+
+  test('одношаговая корректировка при висящей PENDING-заявке ОТК → 409 ALREADY_PENDING', async () => {
+    const { passportId } = await setup(10);
+    await createCorrection(passportId, { qtyAfter: 9 });
+
+    const res = await http()
+      .post(`/api/master-actions/passports/${passportId}/qty-correction`)
+      .set('Cookie', masterCookie)
+      .send({ qtyAfter: 8 });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('QTY_CORRECTION_ALREADY_PENDING');
+
+    // Количества не тронуты, заявка ОТК осталась PENDING.
+    const passport = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
+    expect(passport.qtyCut).toBe(10);
+    expect(passport.qtyGood).toBe(10);
+  });
+
+  test('RBAC: одношаговая корректировка мастера для роли QC → 403', async () => {
+    const { passportId } = await setup(10);
+
+    const res = await http()
+      .post(`/api/master-actions/passports/${passportId}/qty-correction`)
+      .set('Cookie', qcCookie)
+      .send({ qtyAfter: 9 });
     expect(res.status).toBe(403);
   });
 });

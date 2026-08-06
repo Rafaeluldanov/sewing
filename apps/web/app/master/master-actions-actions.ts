@@ -35,9 +35,14 @@ import {
   ReturnToReworkSchema,
   type QcPassportDetailDto,
 } from '@sewing/shared/qc';
+import {
+  CreatePassportQtyCorrectionSchema,
+  type ApprovePassportQtyCorrectionResultDto,
+} from '@sewing/shared/passport-qty-corrections';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { fetchPassportHistory } from '@/lib/passports-api';
 import {
+  applyMasterQtyCorrection,
   findMasterPassportByCode,
   getMasterPassportQcDetail,
   recordMasterPassportDefect,
@@ -274,6 +279,50 @@ export async function recordMasterDefectAction(
     const detail = await recordMasterPassportDefect(passportId, parsed.data);
     revalidatePath('/master');
     return { ok: true, detail };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+export type MasterQtyCorrectionResult =
+  | { ok: true; result: ApprovePassportQtyCorrectionResultDto }
+  | { ok: false; error: string; errorRequestId?: string };
+
+/**
+ * Одношаговая корректировка количества по паспорту: мастер сам аппрувер,
+ * заявка создаётся и применяется сразу (см.
+ * `PassportQtyCorrectionsService.applyByMaster`). Ревалидируем те же
+ * страницы, что и approve заявки ОТК
+ * (`apps/web/app/master/qty-corrections-actions.ts`) — количества
+ * паспорта видны в заказе и карточке паспорта.
+ */
+export async function applyMasterQtyCorrectionAction(
+  passportId: string,
+  qtyAfter: number,
+  reason?: string,
+): Promise<MasterQtyCorrectionResult> {
+  const parsed = CreatePassportQtyCorrectionSchema.safeParse({
+    qtyAfter,
+    reason: reason && reason.trim() ? reason.trim() : undefined,
+  });
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error:
+        parsed.error.issues[0]?.message ?? 'Невалидные данные корректировки.',
+    };
+  }
+  try {
+    const result = await applyMasterQtyCorrection(passportId, parsed.data);
+    revalidatePath('/master');
+    revalidatePath(`/orders/${result.correction.orderId}`);
+    revalidatePath(`/admin/orders/${result.correction.orderId}`);
+    revalidatePath(`/admin/passports/${result.correction.passportId}`);
+    return { ok: true, result };
   } catch (e) {
     return {
       ok: false,

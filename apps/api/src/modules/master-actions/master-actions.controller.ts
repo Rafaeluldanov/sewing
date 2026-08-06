@@ -26,10 +26,16 @@ import {
   type QcPassportDetailDto,
   type ReturnToReworkDto,
 } from '@sewing/shared/qc';
+import {
+  CreatePassportQtyCorrectionSchema,
+  type ApprovePassportQtyCorrectionResultDto,
+  type CreatePassportQtyCorrectionDto,
+} from '@sewing/shared/passport-qty-corrections';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { QcService } from '../qc/qc.service.js';
+import { PassportQtyCorrectionsService } from '../passport-qty-corrections/passport-qty-corrections.service.js';
 import { MasterActionsService } from './master-actions.service.js';
 
 /**
@@ -57,6 +63,7 @@ export class MasterActionsController {
   constructor(
     private readonly service: MasterActionsService,
     private readonly qc: QcService,
+    private readonly qtyCorrections: PassportQtyCorrectionsService,
   ) {}
 
   /**
@@ -198,6 +205,28 @@ export class MasterActionsController {
     dto: ReturnToReworkDto,
   ): Promise<QcPassportDetailDto> {
     return this.qc.returnToRework(id, dto, user.employeeId);
+  }
+
+  /**
+   * `POST /api/master-actions/passports/:id/qty-correction` —
+   * скорректировать фактическое количество по паспорту одним шагом.
+   *
+   * У ОТК это двухшаговая заявка (`POST /api/qc/.../qty-corrections` →
+   * approve мастером), но мастер сам аппрувер, поэтому здесь заявка
+   * создаётся сразу `APPROVED` и применяется в той же транзакции
+   * (см. `PassportQtyCorrectionsService.applyByMaster`). Если по
+   * паспорту уже висит `PENDING`-заявка ОТК — 409
+   * `QTY_CORRECTION_ALREADY_PENDING`, мастер разбирает её во вкладке
+   * «Корректировки».
+   */
+  @Post('passports/:id/qty-correction')
+  applyQtyCorrection(
+    @CurrentUser() user: AuthPrincipal,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(CreatePassportQtyCorrectionSchema))
+    dto: CreatePassportQtyCorrectionDto,
+  ): Promise<ApprovePassportQtyCorrectionResultDto> {
+    return this.qtyCorrections.applyByMaster(id, dto, user.employeeId);
   }
 
   // -------------------------------------------------------------------------

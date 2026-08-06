@@ -607,6 +607,7 @@ export function MasterPageClient({
           passport={actionsFor.passport}
           ownerFullName={actionsFor.ownerName}
           defectTypes={defectTypes}
+          qtyCorrectionEnabled={qtyCorrectionEnabled}
           onClose={() => setActionsFor(null)}
           onSuccess={(msg) => {
             showToast(msg);

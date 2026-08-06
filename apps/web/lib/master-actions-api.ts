@@ -23,6 +23,10 @@ import type {
   DefectTypeDto,
   QcPassportDetailDto,
 } from '@sewing/shared/qc';
+import type {
+  ApprovePassportQtyCorrectionResultDto,
+  CreatePassportQtyCorrectionDto,
+} from '@sewing/shared/passport-qty-corrections';
 import { apiFetch } from './api';
 
 export function unassignMasterPassport(
@@ -99,6 +103,21 @@ export function recordMasterPassportDefect(
 ): Promise<QcPassportDetailDto> {
   return apiFetch<QcPassportDetailDto>(
     `/master-actions/passports/${encodeURIComponent(passportId)}/defect`,
+    { method: 'POST', body },
+  );
+}
+
+/**
+ * Корректировка количества по паспорту одним шагом: мастер сам аппрувер,
+ * заявка создаётся сразу `APPROVED` и применяется в той же транзакции
+ * (см. `PassportQtyCorrectionsService.applyByMaster`).
+ */
+export function applyMasterQtyCorrection(
+  passportId: string,
+  body: CreatePassportQtyCorrectionDto,
+): Promise<ApprovePassportQtyCorrectionResultDto> {
+  return apiFetch<ApprovePassportQtyCorrectionResultDto>(
+    `/master-actions/passports/${encodeURIComponent(passportId)}/qty-correction`,
     { method: 'POST', body },
   );
 }
