@@ -432,9 +432,15 @@ export const UpdateOrderTechCardLineSchema = z
       .optional(),
   })
   .superRefine((v, ctx) => {
+    // `normUnit` В СПИСКЕ ОБЯЗАТЕЛЕН: у расщеплённой строки («расход в
+    // м пог., закупка в кг») правка ячейки единицы расхода шлёт патч
+    // ровно из одного этого поля. Пока его тут не было, Zod отбивал
+    // такой патч как «пустой», запрос до API не уходил вовсе, и снять
+    // расщепление (`normUnit: null`) тоже было нельзя.
     if (
       v.name === undefined &&
       v.unit === undefined &&
+      v.normUnit === undefined &&
       v.qtyPerUnit === undefined &&
       v.colorText === undefined &&
       v.densityGsm === undefined &&

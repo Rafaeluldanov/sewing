@@ -440,6 +440,64 @@ describeWithDb('integration — workshop needs category-driven', () => {
     expect(Number(byName.get('Концевик')!.calculatedQty)).toBeCloseTo(1000, 4);
   });
 
+  test('правка нормы в заказе не подставляется в норму с ДРУГОЙ единицей', async () => {
+    const cat = await createCategoryFull();
+    const molnija = findParam(cat, 'Молния'); // роль PACKAGING, единица «шт»
+    const patternId = await createPattern({
+      categoryId: cat.id,
+      article: 'P-CAT-UNIT',
+    });
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/parameter-norms`)
+      .set('Cookie', t.adminCookie)
+      .send({ norms: [{ categoryParameterId: molnija.id, qtyPerItem: '4' }] })
+      .expect(200);
+
+    // Единственная строка роли PACKAGING в спецификации — ШНУР в метрах.
+    // Норма номенклатуры при этом штучная.
+    const tcId = await createTechCard({
+      name: 'TC unit mismatch',
+      materialLines: [
+        { name: 'Шнур', unit: 'м', qtyPerUnit: '1.2', materialRole: 'PACKAGING' },
+      ],
+    });
+    const orderId = await createOrder({
+      techCardId: tcId,
+      patternItemId: patternId,
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 500 }],
+      color: 'чёрный',
+    });
+
+    // Правим норму строки В ЗАКАЗЕ — она станет qtySource = 'ORDER'.
+    const req = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, name: 'Шнур' },
+      select: { id: true },
+    });
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/tech-card/lines/${req.id}`)
+      .set('Cookie', t.adminCookie)
+      .send({ qtyPerUnit: '1.5' })
+      .expect(200);
+
+    const calc = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+    const needs = calc.body.needs as Array<{
+      sourceName: string;
+      unit: string;
+      calculatedQty: string;
+    }>;
+
+    // Норма «1,5 м» НЕ подставляется вместо «4 шт»: единицы разные.
+    // До фикса штучная ветка единицу не сверяла вовсе, и вместо
+    // 4 × 500 = 2000 люверсов заказывалось 1,5 × 500 = 750.
+    const byNorm = needs.find((n) => n.unit === 'шт');
+    expect(byNorm).toBeDefined();
+    expect(Number(byNorm!.calculatedQty)).toBeCloseTo(2000, 4);
+  });
+
   // -------------------------------------------------------------------------
   // Scenario C: missing selected color → warning
   // -------------------------------------------------------------------------

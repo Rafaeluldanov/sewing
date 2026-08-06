@@ -147,7 +147,7 @@ export function EditWorkshopNeedForm({
   // (1 боб. = 4000 ярдов), но в БД храним метры / цену за метр —
   // см. `../thread-units`. Конверсия только на фронте, остальные
   // единицы не трогаем.
-  const isThread = isThreadNeed(need.materialRole);
+  const isThread = isThreadNeed(need.materialRole, need.unit);
   // Кнопки: покупаются упаковками. «К закупке» → «Упаковок» + «Шт/упак»,
   // «Цена за 1 шт» → «Цена за упаковку». В БД остаётся поштучно +
   // отдельная колонка packSize (см. `../button-units`).

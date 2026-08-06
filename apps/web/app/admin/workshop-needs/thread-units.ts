@@ -33,14 +33,31 @@ export const YARDS_PER_BOBBIN = 4000;
 export const M_PER_BOBBIN = YARDS_PER_BOBBIN * M_PER_YARD;
 
 /**
- * Строка потребности — нитки? Единственный надёжный сигнал —
- * `materialRole`, см. `getWorkshopNeedKind` в
- * `@sewing/shared/workshop-needs`.
+ * Единицы, в которых нитки МЕРЯЮТ ДЛИНОЙ. Только для них ярдовый режим
+ * имеет смысл: 1 ярд = 0,9144 м — это перевод длины в длину.
+ */
+const THREAD_LENGTH_UNITS = new Set(['м', 'м.', 'м пог.', 'м пог', 'мп']);
+
+/**
+ * Строка потребности — нитки, которые считают ярдами?
+ *
+ * Роли недостаточно. Нитки заводят и в бобинах, и в комплектах, и
+ * штуками — тогда число в строке НЕ длина, и делить его на 0,9144
+ * бессмысленно. Раньше признаком была одна роль, поэтому строка «20 шт»
+ * показывалась как «21,87 ярд», а при сохранении количество умножалось
+ * на 0,9144, а цена делилась на 3657,6: закупщик вводил 22 бобины по
+ * 300 ₽, в базу уходило 20,1168 «шт» по 0,082 ₽.
  */
 export function isThreadNeed(
   materialRole: string | null | undefined,
+  unit?: string | null,
 ): boolean {
-  return materialRole === 'THREAD';
+  if (materialRole !== 'THREAD') return false;
+  // `undefined` — вызывающий единицу не передал (старый контракт).
+  // Считаем строку метровой, чтобы поведение не поменялось молча;
+  // все живые вызовы единицу передают.
+  if (unit === undefined) return true;
+  return THREAD_LENGTH_UNITS.has((unit ?? '').trim().toLowerCase());
 }
 
 /**

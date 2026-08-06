@@ -243,7 +243,7 @@ export function InlineEditWorkshopNeedRow({
   // фронте; в БД и backend всё остаётся в метрах / цене за метр (см.
   // `./thread-units`). Для остальных единиц (шт / м² / кг / компл)
   // ничего не меняем.
-  const isThread = isThreadNeed(need.materialRole);
+  const isThread = isThreadNeed(need.materialRole, need.unit);
 
   // Кнопки: считаются/хранятся поштучно, но закупщик покупает их
   // упаковками. Поле «К закупке» заменяется на «Упаковок» + «Шт/упак»,

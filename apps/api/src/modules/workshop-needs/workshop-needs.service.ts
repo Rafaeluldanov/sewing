@@ -2128,13 +2128,34 @@ export class WorkshopNeedsService {
 
     const resolvedColorText = this.resolveColor(line, order.color);
 
+    // Норма, ПРАВЛЕННАЯ В ЗАКАЗЕ, главнее геометрии лекала. Это то же
+    // правило, что и в category-driven ветке (`orderEditedNormPerUnit`),
+    // но здесь его не было: AREA_DENSITY считал строго по площадям и
+    // молча игнорировал `qtyPerUnit` строки. Технолог правил норму в
+    // спецификации, экран показывал новое число, а в закупку уходило
+    // старое — два числа про один материал, без ноты и предупреждения.
+    //
+    // Пропускаем площади и уходим на ветку нормы: она сама разберётся с
+    // расщеплёнными единицами (`needsPurchaseConversion`).
+    const normEditedInOrder =
+      line.qtySource === 'ORDER' &&
+      line.qtyPerUnit != null &&
+      line.qtyPerUnit.greaterThan(0);
+
     // Попытка AREA_DENSITY: нужны materialRole + densityGsm + лекало +
     // хотя бы одна совпавшая площадь.
     const canTryArea =
+      !normEditedInOrder &&
       Boolean(order.patternItemId) &&
       line.materialRole != null &&
       line.densityGsm != null &&
       line.densityGsm > 0;
+
+    if (normEditedInOrder && line.materialRole != null && line.densityGsm) {
+      warnings.push(
+        `Для строки «${line.name}» норма правлена в заказе — считаем по ней, а не по площади лекала.`,
+      );
+    }
 
     if (canTryArea) {
       const role = line.materialRole as string;
@@ -2438,7 +2459,7 @@ export class WorkshopNeedsService {
     orderColor: string | null,
   ): ComputedNeed {
     // Норма из заказа главнее номенклатуры (см. `orderEditedNormPerUnit`).
-    const editedPerItem = orderEditedNormPerUnit(matchedLine, 'qty');
+    const editedPerItem = orderEditedNormPerUnit(matchedLine, 'qty', norm.unit);
     const calculatedQty = (editedPerItem ?? norm.qtyPerItem)
       .mul(totalOrderQty)
       .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
@@ -3660,8 +3681,9 @@ const EMPTY_ENRICHMENT: ResolvedEnrichment = {
  * материал. Здесь единственное место, где приоритет проверяется.
  *
  * Единицы. Норма заказа осмысленна только в своей единице, поэтому вызывающий
- * передаёт `expect`: `qty` — штучная норма (совпадение с единицей параметра
- * проверять не нужно, там уже «шт»), `linear` — «м»/«м пог.», `area` — «м²».
+ * передаёт `expect`: `qty` — штучная норма (сверяется с единицей параметра
+ * номенклатуры, её передают третьим аргументом), `linear` — «м»/«м пог.»,
+ * `area` — «м²».
  * Не сошлось — правку НЕ применяем и возвращаем `null`: закупку считаем по
  * номенклатуре, а расхождение показываем предупреждением (см. вызовы).
  *
@@ -3681,21 +3703,35 @@ function normUnitOf(line: SourceLine): string {
   return norm === '' ? line.unit : norm;
 }
 
-function orderEditedNormPerUnit(
-  line: SourceLine | null,
-  expect: 'qty' | 'linear' | 'area',
-): Prisma.Decimal | null {
-  if (!line || line.qtySource !== 'ORDER') return null;
-  if (line.qtyPerUnit == null || line.qtyPerUnit.lte(0)) return null;
-  const unit = (normUnitOf(line) ?? '')
+/** Единица для сверки: без точек, пробелов и «²» → «2», в нижнем регистре. */
+function normalizeUnitForCompare(unit: string | null | undefined): string {
+  return (unit ?? '')
     .trim()
     .toLowerCase()
     .replace(/[.\s]/g, '')
     .replace(/²/g, '2');
+}
+
+function orderEditedNormPerUnit(
+  line: SourceLine | null,
+  expect: 'qty' | 'linear' | 'area',
+  expectedQtyUnit?: string | null,
+): Prisma.Decimal | null {
+  if (!line || line.qtySource !== 'ORDER') return null;
+  if (line.qtyPerUnit == null || line.qtyPerUnit.lte(0)) return null;
+  const unit = normalizeUnitForCompare(normUnitOf(line));
   if (expect === 'linear' && !(unit === 'м' || unit === 'мпог' || unit === 'мп')) {
     return null;
   }
   if (expect === 'area' && unit !== 'м2') return null;
+  // Штучная норма тоже обязана сойтись по единице. Раньше проверки здесь
+  // не было вовсе — на том основании, что «там уже шт». Но строка
+  // спецификации к норме подбирается по РОЛИ, а роль грубее материала:
+  // под норму «Люверс, шт» вставал «Шнур, м», и 1,2 м шнура
+  // подставлялись как 1,2 шт люверсов — недозаказ в разы.
+  if (expect === 'qty' && expectedQtyUnit != null) {
+    if (unit !== normalizeUnitForCompare(expectedQtyUnit)) return null;
+  }
   return line.qtyPerUnit;
 }
 

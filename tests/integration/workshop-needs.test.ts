@@ -156,6 +156,78 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
     expect(list.body[0].id).toBe(need.id);
   });
 
+  test('норма, правленная в заказе, побеждает площадь лекала', async () => {
+    const pattern = await t.prisma.patternItem.create({
+      data: {
+        name: 'Лекало демо 2',
+        article: 'P-DEMO-EDIT',
+        status: 'ACTIVE',
+        materialAreas: {
+          create: [
+            {
+              sizeId: seed.sizes.M,
+              materialRole: 'MAIN_FABRIC',
+              areaM2: new Prisma.Decimal('1.05'),
+            },
+          ],
+        },
+      },
+    });
+    const tc = await createTechCard(t, cookies.manager, {
+      code: 'TC-AD-EDIT',
+      name: 'AREA_DENSITY + правка нормы',
+      materialLines: [
+        {
+          name: 'Кулирка',
+          unit: 'кг',
+          qtyPerUnit: '0.2',
+          materialRole: 'MAIN_FABRIC',
+          fabricType: 'кулирка',
+          densityGsm: 180,
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
+    const orderId = await createOrderWithPatternAndTechCard(
+      t,
+      seed,
+      cookies.manager,
+      {
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+        techCardId: tc.id,
+        patternItemId: pattern.id,
+        color: 'чёрный',
+      },
+    );
+
+    // Технолог правит норму в спецификации заказа: 0,2 → 0,3 кг/шт.
+    const req = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, materialRole: 'MAIN_FABRIC' },
+      select: { id: true },
+    });
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/tech-card/lines/${req.id}`)
+      .set('Cookie', cookies.manager)
+      .send({ qtyPerUnit: '0.3' })
+      .expect(200);
+
+    const r = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+
+    const need = r.body.needs[0];
+    // 0,3 × 100 = 30 кг. До фикса площадь побеждала молча:
+    // 1,05 × 180 × 100 / 1000 = 18,9 кг — экран спецификации показывал
+    // одно число, закупка считала другое, и ни ноты, ни warning.
+    expect(Number(need.calculatedQty)).toBeCloseTo(30, 4);
+    expect(need.calculationMethod).toBe('QTY_PER_UNIT');
+    expect(
+      (r.body.warnings as string[]).some((w) => w.includes('правлена в заказе')),
+    ).toBe(true);
+  });
+
   // ---------------------------------------------------------------------------
   // 2. QTY_PER_UNIT fallback: нитки/фурнитура без materialRole+density
   // ---------------------------------------------------------------------------
