@@ -209,9 +209,15 @@ function bucketsFromWorkshopNeeds(
       continue;
     }
 
+    // Роль материала — ГЛАВНЫЙ признак классификации (см.
+    // `getWorkshopNeedKind`): по ней фурнитура отделяется от тканей.
+    // Без неё молнии и люверсы уезжали в «Материалы» и «Прочее», строка
+    // «Фурнитура» показывала ноль, а «материалы за изделие» — завышенное
+    // число. Передаём ровно как соседний `resolveMaterialSection`.
     const kind = getWorkshopNeedKind({
       sourceType: need.sourceType,
       calculationMethod: need.calculationMethod,
+      materialRole: need.materialRole ?? undefined,
     });
     addToBucket(buckets, kind, total);
   }
@@ -283,13 +289,24 @@ export async function OrderPlannedCostSummaryCard({
   const otherUnit = safeUnit(buckets.otherRub);
   const operationsUnit = safeUnit(operationsRubResolved);
 
+  // Упрощённый MVP давальческого сырья: при политике «не учитывать»
+  // backend исключает строки MATERIAL / HARDWARE из
+  // `OrderCostEstimate.totalCostRub`, но САМИ СТРОКИ в смете
+  // оставляет. Карточка складывала их обратно и показывала итог
+  // больше зафиксированной себестоимости заказа — на всю стоимость
+  // давальческого сырья. Суммы по секциям при этом оставляем на
+  // экране: менеджеру всё равно надо видеть, сколько материала нужно.
+  const isMaterialsExcluded =
+    (order.materialsAndHardwareCostPolicy ?? 'INCLUDE') === 'EXCLUDE';
+
   // Итог: материалы + фурнитура + нанесение + прочее + операции.
   // Если операции `null` — не подмешиваем 0, иначе менеджер увидит
   // фейково низкий total. Сам total отдаём `null`, если нет ни
   // одной положительной составляющей.
   const componentsRub = [
-    buckets.materialsRub,
-    buckets.hardwareRub,
+    ...(isMaterialsExcluded
+      ? []
+      : [buckets.materialsRub, buckets.hardwareRub]),
     buckets.applicationRub,
     buckets.otherRub,
     operationsRubResolved,

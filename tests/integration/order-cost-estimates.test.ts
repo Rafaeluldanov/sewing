@@ -110,6 +110,54 @@ describeWithDb('integration — order cost estimates', () => {
     expect(prCount).toBe(0);
   });
 
+  test('логистика заказа входит в смету отдельной строкой', async () => {
+    const orderId = await prepareCalculationOrder(t, seed, cookie);
+    const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });
+    for (const n of needs) {
+      await request(t.app.getHttpServer())
+        .patch(`/api/workshop-needs/${n.id}`)
+        .set('Cookie', cookie)
+        .send({ purchaseQty: '10', quotedPrice: '100', quotedCurrency: 'RUB' })
+        .expect(200);
+    }
+    const materialsRub = 10 * 100 * needs.length;
+
+    // Строка логистики заводится во вкладке «Операции». Она давно
+    // прибавлялась к итогу той вкладки, а смета о ней не знала — из-за
+    // чего соседние вкладки одного заказа показывали разные деньги.
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/logistics-lines`)
+      .set('Cookie', cookie)
+      .send({ name: 'Доставка из Китая', costRub: '45000' })
+      .expect(201);
+    // Нулевую строку заводят как напоминание — в смете ей не место.
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/logistics-lines`)
+      .set('Cookie', cookie)
+      .send({ name: 'Забрать образцы', costRub: '0' })
+      .expect(201);
+
+    const r = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', cookie)
+      .send({})
+      .expect(201);
+
+    expect(Number(r.body.totalCostRub)).toBeCloseTo(materialsRub + 45000, 2);
+    const logisticsLines = (
+      r.body.lines as { sourceType: string; description: string; lineTotalRub: string }[]
+    ).filter((l) => l.sourceType === 'LOGISTICS');
+    expect(logisticsLines).toHaveLength(1);
+    expect(logisticsLines[0].description).toBe('Доставка из Китая');
+    expect(Number(logisticsLines[0].lineTotalRub)).toBeCloseTo(45000, 2);
+
+    const order = await t.prisma.order.findUnique({ where: { id: orderId } });
+    expect(Number(order?.costEstimateTotalRub)).toBeCloseTo(
+      materialsRub + 45000,
+      2,
+    );
+  });
+
   // -------------------------------------------------------------------------
   // 2. USD без usdRateRub → 422
   // -------------------------------------------------------------------------

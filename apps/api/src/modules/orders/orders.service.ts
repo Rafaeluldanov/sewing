@@ -3909,6 +3909,16 @@ export class OrdersService {
       // строках: при пустой потребности плашке больше не на чем приехать.
       needsStaleAt: order.needsStaleAt ? order.needsStaleAt.toISOString() : null,
       needsStaleReason: order.needsStaleReason ?? null,
+      // Симметрично — отказ автопересчёта СЕБЕСТОИМОСТИ
+      // (`OrderCostEstimatesService.syncAfterNeedsChange` → `markStale`).
+      // Раньше признак жил только в строках потребности
+      // (`WorkshopNeedListItemDto.orderCostEstimateStaleAt`), поэтому
+      // «Сводно по заказу» показывало устаревший снимок сметы как
+      // актуальный — плашке было не на чем приехать.
+      costEstimateStaleAt: order.costEstimateStaleAt
+        ? order.costEstimateStaleAt.toISOString()
+        : null,
+      costEstimateStaleReason: order.costEstimateStaleReason ?? null,
       // Этап 2 «План операций на заказе» — stale-detection (см.
       // `OrderOperationPlanService.getFreshnessForOrder`). Поля
       // computed-only, в БД не хранятся.

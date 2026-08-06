@@ -10,8 +10,11 @@
  *   - факт стоимости материалов добавляется в **уже существующую**
  *     финансовую сводку (`OrderSummaryUnifiedTable` →
  *     `TotalsBlock`) тремя строками внутри блока «Себестоимость»:
- *     «Материалы за тираж» (план), «Материалы за тираж · факт»,
- *     «Материалы за тираж · Δ (факт − план)».
+ *     «Материалы за тираж» (план), «Материалы и фурнитура за тираж ·
+ *     факт», «Материалы и фурнитура за тираж · Δ (факт − план)».
+ *     База факта и плана — обе секции: автосписание кроя выдаёт строки
+ *     любых ролей, кроме нанесения, поэтому сравнивать его с планом
+ *     одних только материалов нельзя.
  *
  * Source-of-truth:
  *   - Helper:    `apps/web/components/orders/summary/build-order-summary-rows.ts`
@@ -354,8 +357,8 @@ describe('OrderSummaryUnifiedTable — загрузка MaterialIssue и UI', ()
     expect(src).toMatch(/order-summary-totals-material-planned/);
     expect(src).toMatch(/order-summary-totals-material-actual/);
     expect(src).toMatch(/order-summary-totals-material-delta/);
-    expect(src).toMatch(/Материалы за тираж · факт/);
-    expect(src).toMatch(/Материалы за тираж · Δ \(факт − план\)/);
+    expect(src).toMatch(/Материалы и фурнитура за тираж · факт/);
+    expect(src).toMatch(/Материалы и фурнитура за тираж · Δ \(факт − план\)/);
   });
 
   test('Δ-строка применяет тон success / danger через order-summary-margin', () => {

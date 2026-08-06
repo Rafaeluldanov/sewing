@@ -493,13 +493,20 @@ export function buildOrderSummaryRows(
 
   // Строки зафиксированной сметы без `workshopNeedId` — это позиции,
   // у которых нет потребности цеха, поэтому через material/operation
-  // rows они в сводку не попадают. Сейчас это «Разработка лекала»
-  // (`sourceType = PATTERN_DEVELOPMENT`, kind=OTHER). Берём именно из
-  // `currentCostEstimate`, чтобы «Сводно по заказу» совпадало с
-  // зафиксированным `OrderCostEstimate.totalCostRub` (а не с текущим
-  // значением поля заказа, которое могли поменять после расчёта).
+  // rows они в сводку не попадают: «Разработка лекала»
+  // (`sourceType = PATTERN_DEVELOPMENT`) и прочие / непредвиденные
+  // расходы (`sourceType = EXTRA_COST`, `OrderExtraCost` с галкой «в
+  // себестоимость»). Берём именно из `currentCostEstimate`, чтобы
+  // «Сводно по заказу» совпадало с зафиксированным
+  // `OrderCostEstimate.totalCostRub` (а не с текущим значением поля
+  // заказа, которое могли поменять после расчёта).
+  //
+  // Признак — отсутствие `workshopNeedId`, а не перечисление типов:
+  // раньше здесь стояло `sourceType !== 'PATTERN_DEVELOPMENT'`, и
+  // прочие расходы молча выпадали, занижая себестоимость и завышая
+  // маржу ровно на свою сумму.
   for (const line of currentCostEstimate?.lines ?? []) {
-    if (line.sourceType !== 'PATTERN_DEVELOPMENT') continue;
+    if (line.workshopNeedId) continue;
     const totalRub = toFiniteNumber(line.lineTotalRub);
     const qty = toFiniteNumber(line.purchaseQty);
     const price = toFiniteNumber(line.quotedPrice);
@@ -640,6 +647,28 @@ interface ComputeTotalsInput {
   /** Опциональный «есть незавершённый расчёт себестоимости» — для warning. */
   hasCompletedEstimate?: boolean;
   /**
+   * Отказ автопересчёта потребности / себестоимости
+   * (`Order.needsStaleAt` / `Order.costEstimateStaleAt` + причины).
+   *
+   * Backend ставит эти отметки, когда пересчёт объективно невозможен
+   * (нет курса USD, нет цены, статус не допускает). Сводка обязана их
+   * показывать: иначе она рисует устаревший снимок сметы как
+   * актуальный, и расхождение с реальными материалами видно только по
+   * плашке во вкладке «Потребности» — куда менеджер может не зайти.
+   */
+  needsStaleReason?: string | null;
+  costEstimateStaleReason?: string | null;
+  /**
+   * Снимок плановой стоимости операций (`Order.operationCostPlanRub`).
+   *
+   * Источник истины по деньгам за работу — он, а не сумма строк:
+   * строка операции остаётся без суммы, если операция окладная, без
+   * ставки или с расценкой по размерам без совпадения, и итог по
+   * секции молча занижался. Вкладка «Операции» давно считает по
+   * снимку — сводка теперь тоже.
+   */
+  operationCostPlanRub?: string | number | null;
+  /**
    * Список документов «Фактический расход материалов» по заказу
    * (`GET /api/orders/:orderId/material-issues`). Используется для
    * подсчёта `materialActualCostRub` / `materialDeltaCostRub` —
@@ -679,6 +708,9 @@ export function computeOrderSummaryTotals(
     hasCompletedEstimate,
     materialIssues,
     materialsAndHardwareCostPolicy = 'INCLUDE',
+    needsStaleReason,
+    costEstimateStaleReason,
+    operationCostPlanRub,
   } = input;
   const isMaterialsAndHardwareExcluded =
     materialsAndHardwareCostPolicy === 'EXCLUDE';
@@ -695,6 +727,7 @@ export function computeOrderSummaryTotals(
   let hasUsdMissingRate = false;
   let hasMissingPrice = false;
   let hasOperationFallback = false;
+  let hasOperationPlanMismatch = false;
 
   for (const r of rows) {
     if (r.totalRub != null) {
@@ -731,6 +764,25 @@ export function computeOrderSummaryTotals(
         hasOperationFallback = true;
       }
     }
+  }
+
+  // Секция «Операции» считается по снимку заказа, а не по сумме строк:
+  // строка без суммы (окладная / без ставки / расценка по размерам без
+  // совпадения) молча занижала итог. Расхождение не прячем — если
+  // снимок и строки не сходятся, поднимаем warning: значит план
+  // операций разошёлся с тем, что показано построчно.
+  const operationPlanSnapshotRub = toFiniteNumber(operationCostPlanRub);
+  if (operationPlanSnapshotRub != null) {
+    const rowsOperationRub = byKind.operation;
+    if (
+      rowsOperationRub != null &&
+      Math.abs(rowsOperationRub - operationPlanSnapshotRub) >= 0.01
+    ) {
+      hasOperationPlanMismatch = true;
+    }
+    costTotalRub =
+      (costTotalRub ?? 0) - (byKind.operation ?? 0) + operationPlanSnapshotRub;
+    byKind.operation = operationPlanSnapshotRub;
   }
 
   const costPerUnitRub =
@@ -772,10 +824,21 @@ export function computeOrderSummaryTotals(
   if (isMaterialsAndHardwareExcluded) {
     materialActualCostRub = 0;
   }
-  // Δ = факт - план. Если план неизвестен (нет ни одной MATERIAL
-  // строки в RUB) — отклонение тоже неизвестно, иначе UI показал
-  // бы фейковый «перерасход» на всю фактическую сумму.
-  const plannedMaterialCostRub = byKind.material;
+  // Δ = факт - план. Если план неизвестен — отклонение тоже
+  // неизвестно, иначе UI показал бы фейковый «перерасход» на всю
+  // фактическую сумму.
+  //
+  // База плана — МАТЕРИАЛЫ + ФУРНИТУРА, а не одни материалы. Факт
+  // (`materialActualCostRub`) считается по документам расхода, а
+  // автосписание кроя берёт строки потребности ЛЮБЫХ ролей, кроме
+  // нанесения (`createAutoCutIssueForPassport`): туда попадают и нитки,
+  // и пуговицы, и этикетки, и упаковка. Сравнение такого факта с планом
+  // одной только секции MATERIAL давало систематический ложный
+  // перерасход ровно на стоимость фурнитуры.
+  const plannedMaterialCostRub =
+    byKind.material == null && byKind.hardware == null
+      ? null
+      : (byKind.material ?? 0) + (byKind.hardware ?? 0);
   const materialDeltaCostRub = isMaterialsAndHardwareExcluded
     ? null
     : materialActualCostRub != null && plannedMaterialCostRub != null
@@ -842,8 +905,21 @@ export function computeOrderSummaryTotals(
       'Есть операции без точной ставки (окладная / план не зафиксирован)',
     );
   }
+  if (hasOperationPlanMismatch) {
+    warnings.push(
+      'Итог по операциям взят из плана заказа и не сходится с суммой строк',
+    );
+  }
   if (operationPlanIsStale === true) {
     warnings.push('План операций требует пересчёта');
+  }
+  // Отказы автопересчёта — первыми по важности: пока они висят, все
+  // числа ниже относятся к прежним материалам.
+  if (needsStaleReason) {
+    warnings.push(`Потребность устарела: ${needsStaleReason}`);
+  }
+  if (costEstimateStaleReason) {
+    warnings.push(`Себестоимость устарела: ${costEstimateStaleReason}`);
   }
   if (customerUnitPriceNum == null) {
     warnings.push('Не указана цена продажи');

@@ -12,7 +12,10 @@ import {
   getWorkshopNeedKind,
   type MoneyCurrency,
 } from '@sewing/shared/workshop-needs';
-import { ORDER_EXTRA_COST_SOURCE_TYPE } from '@sewing/shared/order-extra-costs';
+import {
+  ORDER_EXTRA_COST_SOURCE_TYPE,
+  ORDER_LOGISTICS_SOURCE_TYPE,
+} from '@sewing/shared/order-extra-costs';
 import {
   OrderCalculationIncompleteException,
   OrderCalculationInvalidStatusException,
@@ -59,6 +62,8 @@ export class OrderCostEstimatesService {
    *     фурнитура / нанесение, с валидацией «К закупке» / цены / валюты;
    *   - `OrderExtraCost` с `includeInCostPrice = true` — прочие /
    *     непредвиденные расходы (kind=OTHER, sourceType=EXTRA_COST);
+   *   - `OrderLogisticsLine` с ненулевой стоимостью — логистика
+   *     (kind=OTHER, sourceType=LOGISTICS);
    *   - стоимости разработки лекала (`patternDevelopmentCostRub`).
    *
    * Курс USD (`usdRateInput`) обязателен, если хотя бы одна строка
@@ -107,6 +112,16 @@ export class OrderCostEstimatesService {
     const extraCosts = await this.prisma.orderExtraCost.findMany({
       where: { orderId, includeInCostPrice: true },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+
+    // Логистика заказа. Всегда в рублях (`Decimal(12,2)`), галки «в
+    // себестоимость» у неё нет: строку логистики заводят именно как
+    // расход по заказу. Вкладка «Операции» её к своему итогу
+    // прибавляла, а смета о ней не знала — из-за этого соседние вкладки
+    // одного заказа показывали разные деньги.
+    const logisticsLines = await this.prisma.orderLogisticsLine.findMany({
+      where: { orderId },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
     });
 
     type ValidLine = {
@@ -293,6 +308,35 @@ export class OrderCostEstimatesService {
         };
       });
 
+    // Логистика (kind=OTHER, sourceType=LOGISTICS). В итог входит
+    // всегда — это расход компании, а не давальческое сырьё. Строки с
+    // нулевой стоимостью пропускаем: смета не должна обрастать пустыми
+    // позициями «доставка 0 ₽», которые заводят как напоминание.
+    const logisticsLineCreates: Prisma.OrderCostEstimateLineUncheckedCreateWithoutEstimateInput[] =
+      [];
+    for (const l of logisticsLines) {
+      const amount = round2(new Prisma.Decimal(l.costRub));
+      if (!amount.greaterThan(0)) continue;
+      linesTotalRub = linesTotalRub.add(amount);
+      logisticsLineCreates.push({
+        workshopNeedId: null,
+        sourceType: ORDER_LOGISTICS_SOURCE_TYPE,
+        sourceId: l.id,
+        kind: 'OTHER',
+        description: l.name,
+        unit: 'усл.',
+        calculatedQty: null,
+        purchaseQty: new Prisma.Decimal(1),
+        quotedPrice: amount,
+        quotedCurrency: 'RUB',
+        usdRateRub: null,
+        lineTotalOriginal: amount,
+        lineTotalRub: amount,
+        supplierNameSnapshot: null,
+        purchaseItemNameSnapshot: null,
+      });
+    }
+
     // Разработка лекала — отдельной строкой, если чекбокс «входит в
     // себестоимость» включён (см. `Order.patternDevelopmentCostInCostPrice`).
     const devCostRaw = order.patternDevelopmentCostRub;
@@ -335,6 +379,7 @@ export class OrderCostEstimatesService {
     const lineCreates = [
       ...needLineCreates,
       ...extraCostLineCreates,
+      ...logisticsLineCreates,
       ...developmentLineCreates,
     ];
 

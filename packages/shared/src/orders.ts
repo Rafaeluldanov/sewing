@@ -1911,6 +1911,17 @@ export interface OrderDetailDto
   needsStaleAt?: string | null;
   needsStaleReason?: string | null;
   /**
+   * Себестоимость не догнала правку материалов и осталась от прежних
+   * (`OrderCostEstimatesService.syncAfterNeedsChange` → `markStale`).
+   * Причина отказа — человекочитаемая: нет курса USD, нет цены, статус
+   * заказа не допускает пересчёт. Как и `needsStaleAt`, дублируется в
+   * строках потребности (`orderCostEstimateStaleAt`), но строк может не
+   * быть, а зафиксированная смета — есть.
+   * Опционально (`?`) для backward-compat.
+   */
+  costEstimateStaleAt?: string | null;
+  costEstimateStaleReason?: string | null;
+  /**
    * Snapshot строк материалов на заказе. Заполняется в
    * `OrdersService.start()` по шаблону `techCardId`; пустой массив =
    * «техкарта не фиксировалась» (заказ либо ещё не запущен, либо

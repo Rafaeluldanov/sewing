@@ -563,13 +563,13 @@ function TotalsBlock({ totals }: { totals: OrderSummaryTotals }) {
     // тоже учитываются — для order-level summary этого достаточно.
     {
       id: 'material-actual',
-      label: 'Материалы за тираж · факт',
+      label: 'Материалы и фурнитура за тираж · факт',
       value: fmtRub(totals.materialActualCostRub),
       testId: 'order-summary-totals-material-actual',
     },
     {
       id: 'material-delta',
-      label: 'Материалы за тираж · Δ (факт − план)',
+      label: 'Материалы и фурнитура за тираж · Δ (факт − план)',
       value: fmtRub(totals.materialDeltaCostRub),
       testId: 'order-summary-totals-material-delta',
       tone: materialDeltaTone,
@@ -842,6 +842,12 @@ export async function OrderSummaryUnifiedTable({
     materialIssues: data.materialIssues ?? undefined,
     materialsAndHardwareCostPolicy:
       order.materialsAndHardwareCostPolicy ?? 'INCLUDE',
+    // Отказы автопересчёта: пока отметка висит, числа ниже относятся к
+    // прежним материалам, и молчать об этом нельзя.
+    needsStaleReason: order.needsStaleReason ?? null,
+    costEstimateStaleReason: order.costEstimateStaleReason ?? null,
+    // Деньги за работу берём из снимка заказа — как вкладка «Операции».
+    operationCostPlanRub: order.operationCostPlanRub ?? null,
   });
 
   // Колонки: Раздел / Статья / Кол-во / Ед. / Цена / Сумма за тираж /
