@@ -5,12 +5,16 @@ import type {
   CreateDisplayScreenDto,
   DisplayScreenDetailDto,
   DisplayScreenListItemDto,
+  UpdateDisplayScreenDto,
 } from '@sewing/shared/display-screens';
 import type { BulkArchiveResultDto } from '@sewing/shared/archive';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
-import { DisplayLoginTakenException } from '../../common/errors.js';
+import {
+  DisplayLoginTakenException,
+  DisplayScreenNotFoundException,
+} from '../../common/errors.js';
 
 /**
  * Сервис конфигурации display-экранов цеха (`DisplayScreenConfig`).
@@ -84,6 +88,39 @@ export class DisplayScreensService {
         employeeLogin: r.employee.login,
       }),
     );
+  }
+
+  /**
+   * Один экран для карточки `/admin/display-screens/[id]`. Форма
+   * редактирования — единственный потребитель, поэтому отдаём тот же
+   * DTO, что и список (отдельных «деталей» у конфига нет).
+   */
+  async getOne(id: string): Promise<DisplayScreenDetailDto> {
+    const row = await this.prisma.displayScreenConfig.findUnique({
+      where: { id },
+      include: {
+        employee: { select: { id: true, login: true } },
+        companyDivision: { select: { id: true, code: true, name: true } },
+      },
+    });
+    if (!row) throw new DisplayScreenNotFoundException();
+    return toListDto({
+      id: row.id,
+      name: row.name,
+      companyDivisionId: row.companyDivisionId,
+      companyDivision: row.companyDivision
+        ? {
+            id: row.companyDivision.id,
+            code: row.companyDivision.code,
+            name: row.companyDivision.name,
+          }
+        : null,
+      isActive: row.isActive,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      employeeId: row.employee.id,
+      employeeLogin: row.employee.login,
+    });
   }
 
   // ===========================================================================
@@ -197,6 +234,172 @@ export class DisplayScreensService {
         updatedAt: result.config.updatedAt,
         employeeId: result.employee.id,
         employeeLogin: result.employee.login,
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        const target = (e.meta?.target as string[] | string | undefined) ?? [];
+        const fields = Array.isArray(target) ? target : [target];
+        if (fields.some((f) => String(f).includes('login'))) {
+          throw new DisplayLoginTakenException();
+        }
+      }
+      throw e;
+    }
+  }
+
+  // ===========================================================================
+  // UPDATE
+  // ===========================================================================
+
+  /**
+   * Правка существующего экрана: название, подразделение, логин и PIN
+   * его DISPLAY-учётки. До этой ручки поменять подразделение можно было
+   * только «удалить и завести заново» — а это рвало учётку вместе с её
+   * логином (уникальный индекс) и всю историю событий монитора.
+   *
+   * Экран — это по-прежнему ПАРА `(DisplayScreenConfig, Employee)`,
+   * поэтому правка идёт одной транзакцией на обе записи:
+   *
+   *   config   → name, companyDivisionId
+   *   employee → login, pinHash, fullName («Display: <имя экрана>»)
+   *
+   * `fullName` пересобирается при смене имени намеренно: это же имя
+   * видно в `auth/me` и в журнале событий, и разъехавшееся «Display:
+   * старое имя» у переименованной железки — прямой путь к неверной
+   * атрибуции в аудите.
+   *
+   * `isActive` здесь НЕ меняется — за включение/выключение отвечает
+   * контур архива (`archiveMany`/`restoreMany`), который синхронно
+   * гасит и зажигает `Employee.active`. Второй путь к тому же флагу
+   * неизбежно разъехался бы с учёткой (см. `UpdateDisplayScreenSchema`).
+   *
+   * Порядок шагов такой же, как в `create()`: тяжёлый bcrypt и
+   * read-only проверка карточки подразделения — ДО открытия
+   * транзакции; `P2002` по логину транслируется в стабильный
+   * `DISPLAY_LOGIN_TAKEN` (409), чтобы UI подсветил поле.
+   */
+  async update(
+    id: string,
+    dto: UpdateDisplayScreenDto,
+    actorEmployeeId?: string | null,
+  ): Promise<DisplayScreenDetailDto> {
+    const existing = await this.prisma.displayScreenConfig.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        companyDivisionId: true,
+        employeeId: true,
+        employee: { select: { login: true } },
+      },
+    });
+    if (!existing) throw new DisplayScreenNotFoundException();
+
+    if (dto.companyDivisionId) {
+      const card = await this.prisma.companyDivision.findUnique({
+        where: { id: dto.companyDivisionId },
+        select: { id: true },
+      });
+      if (!card) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'COMPANY_DIVISION_NOT_FOUND',
+          message: 'Подразделение не найдено',
+        });
+      }
+    }
+
+    // Хеширование PIN'а — вне транзакции (~50-200 мс), как и в create().
+    const pinHash = dto.pin
+      ? await bcrypt.hash(dto.pin, PIN_HASH_COST)
+      : null;
+
+    const configData: Prisma.DisplayScreenConfigUpdateInput = {};
+    if (dto.name !== undefined) configData.name = dto.name;
+    if (dto.companyDivisionId !== undefined) {
+      configData.companyDivision = { connect: { id: dto.companyDivisionId } };
+    }
+
+    const employeeData: Prisma.EmployeeUpdateInput = {};
+    if (dto.login !== undefined) employeeData.login = dto.login;
+    if (pinHash) employeeData.pinHash = pinHash;
+    if (dto.name !== undefined) employeeData.fullName = `Display: ${dto.name}`;
+
+    try {
+      const config = await this.prisma.$transaction(async (tx) => {
+        if (Object.keys(employeeData).length > 0) {
+          await tx.employee.update({
+            where: { id: existing.employeeId },
+            data: employeeData,
+          });
+        }
+        const updated = await tx.displayScreenConfig.update({
+          where: { id },
+          data: configData,
+          include: {
+            employee: { select: { id: true, login: true } },
+            companyDivision: {
+              select: { id: true, code: true, name: true },
+            },
+          },
+        });
+        await this.audit.log(
+          {
+            event: 'DISPLAY_SCREEN_UPDATED',
+            entityType: 'DISPLAY_SCREEN',
+            entityId: id,
+            employeeId: actorEmployeeId ?? null,
+            payload: {
+              // Пишем «было → стало» только по реально изменённым
+              // полям. PIN — исключительно флагом: ни сам код, ни его
+              // хеш в журнале не место.
+              ...(dto.name !== undefined && dto.name !== existing.name
+                ? { nameFrom: existing.name, nameTo: dto.name }
+                : {}),
+              ...(dto.companyDivisionId !== undefined &&
+              dto.companyDivisionId !== existing.companyDivisionId
+                ? {
+                    companyDivisionFrom: existing.companyDivisionId,
+                    companyDivisionTo: dto.companyDivisionId,
+                  }
+                : {}),
+              ...(dto.login !== undefined && dto.login !== existing.employee.login
+                ? { loginFrom: existing.employee.login, loginTo: dto.login }
+                : {}),
+              ...(pinHash ? { pinChanged: true } : {}),
+              employeeId: existing.employeeId,
+            },
+          },
+          tx,
+        );
+        return updated;
+      });
+
+      this.logger.log(
+        `event=display-screen.update id=${config.id} ` +
+          `companyDivisionId=${config.companyDivisionId ?? 'null'} ` +
+          `login=${config.employee.login} pinChanged=${pinHash ? 1 : 0}`,
+      );
+
+      return toListDto({
+        id: config.id,
+        name: config.name,
+        companyDivisionId: config.companyDivisionId,
+        companyDivision: config.companyDivision
+          ? {
+              id: config.companyDivision.id,
+              code: config.companyDivision.code,
+              name: config.companyDivision.name,
+            }
+          : null,
+        isActive: config.isActive,
+        createdAt: config.createdAt,
+        updatedAt: config.updatedAt,
+        employeeId: config.employee.id,
+        employeeLogin: config.employee.login,
       });
     } catch (e) {
       if (

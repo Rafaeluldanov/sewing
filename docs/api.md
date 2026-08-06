@@ -2144,6 +2144,15 @@ DTO: `packages/shared/src/shopfloor.ts`. ADR: 0007, 0013.
 | ----- | --------------------------------- | ------------------ | -------- |
 | GET   | `/api/display-screens`            | SHOP_MANAGER, ADMIN | Список конфигов. Каждая запись отдаёт `companyDivisionId` и краткие реквизиты `companyDivision { id, code, name }` (`null` — для конфигов без привязки к карточке). |
 | POST  | `/api/display-screens`            | SHOP_MANAGER, ADMIN | Body `CreateDisplayScreenDto`. В одной транзакции создаёт `Employee(role=DISPLAY)` + `DisplayScreenConfig` (1:1 по `employeeId`). Тело обязательно содержит `companyDivisionId` (FK на `CompanyDivision`); если карточка не найдена — 400 `COMPANY_DIVISION_NOT_FOUND`. |
+| GET   | `/api/display-screens/:id`        | SHOP_MANAGER, ADMIN | Один экран для карточки `/admin/display-screens/[id]`. Форма ответа — та же, что у элемента списка. Нет экрана — 404 `DISPLAY_SCREEN_NOT_FOUND`. |
+| PATCH | `/api/display-screens/:id`        | SHOP_MANAGER, ADMIN | Body `UpdateDisplayScreenDto` (`name?`, `companyDivisionId?`, `login?`, `pin?` — все необязательны, схема `.strict()`). Одной транзакцией правит ПАРУ «конфиг + учётка»: `DisplayScreenConfig.name/companyDivisionId` и `Employee.login/pinHash/fullName` (`fullName` пересобирается как `Display: <имя>`). Ошибки: 404 `DISPLAY_SCREEN_NOT_FOUND`, 400 `COMPANY_DIVISION_NOT_FOUND`, 409 `DISPLAY_LOGIN_TAKEN`. Пишет `AuditLog(DISPLAY_SCREEN_UPDATED)` с «было → стало» только по изменившимся полям; PIN — флагом `pinChanged: true`, без значения и хеша. |
+
+`isActive` в PATCH сознательно НЕ принимается (`.strict()` вернёт 400 на
+попытку): включением и выключением экрана заведует контур архива
+(`POST /archive|restore` ниже), который синхронно гасит и зажигает
+DISPLAY-учётку. Второй путь к тому же флагу разъехался бы с
+`Employee.active`. Удаление — только `POST /purge` из архива (там же
+освобождается логин учётки).
 
 DTO: `packages/shared/src/display-screens.ts`.
 

@@ -888,6 +888,21 @@ export class DisplayLoginTakenException extends BusinessException {
   }
 }
 
+/**
+ * Экран не найден (`GET|PATCH /api/display-screens/:id`). Отдельный код
+ * нужен карточке `/admin/display-screens/[id]`: она превращает 404 в
+ * `notFound()`, а не в общий error-box.
+ */
+export class DisplayScreenNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'DISPLAY_SCREEN_NOT_FOUND',
+      'Display-экран не найден',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Справочник ролей (`/admin/roles`, `AppRolesService`)
 // ---------------------------------------------------------------------------

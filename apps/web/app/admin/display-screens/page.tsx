@@ -123,12 +123,14 @@ export default async function AdminDisplayScreensListPage({
 }
 
 /**
- * Куда «проваливается» строка экрана. Отдельной карточки экрана в
- * админке нет, поэтому drill-in = открыть то, что этот экран
- * показывает в зале: `/shopfloor/display` в области его подразделения
- * (`?divisionCode=<CompanyDivision.code>`, см.
+ * Что показывает этот экран в зале: `/shopfloor/display` в области его
+ * подразделения (`?divisionCode=<CompanyDivision.code>`, см.
  * `app/shopfloor/display/page.tsx`). Экран без подразделения ведёт на
  * общий агрегат по всем активным заказам.
+ *
+ * Раньше это был и drill-in по строке — карточки экрана не
+ * существовало. Теперь строка ведёт в карточку (`screenCardHref`), а
+ * витрина осталась отдельной ссылкой-действием в последней колонке.
  */
 function screenBoardHref(s: DisplayScreenListItemDto): string {
   return s.companyDivision
@@ -136,6 +138,16 @@ function screenBoardHref(s: DisplayScreenListItemDto): string {
         s.companyDivision.code,
       )}`
     : '/shopfloor/display';
+}
+
+/**
+ * Карточка экрана — правка названия, подразделения, логина и PIN'а
+ * его DISPLAY-учётки (`/admin/display-screens/[id]`). Это и есть
+ * drill-in по строке: клик по строке в остальных справочниках админки
+ * открывает именно карточку, а не «что оно показывает».
+ */
+function screenCardHref(s: DisplayScreenListItemDto): string {
+  return `/admin/display-screens/${s.id}`;
 }
 
 function DisplayScreensTable({
@@ -185,9 +197,9 @@ function DisplayScreensTable({
       render: (s) => <BulkArchiveRowActions id={s.id} />,
     },
     {
-      // Явная ссылка-афформанс к drill-in по строке (`rowHref` ниже):
-      // без неё «провалиться» можно было бы только слепым кликом, без
-      // клавиатуры и без открытия в новой вкладке.
+      // Ссылка на саму витрину. Drill-in по строке ведёт в карточку
+      // экрана, поэтому «Монитор» здесь — не афформанс к `rowHref`, а
+      // самостоятельное действие «посмотреть, что оно показывает».
       key: 'open',
       header: '',
       isAction: true,
@@ -206,14 +218,12 @@ function DisplayScreensTable({
         columns={columns}
         rowKey={(s) => s.id}
         /*
-          Drill-in: карточки экрана в админке нет, поэтому «провалиться»
-          в строку = открыть то, что этот экран показывает в зале —
-          `/shopfloor/display` в области его подразделения
-          (`?divisionCode=<CompanyDivision.code>`, см.
-          `app/shopfloor/display/page.tsx`). Экран без подразделения
-          ведёт на общий агрегат по всем активным заказам.
+          Drill-in: строка открывает карточку экрана
+          (`/admin/display-screens/[id]`) — там правятся название,
+          подразделение, логин и PIN учётки. Ссылка на саму витрину
+          вынесена отдельной колонкой «Монитор» выше.
         */
-        rowHref={screenBoardHref}
+        rowHref={screenCardHref}
         emptyContent={
           <AdminEmptyState
             icon={
