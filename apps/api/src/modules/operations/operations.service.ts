@@ -978,12 +978,18 @@ export class OperationsService {
    * Это «цена операции внутри заказа»: одна операция «Оверлок» на всю
    * систему, но в конкретном тираже своя расценка — справочник операции
    * при этом НЕ меняется. Для `SALARY_ONLY` сделки нет (оклад).
+   *
+   * `routeStepIndex` (опционально): позиция шага в маршруте заказа
+   * (`OrderRouteStep.index`). Нужен, когда операция встречается в
+   * маршруте несколько раз (чередующиеся ОТК/ВТО) — у каждого прохода
+   * своя расценка. Без него берётся первый проход.
    */
   async resolveRate(
     operationId: string,
     sizeId: string,
     tx?: Prisma.TransactionClient,
     orderId?: string | null,
+    routeStepIndex?: number | null,
   ): Promise<Prisma.Decimal | null> {
     const client: Prisma.TransactionClient | PrismaService = tx ?? this.prisma;
     const op = await client.operation.findUnique({
@@ -996,12 +1002,23 @@ export class OperationsService {
     // СПОСОБ ОПЛАТЫ (оклад ⇄ сделка, `pricingModeOverride`), и расценку
     // (`rateOverride` / поразмерный `OrderRouteStepSizeOverride.rate`).
     // Действует только внутри заказа — справочник операции не трогается.
-    // `findFirst`, а не `findUnique`: на `OrderRouteStep` нет уникального
-    // индекса (orderId, operationId), но операция в маршруте встречается
-    // не более одного раза. Поразмерный оверрайд берём сразу по `sizeId`.
+    //
+    // Операция в маршруте может встречаться НЕСКОЛЬКО раз: чередующиеся
+    // ОТК/ВТО — штатный сценарий (фича «Повтор операции в маршруте»,
+    // идентичность шага = позиция). У каждого прохода своя расценка,
+    // поэтому шаг адресуем по `index` — `@@unique([orderId, index])`.
+    // Без индекса берём ПЕРВЫЙ проход по возрастанию `index`: раньше
+    // здесь был `findFirst` без сортировки, и обоим проходам доставалась
+    // расценка случайной строки снимка — факт расходился с планом в
+    // любую сторону.
     const override = orderId
       ? await client.orderRouteStep.findFirst({
-          where: { orderId, operationId },
+          where: {
+            orderId,
+            operationId,
+            ...(routeStepIndex != null ? { index: routeStepIndex } : {}),
+          },
+          orderBy: { index: 'asc' },
           select: {
             pricingModeOverride: true,
             rateOverride: true,

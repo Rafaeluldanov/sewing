@@ -802,11 +802,19 @@ export class EarningsService {
       select: { id: true, code: true, pricingMode: true },
     });
     if (!op) return;
-    // Источник истины — Operation.pricingMode (см. ADR-0005,
-    // `docs/domain.md §16a`):
-    //   SALARY_ONLY → нет сдельной ставки, ничего не создаём;
-    //   FIXED / BY_SIZE → создаём начисление по resolveRate.
-    if (op.pricingMode === 'SALARY_ONLY') return;
+    // Способ оплаты НЕ читаем здесь из справочника: маршрут заказа может
+    // переопределить его на сделку (`OrderRouteStep.pricingModeOverride`,
+    // кнопка «Редактировать маршрут заказа»). Гейт по `op.pricingMode`
+    // выходил раньше, чем кто-либо смотрел в снимок, поэтому окладная в
+    // справочнике операция, переведённая в заказе на сделку, не давала
+    // начисления вовсе — а план те же деньги считал и клал в
+    // себестоимость. Швея за тираж не получала ничего.
+    //
+    // Единственный источник истины по эффективному режиму и ставке —
+    // `OperationsService.resolveRate`: он сам вернёт `null` для оклада
+    // (в том числе когда заказ переводит сделку ОБРАТНО на оклад), и
+    // ниже мы на этом `null` и выходим.
+    //
     // CUT_CUT покрывается immediate-веткой при выпуске паспорта
     // (`createImmediateForCutter`), здесь — только пошив.
     if (op.code === 'CUT_CUT') return;
@@ -831,11 +839,19 @@ export class EarningsService {
         operationId: op.id,
         currentRouteStepIndex: passportForOrder?.currentRouteStepIndex ?? null,
       }));
+    // Расценку берём у ТОГО прохода, который сейчас закрывают: при
+    // чередующихся ОТК/ВТО у проходов могут быть разные `rateOverride`.
+    const routeStepIndex = await this.resolveRouteStepIndexForPass(tx, {
+      orderId: passportForOrder?.orderId ?? null,
+      operationId: op.id,
+      passOrdinal,
+    });
     const rate = await this.operations.resolveRate(
       op.id,
       args.sizeId,
       tx,
       passportForOrder?.orderId ?? null,
+      routeStepIndex,
     );
     if (!rate) return;
 
@@ -1489,6 +1505,38 @@ export class EarningsService {
       (s) => s.index === args.currentRouteStepIndex,
     );
     return at > 0 ? at : 0;
+  }
+
+  /**
+   * Позиция шага в маршруте заказа (`OrderRouteStep.index`) для КОНКРЕТНОГО
+   * прохода операции.
+   *
+   * Нужна расценке: при чередующихся ОТК/ВТО одна операция стоит в
+   * маршруте дважды, и у проходов могут быть разные `rateOverride`.
+   * Считаем от уже вычисленного `passOrdinal`, а не от
+   * `currentRouteStepIndex` напрямую: у ОТК позиция паспорта не
+   * двигается (`QC_PASSED` её не меняет), и номер прохода приходит
+   * снаружи — по числу пройденных проверок.
+   *
+   * `null` — операция в маршруте одна (или заказа нет): адресовать
+   * нечего, расценка берётся первым проходом.
+   */
+  private async resolveRouteStepIndexForPass(
+    tx: Prisma.TransactionClient,
+    args: {
+      orderId: string | null;
+      operationId: string;
+      passOrdinal: number;
+    },
+  ): Promise<number | null> {
+    if (!args.orderId) return null;
+    const occurrences = await tx.orderRouteStep.findMany({
+      where: { orderId: args.orderId, operationId: args.operationId },
+      orderBy: { index: 'asc' },
+      select: { index: true },
+    });
+    if (occurrences.length < 2) return null;
+    return occurrences[args.passOrdinal]?.index ?? occurrences[0].index;
   }
 
   private async safeCreate(

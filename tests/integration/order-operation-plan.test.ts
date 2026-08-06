@@ -1216,6 +1216,63 @@ describeWithDb('integration — order operation plan (Этап 2)', () => {
       await t.prisma.orderRouteStep.count({ where: { orderId } }),
     ).toBe(0);
   });
+
+  test('правка расценки в заказе доезжает до плана — и в расчёте, и после него', async () => {
+    const op = await createOperation(t, {
+      code: 'OP-OVR',
+      name: 'Пошив',
+      pricingMode: 'FIXED',
+      fixedRate: 50,
+      timeNormMode: 'FIXED',
+      timeNormSec: 60,
+    });
+    const route = await createRoute(t, {
+      code: 'R-OVR',
+      operationIds: [op.id],
+    });
+    const orderId = await createOrder(t, seed, cookies.manager, {
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 200 }],
+      routeTemplateId: route.id,
+    });
+
+    // База: 200 шт × 50 ₽ по справочнику.
+    const before = await t.prisma.order.findUnique({ where: { id: orderId } });
+    expect(Number(before!.operationCostPlanRub)).toBeCloseTo(10000, 2);
+
+    const step = await t.prisma.orderRouteStep.findFirstOrThrow({
+      where: { orderId, operationId: op.id },
+      select: { id: true },
+    });
+    await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/route-overrides`)
+      .set('Cookie', cookies.manager)
+      .send({ steps: [{ stepId: step.id, rateOverride: 65 }] })
+      .expect(200);
+
+    // До расчёта план и раньше подхватывал переопределение — расчёт по
+    // шаблону подмешивает per-order оверрайды снимка.
+    const afterDraft = await t.prisma.order.findUnique({
+      where: { id: orderId },
+    });
+    expect(Number(afterDraft!.operationCostPlanRub)).toBeCloseTo(13000, 2);
+
+    // После расчёта план тоже обязан двигаться: «заморожен» он не был
+    // никогда — правки количества и маршрута его пересчитывают. Статус
+    // ставим напрямую: тест про пересчёт плана, а не про сам расчёт.
+    await t.prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'CALCULATION_DONE' },
+    });
+    await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/route-overrides`)
+      .set('Cookie', cookies.manager)
+      .send({ steps: [{ stepId: step.id, rateOverride: 80 }] })
+      .expect(200);
+    const afterCalc = await t.prisma.order.findUnique({
+      where: { id: orderId },
+    });
+    expect(Number(afterCalc!.operationCostPlanRub)).toBeCloseTo(16000, 2);
+  });
 });
 
 // ===========================================================================

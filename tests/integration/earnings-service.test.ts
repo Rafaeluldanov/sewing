@@ -203,6 +203,88 @@ describeWithDb('integration — EarningsService and OperationEntry single-write 
     expect(e.qty).toBe(4);
   });
 
+  test('операция, переведённая в заказе с оклада на сделку, оплачивается', async () => {
+    // Окладная в справочнике операция — сдельного начисления по ней нет.
+    const salaryOp = await t.prisma.operation.create({
+      data: {
+        code: 'OP-SALARY-TO-PIECE',
+        name: 'ВТО',
+        category: 'SEWING',
+        sortOrder: 900,
+        pricingMode: 'SALARY_ONLY',
+        timeNormMode: 'FIXED',
+        timeNormSec: 60,
+      },
+      select: { id: true },
+    });
+    const order = await t.prisma.order.create({
+      data: {
+        number: `O-EARN-MODE-${Math.random().toString(36).slice(2, 8)}`,
+        orderDate: new Date(),
+        color: seed.product.color,
+        status: 'IN_PRODUCTION',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
+        items: {
+          create: {
+            productId: seed.product.id,
+            sizeId: seed.sizes.M,
+            qtyPlan: 100,
+          },
+        },
+        // В ЗАКАЗЕ шаг переведён на сделку по 12 ₽/шт — это и есть кнопка
+        // «Редактировать маршрут заказа». Справочник операции не тронут.
+        routeSteps: {
+          create: {
+            index: 0,
+            operationId: salaryOp.id,
+            pricingModeOverride: 'FIXED',
+            rateOverride: '12',
+          },
+        },
+      },
+      select: { id: true },
+    });
+    const passport = await t.prisma.passport.create({
+      data: {
+        number: `P-EARN-MODE-${Math.random().toString(36).slice(2, 8)}`,
+        qrCode: `passport:earn-mode-${Math.random().toString(36).slice(2, 8)}`,
+        orderId: order.id,
+        productId: seed.product.id,
+        sizeId: seed.sizes.M,
+        color: seed.product.color,
+        rollNumber: 'R-EARN',
+        cutDate: new Date(),
+        qtyPlan: 100,
+        qtyCut: 100,
+        qtyGood: 100,
+        cutterId: seed.employees.cutter.id,
+        creatorId: seed.employees.cutter.id,
+      },
+      select: { id: true },
+    });
+
+    await t.prisma.$transaction(async (tx) => {
+      await earnings.createPendingForCompletedOperation(tx, {
+        passportId: passport.id,
+        operationId: salaryOp.id,
+        employeeId: seed.employees.seamstress.id,
+        productId: seed.product.id,
+        sizeId: seed.sizes.M,
+        qty: 100,
+        sourceEventId: null,
+      });
+    });
+
+    // До фикса гейт по справочному `pricingMode` выходил раньше, чем
+    // кто-либо смотрел в снимок маршрута: начисления не было вовсе, при
+    // том что план те же 1200 ₽ считал и клал в себестоимость.
+    const rows = await t.prisma.operationEntry.findMany({
+      where: { passportId: passport.id },
+    });
+    expect(rows).toHaveLength(1);
+    expect(Number(rows[0]!.amount)).toBeCloseTo(1200, 2);
+  });
+
   // ---------------------------------------------------------------------------
   // 3. createPendingForCompletedOperation — повторный trigger даёт 1 строку
   //    (composite-key идемпотентность; safeCreate глотает P2002).
