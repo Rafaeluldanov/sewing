@@ -225,7 +225,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
   // Scenario A: no extra techcard-only lines
   // -------------------------------------------------------------------------
 
-  test('category-driven: лишние строки техкарты (Тафта/Синтепон) НЕ попадают в потребность', async () => {
+  test('category-driven: строки спецификации без нормы всё равно попадают в потребность', async () => {
     const cat = await createCategoryFull();
     const main = findParam(cat, 'Основное полотно');
     const molnija = findParam(cat, 'Молния');
@@ -329,16 +329,27 @@ describeWithDb('integration — workshop needs category-driven', () => {
       resolvedColorText: string | null;
     }>;
 
-    // 4a. Лишних строк нет: всего две потребности (MAIN_FABRIC и PACKAGING).
+    // 4a. Правило 05.08 (коммит 3e7faa0): что стоит в СПЕЦИФИКАЦИИ заказа,
+    //     то и идёт в его потребность — независимо от того, есть ли под
+    //     роль заполненный параметр номенклатуры. Раньше строка без нормы
+    //     молча пропадала из закупки, и на 02-00010 так потерялись Нитки,
+    //     Молния и Составник. Поэтому Тафта (LINING без значений) и
+    //     Синтепон (FILLER — такой роли в категории нет вовсе) в
+    //     потребность ПОПАДАЮТ, из спецификации заказа.
     const sourceTypes = needs.map((n) => n.sourceType).sort();
     expect(sourceTypes).toEqual([
+      'ORDER_MATERIAL_REQUIREMENT',
+      'ORDER_MATERIAL_REQUIREMENT',
       'PATTERN_PARAMETER_NORM',
       'PATTERN_SIZE_PARAMETER_VALUE',
     ]);
-    // Никакой строки Тафта / Синтепон в потребности нет.
     const names = needs.map((n) => n.sourceName);
-    expect(names).not.toContain('Тафта');
-    expect(names).not.toContain('Синтепон');
+    expect(names).toContain('Тафта');
+    expect(names).toContain('Синтепон');
+    // Двойного счёта при этом нет: роли, закрытые параметром, приходят
+    // ровно одной строкой — из нормы, а не из спецификации тоже.
+    expect(needs.filter((n) => n.materialRole === 'MAIN_FABRIC')).toHaveLength(1);
+    expect(needs.filter((n) => n.materialRole === 'PACKAGING')).toHaveLength(1);
 
     // 4b. Описание основного полотна обогащено из техкарты (Дюспа,
     //     90 г/м², бордо, ширина 140 см).
@@ -362,6 +373,71 @@ describeWithDb('integration — workshop needs category-driven', () => {
     // DTO-поля enrichment проброшены.
     expect(molnija2!.hardwareSizeText).toBe('60 см');
     expect(molnija2!.hardwareMaterialText).toBe('пластик');
+  });
+
+  test('несколько строк одной роли: заполненная норма не уносит остальную фурнитуру', async () => {
+    const cat = await createCategoryFull();
+    const molnija = findParam(cat, 'Молния');
+    const patternId = await createPattern({
+      categoryId: cat.id,
+      article: 'P-CAT-MULTI',
+    });
+
+    // В номенклатуре заполнена РОВНО ОДНА норма роли PACKAGING — «Молния».
+    // Роль PACKAGING при этом объединяет 17 подтипов, и в спецификации
+    // заказа под ней стоят ещё шнур и концевик.
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/parameter-norms`)
+      .set('Cookie', t.adminCookie)
+      .send({ norms: [{ categoryParameterId: molnija.id, qtyPerItem: '1' }] })
+      .expect(200);
+
+    const tcId = await createTechCard({
+      name: 'TC multi-role',
+      materialLines: [
+        {
+          name: 'Молния',
+          unit: 'шт',
+          qtyPerUnit: '1',
+          materialRole: 'PACKAGING',
+          hardwareSizeText: '60 см',
+        },
+        { name: 'Шнур', unit: 'м', qtyPerUnit: '1.2', materialRole: 'PACKAGING' },
+        { name: 'Концевик', unit: 'шт', qtyPerUnit: '2', materialRole: 'PACKAGING' },
+      ],
+    });
+
+    const orderId = await createOrder({
+      techCardId: tcId,
+      patternItemId: patternId,
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 500 }],
+      color: 'чёрный',
+    });
+
+    const calc = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+
+    const needs = calc.body.needs as Array<{
+      sourceName: string;
+      materialRole: string | null;
+      calculatedQty: string;
+    }>;
+    const byName = new Map(needs.map((n) => [n.sourceName, n]));
+
+    // Все три материала в потребности. До фикса роль PACKAGING считалась
+    // «закрытой» одной нормой, и шнур с концевиком выпадали из закупки
+    // молча — 600 м и 1000 шт не заказывались вовсе.
+    expect(byName.has('Молния')).toBe(true);
+    expect(byName.has('Шнур')).toBe(true);
+    expect(byName.has('Концевик')).toBe(true);
+    // Норма даёт молнию ровно один раз — двойного счёта нет.
+    expect(needs.filter((n) => n.sourceName === 'Молния')).toHaveLength(1);
+    expect(Number(byName.get('Молния')!.calculatedQty)).toBeCloseTo(500, 4);
+    expect(Number(byName.get('Шнур')!.calculatedQty)).toBeCloseTo(600, 4);
+    expect(Number(byName.get('Концевик')!.calculatedQty)).toBeCloseTo(1000, 4);
   });
 
   // -------------------------------------------------------------------------

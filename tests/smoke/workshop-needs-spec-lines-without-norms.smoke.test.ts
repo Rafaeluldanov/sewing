@@ -13,10 +13,14 @@
  * Сторожим ровно две вещи:
  *   1. гейта по `isManual` в этой ветке БОЛЬШЕ НЕТ — считаются все строки
  *      спецификации, и шаблонные тоже;
- *   2. оба гейта от двойного счёта на месте: роль, закрытая параметром
- *      номенклатуры (`rolesCoveredByPattern`), и строка, уже ушедшая
- *      обогащением в найденную норму (`enrichedLineIds`) — совпасть она могла
- *      и по имени, при пустой роли.
+ *   2. гейты от двойного счёта на месте и различают СИЛУ покрытия роли:
+ *      геометрия лекала (`rolesCoveredByGeometry` — площадь и погонные метры
+ *      по размерам) гасит строку всегда, потому что расход выводится из
+ *      лекала; норма фурнитуры (`rolesCoveredByQtyNorm`) — только пока строка
+ *      с этой ролью в спецификации одна, иначе роль PACKAGING с одной
+ *      заполненной нормой уносила бы из потребности всю остальную фурнитуру;
+ *      плюс строка, уже ушедшая обогащением в найденную норму
+ *      (`enrichedLineIds`) — совпасть она могла и по имени, при пустой роли.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -49,12 +53,24 @@ describe('потребность цеха — строки спецификац�
     expect(branch).not.toMatch(/if \(!line\.isManual\) continue;/);
   });
 
-  test('оба гейта от двойного счёта на месте', () => {
+  test('гейты от двойного счёта на месте', () => {
     const branch = fallbackBranch();
+    // Геометрия лекала закрывает роль целиком — строка гасится всегда.
     expect(branch).toMatch(
-      /rolesCoveredByPattern\.has\(line\.materialRole\)\s*\)?\s*\n?\s*continue;/,
+      /rolesCoveredByGeometry\.has\(role\)\)\s*continue;/,
     );
+    // Норма фурнитуры — только пока строка с этой ролью одна.
+    expect(branch).toMatch(/rolesCoveredByQtyNorm\.has\(role\)/);
+    expect(branch).toMatch(/specLinesByRole\.get\(role\) \?\? 0\) <= 1/);
     expect(branch).toMatch(/enrichedLineIds\.has\(line\.id\)\) continue;/);
+  });
+
+  test('роли по геометрии и по норме фурнитуры собираются раздельно', () => {
+    // Слить их обратно в один набор — значит вернуть дефект: одна норма
+    // «Молния» уносила из потребности шнур и концевики той же роли.
+    expect(src).toMatch(/const rolesCoveredByGeometry = new Set<string>\(\);/);
+    expect(src).toMatch(/const rolesCoveredByQtyNorm = new Set<string>\(\);/);
+    expect(src).not.toMatch(/rolesCoveredByPattern/);
   });
 
   test('обогащённые строки собираются по всем трём источникам норм', () => {

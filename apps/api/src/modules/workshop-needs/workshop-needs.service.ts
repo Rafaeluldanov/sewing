@@ -1388,22 +1388,38 @@ export class WorkshopNeedsService {
     let methodMaterialArea = 0;
     let methodLinearBySize = 0;
 
-    // Роли, которые УЖЕ закрыты параметрами номенклатуры: площадью, нормой
-    // фурнитуры или погонными метрами. Строка заказа с такой ролью считается
-    // по номенклатуре (а её правка нормы доезжает через `matchedLine` —
-    // `orderEditedNormPerUnit`), поэтому считать её ВТОРОЙ раз нельзя: это
-    // был бы двойной счёт в закупке.
-    const rolesCoveredByPattern = new Set<string>();
-    for (const role of areasByRole.keys()) rolesCoveredByPattern.add(role);
+    // Роли, которые УЖЕ закрыты параметрами номенклатуры. Строка заказа с
+    // такой ролью считается по номенклатуре (а её правка нормы доезжает
+    // через `matchedLine` — `orderEditedNormPerUnit`), поэтому считать её
+    // ВТОРОЙ раз нельзя: это был бы двойной счёт в закупке.
+    //
+    // Роли разделены по СИЛЕ покрытия, и это не косметика:
+    //
+    //   - площадь лекала и погонные метры по размерам закрывают роль
+    //     ЦЕЛИКОМ: расход выводится из геометрии лекала, а не из строки
+    //     спецификации. Вторая строка той же роли посчиталась бы по той же
+    //     площади — это прямой двойной счёт, поэтому такие роли гасят
+    //     строку всегда;
+    //
+    //   - норма фурнитуры (QTY_PER_ITEM) закрывает КОНКРЕТНЫЙ материал, а
+    //     не роль. Роль PACKAGING объединяет 17 подтипов (молния, кнопка,
+    //     люверс, шнур, концевик…), и схема прямо допускает несколько норм
+    //     с одинаковым `roleKey`, различающихся `categoryParameterId`.
+    //     Гасить по роли значило: заполнена одна норма «Молния» — и шнур с
+    //     концевиками из спецификации не попадают в потребность вовсе, без
+    //     предупреждения.
+    const rolesCoveredByGeometry = new Set<string>();
+    for (const role of areasByRole.keys()) rolesCoveredByGeometry.add(role);
+    for (const values of linearByParam.values()) {
+      for (const v of values) rolesCoveredByGeometry.add(v.roleKey);
+    }
     // Намеренно `.filter().forEach()`, а не `for … of`: сигнатурой цикла по
     // нормам smoke-тест находит ГЛАВНЫЙ цикл и проверяет порядок гейта внутри
     // него — второе вхождение увело бы его сюда, на безобидный сбор ролей.
+    const rolesCoveredByQtyNorm = new Set<string>();
     (order.patternItem?.parameterNorms ?? [])
       .filter((n) => n.inputTypeSnapshot === 'QTY_PER_ITEM')
-      .forEach((n) => rolesCoveredByPattern.add(n.roleKey));
-    for (const values of linearByParam.values()) {
-      for (const v of values) rolesCoveredByPattern.add(v.roleKey);
-    }
+      .forEach((n) => rolesCoveredByQtyNorm.add(n.roleKey));
 
     // -----------------------------------------------------------------------
     // Фича «Расцветки»: считаем ПО КАЖДОЙ группе-расцветке. Внутри — те
@@ -1558,15 +1574,38 @@ export class WorkshopNeedsService {
       // строки убираются ИЗ СПЕЦИФИКАЦИИ, а не прячутся в расчёте.
       //
       // От двойного счёта защищают два гейта:
-      //   - роль закрыта параметром номенклатуры (`rolesCoveredByPattern`) —
-      //     строка уже посчитана выше, её правка доехала через `matchedLine`;
+      //   - роль закрыта параметром номенклатуры — строка уже посчитана
+      //     выше, её правка доехала через `matchedLine`;
       //   - строка уже ушла ОБОГАЩЕНИЕМ в найденную норму (`enrichedLineIds`)
       //     — совпасть она могла и по имени, при пустой или чужой роли.
       // Для legacy-заказов ветка не нужна: там `!isCategoryDriven` считает
       // каждую строку источника.
+      //
+      // Норма фурнитуры гасит строку только пока строка с этой ролью в
+      // спецификации ОДНА: тогда норма её и представляет, даже если имена
+      // разошлись и обогащение не сработало. Как только строк несколько —
+      // однозначного соответствия нет, и гасим ровно ту, что реально ушла
+      // в норму. Остальные считаются по спецификации: правило «что стоит в
+      // спецификации заказа, то и идёт в потребность» важнее экономии на
+      // строке, а лишнее видно в списке и убирается руками — в отличие от
+      // недостачи, которая всплывает уже на раскрое.
+      const specLinesByRole = new Map<string, number>();
+      for (const line of g.sourceLines) {
+        if (!line.materialRole) continue;
+        specLinesByRole.set(
+          line.materialRole,
+          (specLinesByRole.get(line.materialRole) ?? 0) + 1,
+        );
+      }
       if (isCategoryDriven) {
         for (const line of g.sourceLines) {
-          if (line.materialRole && rolesCoveredByPattern.has(line.materialRole))
+          const role = line.materialRole;
+          if (role && rolesCoveredByGeometry.has(role)) continue;
+          if (
+            role &&
+            rolesCoveredByQtyNorm.has(role) &&
+            (specLinesByRole.get(role) ?? 0) <= 1
+          )
             continue;
           if (enrichedLineIds.has(line.id)) continue;
           const computedManual = this.computeLine({
