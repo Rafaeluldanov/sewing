@@ -54,6 +54,7 @@
     "./tech-card-parameters": "./src/tech-card-parameters.ts",
     "./order-tech-cards": "./src/order-tech-cards.ts",
     "./norm-purchase": "./src/norm-purchase.ts",
+    "./purchase-units": "./src/purchase-units.ts",
     "./pattern-norms": "./src/pattern-norms.ts",
     "./patterns": "./src/patterns.ts",
     "./pattern-categories": "./src/pattern-categories.ts",

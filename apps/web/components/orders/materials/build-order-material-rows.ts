@@ -512,16 +512,7 @@ function resolveStatus(
     return { label: 'Нужен цвет', tone: 'warning', secondary: null, warnings };
   }
 
-  // 2. Нет цены
-  if (
-    need.quotedPrice == null ||
-    need.quotedPrice === '' ||
-    Number(need.quotedPrice) <= 0
-  ) {
-    return { label: 'Нет цены', tone: 'warning', secondary: null, warnings };
-  }
-
-  // 3. Полностью принято?
+  // 2. Полностью принято?
   if (targetQtyNum > 0 && receivedQtyNum >= targetQtyNum) {
     const secondary =
       cutRow?.manuallyUnblocked === true
@@ -538,7 +529,7 @@ function resolveStatus(
     };
   }
 
-  // 4. Готово к крою (placedQty покрывает целевую)
+  // 3. Готово к крою (placedQty покрывает целевую)
   if (targetQtyNum > 0 && placedQtyNum >= targetQtyNum) {
     return {
       label: 'Готово к крою',
@@ -548,7 +539,7 @@ function resolveStatus(
     };
   }
 
-  // 5. Активный PO
+  // 4. Активный PO
   if (activePo) {
     const secondary =
       cutRow?.manuallyUnblocked === true
@@ -568,7 +559,7 @@ function resolveStatus(
     return { label: 'Заказан', tone: 'info', secondary, warnings };
   }
 
-  // 6. Manual arrival override — если PO нет, но overrides есть
+  // 5. Manual arrival override — если PO нет, но overrides есть
   if (cutRow?.manuallyUnblocked === true) {
     return {
       label: 'Разблокировано вручную',
@@ -576,6 +567,17 @@ function resolveStatus(
       secondary: null,
       warnings,
     };
+  }
+
+  // 6. Нет цены — НИЖЕ фактических статусов: смена единицы закупки
+  // обнуляет цену, и принятый по факту материал не должен из-за этого
+  // терять «Принято»/«Заказан». В warnings «Цена не указана» есть всегда.
+  if (
+    need.quotedPrice == null ||
+    need.quotedPrice === '' ||
+    Number(need.quotedPrice) <= 0
+  ) {
+    return { label: 'Нет цены', tone: 'warning', secondary: null, warnings };
   }
 
   // 7. Падение к WorkshopNeed.status

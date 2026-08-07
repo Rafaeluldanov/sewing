@@ -78,8 +78,13 @@ function normalizeKey(s: string | null | undefined): string {
     .replace(/ё/g, 'е');
 }
 
-/** «м пог.» / «мп» → `м`; «м²» / «кв м» → `м2`. Как в pattern-norms. */
-function normalizeUnit(s: string | null | undefined): string {
+/**
+ * «м пог.» / «мп» → `м`; «м²» / «кв м» → `м2`. Как в pattern-norms.
+ * Экспортирована для словаря закупочных единиц (`purchase-units.ts`):
+ * сравнение единиц обязано жить по одним правилам с пересчётом, иначе
+ * select предложит «м» строке в «м пог.» как другую единицу.
+ */
+export function normalizeUnit(s: string | null | undefined): string {
   const raw = normalizeKey(s).replace(/[.\s]/g, '');
   if (raw === 'м2' || raw === 'м²' || raw === 'квм') return 'м2';
   if (raw === 'м' || raw === 'мпог' || raw === 'мп' || raw === 'погм') return 'м';

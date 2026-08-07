@@ -210,6 +210,9 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
     characteristics: fabricChars,
   },
   // --- Рибана / кашкорсе (Цвет) -----------------------------------------
+  // Ширина/плотность как у полотен: словарь разрешает «кг», а пересчёт в
+  // него требует обеих характеристик — пустой набор здесь приводил к тому,
+  // что смена подтипа вычищала уже заполненные rollWidth/density.
   {
     subtypeKey: 'RIB',
     defaultInputType: 'LINEAR_M_BY_SIZE',
@@ -217,7 +220,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
     groupRoleKey: 'RIB',
     defaultUnit: 'м пог.',
     allowedUnits: ['м пог.', 'кг', 'м²'],
-    characteristics: [],
+    characteristics: fabricChars,
   },
   {
     subtypeKey: 'KASHKORSE',
@@ -226,7 +229,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
     groupRoleKey: 'RIB',
     defaultUnit: 'м пог.',
     allowedUnits: ['м пог.', 'кг', 'м²'],
-    characteristics: [],
+    characteristics: fabricChars,
   },
   // --- Клеевые материалы -------------------------------------------------
   {

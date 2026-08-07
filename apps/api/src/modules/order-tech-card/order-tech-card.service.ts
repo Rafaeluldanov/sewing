@@ -767,9 +767,15 @@ export class OrderTechCardService {
     });
 
     const first = dto.lines[0]!;
+    // Норма подписывается СВОЕЙ единицей: у расщеплённой строки unit —
+    // закупочный, и «1.5 кг/шт» вместо «1.5 м пог./шт» — ровно та подмена
+    // длины весом, против которой написан norm-purchase.
+    const firstNormUnit = first.normUnit?.trim() || null;
     const summary =
       dto.lines.length === 1
-        ? `Добавлен материал «${first.name}» — ${first.qtyPerUnit} ${first.unit}/шт`
+        ? `Добавлен материал «${first.name}» — ${first.qtyPerUnit} ${
+            firstNormUnit ?? first.unit
+          }/шт${firstNormUnit ? ` (закупка в ${first.unit})` : ''}`
         : `Добавлено материалов: ${dto.lines.length} — ${dto.lines
             .map((l) => l.name)
             .join(', ')}`;
@@ -779,6 +785,7 @@ export class OrderTechCardService {
         lines: dto.lines.map((l) => ({
           name: l.name,
           unit: l.unit,
+          normUnit: l.normUnit?.trim() || null,
           qtyPerUnit: l.qtyPerUnit,
           colorText: l.colorText?.trim() || null,
         })),
@@ -1110,7 +1117,15 @@ export class OrderTechCardService {
       changed.push(`норма ${row.qtyPerUnit.toString()} → ${cells.qtyPerUnit}`);
     }
     if (dto.unit !== undefined && cells.unit !== row.unit) {
-      changed.push(`ед. ${row.unit} → ${cells.unit}`);
+      changed.push(`ед. закупки ${row.unit} → ${cells.unit}`);
+    }
+    if (dto.normUnit !== undefined) {
+      const nextNormUnit = dto.normUnit?.trim() || null;
+      if (nextNormUnit !== row.normUnit) {
+        changed.push(
+          `ед. нормы ${row.normUnit ?? '—'} → ${nextNormUnit ?? '—'}`,
+        );
+      }
     }
     if (dto.densityGsm !== undefined && cells.densityGsm !== row.densityGsm) {
       changed.push(`плотность ${row.densityGsm ?? '—'} → ${cells.densityGsm ?? '—'}`);

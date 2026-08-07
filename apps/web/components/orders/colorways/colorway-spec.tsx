@@ -42,6 +42,15 @@ import {
   getMaterialSubtype,
 } from '@sewing/shared/material-characteristics';
 import {
+  needsPurchaseConversion,
+  normalizeUnit,
+} from '@sewing/shared/norm-purchase';
+import {
+  DEFAULT_NORM_UNIT,
+  getNormUnitOptions,
+  getPurchaseUnitOptions,
+} from '@sewing/shared/purchase-units';
+import {
   characteristicValueFromSubtypeKey,
   resolveSubtypeKeyByCharacteristic,
 } from '@sewing/shared/material-characteristic-options';
@@ -85,10 +94,15 @@ interface DraftLine {
   name: string;
   qtyPerUnit: string;
   /**
-   * Единица. У новой строки она ЗАКУПОЧНАЯ (`unit`) — в ней же считается
-   * `totalQty`. Расщепление «норма в одной единице, закупка в другой»
-   * задаётся ПОСЛЕ сохранения, правкой `normUnit` в самой строке: пересчёт
-   * требует ширины рулона и плотности, а их на заведении не спрашивают.
+   * Единица НОРМЫ — в ней вводится `qtyPerUnit`. Селект с дефолтом
+   * «м пог.»: свободный ввод плодил варианты написания («мп», «пог м»).
+   */
+  normUnit: string;
+  /**
+   * Единица ЗАКУПКИ (`unit`) — в ней посчитается `totalQty`. Пока её не
+   * трогали, зеркалит единицу нормы. Выбрали другую — строка уедет сразу
+   * расщеплённой (`normUnit ≠ unit`); пересчёт «К закупке» заработает,
+   * когда в параметрах заполнят ширину рулона и плотность.
    */
   unit: string;
   colorText: string;
@@ -99,7 +113,8 @@ function emptyDraft(seq: number): DraftLine {
     key: `d${seq}`,
     name: '',
     qtyPerUnit: '',
-    unit: '',
+    normUnit: DEFAULT_NORM_UNIT,
+    unit: DEFAULT_NORM_UNIT,
     colorText: '',
   };
 }
@@ -124,12 +139,15 @@ function pluralMaterials(n: number): string {
   return `${n} материалов`;
 }
 
-/** Пустая строка — её не считаем ни готовой, ни ошибочной. */
+/**
+ * Пустая строка — её не считаем ни готовой, ни ошибочной. Единицы не
+ * смотрим: у селектов есть значения по умолчанию, и они не признак того,
+ * что человек начал заполнять строку.
+ */
 function isDraftBlank(d: DraftLine): boolean {
   return (
     d.name.trim() === '' &&
     d.qtyPerUnit.trim() === '' &&
-    d.unit.trim() === '' &&
     d.colorText.trim() === ''
   );
 }
@@ -265,15 +283,12 @@ export function ColorwaySpec({
   // план операций пересобираются, маршрут и паспорта — нет, потребности
   // пересчитываются best-effort, событие уходит в журнал правок.
   const amendment = params.editMode === 'AMENDMENT';
-  // Есть ли в группе строка, у которой расход и закупка в разных единицах.
-  // От этого зависит, показывать таблицу в один блок или в два. Черновики
-  // на это НЕ влияют: расщепление задаётся правкой сохранённой строки, а
-  // «развернуть таблицу собой» черновик не мог бы физически — поле
-  // закупочной единицы рендерится внутри тех самых колонок.
-  const hasSplitLines = (group?.lines ?? []).some(
-    (l) => (l.normUnit ?? '').trim() !== '',
-  );
-  const cols = hasSplitLines ? 10 : 7;
+  // Таблица всегда в «расщеплённом» виде: зона расхода + зона закупки.
+  // Раньше закупочные колонки появлялись только при строке с normUnit ≠
+  // unit, но селект единицы закупки живёт именно в них — прятать его
+  // значило бы «расщепить строку нельзя, пока какая-нибудь уже не
+  // расщеплена».
+  const cols = 10;
 
   /**
    * Тираж расцветки — чтобы показать «Итого» черновика ДО сохранения.
@@ -385,12 +400,16 @@ export function ColorwaySpec({
     if (readyDrafts.length === 0 || pending) return;
     const payload = {
       orderVariantId: writeVariantId,
-      // Единица одна и ЗАКУПОЧНАЯ: расщеплённая строка без ширины рулона и
-      // плотности посчиталась бы в потребности как длина, подписанная
-      // килограммами. Расщепляют уже сохранённую строку, когда параметры есть.
+      // Единица закупки может отличаться от единицы нормы — тогда строка
+      // создаётся сразу расщеплённой (уезжает `normUnit`). Пока ширина
+      // рулона и плотность не заполнены, «К закупке» честно показывает
+      // отказ пересчёта, а не длину, подписанную килограммами.
       lines: readyDrafts.map((d) => ({
         name: d.name.trim(),
         unit: d.unit.trim(),
+        normUnit: needsPurchaseConversion(d.normUnit, d.unit)
+          ? d.normUnit.trim()
+          : null,
         qtyPerUnit: d.qtyPerUnit.trim().replace(',', '.'),
         colorText: d.colorText.trim() || null,
       })),
@@ -563,44 +582,34 @@ export function ColorwaySpec({
       <div className="cws-tablewrap">
         <table className="cws-table">
           <thead>
-            {/* Шапка раздваивается ТОЛЬКО когда в группе есть строка, у которой
-                единица нормы отличается от закупочной. Иначе оба блока
-                показывали бы одно и то же число, а лишняя пара колонок —
-                это шум для всех, у кого расход и закупка в одной единице. */}
-            {hasSplitLines && (
-              /* Арифметика колонок: 2 + 4 + 1 + 2 + 1 = 10 — ровно столько
-                 ячеек в теле. Раньше зона расхода стояла на трёх колонках,
-                 строка выходила короче тела на одну, и заголовки съезжали
-                 влево: «Закупка» накрывала служебную стрелку вместо «К
-                 закупке», а тонировка зоны не совпадала со своей плашкой.
-                 «Цвет» попадает внутрь зоны расхода паразитом — это цена
-                 того, что колонки не переставляются местами. */
-              <tr>
-                <th colSpan={2}></th>
-                <th className="cws-grp cws-grp--norm" colSpan={4}>
-                  Расход — единица техкарты
-                </th>
-                <th></th>
-                <th className="cws-grp cws-grp--buy" colSpan={2}>
-                  Закупка
-                </th>
-                <th></th>
-              </tr>
-            )}
+            {/* Арифметика колонок: 2 + 4 + 1 + 2 + 1 = 10 — ровно столько
+                ячеек в теле. Раньше зона расхода стояла на трёх колонках,
+                строка выходила короче тела на одну, и заголовки съезжали
+                влево: «Закупка» накрывала служебную стрелку вместо «К
+                закупке», а тонировка зоны не совпадала со своей плашкой.
+                «Цвет» попадает внутрь зоны расхода паразитом — это цена
+                того, что колонки не переставляются местами. */}
+            <tr>
+              <th colSpan={2}></th>
+              <th className="cws-grp cws-grp--norm" colSpan={4}>
+                Расход — единица техкарты
+              </th>
+              <th></th>
+              <th className="cws-grp cws-grp--buy" colSpan={2}>
+                Закупка
+              </th>
+              <th></th>
+            </tr>
             <tr>
               <th>Материал</th>
               <th>Параметры</th>
               <th className="num">Норма/шт</th>
               <th>Ед.</th>
               <th>Цвет</th>
-              <th className="num">{hasSplitLines ? 'Расход' : 'Итого'}</th>
-              {hasSplitLines && (
-                <>
-                  <th aria-label="Пересчёт"></th>
-                  <th className="cws-zone--buy">Ед.</th>
-                  <th className="num cws-zone--buy">К закупке</th>
-                </>
-              )}
+              <th className="num">Расход</th>
+              <th aria-label="Пересчёт"></th>
+              <th className="cws-zone--buy">Ед.</th>
+              <th className="num cws-zone--buy">К закупке</th>
               <th aria-label="Действия"></th>
             </tr>
           </thead>
@@ -622,6 +631,18 @@ export function ColorwaySpec({
               const qtyBound = l.boundFields.includes('core:qtyPerUnit');
               const boundTitle =
                 'Ячейка привязана к параметру — правьте значение параметра';
+              const normUnitCurrent = l.normUnit ?? l.unit;
+              // Расщеплённость — НОРМАЛИЗОВАННО, как считает бэкенд: у
+              // legacy-строки с normUnit='м' и unit='м пог.' totalNorm
+              // придёт null, и ветвление по сырому normUnit рисовало бы
+              // «— м» вместо числа.
+              const lineSplit = needsPurchaseConversion(l.normUnit, l.unit);
+              const purchaseOptions = getPurchaseUnitOptions({
+                subtypeKey: l.subtypeKey,
+                materialRole: l.materialRole,
+                normUnit: normUnitCurrent,
+                current: l.unit,
+              });
               const open = openLine === l.id;
               const chips = characteristicKeysForLine(l)
                 .map((key) => ({
@@ -640,7 +661,7 @@ export function ColorwaySpec({
                   : null);
               return (
                 <Fragment
-                  key={`${l.id}:${l.name}:${l.qtyPerUnit}:${l.unit}:${l.colorText ?? ''}:${l.densityGsm ?? ''}:${l.subtypeKey ?? ''}:${JSON.stringify(l.characteristics ?? {})}`}
+                  key={`${l.id}:${l.name}:${l.qtyPerUnit}:${l.unit}:${l.normUnit ?? ''}:${l.colorText ?? ''}:${l.densityGsm ?? ''}:${l.subtypeKey ?? ''}:${JSON.stringify(l.characteristics ?? {})}`}
                 >
                 <tr>
                   <td>
@@ -777,12 +798,15 @@ export function ColorwaySpec({
                   </td>
                   {/* Единица РАСХОДА. У расщеплённой строки это `normUnit` и
                       правится она отдельно от закупочной; у обычной — прежнее
-                      поле `unit`, как и было. */}
+                      поле `unit`, как и было. Селект вместо свободного ввода:
+                      словарь по подтипу/роли, историческое значение вне
+                      словаря остаётся первой опцией. */}
                   <td>
-                    <input
+                    <select
                       className="cws-cell cws-cell--sm"
-                      defaultValue={l.normUnit ?? l.unit}
+                      defaultValue={normUnitCurrent}
                       disabled={ro || pending || unitBound}
+                      aria-label="Единица нормы"
                       title={
                         unitBound
                           ? boundTitle
@@ -790,16 +814,37 @@ export function ColorwaySpec({
                             ? 'Единица нормы расхода. Закупочная единица — в блоке «Закупка».'
                             : undefined
                       }
-                      onBlur={(e) => {
-                        const next = e.target.value.trim();
-                        if (!next) return;
-                        if (l.normUnit) {
-                          if (next !== l.normUnit) saveLine(l.id, { normUnit: next });
-                        } else if (next !== l.unit) {
-                          saveLine(l.id, { unit: next });
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        if (next === normUnitCurrent) return;
+                        if (
+                          needsPurchaseConversion(next, l.unit) &&
+                          normalizeUnit(next) === 'м'
+                        ) {
+                          // Норма в метрах, закупка другая — расщепление
+                          // (рождается у обычной строки, правится у
+                          // расщеплённой). Закупочная единица и цена в
+                          // потребности не трогаются.
+                          saveLine(l.id, { normUnit: next });
+                        } else {
+                          // Единицы совпали либо пересчёт из «next»
+                          // невозможен (не-метровая норма) — закупка следует
+                          // за нормой, расщепление схлопывается: пара
+                          // «шт → кг» была бы вечным отказом пересчёта.
+                          saveLine(l.id, { unit: next, normUnit: null });
                         }
                       }}
-                    />
+                    >
+                      {getNormUnitOptions({
+                        subtypeKey: l.subtypeKey,
+                        materialRole: l.materialRole,
+                        current: normUnitCurrent,
+                      }).map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
+                    </select>
                   </td>
                   <td>
                     <input
@@ -817,32 +862,77 @@ export function ColorwaySpec({
                   {/* Расход — в единице НОРМЫ; у нерасщеплённой строки это
                       прежнее «итого» в единице закупки, поле в поле. */}
                   <td className="num cws-total">
-                    {l.normUnit ? (l.totalNorm ?? '—') : l.totalQty}{' '}
-                    {l.normUnit ?? l.unit}
+                    {lineSplit ? (l.totalNorm ?? '—') : l.totalQty}{' '}
+                    {lineSplit ? l.normUnit : l.unit}
                   </td>
-                  {hasSplitLines && (
-                    <>
-                      <td className="num cws-arrow">{l.normUnit ? '→' : ''}</td>
-                      <td className="cws-zone--buy">
-                        {l.normUnit ? l.unit : ''}
-                      </td>
-                      <td className="num cws-total cws-zone--buy">
-                        {!l.normUnit ? (
-                          ''
-                        ) : l.purchaseProblem ? (
-                          /* Прочерк с объяснением, а не тихий ноль: ноль
-                             читается как «материал не нужен». */
-                          <span className="cws-nocalc" title={l.purchaseProblem}>
-                            —
-                          </span>
-                        ) : (
-                          <span title={l.purchaseFormula ?? undefined}>
-                            {l.totalQty} {l.unit}
-                          </span>
-                        )}
-                      </td>
-                    </>
-                  )}
+                  <td className="num cws-arrow">{lineSplit ? '→' : ''}</td>
+                  {/* Единица ЗАКУПКИ — селект: выбор другой единицы у обычной
+                      строки рождает расщепление (норма остаётся в прежней
+                      единице), возврат в единицу нормы — схлопывает его.
+                      Пересчитать «К закупке» и потребность бэкенд умеет
+                      только из погонных метров — не-метровой норме словарь
+                      отдаёт одну опцию, и селект гаснет с объяснением. */}
+                  <td className="cws-zone--buy">
+                    <select
+                      className="cws-cell cws-cell--sm"
+                      defaultValue={l.unit}
+                      disabled={
+                        ro || pending || unitBound || purchaseOptions.length <= 1
+                      }
+                      aria-label="Единица закупки"
+                      title={
+                        unitBound
+                          ? boundTitle
+                          : purchaseOptions.length <= 1
+                            ? normalizeUnit(normUnitCurrent) === 'м'
+                              ? 'Других закупочных единиц для этого материала не предусмотрено'
+                              : `Пересчёт закупки умеет только из погонных метров, а норма задана в «${normUnitCurrent}»`
+                            : 'Единица закупки: другая единица пересчитает «К закупке» и потребность цеха'
+                      }
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        if (next === l.unit) return;
+                        if (l.normUnit) {
+                          // Закупку вернули в единицу нормы — расщепление
+                          // схлопывается, строка живёт как обычная.
+                          saveLine(
+                            l.id,
+                            needsPurchaseConversion(l.normUnit, next)
+                              ? { unit: next }
+                              : { unit: next, normUnit: null },
+                          );
+                        } else {
+                          // Норма остаётся в прежней единице — расщепление
+                          // рождается здесь, число нормы смысла не меняет.
+                          saveLine(
+                            l.id,
+                            needsPurchaseConversion(l.unit, next)
+                              ? { unit: next, normUnit: l.unit }
+                              : { unit: next },
+                          );
+                        }
+                      }}
+                    >
+                      {purchaseOptions.map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="num cws-total cws-zone--buy">
+                    {l.purchaseProblem ? (
+                      /* Прочерк с объяснением, а не тихий ноль: ноль
+                         читается как «материал не нужен». */
+                      <span className="cws-nocalc" title={l.purchaseProblem}>
+                        —
+                      </span>
+                    ) : (
+                      <span title={l.purchaseFormula ?? undefined}>
+                        {l.totalQty} {l.unit}
+                      </span>
+                    )}
+                  </td>
                   <td className="num">
                     {!ro && (
                       <button
@@ -897,10 +987,21 @@ export function ColorwaySpec({
             {drafts.map((d) => {
               const problem = isDraftBlank(d) ? null : draftProblem(d);
               const qty = Number(d.qtyPerUnit.trim().replace(',', '.'));
-              const totalPreview =
+              // Живой предпросчёт: расход = норма × тираж в единице нормы.
+              // «К закупке» до сохранения считается только при совпадающих
+              // единицах — пересчёт требует ширины и плотности, которых у
+              // черновика ещё нет.
+              const draftTotal =
                 unitsPlan !== null && Number.isFinite(qty) && qty > 0
-                  ? `${Math.round(qty * unitsPlan * 1000) / 1000} ${d.unit.trim() || ''}`
-                  : '—';
+                  ? Math.round(qty * unitsPlan * 1000) / 1000
+                  : null;
+              const draftSplit = needsPurchaseConversion(d.normUnit, d.unit);
+              const draftBuyOptions = getPurchaseUnitOptions({
+                normUnit: d.normUnit,
+                current: d.unit,
+              });
+              const totalPreview =
+                draftTotal !== null ? `${draftTotal} ${d.normUnit}` : '—';
               return (
                 <tr className="cws-draft" key={d.key}>
                   <td>
@@ -966,21 +1067,39 @@ export function ColorwaySpec({
                     </span>
                   </td>
                   <td>
-                    <input
-                      className={`cws-cell cws-cell--sm${
-                        problem && d.unit.trim() === '' ? ' cws-cell--bad' : ''
-                      }`}
-                      placeholder="ед."
-                      value={d.unit}
+                    <select
+                      className="cws-cell cws-cell--sm"
+                      value={d.normUnit}
                       disabled={pending}
-                      title={
-                        hasSplitLines
-                          ? 'Единица закупки. Расщепить норму и закупку по разным единицам можно у сохранённой строки.'
-                          : undefined
-                      }
-                      onChange={(e) => patchDraft(d.key, { unit: e.target.value })}
+                      aria-label="Единица нормы"
+                      title="Единица, в которой задана норма расхода"
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        // Закупочная единица следует за нормой, пока её не
+                        // трогали — как у нерасщеплённой строки. И ещё раз
+                        // догоняет, если пара перестала быть пересчитываемой:
+                        // «норма шт → закупка кг» была бы вечным отказом.
+                        const follow =
+                          d.unit === d.normUnit ||
+                          !(
+                            needsPurchaseConversion(next, d.unit) &&
+                            normalizeUnit(next) === 'м'
+                          );
+                        patchDraft(
+                          d.key,
+                          follow
+                            ? { normUnit: next, unit: next }
+                            : { normUnit: next },
+                        );
+                      }}
                       onKeyDown={(e) => draftKeyDown(e, d, false)}
-                    />
+                    >
+                      {getNormUnitOptions({ current: d.normUnit }).map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
+                    </select>
                   </td>
                   <td>
                     <input
@@ -991,25 +1110,51 @@ export function ColorwaySpec({
                       onChange={(e) =>
                         patchDraft(d.key, { colorText: e.target.value })
                       }
-                      onKeyDown={(e) => draftKeyDown(e, d, true)}
+                      onKeyDown={(e) => draftKeyDown(e, d, false)}
                     />
                   </td>
                   <td className="num cws-draft-total">{totalPreview}</td>
-                  {/* Новая строка не расщеплена: закупка идёт в той же
-                      единице. Расщепить (норма в одной, закупка в другой)
-                      можно у сохранённой строки — пересчёт требует ширины
-                      рулона и плотности, а их на заведении не спрашивают. */}
-                  {hasSplitLines && (
-                    <>
-                      <td className="num cws-arrow"></td>
-                      <td className="cws-zone--buy cws-muted">
-                        {d.unit.trim() || '—'}
-                      </td>
-                      <td className="num cws-zone--buy cws-draft-total">
-                        {totalPreview}
-                      </td>
-                    </>
-                  )}
+                  <td className="num cws-arrow">{draftSplit ? '→' : ''}</td>
+                  {/* Единица закупки выбирается прямо при заведении: другая
+                      единица — строка сохранится сразу расщеплённой. */}
+                  <td className="cws-zone--buy">
+                    <select
+                      className="cws-cell cws-cell--sm"
+                      value={d.unit}
+                      disabled={pending || draftBuyOptions.length <= 1}
+                      aria-label="Единица закупки"
+                      title={
+                        draftBuyOptions.length <= 1
+                          ? `Пересчёт закупки умеет только из погонных метров, а норма задана в «${d.normUnit}»`
+                          : 'Единица закупки: выберите другую — строка сохранится расщеплённой, пересчёт заработает после заполнения ширины и плотности'
+                      }
+                      onChange={(e) =>
+                        patchDraft(d.key, { unit: e.target.value })
+                      }
+                      onKeyDown={(e) => draftKeyDown(e, d, true)}
+                    >
+                      {draftBuyOptions.map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="num cws-zone--buy cws-draft-total">
+                    {draftSplit ? (
+                      /* Пересчёт в закупочную единицу требует ширины рулона
+                         и плотности — их зададут в параметрах после
+                         сохранения. До того — честный прочерк, не ноль. */
+                      <span
+                        className="cws-nocalc"
+                        title="Для пересчёта нужны ширина рулона и плотность — задайте параметры после сохранения"
+                      >
+                        —
+                      </span>
+                    ) : (
+                      totalPreview
+                    )}
+                  </td>
                   <td className="num">
                     <button
                       type="button"
@@ -1044,7 +1189,7 @@ export function ColorwaySpec({
                     </button>
                     <span className="cws-batch__hint">
                       Готово <strong>{readyDrafts.length}</strong> из{' '}
-                      {drafts.length}. Обязательны название, норма и единица —
+                      {drafts.length}. Обязательны название и норма —
                       параметры зададите после.
                     </span>
                     <span className="cws-batch__sp">
@@ -1641,7 +1786,9 @@ function SpecStyles() {
 .cws-arrow { color:var(--color-accent-fg,var(--color-fg-muted)); font-weight:700; }
 .cws-nocalc { color:var(--color-fg-subtle); cursor:help; }
 .cws-cell { width:100%; min-width:70px; height:var(--cws-h); padding:0 8px; border:1px solid var(--color-border-strong);
-  border-radius:var(--cws-r); font:inherit; font-size:13px; background:var(--color-bg-card); color:var(--color-fg); }
+  /* background-COLOR, не шорткат: у select-ов globals.css рисует шеврон
+     через background-image, и шорткат молча стирал бы стрелку. */
+  border-radius:var(--cws-r); font:inherit; font-size:13px; background-color:var(--color-bg-card); color:var(--color-fg); }
 select.cws-cell { padding-right:22px; }
 .cws-cell:focus { outline:none; border-color:var(--color-accent); }
 .cws-cell:disabled { opacity:.65; cursor:not-allowed; background:var(--color-bg-muted); }
@@ -1666,7 +1813,7 @@ select.cws-cell { padding-right:22px; }
 .cws-btn--primary:hover:not(:disabled) { color:var(--btn-primary-fg,#fff); }
 .cws-form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px; border:1px dashed var(--color-border-strong); border-radius:10px; }
 .cws-form input, .cws-form select { height:var(--cws-h); padding:0 9px; border:1px solid var(--color-border-strong);
-  border-radius:var(--cws-r); font:inherit; font-size:13px; background:var(--color-bg-card); color:var(--color-fg); }
+  border-radius:var(--cws-r); font:inherit; font-size:13px; background-color:var(--color-bg-card); color:var(--color-fg); }
 .cws-form input:focus, .cws-form select:focus { outline:none; border-color:var(--color-accent); }
 .cws-form--saveas p { width:100%; margin:0; }
 .cws-params ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }

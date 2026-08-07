@@ -29,6 +29,7 @@ import {
 import {
   computeNormPurchase,
   needsPurchaseConversion,
+  normalizeUnit,
 } from '@sewing/shared/norm-purchase';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -228,7 +229,12 @@ export class WorkshopNeedsService {
     const compositionChanged = {
       description:
         dto.description !== undefined && dto.description !== existing.description,
-      unit: dto.unit !== undefined && dto.unit !== existing.unit,
+      // Единицу сравниваем НОРМАЛИЗОВАННО: «м пог» → «м пог.» — то же самое,
+      // косметическая правка написания не должна помечать строку «правлено
+      // вручную» и сбрасывать согласованную цену.
+      unit:
+        dto.unit !== undefined &&
+        normalizeUnit(dto.unit) !== normalizeUnit(existing.unit),
       materialRole:
         dto.materialRole !== undefined &&
         (dto.materialRole ?? null) !== (existing.materialRole ?? null),
@@ -263,7 +269,9 @@ export class WorkshopNeedsService {
       data.description = dto.description;
       changedFields.push('description');
     }
-    if (compositionChanged.unit) {
+    // Написание единицы обновляем и при косметической правке — но как
+    // обычное поле, без manualEditAt и без сброса закупочного блока.
+    if (dto.unit !== undefined && dto.unit !== existing.unit) {
       data.unit = dto.unit;
       changedFields.push('unit');
     }
@@ -323,6 +331,53 @@ export class WorkshopNeedsService {
       data.quotedCurrency = dto.quotedCurrency;
       changedFields.push('quotedCurrency');
     }
+
+    // Смена единицы обесценивает закупочный блок: «620 ₽/кг» после
+    // «кг → м пог.» — уже не цена, а ловушка для сметы (сумма =
+    // цена × количество, оба в единице строки — см. order-cost-estimates).
+    // Тот же принцип, что у carry-ключа пересчёта (`purchaseCarryKey`
+    // включает unit): сменилась единица — закупка начинается заново.
+    // Исключение — значение, ЭТИМ ЖЕ запросом переписанное на другое:
+    // окно правки шлёт весь набор полей разом, и старое число в dto
+    // означает «не трогал», а не «подтверждаю в новой единице».
+    const resetByUnitChange: string[] = [];
+    if (compositionChanged.unit) {
+      const retyped = (
+        incoming: string | null | undefined,
+        prev: Prisma.Decimal | null,
+      ): boolean => {
+        if (incoming === undefined) return false;
+        if (incoming === null || prev === null) {
+          return (incoming === null) !== (prev === null);
+        }
+        return !new Prisma.Decimal(incoming).equals(prev);
+      };
+      const resetField = (
+        field: 'purchaseQty' | 'packSize' | 'quotedPrice' | 'quotedCurrency',
+        hadValue: boolean,
+      ): void => {
+        data[field] = null;
+        resetByUnitChange.push(field);
+        if (hadValue && !changedFields.includes(field)) {
+          changedFields.push(field);
+        }
+      };
+      if (!retyped(dto.purchaseQty as string | null | undefined, existing.purchaseQty)) {
+        resetField('purchaseQty', existing.purchaseQty != null);
+      }
+      if (!retyped(dto.packSize as string | null | undefined, existing.packSize)) {
+        resetField('packSize', existing.packSize != null);
+      }
+      if (!retyped(dto.quotedPrice as string | null | undefined, existing.quotedPrice)) {
+        resetField('quotedPrice', existing.quotedPrice != null);
+        // Валюту гасим только если её НЕ переписали этим же запросом:
+        // «сменил единицу и заодно выбрал USD» — валюта остаётся.
+        if (dto.quotedCurrency === undefined) {
+          resetField('quotedCurrency', existing.quotedCurrency != null);
+        }
+      }
+    }
+
     if (dto.expectedDeliveryDate !== undefined) {
       data.expectedDeliveryDate =
         dto.expectedDeliveryDate === null
@@ -384,6 +439,10 @@ export class WorkshopNeedsService {
           payload: {
             orderId: existing.orderId,
             changedFields,
+            // Смена единицы обнуляет закупочный блок значениями, которых в
+            // dto НЕ БЫЛО, — без этого маркера `after` утверждал бы, что
+            // цена сохранена, хотя в БД уехал null.
+            ...(resetByUnitChange.length > 0 ? { resetByUnitChange } : {}),
             // Запрос как пришёл (после Zod-нормализации). Decimal-поля
             // сериализуем строкой, как и в DTO — чтобы payload был
             // самодостаточен и не требовал отдельного типа.
@@ -3975,7 +4034,9 @@ function purchaseCarryKey(parts: {
     parts.sourceId ?? '',
     parts.orderVariantId ?? '',
     parts.materialRole ?? '',
-    parts.unit ?? '',
+    // Нормализованно: «м пог» и «м пог.» — одна единица, косметическая
+    // разница написания не должна ронять перенос цены.
+    normalizeUnit(parts.unit),
   ].join(' ');
 }
 
