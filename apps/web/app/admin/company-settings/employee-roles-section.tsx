@@ -62,36 +62,130 @@ function orderedRoles(employee: EmployeeListItemDto): string[] {
   return [employee.role, ...set.filter((r) => r !== employee.role)];
 }
 
-/** Read-only чипы ролей: основная — с ★ и акцентом. */
+/** Роль в сводной ленте человека (склеена по всем его учётным записям). */
+interface MergedRole {
+  code: string;
+  /** Логины учёток, где роль выдана (подсказка на чипе). */
+  logins: string[];
+  /** Основная (★) хотя бы в одной учётке. */
+  primary: boolean;
+}
+
+/**
+ * Один человек = одна строка списка. Учёток у него может быть
+ * несколько: исторически одному сотруднику заводили отдельный логин на
+ * каждый участок (Андашова Астра — `astra` ОТК + `astra1` упаковка),
+ * и список показывал ФИО столько раз, сколько логинов.
+ */
+interface EmployeeGroup {
+  key: string;
+  fullName: string;
+  /** Учётки, отсортированы по логину. Минимум одна. */
+  accounts: EmployeeListItemDto[];
+  /** Доступы всех учёток без дублей. */
+  roles: MergedRole[];
+}
+
+/**
+ * Ключ склейки — ФИО без регистра и лишних пробелов. Полных тёзок
+ * (разные люди с одинаковым ФИО) это тоже склеит — поэтому у строки с
+ * несколькими учётками логины выведены под именем, а редактор ролей
+ * остаётся ПОУЧЁТОЧНЫМ: доступ живёт на `Employee`, а не на человеке.
+ */
+function groupKey(fullName: string): string {
+  return fullName.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function groupEmployees(list: EmployeeListItemDto[]): EmployeeGroup[] {
+  const groups = new Map<string, EmployeeGroup>();
+
+  for (const employee of list) {
+    const key = groupKey(employee.fullName);
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        key,
+        fullName: employee.fullName.trim(),
+        accounts: [],
+        roles: [],
+      };
+      groups.set(key, group);
+    }
+    group.accounts.push(employee);
+  }
+
+  for (const group of groups.values()) {
+    group.accounts.sort((a, b) => a.login.localeCompare(b.login));
+    const roles = new Map<string, MergedRole>();
+    for (const account of group.accounts) {
+      for (const code of orderedRoles(account)) {
+        const hit = roles.get(code);
+        if (hit) {
+          if (!hit.logins.includes(account.login)) hit.logins.push(account.login);
+          hit.primary = hit.primary || code === account.role;
+        } else {
+          roles.set(code, {
+            code,
+            logins: [account.login],
+            primary: code === account.role,
+          });
+        }
+      }
+    }
+    group.roles = [...roles.values()];
+  }
+
+  return [...groups.values()].sort((a, b) =>
+    a.fullName.localeCompare(b.fullName, 'ru'),
+  );
+}
+
+/**
+ * Read-only чипы доступов человека: основная роль — с ★ и акцентом.
+ * У человека с несколькими учётками ★ может быть на нескольких чипах —
+ * рабочий экран по умолчанию свой у каждого логина.
+ */
 function RoleChipsReadonly({
-  employee,
+  roles,
+  showLogins,
   labels,
 }: {
-  employee: EmployeeListItemDto;
+  roles: MergedRole[];
+  /** Дописывать ли к чипу, какой учётке принадлежит доступ. */
+  showLogins: boolean;
   labels: Readonly<Record<string, string>>;
 }) {
   return (
     <div className="admin-chip-list">
-      {orderedRoles(employee).map((r) => {
-        const isPrimary = r === employee.role;
-        return (
-          <span
-            key={r}
-            className={'admin-chip' + (isPrimary ? ' admin-chip--primary' : '')}
-          >
-            {isPrimary && (
-              <Star
-                className="admin-chip__icon"
-                size={13}
-                strokeWidth={1.6}
-                fill="currentColor"
-                aria-hidden
-              />
-            )}
-            {formatRole(r, labels)}
-          </span>
-        );
-      })}
+      {roles.map((role) => (
+        <span
+          key={role.code}
+          className={
+            'admin-chip' + (role.primary ? ' admin-chip--primary' : '')
+          }
+          title={
+            showLogins
+              ? `Учётная запись: ${role.logins.join(', ')}`
+              : undefined
+          }
+        >
+          {role.primary && (
+            <Star
+              className="admin-chip__icon"
+              size={13}
+              strokeWidth={1.6}
+              fill="currentColor"
+              aria-hidden
+            />
+          )}
+          {formatRole(role.code, labels)}
+          {showLogins && (
+            <span className="admin-chip__login">
+              · {role.logins.join(', ')}
+            </span>
+          )}
+        </span>
+      ))}
     </div>
   );
 }
@@ -111,11 +205,14 @@ function SaveButton() {
 }
 
 /**
- * Инлайн-редактор ролей одного сотрудника. Роли — переключаемые чипы:
+ * Инлайн-редактор ролей ОДНОЙ учётной записи. Роли — переключаемые чипы:
  * клик по телу чипа включает/выключает доступ, ★ на выбранном чипе делает
  * роль основной. Значения уходят в server action скрытыми input'ами
  * (`roles` — много, `primaryRole` — один), поэтому disabled/ADMIN-логика
  * не завязана на нативные form-контролы.
+ *
+ * Подсказка про клик/★ живёт на уровне строки, а не внутри формы: у
+ * человека с несколькими учётками редакторов несколько, а текст один.
  */
 function EmployeeRolesEditor({
   employee,
@@ -220,15 +317,6 @@ function EmployeeRolesEditor({
       ))}
       <input type="hidden" name="primaryRole" value={primary} />
 
-      <span className="admin-field__hint admin-muted">
-        Клик по роли — доступ вкл/выкл. ★ — основная роль (рабочий экран по
-        умолчанию); переключаться между участками сотрудник может сканом
-        рабочего места.
-        {!canAssignAdmin
-          ? ' Роль «Администратор» назначает только администратор.'
-          : ''}
-      </span>
-
       {state.error && (
         <div className="error-box" role="alert">
           <XCircle size={16} strokeWidth={1.6} aria-hidden /> {state.error}
@@ -260,9 +348,15 @@ function EmployeeRolesEditor({
  * По ТЗ редактирование ролей живёт в настройках, а не в карточке
  * сотрудника.
  *
- * UX: обзор-список всех активных сотрудников — сразу видно, у кого какие
- * роли (чипы, ★ = основная). Поиск по имени; правка — инлайн по кнопке
- * «Изменить» (одна строка за раз). Источник истины — backend
+ * UX: обзор-список — строка на ЧЕЛОВЕКА (ФИО), а не на учётную запись.
+ * Одному человеку исторически заводили отдельный логин на каждый
+ * участок, из-за чего ФИО повторялось в списке столько раз, сколько у
+ * него логинов; теперь такие строки склеены, а доступы всех учёток
+ * собраны в одну ленту чипов (★ = основная роль учётки).
+ *
+ * Правка при этом остаётся ПОУЧЁТОЧНОЙ — `roles` лежат на `Employee`:
+ * у склеенной строки «Изменить» разворачивает по редактору на логин.
+ * Поиск — по ФИО и по логину. Источник истины — backend
  * `PATCH /api/employees/:id` (`role`/`roles`); RBAC (SHOP_MANAGER/ADMIN,
  * запрет эскалации ADMIN, защита последнего админа) — на сервере.
  */
@@ -277,23 +371,24 @@ export function EmployeeRolesSection({
     [roleOptions],
   );
 
-  const active = useMemo(
-    () =>
-      employees
-        .filter((e) => e.active)
-        .sort((a, b) => a.fullName.localeCompare(b.fullName, 'ru')),
+  const groups = useMemo(
+    () => groupEmployees(employees.filter((e) => e.active)),
     [employees],
   );
 
   const [query, setQuery] = useState('');
-  const [editingId, setEditingId] = useState<string>('');
-  const stopEditing = useCallback(() => setEditingId(''), []);
+  const [editingKey, setEditingKey] = useState<string>('');
+  const stopEditing = useCallback(() => setEditingKey(''), []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return active;
-    return active.filter((e) => e.fullName.toLowerCase().includes(q));
-  }, [active, query]);
+    if (!q) return groups;
+    return groups.filter(
+      (g) =>
+        g.fullName.toLowerCase().includes(q) ||
+        g.accounts.some((a) => a.login.toLowerCase().includes(q)),
+    );
+  }, [groups, query]);
 
   return (
     <AdminCard>
@@ -307,51 +402,86 @@ export function EmployeeRolesSection({
         <Search size={16} strokeWidth={1.6} aria-hidden />
         <input
           type="search"
-          placeholder="Поиск по имени…"
+          placeholder="Поиск по имени или логину…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Поиск сотрудника"
         />
         <span className="admin-muted admin-role-search__count">
-          {filtered.length} из {active.length}
+          {filtered.length} из {groups.length}
         </span>
       </div>
 
       {filtered.length === 0 ? (
         <p className="admin-muted" style={{ fontSize: '0.9rem', marginTop: 8 }}>
-          {active.length === 0
+          {groups.length === 0
             ? 'Активных сотрудников нет.'
             : 'Никого не нашлось.'}
         </p>
       ) : (
         <ul className="admin-role-rows">
-          {filtered.map((e) => {
-            const editing = editingId === e.id;
+          {filtered.map((g) => {
+            const editing = editingKey === g.key;
+            const multi = g.accounts.length > 1;
             return (
               <li
-                key={e.id}
+                key={g.key}
                 className={
                   'admin-role-row' + (editing ? ' admin-role-row--editing' : '')
                 }
               >
-                <div className="admin-role-row__name">{e.fullName}</div>
+                <div className="admin-role-row__name">
+                  {g.fullName}
+                  {multi && (
+                    <span className="admin-role-row__logins admin-muted">
+                      Учётные записи:{' '}
+                      {g.accounts.map((a) => a.login).join(' · ')}
+                    </span>
+                  )}
+                </div>
                 <div className="admin-role-row__body">
                   {editing ? (
-                    <EmployeeRolesEditor
-                      employee={e}
-                      canAssignAdmin={canAssignAdmin}
-                      options={options}
-                      onDone={stopEditing}
-                    />
+                    <div className="admin-stack" style={{ gap: 12 }}>
+                      {g.accounts.map((account) => (
+                        <div key={account.id} className="admin-role-account">
+                          {multi && (
+                            <div className="admin-role-account__login">
+                              Логин <code>{account.login}</code>
+                            </div>
+                          )}
+                          <EmployeeRolesEditor
+                            employee={account}
+                            canAssignAdmin={canAssignAdmin}
+                            options={options}
+                            onDone={stopEditing}
+                          />
+                        </div>
+                      ))}
+                      <span className="admin-field__hint admin-muted">
+                        Клик по роли — доступ вкл/выкл. ★ — основная роль
+                        (рабочий экран по умолчанию); переключаться между
+                        участками сотрудник может сканом рабочего места.
+                        {multi
+                          ? ' У сотрудника несколько учётных записей — доступы правятся и сохраняются для каждой отдельно.'
+                          : ''}
+                        {!canAssignAdmin
+                          ? ' Роль «Администратор» назначает только администратор.'
+                          : ''}
+                      </span>
+                    </div>
                   ) : (
-                    <RoleChipsReadonly employee={e} labels={labels} />
+                    <RoleChipsReadonly
+                      roles={g.roles}
+                      showLogins={multi}
+                      labels={labels}
+                    />
                   )}
                 </div>
                 {!editing && (
                   <button
                     type="button"
                     className="admin-btn admin-btn--ghost admin-role-row__edit"
-                    onClick={() => setEditingId(e.id)}
+                    onClick={() => setEditingKey(g.key)}
                   >
                     <Pencil size={14} strokeWidth={1.6} aria-hidden />
                     Изменить
