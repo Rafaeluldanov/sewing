@@ -69,11 +69,23 @@
  *     legacy materials block — их смысл собран в KPI / unified
  *     table / totals.
  *
+ * Разбиение по расцветкам (07.08, фича «Расцветки»): если потребность
+ * посчитана по расцветкам (у строк есть `WorkshopNeed.orderVariantId`),
+ * материальные строки рендерятся сворачиваемыми блоками-расцветками
+ * (`OrderSummaryColorwayCollapsible`) с материальным подытогом каждой
+ * расцветки (за тираж расцветки / за 1 изделие расцветки — вариант
+ * «только материальная часть», решение владельца 07.08). Строки без
+ * расцветки — блок «Общее по заказу», операции — единой таблицей ниже
+ * блоков. Общий итог (`computeOrderSummaryTotals` → KPI / TotalsBlock)
+ * считается ДО группировки и от неё не зависит. Заказ без расцветок
+ * рендерится плоской таблицей — как раньше.
+ *
  * Backend / Prisma / WorkshopNeed formulas / OperationPlan formulas
  * / OrderCostEstimate logic / payroll / Passport / PurchaseOrder /
  * PurchaseReceipt — НЕ изменялись.
  */
 import { AlertTriangle } from 'lucide-react';
+import type { OrderColorwaysDto } from '@sewing/shared';
 import type { CutReadinessDto } from '@sewing/shared/cut-readiness';
 import type { MaterialIssueListItemDto } from '@sewing/shared/material-issues';
 import type { OperationDetailDto } from '@sewing/shared/operations';
@@ -92,6 +104,7 @@ import {
   type AdminTableColumn,
 } from '@/components/admin';
 import { ApiRequestError, errorText } from '@/lib/api';
+import { getOrderColorways } from '@/lib/colorways-api';
 import { getOrderCutReadiness } from '@/lib/cut-readiness-api';
 import { listOrderMaterialIssues } from '@/lib/material-issues-api';
 import { getOperation } from '@/lib/operations-api';
@@ -107,9 +120,11 @@ import { buildOrderOperationRows } from '@/components/orders/operations/build-or
 import {
   buildOrderSummaryRows,
   computeOrderSummaryTotals,
+  groupOrderSummaryRowsByColorway,
   type OrderSummaryRow,
   type OrderSummaryTotals,
 } from './build-order-summary-rows';
+import { OrderSummaryColorwayCollapsible } from './order-summary-colorway-collapsible';
 
 interface Props {
   order: OrderDetailDto;
@@ -170,6 +185,14 @@ interface LoadedData {
    * для факта (не путаем «нет данных» с «факта = 0»).
    */
   materialIssues: MaterialIssueListItemDto[] | null;
+  /**
+   * Живые расцветки заказа (`GET /orders/:id/colorways`) — лейблы,
+   * порядок и тираж блоков-расцветок. Грузятся ТОЛЬКО если потребность
+   * посчитана по расцветкам (есть строки с `orderVariantId`); ошибка
+   * глотается молча — блоки деградируют на snapshot-цвет
+   * (`WorkshopNeed.variantColor`) без тиража, сводка остаётся рабочей.
+   */
+  colorways: OrderColorwaysDto | null;
   loadErrors: string[];
 }
 
@@ -219,6 +242,18 @@ async function loadData(order: OrderDetailDto): Promise<LoadedData> {
       'Фактический расход материалов',
     ),
   ]);
+
+  // Расцветки: нужны только когда строки потребности привязаны к
+  // расцветкам. Заказ без расцветок (или с одной) не делает лишний
+  // запрос и рендерится плоской таблицей, как раньше.
+  let colorways: OrderColorwaysDto | null = null;
+  if (workshopNeeds.some((n) => n.orderVariantId)) {
+    try {
+      colorways = await getOrderColorways(order.id);
+    } catch {
+      // молча — лейблы блоков возьмутся из snapshot `variantColor`.
+    }
+  }
 
   const purchaseReceiptDetails = new Map<string, PurchaseReceiptDetailDto>();
   await Promise.all(
@@ -277,6 +312,7 @@ async function loadData(order: OrderDetailDto): Promise<LoadedData> {
     operationsById,
     productionBalance,
     materialIssues,
+    colorways,
     loadErrors,
   };
 }
@@ -850,6 +886,16 @@ export async function OrderSummaryUnifiedTable({
     operationCostPlanRub: order.operationCostPlanRub ?? null,
   });
 
+  // Разбиение по расцветкам — ПОСЛЕ подсчёта общего итога: блоки лишь
+  // перераскладывают те же строки, KPI и «Итого» от группировки не
+  // зависят. Пустой список групп = в заказе нет строк с расцветкой —
+  // рендерим плоскую таблицу, как раньше.
+  const grouping = groupOrderSummaryRowsByColorway({
+    rows: summaryRows,
+    colorways: data.colorways,
+  });
+  const hasColorwayBlocks = grouping.colorwayGroups.length > 0;
+
   // Колонки: Раздел / Статья / Кол-во / Ед. / Цена / Сумма за тираж /
   // За 1 изделие / Доля / Комментарий (9 колонок).
   const columns: AdminTableColumn<OrderSummaryRow>[] = [
@@ -931,7 +977,7 @@ export async function OrderSummaryUnifiedTable({
           title="Сводки пока нет"
           hint="Сводная себестоимость появится после расчёта материалов и операций."
         />
-      ) : (
+      ) : !hasColorwayBlocks ? (
         <div className="order-summary-table-wrap">
           <AdminTable
             className="order-summary-table"
@@ -939,6 +985,78 @@ export async function OrderSummaryUnifiedTable({
             columns={columns}
             rowKey={(r) => `${r.sourceKind}-${r.id}`}
           />
+        </div>
+      ) : (
+        <div
+          className="order-summary-groups"
+          data-testid="order-summary-colorway-groups"
+        >
+          {grouping.colorwayGroups.map((g) => (
+            <OrderSummaryColorwayCollapsible
+              key={g.orderVariantId}
+              kind="colorway"
+              title={g.colorLabel}
+              count={g.rows.length}
+              qtyLabel={g.qty != null ? `${g.qty} шт` : null}
+              summary={[
+                {
+                  label: 'Материалы и фурнитура за тираж',
+                  value: fmtRub(g.materialTotalRub),
+                },
+                {
+                  label: 'За 1 изделие расцветки',
+                  value: fmtRub(g.materialPerUnitRub),
+                },
+              ]}
+              warnings={g.warnings}
+            >
+              <div className="order-summary-table-wrap">
+                <AdminTable
+                  className="order-summary-table"
+                  rows={g.rows}
+                  columns={columns}
+                  rowKey={(r) => `${r.sourceKind}-${r.id}`}
+                />
+              </div>
+            </OrderSummaryColorwayCollapsible>
+          ))}
+
+          {grouping.commonRows.length > 0 && (
+            <OrderSummaryColorwayCollapsible
+              kind="common"
+              title="Общее по заказу"
+              count={grouping.commonRows.length}
+              summary={[
+                {
+                  label: 'Сумма за тираж',
+                  value: fmtRub(grouping.commonTotalRub),
+                },
+              ]}
+              warnings={grouping.commonWarnings}
+            >
+              <div className="order-summary-table-wrap">
+                <AdminTable
+                  className="order-summary-table"
+                  rows={grouping.commonRows}
+                  columns={columns}
+                  rowKey={(r) => `${r.sourceKind}-${r.id}`}
+                />
+              </div>
+            </OrderSummaryColorwayCollapsible>
+          )}
+
+          {grouping.operationRows.length > 0 && (
+            // Операции — единой таблицей под блоками: маршрут один на
+            // заказ, к расцветкам не относится (вариант «а», 07.08).
+            <div className="order-summary-table-wrap">
+              <AdminTable
+                className="order-summary-table"
+                rows={grouping.operationRows}
+                columns={columns}
+                rowKey={(r) => `${r.sourceKind}-${r.id}`}
+              />
+            </div>
+          )}
         </div>
       )}
 

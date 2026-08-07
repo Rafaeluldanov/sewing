@@ -16999,6 +16999,145 @@ body:has(.admin-layout) .app-header { display: none !important; }
   color: var(--admin-danger-fg, #991b1b);
 }
 
+/* --- Разбиение по расцветкам (блоки «Сводно по заказу») ------------------- */
+
+.order-summary-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.summary-colorway {
+  background: var(--admin-surface, #ffffff);
+  border: 1px solid var(--admin-border, #e4e4e1);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.summary-colorway__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.summary-colorway__title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  color: var(--admin-text, #1b1b1b);
+}
+
+.summary-colorway__title {
+  font-size: var(--title-subsection);
+  font-weight: 700;
+}
+
+.summary-colorway__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--admin-soft, #f1f1ef);
+  color: var(--admin-muted, #5f5f5c);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.summary-colorway__qty {
+  font-size: 0.8rem;
+  color: var(--admin-muted, #5f5f5c);
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-colorway__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.3rem;
+}
+
+.summary-colorway__sum {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.summary-colorway__sum-k {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--admin-muted, #5f5f5c);
+}
+
+.summary-colorway__sum-v {
+  font-size: 0.88rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--admin-text, #1b1b1b);
+}
+
+.summary-colorway__warnings {
+  margin: 0;
+  padding: 0.35rem 0.55rem;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: var(--admin-warning-bg, #fff7ed);
+  color: var(--admin-warning-fg, #9a3412);
+  border-radius: 6px;
+  font-size: 0.76rem;
+}
+
+.summary-colorway__warnings li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.summary-colorway__body {
+  padding: 0 0.8rem 0.65rem;
+  min-width: 0;
+}
+
+.summary-colorway__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+  border: none;
+  border-top: 1px dashed var(--admin-border, #e4e4e1);
+  background: var(--admin-bg, #f7f7f6);
+  color: var(--admin-muted, #5f5f5c);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.5rem;
+  cursor: pointer;
+}
+
+.summary-colorway__toggle:hover {
+  background: var(--admin-soft, #f1f1ef);
+  color: var(--admin-text, #1b1b1b);
+}
+
+.summary-colorway__chev {
+  transition: transform 0.18s ease;
+}
+
+.summary-colorway[data-open] .summary-colorway__chev {
+  transform: rotate(180deg);
+}
+
 @media (max-width: 720px) {
   .order-summary-table-card {
     padding: 0.55rem 0.65rem;

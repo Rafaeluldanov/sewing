@@ -37,11 +37,18 @@
  * (через `salaryPlanRubPerShift × shiftSeconds`); в этом случае
  * `lineTotalRub != null`. Если нет — `totalRub === null` и в
  * `comment` прокидываем «окладная». Backend formulas не дублируем.
+ *
+ * Разбиение по расцветкам (07.08): `groupOrderSummaryRowsByColorway`
+ * перераскладывает готовые `OrderSummaryRow[]` на блоки-расцветки
+ * (по `WorkshopNeed.orderVariantId`), блок «Общее по заказу» и
+ * секцию операций. Подытог блока — только материальная часть
+ * расцветки; общий итог считается ДО группировки и не меняется.
  */
 import {
   getWorkshopNeedKind,
   type WorkshopNeedKind,
 } from '@sewing/shared/workshop-needs';
+import type { OrderColorwaysDto } from '@sewing/shared';
 import type {
   MaterialIssueListItemDto,
   MaterialIssueStatus,
@@ -155,6 +162,19 @@ export interface OrderSummaryRow {
   comment: string | null;
   /** Список warnings строки (для UI tooltip / списка). */
   warnings: string[];
+
+  /**
+   * Фича «Расцветки» (FEATURE_COLORWAYS): к какой расцветке
+   * (`OrderVariant`) относится строка. Приходит из
+   * `WorkshopNeed.orderVariantId` — потребность считается по каждой
+   * расцветке отдельно. `null` — order-level строка (нанесение /
+   * ручная строка / заказ с ≤1 расцветкой / операция / строка сметы).
+   * `variantColor` — snapshot цвета на момент расчёта потребности;
+   * используется как fallback-лейбл группы, если живая расцветка
+   * уже удалена или недоступна.
+   */
+  orderVariantId: string | null;
+  variantColor: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +354,8 @@ function buildMaterialRow(
     unitCostRub: null, // будет посчитан caller-ом, когда знает qtyTotal заказа
     comment,
     warnings: Array.from(warnings),
+    orderVariantId: row.originalNeed.orderVariantId ?? null,
+    variantColor: row.originalNeed.variantColor ?? null,
   };
 }
 
@@ -400,6 +422,9 @@ function buildOperationRow(
     unitCostRub: null,
     comment,
     warnings: Array.from(warnings),
+    // Маршрут один на заказ — операции к расцветке не привязаны.
+    orderVariantId: null,
+    variantColor: null,
   };
 }
 
@@ -530,6 +555,10 @@ export function buildOrderSummaryRows(
       unitCostRub: null,
       comment: null,
       warnings: [],
+      // Строки сметы без workshopNeedId (лекало / прочие расходы) —
+      // order-level, к расцветке не относятся.
+      orderVariantId: null,
+      variantColor: null,
     });
   }
 
@@ -951,5 +980,210 @@ export function computeOrderSummaryTotals(
     marginPerUnitRub,
     marginPercent,
     warnings,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Colorway grouping
+// ---------------------------------------------------------------------------
+
+/**
+ * Группа «расцветка» для вкладки «Сводно по заказу»: материальные
+ * строки одной расцветки + её материальная себестоимость.
+ *
+ * Семантика подытога — сознательно ТОЛЬКО материальная часть
+ * (материалы + фурнитура + любые строки, привязанные к расцветке):
+ * операции и order-level строки (нанесение / прочее) в подытог
+ * расцветки НЕ входят, они видны в общем итоге под таблицей
+ * (`computeOrderSummaryTotals` не меняется). Решение владельца от
+ * 07.08: «пока только материальная часть».
+ */
+export interface OrderSummaryColorwayGroup {
+  /** `OrderVariant.id` расцветки (ключ группировки). */
+  orderVariantId: string;
+  /** Лейбл группы: живой цвет расцветки, иначе snapshot
+   *  `WorkshopNeed.variantColor`, иначе «Расцветка». */
+  colorLabel: string;
+  /** Тираж расцветки — Σ `qtyPlan` живого поразмерного плана.
+   *  `null`, если расцветка удалена / API расцветок недоступен. */
+  qty: number | null;
+  /**
+   * Строки группы (те же `OrderSummaryRow`, что и в плоской таблице).
+   * `unitCostRub` здесь пересчитан на тираж РАСЦВЕТКИ: материал
+   * чёрной ткани расходуется только на чёрные изделия, поэтому
+   * деление на весь тираж заказа внутри блока расцветки врало бы.
+   * При неизвестном тираже расцветки `unitCostRub = null` («—»).
+   */
+  rows: OrderSummaryRow[];
+  /** Материальная часть расцветки: Σ `totalRub` строк группы.
+   *  `null`, если ни у одной строки нет RUB-суммы. */
+  materialTotalRub: number | null;
+  /** `materialTotalRub / qty`. `null`, если что-то из двух неизвестно. */
+  materialPerUnitRub: number | null;
+  /** Предупреждения группы (USD без курса / нет цены / не учитывается). */
+  warnings: string[];
+}
+
+/** Результат разбиения строк сводки по расцветкам. */
+export interface OrderSummaryColorwayGrouping {
+  /**
+   * Блоки расцветок в порядке `ordinal` живых расцветок; группы по
+   * удалённым расцветкам — после живых, по алфавиту лейбла. Пустой
+   * массив — в заказе нет строк с расцветкой, UI рендерит плоскую
+   * таблицу как раньше.
+   */
+  colorwayGroups: OrderSummaryColorwayGroup[];
+  /** Строки без расцветки, кроме операций: нанесение / ручные
+   *  строки / прочее / строки сметы. `unitCostRub` не пересчитывается
+   *  (делится на весь тираж — эти затраты общие). */
+  commonRows: OrderSummaryRow[];
+  /** Σ `totalRub` общих строк — для заголовка блока «Общее по заказу». */
+  commonTotalRub: number | null;
+  /** Предупреждения общих строк (USD без курса / нет цены). */
+  commonWarnings: string[];
+  /** Операции — единой секцией, к расцветкам не относятся. */
+  operationRows: OrderSummaryRow[];
+}
+
+interface GroupByColorwayInput {
+  rows: OrderSummaryRow[];
+  /** Живые расцветки заказа (`GET /orders/:id/colorways`) — источник
+   *  лейбла, порядка и тиража группы. `null` — API недоступен /
+   *  фича выключена: группы соберутся по snapshot-цветам без тиража. */
+  colorways: OrderColorwaysDto | null;
+}
+
+/**
+ * Собирает предупреждения по строкам одной группы. Мы не дублируем
+ * построчные warnings — только причины, из-за которых подытог группы
+ * меньше суммы «на глаз» (строка не вошла в Σ).
+ */
+function collectGroupWarnings(rows: OrderSummaryRow[]): string[] {
+  let usdCount = 0;
+  let noPriceCount = 0;
+  let excludedCount = 0;
+  for (const r of rows) {
+    if (r.totalRub != null) continue;
+    if (r.totalDisplay === ORDER_MATERIALS_AND_HARDWARE_EXCLUDED_LABEL) {
+      excludedCount += 1;
+    } else if (
+      r.priceCurrency === 'USD' ||
+      r.warnings.some((w) => w.includes('USD без курса'))
+    ) {
+      usdCount += 1;
+    } else {
+      noPriceCount += 1;
+    }
+  }
+  const warnings: string[] = [];
+  if (usdCount > 0) {
+    warnings.push(
+      `USD без курса: ${usdCount} стр. не входит в сумму расцветки`,
+    );
+  }
+  if (noPriceCount > 0) {
+    warnings.push(`Без цены: ${noPriceCount} стр.`);
+  }
+  if (excludedCount > 0) {
+    warnings.push('Материалы клиента — не учитываются в себестоимости');
+  }
+  return warnings;
+}
+
+/** Σ totalRub строк; `null`, если ни у одной строки нет RUB-суммы. */
+function sumRowsTotalRub(rows: OrderSummaryRow[]): number | null {
+  let sum: number | null = null;
+  for (const r of rows) {
+    if (r.totalRub != null) sum = (sum ?? 0) + r.totalRub;
+  }
+  return sum;
+}
+
+/**
+ * Разбивает строки сводки на блоки по расцветкам (вариант «только
+ * материальная часть»). Pure-функция: работает поверх готовых
+ * `OrderSummaryRow[]`, общий итог (`computeOrderSummaryTotals`)
+ * считается ДО группировки и группировкой не меняется — блоки лишь
+ * перераскладывают те же строки.
+ */
+export function groupOrderSummaryRowsByColorway(
+  input: GroupByColorwayInput,
+): OrderSummaryColorwayGrouping {
+  const { rows, colorways } = input;
+
+  const operationRows: OrderSummaryRow[] = [];
+  const commonRows: OrderSummaryRow[] = [];
+  const byVariant = new Map<string, OrderSummaryRow[]>();
+
+  for (const r of rows) {
+    if (r.section === 'OPERATION') {
+      operationRows.push(r);
+    } else if (r.orderVariantId) {
+      const bucket = byVariant.get(r.orderVariantId) ?? [];
+      bucket.push(r);
+      byVariant.set(r.orderVariantId, bucket);
+    } else {
+      commonRows.push(r);
+    }
+  }
+
+  // Живые расцветки: лейбл + порядок + тираж (Σ qtyPlan размеров).
+  const liveById = new Map<
+    string,
+    { color: string; ordinal: number; qty: number }
+  >();
+  for (const v of colorways?.variants ?? []) {
+    let qty = 0;
+    for (const s of v.sizes) qty += s.qtyPlan;
+    liveById.set(v.id, { color: v.color, ordinal: v.ordinal, qty });
+  }
+
+  const colorwayGroups: OrderSummaryColorwayGroup[] = [];
+  for (const [variantId, groupRows] of byVariant) {
+    const live = liveById.get(variantId) ?? null;
+    const snapshotColor =
+      groupRows.find((r) => r.variantColor)?.variantColor ?? null;
+    const colorLabel = live?.color ?? snapshotColor ?? 'Расцветка';
+    const qty = live ? live.qty : null;
+
+    const materialTotalRub = sumRowsTotalRub(groupRows);
+    const materialPerUnitRub =
+      materialTotalRub != null && qty != null && qty > 0
+        ? materialTotalRub / qty
+        : null;
+
+    // «За 1 изделие» внутри блока — на тираж расцветки, не заказа.
+    const rowsPerVariantUnit = groupRows.map((r) => ({
+      ...r,
+      unitCostRub:
+        r.totalRub != null && qty != null && qty > 0
+          ? r.totalRub / qty
+          : null,
+    }));
+
+    colorwayGroups.push({
+      orderVariantId: variantId,
+      colorLabel,
+      qty,
+      rows: rowsPerVariantUnit,
+      materialTotalRub,
+      materialPerUnitRub,
+      warnings: collectGroupWarnings(groupRows),
+    });
+  }
+
+  colorwayGroups.sort((a, b) => {
+    const aOrd = liveById.get(a.orderVariantId)?.ordinal ?? Infinity;
+    const bOrd = liveById.get(b.orderVariantId)?.ordinal ?? Infinity;
+    if (aOrd !== bOrd) return aOrd - bOrd;
+    return a.colorLabel.localeCompare(b.colorLabel, 'ru');
+  });
+
+  return {
+    colorwayGroups,
+    commonRows,
+    commonTotalRub: sumRowsTotalRub(commonRows),
+    commonWarnings: collectGroupWarnings(commonRows),
+    operationRows,
   };
 }
