@@ -75,8 +75,10 @@
  * (`OrderSummaryColorwayCollapsible`) с материальным подытогом каждой
  * расцветки (за тираж расцветки / за 1 изделие расцветки — вариант
  * «только материальная часть», решение владельца 07.08). Строки без
- * расцветки — блок «Общее по заказу», операции — единой таблицей ниже
- * блоков. Общий итог (`computeOrderSummaryTotals` → KPI / TotalsBlock)
+ * расцветки — блок «Общее по заказу»; операции — таким же
+ * сворачиваемым блоком, но отдельным (работа ≠ материальная часть,
+ * подытог блока = строка «Операции за тираж» из «Итого»). Общий итог
+ * (`computeOrderSummaryTotals` → KPI / TotalsBlock)
  * считается ДО группировки и от неё не зависит. Заказ без расцветок
  * рендерится плоской таблицей — как раньше.
  *
@@ -896,6 +898,26 @@ export async function OrderSummaryUnifiedTable({
   });
   const hasColorwayBlocks = grouping.colorwayGroups.length > 0;
 
+  // Подытог блока «Операции» — из тех же totals, что строка «Операции
+  // за тираж» в «Итого» (там уже учтён снимок `operationCostPlanRub`):
+  // шапка блока обязана сходиться с итогом внизу. Warning про строки
+  // без суммы показываем только когда снимка нет — тогда Σ реально
+  // занижена; при живом снимке сумма полная независимо от строк.
+  const operationTotalRub = totals.byKind.operation;
+  const operationPerUnitRub =
+    operationTotalRub != null && order.qtyPlanTotal > 0
+      ? operationTotalRub / order.qtyPlanTotal
+      : null;
+  const operationRowsWithoutTotal = grouping.operationRows.filter(
+    (r) => r.totalRub == null,
+  ).length;
+  const operationBlockWarnings =
+    order.operationCostPlanRub == null && operationRowsWithoutTotal > 0
+      ? [
+          `Без точной ставки: ${operationRowsWithoutTotal} стр. — не входят в сумму`,
+        ]
+      : [];
+
   // Колонки: Раздел / Статья / Кол-во / Ед. / Цена / Сумма за тираж /
   // За 1 изделие / Доля / Комментарий (9 колонок).
   const columns: AdminTableColumn<OrderSummaryRow>[] = [
@@ -1046,16 +1068,35 @@ export async function OrderSummaryUnifiedTable({
           )}
 
           {grouping.operationRows.length > 0 && (
-            // Операции — единой таблицей под блоками: маршрут один на
-            // заказ, к расцветкам не относится (вариант «а», 07.08).
-            <div className="order-summary-table-wrap">
-              <AdminTable
-                className="order-summary-table"
-                rows={grouping.operationRows}
-                columns={columns}
-                rowKey={(r) => `${r.sourceKind}-${r.id}`}
-              />
-            </div>
+            // Операции — таким же сворачиваемым блоком, но ОТДЕЛЬНЫМ
+            // от «Общего по заказу»: подытог общего блока — материальная
+            // часть, операции — работа по маршруту (снимок
+            // `operationCostPlanRub`), в «Итого» они тоже раздельно.
+            <OrderSummaryColorwayCollapsible
+              kind="operations"
+              title="Операции"
+              count={grouping.operationRows.length}
+              summary={[
+                {
+                  label: 'Операции за тираж',
+                  value: fmtRub(operationTotalRub),
+                },
+                {
+                  label: 'За 1 изделие',
+                  value: fmtRub(operationPerUnitRub),
+                },
+              ]}
+              warnings={operationBlockWarnings}
+            >
+              <div className="order-summary-table-wrap">
+                <AdminTable
+                  className="order-summary-table"
+                  rows={grouping.operationRows}
+                  columns={columns}
+                  rowKey={(r) => `${r.sourceKind}-${r.id}`}
+                />
+              </div>
+            </OrderSummaryColorwayCollapsible>
           )}
         </div>
       )}

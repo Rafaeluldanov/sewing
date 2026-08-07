@@ -20,8 +20,9 @@
  *      группы); операции и order-level строки в подытог расцветки не
  *      входят.
  *   3. «За 1 изделие» внутри блока делится на тираж РАСЦВЕТКИ, не заказа.
- *   4. Строки без расцветки — блок «Общее по заказу»; операции — единой
- *      таблицей ниже блоков.
+ *   4. Строки без расцветки — блок «Общее по заказу»; операции — таким
+ *      же сворачиваемым блоком, но отдельным (работа ≠ материальная
+ *      часть; подытог = строка «Операции за тираж» из «Итого»).
  *   5. Общий итог (KPI / TotalsBlock) считается ДО группировки и от неё
  *      не зависит; заказ без расцветок рендерится плоской таблицей.
  *   6. Backend / Prisma / WorkshopNeed formulas — НЕ менялись; живые
@@ -124,9 +125,10 @@ describe('OrderSummaryColorwayCollapsible — client-блок сворачива
     expect(src).toMatch(/data-open=\{open \|\| undefined\}/);
   });
 
-  test('testid-ы блоков расцветки и «Общее по заказу»', () => {
+  test('testid-ы блоков: расцветка / «Общее по заказу» / «Операции»', () => {
     expect(src).toMatch(/order-summary-colorway-block/);
     expect(src).toMatch(/order-summary-common-block/);
+    expect(src).toMatch(/order-summary-operations-block/);
   });
 });
 
@@ -158,14 +160,19 @@ describe('OrderSummaryUnifiedTable — блоки расцветок', () => {
     expect(src).toMatch(/<TotalsBlock totals=\{totals\} \/>/);
   });
 
-  test('рендерит блоки + «Общее по заказу» + операции единой таблицей', () => {
+  test('рендерит блоки: расцветки + «Общее по заказу» + «Операции»', () => {
     expect(src).toMatch(/<OrderSummaryColorwayCollapsible/);
     expect(src).toMatch(/data-testid="order-summary-colorway-groups"/);
     expect(src).toMatch(/Общее по заказу/);
     expect(src).toMatch(/grouping\.operationRows/);
-    // Подытог блока — материальная часть расцветки.
+    // Подытог блока расцветки — материальная часть расцветки.
     expect(src).toMatch(/Материалы и фурнитура за тираж/);
     expect(src).toMatch(/За 1 изделие расцветки/);
+    // Операции — отдельный сворачиваемый блок (не в «Общем по заказу»),
+    // подытог шапки — те же totals, что строка «Операции за тираж» в
+    // «Итого» (снимок operationCostPlanRub уже учтён).
+    expect(src).toMatch(/kind="operations"/);
+    expect(src).toMatch(/totals\.byKind\.operation/);
   });
 
   test('заказ без расцветок — плоская таблица как раньше', () => {

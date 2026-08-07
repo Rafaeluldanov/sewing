@@ -11,8 +11,13 @@
  * умолчанию блок свёрнут: менеджер сначала видит компактный список
  * расцветок с их суммами, детали раскрывает по клику.
  *
- * Тот же блок с `kind="common"` используется для группы «Общее по
- * заказу» (строки без расцветки: нанесение / ручные / прочее).
+ * Тот же блок используется для группы «Общее по заказу»
+ * (`kind="common"` — строки без расцветки: нанесение / ручные /
+ * прочее) и для секции «Операции» (`kind="operations"` — работа по
+ * маршруту; отдельный блок, а не часть «Общего», потому что подытог
+ * общего блока — материальная часть, а операции — деньги за работу
+ * из снимка `Order.operationCostPlanRub`, в «Итого» они тоже
+ * раздельно).
  *
  * Компонент client только ради сворачивания — паттерн
  * `OrderNeedsCollapsible` (children рендерится на сервере и
@@ -20,18 +25,38 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, Layers, Palette } from 'lucide-react';
+import {
+  AlertTriangle,
+  ChevronDown,
+  Layers,
+  Palette,
+  Wrench,
+} from 'lucide-react';
 
 interface SummaryItem {
   label: string;
   value: string;
 }
 
+type BlockKind = 'colorway' | 'common' | 'operations';
+
+const KIND_ICONS: Record<BlockKind, typeof Palette> = {
+  colorway: Palette,
+  common: Layers,
+  operations: Wrench,
+};
+
+const KIND_TESTIDS: Record<BlockKind, string> = {
+  colorway: 'order-summary-colorway-block',
+  common: 'order-summary-common-block',
+  operations: 'order-summary-operations-block',
+};
+
 interface Props {
-  /** Заголовок блока (например «Расцветка «Чёрный»» / «Общее по заказу»). */
+  /** Заголовок блока («Чёрный» / «Общее по заказу» / «Операции»). */
   title: string;
-  /** Вид блока: расцветка или общие строки заказа (иконка шапки). */
-  kind: 'colorway' | 'common';
+  /** Вид блока: расцветка / общие строки заказа / операции. */
+  kind: BlockKind;
   /** Число строк в блоке — бейдж у заголовка. */
   count: number;
   /** Тираж расцветки («120 шт») или `null`, если неизвестен. */
@@ -57,18 +82,14 @@ export function OrderSummaryColorwayCollapsible({
   defaultOpen = false,
 }: Props) {
   const [open, setOpen] = useState(defaultOpen);
-  const Icon = kind === 'colorway' ? Palette : Layers;
+  const Icon = KIND_ICONS[kind];
 
   return (
     <section
       className="summary-colorway"
       data-open={open || undefined}
       data-kind={kind}
-      data-testid={
-        kind === 'colorway'
-          ? 'order-summary-colorway-block'
-          : 'order-summary-common-block'
-      }
+      data-testid={KIND_TESTIDS[kind]}
     >
       <div className="summary-colorway__head">
         <div className="summary-colorway__title-row">
