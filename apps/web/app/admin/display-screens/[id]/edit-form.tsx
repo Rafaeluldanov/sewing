@@ -14,6 +14,7 @@ import {
   type UpdateDisplayPinState,
   type UpdateDisplayScreenState,
 } from './form-state';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 function SubmitButton({
   label,
@@ -122,14 +123,15 @@ export function DisplayScreenMainForm({
 
         <div className="admin-field">
           <label htmlFor="ds-edit-companyDivisionId">Подразделение</label>
-          <select
+          <CreatableSelect
+            entity="companyDivision"
             id="ds-edit-companyDivisionId"
             name="companyDivisionId"
             required
             defaultValue={
               divisionKnown ? (screen.companyDivisionId ?? '') : ''
             }
-            disabled={companyDivisions.length === 0}
+            existingValues={companyDivisions.map((d) => d.id)}
           >
             <option value="" disabled>
               {companyDivisions.length === 0
@@ -141,7 +143,7 @@ export function DisplayScreenMainForm({
                 {d.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
           {!divisionKnown && screen.companyDivision && (
             <p className="admin-muted" style={{ fontSize: '0.82rem' }}>
               Сейчас: {screen.companyDivision.name} — карточка не в списке

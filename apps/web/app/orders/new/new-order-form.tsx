@@ -8,6 +8,7 @@ import type { ProductDto, SizeDto } from '@sewing/shared/orders';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { createOrderAction, type FormActionState } from '../actions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 interface Props {
   sizes: SizeDto[];
@@ -131,14 +132,22 @@ export function NewOrderForm({
       <div className="form-row">
         <label htmlFor="clientId">Клиент *</label>
         <div>
-          <select id="clientId" name="clientId" required aria-required="true">
+          <CreatableSelect
+            entity="client"
+            id="clientId"
+            name="clientId"
+            required
+            aria-required="true"
+            defaultValue=""
+            existingValues={clients.map((c) => c.id)}
+          >
             <option value="">— выберите клиента —</option>
             {clients.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
           <div className="hint">
             {clients.length === 0
               ? 'Список клиентов пуст — добавьте клиента в разделе «Клиенты».'
@@ -151,19 +160,21 @@ export function NewOrderForm({
         <div className="form-row">
           <label htmlFor="companyDivisionId">Подразделение</label>
           <div>
-            <select
+            <CreatableSelect
+              entity="companyDivision"
               id="companyDivisionId"
               name="companyDivisionId"
               value={companyDivisionId}
-              onChange={(e) => setCompanyDivisionId(e.target.value)}
+              onValueChange={setCompanyDivisionId}
               required
+              existingValues={companyDivisions.map((d) => d.id)}
             >
               {companyDivisions.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.name}
                 </option>
               ))}
-            </select>
+            </CreatableSelect>
             <div className="hint">
               Определяет, на каком экране /shopfloor/display будет
               видно заказ. По умолчанию — «B2B».
@@ -188,58 +199,62 @@ export function NewOrderForm({
         </div>
       </div>
 
-      {routeTemplates.length > 0 && (
-        <div className="form-row">
-          <label htmlFor="routeTemplateId">Шаблон маршрута</label>
-          <div>
-            <select
-              id="routeTemplateId"
-              name="routeTemplateId"
-              defaultValue=""
-            >
-              <option value="">— без маршрута —</option>
-              {routeTemplates.map((tpl) => (
-                <option
-                  key={tpl.id}
-                  value={tpl.id}
-                  disabled={tpl.stepsCount === 0}
-                >
-                  {tpl.name} ({tpl.code})
-                  {tpl.stepsCount === 0 ? ' — нет шагов' : ''}
-                </option>
-              ))}
-            </select>
-            <div className="hint">
-              Опционально. Шаги маршрута зафиксируются snapshot-ом при запуске
-              заказа в производство — UI на /work будет подсказывать швее
-              текущий и следующий шаг. Это «мягкий» маршрут: scan «не туда»
-              не блокируется.
-            </div>
+      <div className="form-row">
+        <label htmlFor="routeTemplateId">Шаблон маршрута</label>
+        <div>
+          <CreatableSelect
+            entity="routeTemplate"
+            id="routeTemplateId"
+            name="routeTemplateId"
+            defaultValue=""
+            existingValues={routeTemplates.map((tpl) => tpl.id)}
+          >
+            <option value="">— без маршрута —</option>
+            {routeTemplates.map((tpl) => (
+              <option
+                key={tpl.id}
+                value={tpl.id}
+                disabled={tpl.stepsCount === 0}
+              >
+                {tpl.name} ({tpl.code})
+                {tpl.stepsCount === 0 ? ' — нет шагов' : ''}
+              </option>
+            ))}
+          </CreatableSelect>
+          <div className="hint">
+            Опционально. Шаги маршрута зафиксируются snapshot-ом при запуске
+            заказа в производство — UI на /work будет подсказывать швее
+            текущий и следующий шаг. Это «мягкий» маршрут: scan «не туда»
+            не блокируется.
           </div>
         </div>
-      )}
+      </div>
 
-      {techCards.length > 0 && (
-        <div className="form-row">
-          <label htmlFor="techCardId">Техкарта</label>
-          <div>
-            <select id="techCardId" name="techCardId" defaultValue="">
-              <option value="">— без техкарты —</option>
-              {techCards.map((tc) => (
-                <option key={tc.id} value={tc.id}>
-                  {tc.name} ({tc.code})
-                </option>
-              ))}
-            </select>
-            <div className="hint">
-              Опционально. Строки материалов и внешних подрядных размещений
-              зафиксируются snapshot-ом при запуске заказа в производство —
-              план потребностей на карточке заказа станет read-only и
-              перестанет зависеть от поздних правок шаблона.
-            </div>
+      <div className="form-row">
+        <label htmlFor="techCardId">Техкарта</label>
+        <div>
+          <CreatableSelect
+            entity="techCard"
+            id="techCardId"
+            name="techCardId"
+            defaultValue=""
+            existingValues={techCards.map((tc) => tc.id)}
+          >
+            <option value="">— без техкарты —</option>
+            {techCards.map((tc) => (
+              <option key={tc.id} value={tc.id}>
+                {tc.name} ({tc.code})
+              </option>
+            ))}
+          </CreatableSelect>
+          <div className="hint">
+            Опционально. Строки материалов и внешних подрядных размещений
+            зафиксируются snapshot-ом при запуске заказа в производство —
+            план потребностей на карточке заказа станет read-only и
+            перестанет зависеть от поздних правок шаблона.
           </div>
         </div>
-      )}
+      </div>
 
       <div className="form-row">
         <label htmlFor="comment">Комментарий</label>

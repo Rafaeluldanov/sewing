@@ -14,6 +14,7 @@ import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { AdminDateField } from '@/components/admin/admin-date-field';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import { updateOrderAction, type FormActionState } from '../../actions';
 
 interface Props {
@@ -138,12 +139,14 @@ export function EditOrderForm({
         <div className="form-row">
           <label htmlFor="clientId">Клиент *</label>
           <div>
-            <select
+            <CreatableSelect
+              entity="client"
               id="clientId"
               name="clientId"
               defaultValue={currentClient?.id ?? ''}
               required
               aria-required="true"
+              existingValues={clients.map((c) => c.id)}
             >
               <option value="">— выберите клиента —</option>
               {/*
@@ -164,7 +167,7 @@ export function EditOrderForm({
                   {c.isActive ? '' : ' — архивный'}
                 </option>
               ))}
-            </select>
+            </CreatableSelect>
             <div className="hint">
               Обязательное поле — заказ всегда принадлежит клиенту.
               Свободный текст `customer` остался только для
@@ -197,11 +200,13 @@ export function EditOrderForm({
         <div className="form-row">
           <label htmlFor="companyDivisionId">Подразделение</label>
           <div>
-            <select
+            <CreatableSelect
+              entity="companyDivision"
               id="companyDivisionId"
               name="companyDivisionId"
               value={companyDivisionId}
-              onChange={(e) => setCompanyDivisionId(e.target.value)}
+              onValueChange={setCompanyDivisionId}
+              existingValues={companyDivisions.map((d) => d.id)}
             >
               <option value="">— без подразделения —</option>
               {/*
@@ -225,7 +230,7 @@ export function EditOrderForm({
                   {d.isActive ? '' : ' — архив'}
                 </option>
               ))}
-            </select>
+            </CreatableSelect>
             <div className="hint">
               Менять можно только пока заказ в DRAFT.
             </div>
@@ -289,43 +294,43 @@ export function EditOrderForm({
         </div>
       )}
 
-      {(techCards.length > 0 || order.techCardId) && (
-        <div className="form-row">
-          <label htmlFor="techCardId">Техкарта</label>
-          <div>
-            <select
-              id="techCardId"
-              name="techCardId"
-              defaultValue={order.techCardId ?? ''}
-            >
-              <option value="">— без техкарты —</option>
-              {/*
-                Если у заказа уже выбрана техкарта, которой нет в списке
-                активных (например, её деактивировали), всё равно
-                показываем её как опцию — иначе при сохранении формы
-                привязка пропадёт без явного действия пользователя.
-              */}
-              {order.techCardId &&
-                !techCards.some((t) => t.id === order.techCardId) && (
-                  <option value={order.techCardId}>
-                    {order.techCardName ?? 'Текущая техкарта'} (
-                    {order.techCardCode ?? '—'}) — неактивна
-                  </option>
-                )}
-              {techCards.map((tc) => (
-                <option key={tc.id} value={tc.id}>
-                  {tc.name} ({tc.code})
-                  {tc.isActive ? '' : ' — неактивна'}
+      <div className="form-row">
+        <label htmlFor="techCardId">Техкарта</label>
+        <div>
+          <CreatableSelect
+            entity="techCard"
+            id="techCardId"
+            name="techCardId"
+            defaultValue={order.techCardId ?? ''}
+            existingValues={techCards.map((tc) => tc.id)}
+          >
+            <option value="">— без техкарты —</option>
+            {/*
+              Если у заказа уже выбрана техкарта, которой нет в списке
+              активных (например, её деактивировали), всё равно
+              показываем её как опцию — иначе при сохранении формы
+              привязка пропадёт без явного действия пользователя.
+            */}
+            {order.techCardId &&
+              !techCards.some((t) => t.id === order.techCardId) && (
+                <option value={order.techCardId}>
+                  {order.techCardName ?? 'Текущая техкарта'} (
+                  {order.techCardCode ?? '—'}) — неактивна
                 </option>
-              ))}
-            </select>
-            <div className="hint">
-              Менять техкарту можно только до запуска заказа в производство —
-              после `start()` план потребностей фиксируется snapshot-ом.
-            </div>
+              )}
+            {techCards.map((tc) => (
+              <option key={tc.id} value={tc.id}>
+                {tc.name} ({tc.code})
+                {tc.isActive ? '' : ' — неактивна'}
+              </option>
+            ))}
+          </CreatableSelect>
+          <div className="hint">
+            Менять техкарту можно только до запуска заказа в производство —
+            после `start()` план потребностей фиксируется snapshot-ом.
           </div>
         </div>
-      )}
+      </div>
 
       {/*
         Soft-pattern MVP (этап 2 «Лекала»): селект лекала. Семантика

@@ -283,9 +283,16 @@ export function EquipmentOperationsEditor({ equipment, operations }: Props) {
     [equipment.allowedOperations],
   );
 
+  // Локальный state вместо чистого useMemo: операция может быть создана
+  // «на лету» из селекта (creatable) — merge с дедупом по id.
+  const [extraOps, setExtraOps] = useState<OperationLiteDto[]>([]);
   const sortedOperations = useMemo(
-    () => [...operations].sort((a, b) => a.sortOrder - b.sortOrder),
-    [operations],
+    () =>
+      [
+        ...operations,
+        ...extraOps.filter((x) => !operations.some((o) => o.id === x.id)),
+      ].sort((a, b) => a.sortOrder - b.sortOrder),
+    [operations, extraOps],
   );
 
   const initialOrder = useMemo(() => {
@@ -401,6 +408,21 @@ export function EquipmentOperationsEditor({ equipment, operations }: Props) {
           placeholder="— выбрать операцию —"
           ariaLabel="Добавить операцию"
           className="admin-chip-add__select"
+          creatable
+          onCreatedOperation={(created) =>
+            setExtraOps((prev) => [
+              ...prev.filter((o) => o.id !== created.id),
+              {
+                id: created.id,
+                code: created.code,
+                name: created.name,
+                category: created.category,
+                sortOrder: created.sortOrder,
+                active: created.isActive,
+                pricingMode: created.pricingMode,
+              },
+            ])
+          }
         />
         <button
           type="button"

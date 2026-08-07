@@ -2228,8 +2228,10 @@ DTO: `AdminOverviewDto` в `packages/shared/src/admin.ts`.
 | Метод | Путь                  | RBAC                         | Описание |
 | ----- | --------------------- | ---------------------------- | -------- |
 | GET   | `/api/defect-types`   | QC, SHOP_MANAGER (+ ADMIN)   | Справочник `DefectType[]` (только `isActive`, sort by `sortOrder`). |
+| POST  | `/api/defect-types`   | QC, SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Создать вид брака «на лету» из формы фиксации брака (`CreateDefectTypeSchema`: `name` обязателен, `code` опционален — без него подбирается свободный `DT-N`). `sortOrder = max + 10`. Конфликт кода → 409 `DEFECT_TYPE_CODE_TAKEN`. |
 
-> Записных операций нет — справочник наполняется через `prisma/seed.ts`.
+> Базовое наполнение справочника — `prisma/seed.ts`; admin-CRUD
+> (деактивация/переименование) пока отсутствует.
 
 ---
 

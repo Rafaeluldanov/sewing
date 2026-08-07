@@ -30,6 +30,7 @@ import {
   resolveSubtypeKeyByCharacteristic,
 } from '@sewing/shared/material-characteristic-options';
 import { CharacteristicCombobox } from '@/components/materials/characteristic-combobox';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import {
   createTechCardAction,
   pullMaterialLinesFromCategoryAction,
@@ -1074,12 +1075,15 @@ export function TechCardForm({
             </label>
             {safePatternCategories.length > 0 ? (
               <>
-                <select
+                <CreatableSelect
+                  entity="patternCategory"
                   id="tc-pull-category"
                   value={pullCategoryId}
-                  onChange={(e) => setPullCategoryId(e.target.value)}
+                  onValueChange={setPullCategoryId}
                   disabled={isPullingCategory}
+                  disableCreate={isPullingCategory}
                   data-testid="tech-card-pull-category"
+                  existingValues={safePatternCategories.map((c) => c.id)}
                 >
                   <option value="">— выберите группу —</option>
                   {safePatternCategories.map((c) => (
@@ -1087,7 +1091,7 @@ export function TechCardForm({
                       {c.name}
                     </option>
                   ))}
-                </select>
+                </CreatableSelect>
                 <button
                   type="button"
                   className="admin-btn admin-btn--ghost"

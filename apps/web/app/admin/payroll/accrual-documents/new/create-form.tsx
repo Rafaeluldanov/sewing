@@ -10,6 +10,7 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import type { EmployeeListItemDto } from '@sewing/shared/employees';
 import { createPayrollAccrualDocumentAction } from '../actions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import type { AccrualDocumentActionState } from '../actions';
 
 const initialState: AccrualDocumentActionState = {};
@@ -72,14 +73,20 @@ export function CreateAccrualDocumentForm({
 
       <div className="admin-field">
         <label htmlFor="create-ad-employee">Сотрудник</label>
-        <select id="create-ad-employee" name="employeeId" defaultValue="">
+        <CreatableSelect
+          entity="employee"
+          id="create-ad-employee"
+          name="employeeId"
+          defaultValue=""
+          existingValues={sortedEmployees.map((e) => e.id)}
+        >
           <option value="">— все сотрудники —</option>
           {sortedEmployees.map((e) => (
             <option key={e.id} value={e.id}>
               {e.fullName}
             </option>
           ))}
-        </select>
+        </CreatableSelect>
         <p className="admin-hint">
           Оставьте «все сотрудники», чтобы начислить всем сразу, или выберите
           одного — документ сформируется только по нему.

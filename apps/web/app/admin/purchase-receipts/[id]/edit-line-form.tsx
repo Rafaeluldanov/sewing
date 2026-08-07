@@ -19,6 +19,7 @@ import { Save } from 'lucide-react';
 import type { PurchaseReceiptLineDto } from '@sewing/shared/purchase-receipts';
 import { updatePurchaseReceiptLineAction } from '../actions';
 import { initialUpdatePurchaseReceiptLineState } from '../form-state';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 interface CellOption {
   id: string;
@@ -84,10 +85,12 @@ export function EditPurchaseReceiptLineForm({
               </div>
               <div className="admin-field">
                 <label htmlFor={`pr-cell-${line.id}`}>Ячейка</label>
-                <select
+                <CreatableSelect
+                  entity="warehouseCell"
                   id={`pr-cell-${line.id}`}
                   name="cellId"
                   defaultValue={line.cellId ?? ''}
+                  existingValues={cells.map((c) => c.id)}
                 >
                   <option value="">Не указана</option>
                   {cells.map((c) => (
@@ -96,7 +99,7 @@ export function EditPurchaseReceiptLineForm({
                       {c.warehouseName ? ` · ${c.warehouseName}` : ''}
                     </option>
                   ))}
-                </select>
+                </CreatableSelect>
               </div>
             </>
           )}

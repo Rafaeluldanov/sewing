@@ -13,6 +13,7 @@ import {
   initialCreatePatternState,
   type CreatePatternState,
 } from './form-state';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -83,11 +84,12 @@ export function CreatePatternForm({ categories }: Props) {
         </div>
         <div className="admin-field">
           <label htmlFor="pattern-categoryId">Категория</label>
-          <select
+          <CreatableSelect
+            entity="patternCategory"
             id="pattern-categoryId"
             name="categoryId"
             defaultValue=""
-            disabled={noCategories}
+            existingValues={categories.map((c) => c.id)}
           >
             <option value="">— не выбрана —</option>
             {categories.map((c) => (
@@ -95,11 +97,11 @@ export function CreatePatternForm({ categories }: Props) {
                 {c.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
           {noCategories && (
             <small className="admin-muted">
-              Нет активных категорий. Создайте категорию на странице
-              «Номенклатура» — кнопка «Добавить категорию».
+              Нет активных категорий — можно создать прямо из списка
+              («＋ Добавить группу…»).
             </small>
           )}
         </div>

@@ -45,6 +45,7 @@ import {
   type MasterActionResult,
 } from './master-actions-actions';
 import { PassportHistoryView } from './passport-history-view';
+import { DefectTypeCreatableSelect } from '@/components/qc/defect-type-creatable-select';
 
 type ActionId = 'unassign' | 'transfer' | 'returnToCell' | 'setRouteStep';
 
@@ -896,25 +897,15 @@ function QcActionBody({
                     Вид брака{' '}
                     <span className="master-actions-sheet__required">*</span>
                   </label>
-                  <select
+                  <DefectTypeCreatableSelect
                     id="qc-defect-type"
                     className="master-actions-sheet__input"
                     value={defectTypeId}
-                    onChange={(e) => setDefectTypeId(e.target.value)}
-                    disabled={busy || defectTypes.length === 0}
-                  >
-                    <option value="">— выбрать —</option>
-                    {defectTypes.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name} · {d.code}
-                      </option>
-                    ))}
-                  </select>
-                  {defectTypes.length === 0 && (
-                    <p className="master-actions-sheet__error" role="alert">
-                      Справочник видов брака пуст или недоступен.
-                    </p>
-                  )}
+                    onValueChange={setDefectTypeId}
+                    disabled={busy}
+                    disableCreate={busy}
+                    defectTypes={defectTypes}
+                  />
                 </div>
 
                 <div className="master-actions-sheet__field">

@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useState, useTransition } from 'react';
 import { AlertCircle, Check, Printer, Warehouse, X } from 'lucide-react';
 import { ModalPortal } from '@/components/modal-portal';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import type { PrinterSummaryDto } from '@sewing/shared/printers';
 import {
   WAREHOUSE_LABEL_SIZES,
@@ -264,12 +265,14 @@ function BulkPrintModal({
             <div className="admin-form-grid">
               <div className="admin-field">
                 <label htmlFor={printerSelectId}>Принтер</label>
-                <select
+                <CreatableSelect
+                  entity="printer"
                   id={printerSelectId}
                   value={printerId}
-                  onChange={(e) => setPrinterId(e.target.value)}
-                  disabled={noPrinters}
+                  onValueChange={setPrinterId}
                   required
+                  modalZIndex={120}
+                  existingValues={printers.map((p) => p.id)}
                 >
                   {noPrinters && (
                     <option value="" disabled>
@@ -283,7 +286,7 @@ function BulkPrintModal({
                       {p.isOnline ? ' • онлайн' : ' • офлайн'}
                     </option>
                   ))}
-                </select>
+                </CreatableSelect>
               </div>
 
               <div className="admin-field">

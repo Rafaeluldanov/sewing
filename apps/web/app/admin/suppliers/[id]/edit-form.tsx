@@ -12,6 +12,7 @@ import {
   type CashFlowItemDto,
 } from '@sewing/shared/treasury';
 import { updateSupplierAction } from '../actions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import {
   initialUpdateSupplierState,
   type UpdateSupplierState,
@@ -143,10 +144,12 @@ export function EditSupplierForm({
         </p>
         <div className="admin-field">
           <label htmlFor="supplier-edit-ddsItem">Статья ДДС (казначейство)</label>
-          <select
+          <CreatableSelect
+            entity="cashFlowItem"
             id="supplier-edit-ddsItem"
             name="defaultCashFlowItemId"
             defaultValue={supplier.defaultCashFlowItemId ?? ''}
+            existingValues={cashFlowItems.map((item) => item.id)}
           >
             <option value="">— не выбрана —</option>
             {missingCurrent && supplier.defaultCashFlowItemId && (
@@ -163,7 +166,7 @@ export function EditSupplierForm({
                 {item.code ? ` (${item.code})` : ''}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
           <span className="admin-muted" style={{ fontSize: '0.78rem' }}>
             Статья по умолчанию для оплат этому поставщику. Список ведётся в
             разделе «Казначейство → Статьи ДДС».

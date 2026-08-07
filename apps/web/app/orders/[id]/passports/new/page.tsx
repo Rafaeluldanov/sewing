@@ -188,6 +188,9 @@ export default async function NewPassportPage({
         isCutterAssistant={false}
         creatorIsCutter={isCutter}
         cutterOptions={cutterOptions}
+        canCreateCutter={(me?.user.roles ?? []).some(
+          (r) => r === 'ADMIN' || r === 'SHOP_MANAGER',
+        )}
       />
     </div>
   );

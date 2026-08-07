@@ -68,6 +68,7 @@ import {
   pricePerPackToPiece,
   pricePerPieceToPack,
 } from '../button-units';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -297,11 +298,13 @@ export function EditWorkshopNeedForm({
               <label htmlFor="need-selected-supplier">
                 Поставщик из справочника
               </label>
-              <select
+              <CreatableSelect
+                entity="supplier"
                 id="need-selected-supplier"
                 name="selectedSupplierId"
                 value={supplierIdLocal}
-                onChange={(e) => setSupplierIdLocal(e.target.value)}
+                onValueChange={setSupplierIdLocal}
+                existingValues={suppliers.map((s) => s.id)}
               >
                 <option value="">— не выбран —</option>
                 {suppliers.map((s) => (
@@ -319,7 +322,7 @@ export function EditWorkshopNeedForm({
                       {need.selectedSupplierName} (неактивен)
                     </option>
                   )}
-              </select>
+              </CreatableSelect>
               {supplierChangedSinceLoad && (
                 <small
                   className="admin-muted"

@@ -8,6 +8,7 @@ import type {
   TreasurySettingsDto,
 } from '@sewing/shared/treasury';
 import { updateTreasurySettingsAction } from '../actions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import {
   initialTreasuryFormState,
   type TreasuryFormState,
@@ -56,10 +57,12 @@ export function SettingsForm({
       <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="set-account">Зарплатный счёт</label>
-          <select
+          <CreatableSelect
+            entity="cashAccount"
             id="set-account"
             name="salaryAccountId"
             defaultValue={settings.salaryAccountId ?? ''}
+            existingValues={accounts.map((a) => a.id)}
           >
             <option value="">— не задано —</option>
             {accounts.map((a) => (
@@ -67,14 +70,16 @@ export function SettingsForm({
                 {a.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
         <div className="admin-field">
           <label htmlFor="set-item">Статья ДДС для зарплаты</label>
-          <select
+          <CreatableSelect
+            entity="cashFlowItem"
             id="set-item"
             name="salaryItemId"
             defaultValue={settings.salaryItemId ?? ''}
+            existingValues={items.map((it) => it.id)}
           >
             <option value="">— не задано —</option>
             {items.map((it) => (
@@ -82,7 +87,7 @@ export function SettingsForm({
                 {it.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
       </div>
 
@@ -96,10 +101,12 @@ export function SettingsForm({
       <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="set-supplier-account">Счёт для оплат поставщикам</label>
-          <select
+          <CreatableSelect
+            entity="cashAccount"
             id="set-supplier-account"
             name="supplierAccountId"
             defaultValue={settings.supplierAccountId ?? ''}
+            existingValues={accounts.map((a) => a.id)}
           >
             <option value="">— не задано —</option>
             {accounts.map((a) => (
@@ -107,16 +114,18 @@ export function SettingsForm({
                 {a.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
         <div className="admin-field">
           <label htmlFor="set-supplier-item">
             Статья ДДС для оплат поставщикам (по умолчанию)
           </label>
-          <select
+          <CreatableSelect
+            entity="cashFlowItem"
             id="set-supplier-item"
             name="supplierItemId"
             defaultValue={settings.supplierItemId ?? ''}
+            existingValues={items.map((it) => it.id)}
           >
             <option value="">— не задано —</option>
             {items.map((it) => (
@@ -124,7 +133,7 @@ export function SettingsForm({
                 {it.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
       </div>
 

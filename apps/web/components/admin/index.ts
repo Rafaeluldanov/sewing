@@ -35,6 +35,12 @@ export {
   ArchiveCardButtons,
   type ArchiveCardButtonsProps,
 } from './archive-card-buttons.client';
+export { AdminModal, type AdminModalProps } from './admin-modal';
+export {
+  CreatableSelect,
+  CREATE_SENTINEL,
+  type CreatableSelectProps,
+} from './ref-create/creatable-select';
 export {
   BulkArchiveProvider,
   BulkArchiveCheckbox,

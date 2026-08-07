@@ -6,13 +6,16 @@ import {
   ROUTE_TEMPLATE_CODE_PATTERN,
   type RouteTemplateStepInputDto,
 } from '@sewing/shared/routes';
+import type { OperationLiteDto } from '@sewing/shared/shifts';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   createRouteTemplate,
   deleteRouteTemplate,
   updateRouteTemplate,
 } from '@/lib/routes-api';
+import { getShiftMeta } from '@/lib/shifts-api';
 import type {
+  CreateRouteTemplateInlineState,
   CreateRouteTemplateState,
   UpdateRouteTemplateState,
 } from './form-state';
@@ -117,6 +120,60 @@ export async function createRouteTemplateAction(
     redirect(`/admin/routes/${createdId}`);
   }
   return { ok: true, successMessage: 'Шаблон маршрута создан' };
+}
+
+/**
+ * Inline-вариант создания шаблона (модалка «＋ Добавить маршрут…» из
+ * select-ов форм заказов): та же валидация и `parseSteps`, но БЕЗ
+ * redirect — созданный `RouteTemplateDetailDto` возвращается в state,
+ * хост мержит его в свой список опций и автовыбирает.
+ */
+export async function createRouteTemplateInlineAction(
+  _prev: CreateRouteTemplateInlineState,
+  form: FormData,
+): Promise<CreateRouteTemplateInlineState> {
+  const code = String(form.get('code') ?? '').trim();
+  const name = String(form.get('name') ?? '').trim();
+  const isActive = form.get('isActive') !== 'off';
+
+  if (code.length === 0) return { error: 'Код шаблона обязателен' };
+  if (!ROUTE_TEMPLATE_CODE_PATTERN.test(code)) {
+    return {
+      error:
+        'Код шаблона: латинские заглавные буквы, цифры, "-" и "_" (начинается с буквы или цифры)',
+    };
+  }
+  if (name.length === 0) return { error: 'Название шаблона обязательно' };
+
+  const steps = parseSteps(form);
+
+  try {
+    const created = await createRouteTemplate({ code, name, isActive, steps });
+    revalidatePath('/admin/routes');
+    revalidatePath('/orders/new');
+    return { ok: true, template: created };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { error: errorText(e), errorRequestId: e.requestId };
+    }
+    return { error: 'Не удалось создать шаблон маршрута' };
+  }
+}
+
+/**
+ * Операции для конструктора шагов в модалке маршрута. Отдельная
+ * загрузка при открытии модалки — страницы встройки (формы заказов)
+ * не обязаны заранее тянуть `GET /shifts/meta`.
+ */
+export async function loadRouteFormOperationsAction(): Promise<
+  OperationLiteDto[]
+> {
+  try {
+    const meta = await getShiftMeta();
+    return meta.operations;
+  } catch {
+    return [];
+  }
 }
 
 export async function updateRouteTemplateAction(

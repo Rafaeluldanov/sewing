@@ -85,6 +85,11 @@ import {
   AdminSizeGrid,
   type AdminRouteStep,
 } from '@/components/admin';
+import {
+  CreatableSelect,
+  CREATE_SENTINEL,
+} from '@/components/admin/ref-create/creatable-select';
+import { CreateTechCardWindow } from '@/app/admin/orders/new/create-tech-card-window';
 import { formatOrderStatus } from '@/lib/admin-labels';
 import {
   SendPatternToConstructorButton,
@@ -262,13 +267,31 @@ export function AdminEditOrderForm({
   const [routeTemplateId, setRouteTemplateId] = useState<string>(
     order.routeTemplateId ?? '',
   );
+  // Превью шаблонов, созданных «на лету» из select-а (контур
+  // ref-create): серверный `routePreviewMap` их ещё не знает.
+  const [extraRoutePreviews, setExtraRoutePreviews] = useState<
+    Record<string, RoutePreview>
+  >({});
   const selectedRoute = routeTemplateId
-    ? routePreviewMap[routeTemplateId]
+    ? (routePreviewMap[routeTemplateId] ?? extraRoutePreviews[routeTemplateId])
     : undefined;
 
   const [techCardId, setTechCardId] = useState<string>(
     order.techCardId ?? '',
   );
+  // Техкарты, созданные «на лету» из select-а (окно CreateTechCardWindow):
+  // merge с пришедшими от RSC, дедуп по id.
+  const [extraTechCards, setExtraTechCards] = useState<
+    TechCardTemplateSummaryDto[]
+  >([]);
+  const allTechCards = useMemo(
+    () => [
+      ...techCards,
+      ...extraTechCards.filter((x) => !techCards.some((t) => t.id === x.id)),
+    ],
+    [techCards, extraTechCards],
+  );
+  const [showCreateTechCard, setShowCreateTechCard] = useState(false);
 
   const [patternItemId, setPatternItemId] = useState<string>(
     order.patternItemId ?? '',
@@ -663,12 +686,15 @@ export function AdminEditOrderForm({
               <div className="order-hero-card__basic-grid">
                 <div className="order-hero-card__field">
                   <label htmlFor="companyDivisionId">Подразделение</label>
-                  <select
+                  <CreatableSelect
+                    entity="companyDivision"
                     id="companyDivisionId"
                     name="companyDivisionId"
                     value={companyDivisionId}
-                    onChange={(e) => setCompanyDivisionId(e.target.value)}
+                    onValueChange={setCompanyDivisionId}
                     disabled={!planEditable}
+                    disableCreate={!planEditable}
+                    existingValues={companyDivisions.map((d) => d.id)}
                   >
                     <option value="">— без подразделения —</option>
                     {/*
@@ -688,7 +714,7 @@ export function AdminEditOrderForm({
                         {d.isActive ? '' : ' — архив'}
                       </option>
                     ))}
-                  </select>
+                  </CreatableSelect>
                   {!planEditable && (
                     <span className="order-hero-card__field-hint">
                       Менять подразделение можно только до запуска
@@ -701,13 +727,13 @@ export function AdminEditOrderForm({
                   <label htmlFor="finishedGoodsWarehouseId">
                     Склад выпуска готовой продукции
                   </label>
-                  <select
+                  <CreatableSelect
+                    entity="warehouse"
                     id="finishedGoodsWarehouseId"
                     name="finishedGoodsWarehouseId"
                     value={finishedGoodsWarehouseId}
-                    onChange={(e) =>
-                      setFinishedGoodsWarehouseId(e.target.value)
-                    }
+                    onValueChange={setFinishedGoodsWarehouseId}
+                    existingValues={warehouses.map((w) => w.id)}
                   >
                     <option value="">— не выбран —</option>
                     {showCurrentFinishedGoodsArchivedOption &&
@@ -723,7 +749,7 @@ export function AdminEditOrderForm({
                         {w.isActive ? '' : ' — архив'}
                       </option>
                     ))}
-                  </select>
+                  </CreatableSelect>
                   <span className="order-hero-card__field-hint">
                     Склад, на который должна поступить готовая продукция
                     после производства / упаковки. Это не склад
@@ -788,13 +814,15 @@ export function AdminEditOrderForm({
                       *
                     </span>
                   </label>
-                  <select
+                  <CreatableSelect
+                    entity="client"
                     id="clientId"
                     name="clientId"
                     value={clientId}
-                    onChange={(e) => setClientId(e.target.value)}
+                    onValueChange={setClientId}
                     required
                     aria-required="true"
+                    existingValues={clients.map((c) => c.id)}
                   >
                     <option value="">— выберите клиента —</option>
                     {showCurrentClientArchivedOption && currentClient && (
@@ -808,7 +836,7 @@ export function AdminEditOrderForm({
                         {c.isActive ? '' : ' — архивный'}
                       </option>
                     ))}
-                  </select>
+                  </CreatableSelect>
                   {fieldError('clientId') && (
                     <span className="order-hero-card__field-error">
                       {fieldError('clientId')}
@@ -1303,7 +1331,14 @@ export function AdminEditOrderForm({
                       id="techCardId"
                       name="techCardId"
                       value={techCardId}
-                      onChange={(e) => setTechCardId(e.target.value)}
+                      onChange={(e) => {
+                        if (e.target.value === CREATE_SENTINEL) {
+                          // Controlled select откатится сам — открываем окно.
+                          setShowCreateTechCard(true);
+                          return;
+                        }
+                        setTechCardId(e.target.value);
+                      }}
                       disabled={!isDraft}
                     >
                       <option value="">— без техкарты —</option>
@@ -1312,23 +1347,67 @@ export function AdminEditOrderForm({
                           {order.techCardName ?? 'Текущая техкарта'} — неактивна
                         </option>
                       )}
-                      {techCards.map((tc) => (
+                      {allTechCards.map((tc) => (
                         <option key={tc.id} value={tc.id}>
                           {tc.name}
                         </option>
                       ))}
+                      {isDraft && (
+                        <option value={CREATE_SENTINEL}>
+                          ＋ Добавить техкарту…
+                        </option>
+                      )}
                     </select>
+                    {showCreateTechCard && (
+                      <CreateTechCardWindow
+                        onCancel={() => setShowCreateTechCard(false)}
+                        onCreated={(tc) => {
+                          setExtraTechCards((prev) => [
+                            ...prev.filter((x) => x.id !== tc.id),
+                            tc,
+                          ]);
+                          setTechCardId(tc.id);
+                          setShowCreateTechCard(false);
+                        }}
+                        patternItems={patterns.map((p) => ({
+                          id: p.id,
+                          name: p.name,
+                          article: p.article,
+                        }))}
+                        patternCategories={patternCategories.map((c) => ({
+                          id: c.id,
+                          name: c.name,
+                        }))}
+                      />
+                    )}
                   </div>
                 )}
 
                 <div className="admin-field">
                   <label htmlFor="routeTemplateId">Маршрут</label>
-                  <select
+                  <CreatableSelect
+                    entity="routeTemplate"
                     id="routeTemplateId"
                     name="routeTemplateId"
                     value={routeTemplateId}
-                    onChange={(e) => setRouteTemplateId(e.target.value)}
+                    onValueChange={setRouteTemplateId}
                     disabled={!planEditable}
+                    disableCreate={!planEditable}
+                    existingValues={routeTemplates.map((tpl) => tpl.id)}
+                    onCreated={(tpl) =>
+                      setExtraRoutePreviews((prev) => ({
+                        ...prev,
+                        [tpl.id]: {
+                          id: tpl.id,
+                          name: tpl.name,
+                          steps: tpl.steps.map((s) => ({
+                            id: s.id,
+                            index: s.index,
+                            name: s.operationName,
+                          })),
+                        },
+                      }))
+                    }
                   >
                     <option value="">— без маршрута —</option>
                     {showCurrentRouteFallback && order.routeTemplateId && (
@@ -1346,7 +1425,7 @@ export function AdminEditOrderForm({
                         {tpl.stepsCount === 0 ? ' — нет шагов' : ''}
                       </option>
                     ))}
-                  </select>
+                  </CreatableSelect>
                 </div>
               </div>
 

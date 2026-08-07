@@ -1,18 +1,21 @@
 'use client';
 
 import { useFormState, useFormStatus } from 'react-dom';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Plus, Save, X } from 'lucide-react';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
 import { groupOperationsByCategory } from '@sewing/shared/operations';
 import type { RouteTemplateDetailDto } from '@sewing/shared/routes';
 import {
   createRouteTemplateAction,
+  createRouteTemplateInlineAction,
   updateRouteTemplateAction,
 } from './actions';
 import {
+  initialCreateRouteTemplateInlineState,
   initialCreateRouteTemplateState,
   initialUpdateRouteTemplateState,
+  type CreateRouteTemplateInlineState,
   type CreateRouteTemplateState,
   type UpdateRouteTemplateState,
 } from './form-state';
@@ -25,6 +28,15 @@ interface Props {
   operations: readonly OperationLiteDto[];
   /** Только в режиме `edit` — текущее состояние шаблона. */
   template?: RouteTemplateDetailDto;
+  /**
+   * Inline-режим (модалка «＋ Добавить маршрут…» из select-ов форм
+   * заказов): submit идёт в `createRouteTemplateInlineAction` (без
+   * redirect), а созданный DTO отдаётся хосту через `onCreated`.
+   * Штатные страницы `/admin/routes/new|[id]` пропы не передают и
+   * работают как раньше.
+   */
+  inline?: boolean;
+  onCreated?: (template: RouteTemplateDetailDto) => void;
 }
 
 interface SelectedStep {
@@ -77,7 +89,13 @@ function SubmitButton({ mode }: { mode: Mode }) {
  * скрытые `stepOrder[<id>]` — итоговый порядок шагов на бэкенде
  * нормализуется по `index = i` (см. `RoutesService.replaceSteps`).
  */
-export function RouteTemplateForm({ mode, operations, template }: Props) {
+export function RouteTemplateForm({
+  mode,
+  operations,
+  template,
+  inline = false,
+  onCreated,
+}: Props) {
   const initialSelected: SelectedStep[] = useMemo(() => {
     if (mode !== 'edit' || !template) return [];
     const ordered = template.steps.slice().sort((a, b) => a.index - b.index);
@@ -104,9 +122,30 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
     UpdateRouteTemplateState,
     FormData
   >(updateRouteTemplateAction, initialUpdateRouteTemplateState);
+  const [inlineState, inlineAction] = useFormState<
+    CreateRouteTemplateInlineState,
+    FormData
+  >(createRouteTemplateInlineAction, initialCreateRouteTemplateInlineState);
 
-  const formAction = mode === 'create' ? createAction : updateAction;
-  const state = mode === 'create' ? createState : updateState;
+  const formAction = inline
+    ? inlineAction
+    : mode === 'create'
+      ? createAction
+      : updateAction;
+  const state = inline
+    ? inlineState
+    : mode === 'create'
+      ? createState
+      : updateState;
+
+  // Inline-режим: успешный state несёт созданный DTO — отдаём хосту
+  // (он закроет модалку и автовыберет шаблон в своём select-е).
+  useEffect(() => {
+    if (inline && inlineState.ok && inlineState.template) {
+      onCreated?.(inlineState.template);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inline, inlineState.ok, inlineState.template]);
 
   const operationsById = useMemo(() => {
     const m = new Map<string, OperationLiteDto>();

@@ -49,6 +49,7 @@ import {
   updateOrderBasicsAction,
   type UpdateOrderBasicsActionState,
 } from '@/app/admin/orders/[id]/basic-actions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 interface Props {
   orderId: string;
@@ -159,12 +160,15 @@ export function OrderBasicsForm({
       <div className="order-hero-card__basic-grid">
         <div className="order-hero-card__field">
           <label htmlFor="basics-companyDivisionId">Подразделение</label>
-          <select
+          <CreatableSelect
+            entity="companyDivision"
             id="basics-companyDivisionId"
             name="companyDivisionId"
             value={companyDivisionId}
-            onChange={(e) => setCompanyDivisionId(e.target.value)}
+            onValueChange={setCompanyDivisionId}
             disabled={isTerminal}
+            disableCreate={isTerminal}
+            existingValues={companyDivisions.map((d) => d.id)}
           >
             <option value="">— без подразделения —</option>
             {/*
@@ -185,7 +189,7 @@ export function OrderBasicsForm({
                 {d.isActive ? '' : ' — архив'}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
 
         <div className="order-hero-card__field">
@@ -216,14 +220,17 @@ export function OrderBasicsForm({
               *
             </span>
           </label>
-          <select
+          <CreatableSelect
+            entity="client"
             id="basics-clientId"
             name="clientId"
             value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
+            onValueChange={setClientId}
             disabled={isTerminal}
+            disableCreate={isTerminal}
             required
             aria-required="true"
+            existingValues={clients.map((c) => c.id)}
           >
             <option value="">— выберите клиента —</option>
             {showCurrentClientArchivedOption && initial.clientId && (
@@ -235,7 +242,7 @@ export function OrderBasicsForm({
                 {c.isActive ? '' : ' — архив'}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
           {fieldError('clientId') && (
             <span className="order-hero-card__field-error">
               {fieldError('clientId')}

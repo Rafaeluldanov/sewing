@@ -29,6 +29,7 @@ import type {
   QcPassportDetailDto,
 } from '@sewing/shared/qc';
 import { PASSPORT_STATUS_LABELS } from '@/lib/passport-status-labels';
+import { DefectTypeCreatableSelect } from '@/components/qc/defect-type-creatable-select';
 
 interface ErrorState {
   message: string;
@@ -301,20 +302,15 @@ export function QcWorkCard({
           <div className="form-row">
             <label htmlFor="qc-defect-type">Вид брака</label>
             <div>
-              <select
+              <DefectTypeCreatableSelect
                 id="qc-defect-type"
                 name="defectTypeId"
                 defaultValue=""
                 required
-                disabled={pending || defectTypes.length === 0}
-              >
-                <option value="">— выбрать —</option>
-                {defectTypes.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} · {d.code}
-                  </option>
-                ))}
-              </select>
+                disabled={pending}
+                disableCreate={pending}
+                defectTypes={defectTypes}
+              />
             </div>
           </div>
           <div className="form-row">

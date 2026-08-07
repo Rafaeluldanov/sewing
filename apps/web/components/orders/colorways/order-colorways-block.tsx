@@ -23,6 +23,7 @@ import {
 } from '@sewing/shared/order-tech-cards';
 import { ColorwaySpec } from './colorway-spec';
 import { ModalPortal } from '@/components/modal-portal';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import {
   Palette,
   Plus,
@@ -359,19 +360,37 @@ export function OrderColorwaysBlock({
 
               <label className="cwl-field">
                 <span className="cwl-label">Техкарта материалов</span>
-                <select
+                <CreatableSelect
+                  entity="techCard"
                   className="cwl-input"
                   value={d.techCardId ?? ''}
-                  onChange={(e) =>
-                    patchDraft(v.id, { techCardId: e.target.value || null })
+                  onValueChange={(next) =>
+                    patchDraft(v.id, { techCardId: next || null })
                   }
                   disabled={ro}
+                  disableCreate={ro}
+                  existingValues={data.techCards.map((t) => t.id)}
+                  onCreated={(tc) =>
+                    // Merge в общий список блока: новую техкарту сразу
+                    // видят селекты ВСЕХ расцветок, а не только текущая.
+                    setData((prev) =>
+                      prev.techCards.some((t) => t.id === tc.id)
+                        ? prev
+                        : {
+                            ...prev,
+                            techCards: [
+                              ...prev.techCards,
+                              { id: tc.id, name: tc.name },
+                            ],
+                          },
+                    )
+                  }
                 >
                   <option value="">— по умолчанию заказа —</option>
                   {data.techCards.map((t) => (
                     <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
-                </select>
+                </CreatableSelect>
               </label>
 
               <div className="cwl-field">

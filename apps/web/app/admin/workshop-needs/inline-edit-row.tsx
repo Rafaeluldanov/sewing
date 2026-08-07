@@ -73,6 +73,7 @@ import {
   pricePerPackToPiece,
   pricePerPieceToPack,
 } from './button-units';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 function isoToDateInput(iso: string | null): string {
   if (!iso) return '';
@@ -618,10 +619,14 @@ export function InlineEditWorkshopNeedRow({
           <div className="wn-field wn-field--supplier">
             <span className="wn-field__lab">Поставщик</span>
             {suppliersEnabled && (
-              <select
+              <CreatableSelect
+                entity="supplier"
                 name="selectedSupplierId"
                 defaultValue={need.selectedSupplierId ?? ''}
                 disabled={isCancelled || isLockedByPo}
+                disableCreate={isCancelled || isLockedByPo}
+                aria-label="Поставщик из справочника"
+                existingValues={suppliers.map((s) => s.id)}
               >
                 <option value="">— из справочника —</option>
                 {suppliers.map((s) => (
@@ -636,7 +641,7 @@ export function InlineEditWorkshopNeedRow({
                       {need.selectedSupplierName} (неактивен)
                     </option>
                   )}
-              </select>
+              </CreatableSelect>
             )}
             <input
               name="supplierNameText"

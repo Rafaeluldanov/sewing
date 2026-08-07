@@ -76,17 +76,17 @@ export function CreateEquipmentForm({ operations }: Props) {
     initialCreateEquipmentState,
   );
 
-  const sortedOperations = [...operations].sort(
-    (a, b) => a.sortOrder - b.sortOrder,
+  // Локальный state вместо прямого prop: операция может быть создана
+  // «на лету» из селекта (creatable) — merge с дедупом по id.
+  const [ops, setOps] = useState<OperationLiteDto[]>(() =>
+    [...operations].sort((a, b) => a.sortOrder - b.sortOrder),
   );
 
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [pendingId, setPendingId] = useState<string>('');
 
-  const opsById = new Map(sortedOperations.map((op) => [op.id, op]));
-  const availableOptions = sortedOperations.filter(
-    (op) => !selectedIds.includes(op.id),
-  );
+  const opsById = new Map(ops.map((op) => [op.id, op]));
+  const availableOptions = ops.filter((op) => !selectedIds.includes(op.id));
 
   function addOperation() {
     if (!pendingId || selectedIds.includes(pendingId)) return;
@@ -185,6 +185,23 @@ export function CreateEquipmentForm({ operations }: Props) {
             placeholder="— выбрать операцию —"
             ariaLabel="Добавить операцию"
             className="admin-chip-add__select"
+            creatable
+            onCreatedOperation={(created) =>
+              setOps((prev) =>
+                [
+                  ...prev.filter((o) => o.id !== created.id),
+                  {
+                    id: created.id,
+                    code: created.code,
+                    name: created.name,
+                    category: created.category,
+                    sortOrder: created.sortOrder,
+                    active: created.isActive,
+                    pricingMode: created.pricingMode,
+                  },
+                ].sort((a, b) => a.sortOrder - b.sortOrder),
+              )
+            }
           />
           <button
             type="button"

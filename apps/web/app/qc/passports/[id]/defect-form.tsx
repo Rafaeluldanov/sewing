@@ -4,6 +4,7 @@ import { useFormState, useFormStatus } from 'react-dom';
 import type { DefectTypeDto } from '@sewing/shared/qc';
 import { recordDefectAction } from '../../actions';
 import { initialQcDefectState } from '../../form-state';
+import { DefectTypeCreatableSelect } from '@/components/qc/defect-type-creatable-select';
 
 interface Props {
   passportId: string;
@@ -42,20 +43,15 @@ export function DefectForm({
       <div className="form-row">
         <label htmlFor="defectTypeId">Вид брака</label>
         <div>
-          <select
+          <DefectTypeCreatableSelect
             id="defectTypeId"
             name="defectTypeId"
             defaultValue=""
             required
-            disabled={disabled || defectTypes.length === 0}
-          >
-            <option value="">— выбрать —</option>
-            {defectTypes.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name} · {d.code}
-              </option>
-            ))}
-          </select>
+            disabled={disabled}
+            disableCreate={disabled}
+            defectTypes={defectTypes}
+          />
         </div>
       </div>
 

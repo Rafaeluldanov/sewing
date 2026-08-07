@@ -10,6 +10,7 @@ import {
   type CashFlowItemDto,
 } from '@sewing/shared/treasury';
 import { createCashFlowEntryAction } from './actions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import {
   initialTreasuryFormState,
   type TreasuryFormState,
@@ -62,7 +63,14 @@ export function NewEntryForm({
       <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="entry-account">Счёт</label>
-          <select id="entry-account" name="accountId" required defaultValue="">
+          <CreatableSelect
+            entity="cashAccount"
+            id="entry-account"
+            name="accountId"
+            required
+            defaultValue=""
+            existingValues={accounts.map((a) => a.id)}
+          >
             <option value="" disabled>
               Выберите счёт
             </option>
@@ -71,7 +79,7 @@ export function NewEntryForm({
                 {a.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
         <div className="admin-field">
           <label htmlFor="entry-direction">Направление</label>
@@ -96,7 +104,14 @@ export function NewEntryForm({
       <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="entry-item">Статья ДДС</label>
-          <select id="entry-item" name="itemId" required defaultValue="">
+          <CreatableSelect
+            entity="cashFlowItem"
+            id="entry-item"
+            name="itemId"
+            required
+            defaultValue=""
+            existingValues={items.map((it) => it.id)}
+          >
             <option value="" disabled>
               Выберите статью
             </option>
@@ -105,7 +120,7 @@ export function NewEntryForm({
                 {it.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
         <div className="admin-field">
           <label htmlFor="entry-source">Основание</label>

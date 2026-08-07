@@ -45,6 +45,7 @@ import {
   type CashFlowItemDto,
 } from '@sewing/shared/treasury';
 import { ModalPortal } from '@/components/modal-portal';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import {
   createSupplierPaymentRequestAction,
   updateSupplierPaymentRequestAction,
@@ -164,7 +165,21 @@ export function PaymentRequestFormModal({
   existingFiles,
 }: Props) {
   const isEdit = mode === 'edit';
-  const supplierOptions = suppliers ?? [];
+  /**
+   * Поставщики, созданные «на лету» из селекта (CreatableSelect):
+   * мержим их в options, чтобы `onSupplierChange` находил реквизиты
+   * нового поставщика так же, как у пришедших с сервера.
+   */
+  const [extraSuppliers, setExtraSuppliers] = useState<SupplierListItemDto[]>(
+    [],
+  );
+  const baseSuppliers = suppliers ?? [];
+  const supplierOptions = [
+    ...baseSuppliers,
+    ...extraSuppliers.filter(
+      (x) => !baseSuppliers.some((s) => s.id === x.id),
+    ),
+  ];
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -214,23 +229,40 @@ export function PaymentRequestFormModal({
 
   // Смена поставщика-плательщика (create-режим): подтягиваем реквизиты и
   // дефолтную статью ДДС прямо из переданного списка — без доп. запроса.
+  const applySupplierPrefill = useCallback((s: SupplierListItemDto) => {
+    setReq({
+      legalName: s.legalName,
+      inn: s.inn,
+      kpp: s.kpp,
+      bankName: s.bankName,
+      bankAccount: s.bankAccount,
+      bankBik: s.bankBik,
+      bankCorrAccount: s.bankCorrAccount,
+    });
+    setCashFlowItemId(s.defaultCashFlowItemId ?? '');
+  }, []);
+
   const onSupplierChange = useCallback(
     (nextId: string) => {
       setSupplierId(nextId);
       const s = supplierOptions.find((x) => x.id === nextId);
       if (!s) return;
-      setReq({
-        legalName: s.legalName,
-        inn: s.inn,
-        kpp: s.kpp,
-        bankName: s.bankName,
-        bankAccount: s.bankAccount,
-        bankBik: s.bankBik,
-        bankCorrAccount: s.bankCorrAccount,
-      });
-      setCashFlowItemId(s.defaultCashFlowItemId ?? '');
+      applySupplierPrefill(s);
     },
-    [supplierOptions],
+    [supplierOptions, applySupplierPrefill],
+  );
+
+  /**
+   * Поставщик, созданный из селекта: на момент `onValueChange` его ещё
+   * нет в `supplierOptions` (state не применился), поэтому реквизиты
+   * заполняем отдельным колбэком из свежего DTO.
+   */
+  const onSupplierCreated = useCallback(
+    (s: SupplierListItemDto) => {
+      setSupplierId(s.id);
+      applySupplierPrefill(s);
+    },
+    [applySupplierPrefill],
   );
 
   // Если выбранная статья ДДС не входит в активный список (например, её
@@ -471,11 +503,23 @@ export function PaymentRequestFormModal({
               {!isEdit && supplierOptions.length > 0 && (
                 <div className="spr-field">
                   <label htmlFor="spr-supplier">Поставщик (плательщик)</label>
-                  <select
+                  <CreatableSelect
+                    entity="supplier"
                     id="spr-supplier"
                     value={supplierId}
-                    onChange={(e) => onSupplierChange(e.target.value)}
+                    onValueChange={onSupplierChange}
                     disabled={submitting}
+                    disableCreate={submitting}
+                    modalZIndex={1100}
+                    existingValues={supplierOptions.map((s) => s.id)}
+                    onCreated={(created) => {
+                      // Detail extends ListItem — реквизиты уже внутри.
+                      setExtraSuppliers((prev) => [
+                        ...prev.filter((x) => x.id !== created.id),
+                        created,
+                      ]);
+                      onSupplierCreated(created);
+                    }}
                   >
                     {supplierOptions.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -483,7 +527,7 @@ export function PaymentRequestFormModal({
                         {s.status !== 'ACTIVE' ? ' (неактивен)' : ''}
                       </option>
                     ))}
-                  </select>
+                  </CreatableSelect>
                   <span className="spr-muted">
                     Реквизиты и статья ДДС подтягиваются из карточки
                     выбранного поставщика. По умолчанию — поставщик заказа.
@@ -520,11 +564,15 @@ export function PaymentRequestFormModal({
 
               <div className="spr-field">
                 <label htmlFor="spr-dds">Статья ДДС (казначейство)</label>
-                <select
+                <CreatableSelect
+                  entity="cashFlowItem"
                   id="spr-dds"
                   value={cashFlowItemId}
-                  onChange={(e) => setCashFlowItemId(e.target.value)}
+                  onValueChange={setCashFlowItemId}
                   disabled={submitting}
+                  disableCreate={submitting}
+                  modalZIndex={1100}
+                  existingValues={cashFlowItems.map((item) => item.id)}
                 >
                   <option value="">— не выбрана —</option>
                   {cashFlowMissing && (
@@ -541,7 +589,7 @@ export function PaymentRequestFormModal({
                       {item.code ? ` (${item.code})` : ''}
                     </option>
                   ))}
-                </select>
+                </CreatableSelect>
                 <span className="spr-muted">
                   По какой статье пойдёт оплата в казначействе. По умолчанию —
                   статья из карточки поставщика.

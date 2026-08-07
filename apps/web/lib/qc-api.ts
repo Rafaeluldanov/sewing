@@ -5,6 +5,7 @@
  */
 
 import type {
+  CreateDefectTypeDto,
   CreatePassportDefectDto,
   DefectTypeDto,
   ListQcPassportsQuery,
@@ -121,6 +122,15 @@ export function cancelPassportQtyCorrection(
 export function listDefectTypes(): Promise<DefectTypeDto[]> {
   return apiFetch<DefectTypeDto[]>('/defect-types', {
     next: { revalidate: 300, tags: ['defect-types'] },
+  });
+}
+
+export function createDefectType(
+  body: CreateDefectTypeDto,
+): Promise<DefectTypeDto> {
+  return apiFetch<DefectTypeDto>('/defect-types', {
+    method: 'POST',
+    body,
   });
 }
 

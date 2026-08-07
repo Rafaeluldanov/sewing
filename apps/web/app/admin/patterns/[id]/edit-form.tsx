@@ -14,6 +14,7 @@ import {
   initialUpdatePatternState,
   type UpdatePatternState,
 } from '../form-state';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -90,10 +91,12 @@ export function EditPatternForm({ pattern, categories }: Props) {
         </div>
         <div className="admin-field">
           <label htmlFor="pattern-categoryId">Категория</label>
-          <select
+          <CreatableSelect
+            entity="patternCategory"
             id="pattern-categoryId"
             name="categoryId"
             defaultValue={pattern.categoryId ?? ''}
+            existingValues={categories.map((c) => c.id)}
           >
             <option value="">— не выбрана —</option>
             {categories.map((c) => (
@@ -106,7 +109,7 @@ export function EditPatternForm({ pattern, categories }: Props) {
                 {currentCategoryArchived.name} (архив)
               </option>
             )}
-          </select>
+          </CreatableSelect>
           {pattern.categoryId === null && pattern.categoryCode && (
             <small className="admin-muted">
               Старая категория: <strong>{pattern.categoryCode}</strong>.

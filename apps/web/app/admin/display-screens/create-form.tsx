@@ -3,6 +3,7 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import { AlertCircle, Plus } from 'lucide-react';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import { createDisplayScreenAction } from './actions';
 import {
   initialCreateDisplayScreenState,
@@ -65,12 +66,13 @@ export function CreateDisplayScreenForm({ companyDivisions }: Props) {
 
         <div className="admin-field">
           <label htmlFor="ds-companyDivisionId">Подразделение</label>
-          <select
+          <CreatableSelect
+            entity="companyDivision"
             id="ds-companyDivisionId"
             name="companyDivisionId"
             required
             defaultValue=""
-            disabled={companyDivisions.length === 0}
+            existingValues={companyDivisions.map((d) => d.id)}
           >
             <option value="" disabled>
               {companyDivisions.length === 0
@@ -82,7 +84,7 @@ export function CreateDisplayScreenForm({ companyDivisions }: Props) {
                 {d.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
       </div>
 

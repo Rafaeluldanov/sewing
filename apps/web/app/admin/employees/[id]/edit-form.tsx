@@ -18,6 +18,7 @@ import {
   type CashFlowItemDto,
 } from '@sewing/shared/treasury';
 import { updateEmployeeAction } from '../actions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import {
   initialUpdateEmployeeState,
   type UpdateEmployeeState,
@@ -295,11 +296,13 @@ export function EmployeeEditForm({
       <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="emp-salary-dds-item">Статья ДДС (выплаты)</label>
-          <select
+          <CreatableSelect
+            entity="cashFlowItem"
             id="emp-salary-dds-item"
             name="salaryCashFlowItemId"
             defaultValue={employee.salaryCashFlowItemId ?? ''}
             aria-describedby="emp-salary-dds-item-hint"
+            existingValues={cashFlowItems.map((item) => item.id)}
           >
             <option value="">— из настроек казначейства —</option>
             {salaryItemMissingCurrent && employee.salaryCashFlowItemId && (
@@ -317,7 +320,7 @@ export function EmployeeEditForm({
                 {item.code ? ` (${item.code})` : ''}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
           <span
             id="emp-salary-dds-item-hint"
             className="admin-field__hint admin-muted"
@@ -355,11 +358,13 @@ export function EmployeeEditForm({
         <div className="admin-form-grid">
           <div className="admin-field">
             <label htmlFor="emp-company-division">Подразделение</label>
-            <select
+            <CreatableSelect
+              entity="companyDivision"
               id="emp-company-division"
               name="companyDivisionId"
               value={companyDivisionId}
-              onChange={(e) => setCompanyDivisionId(e.target.value)}
+              onValueChange={setCompanyDivisionId}
+              existingValues={optionsWithCurrent.map((d) => d.id)}
             >
               <option value="">— без привязки —</option>
               {optionsWithCurrent.map((d) => (
@@ -367,7 +372,7 @@ export function EmployeeEditForm({
                   {d.name} ({d.code})
                 </option>
               ))}
-            </select>
+            </CreatableSelect>
             <span
               id="emp-company-division-hint"
               className="admin-field__hint admin-muted"

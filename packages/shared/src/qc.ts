@@ -33,6 +33,30 @@ export interface DefectTypeDto {
   sortOrder: number;
 }
 
+/**
+ * Тело `POST /api/defect-types` — создание вида брака «на лету» из
+ * формы фиксации брака (ОТК/мастер). `code` опционален: если не
+ * передан, backend сгенерирует свободный `DT-N`. `sortOrder` не
+ * принимается — новые виды уходят в конец списка (`max + 10`).
+ */
+export const CreateDefectTypeSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Укажите название вида брака')
+    .max(120, 'Название слишком длинное (макс. 120 символов)'),
+  code: z
+    .string()
+    .trim()
+    .max(48, 'Код слишком длинный (макс. 48 символов)')
+    .regex(
+      /^[A-Z0-9][A-Z0-9_-]*$/,
+      'Код — латинские заглавные буквы, цифры, дефис и подчёркивание',
+    )
+    .optional(),
+});
+export type CreateDefectTypeDto = z.infer<typeof CreateDefectTypeSchema>;
+
 // ---------------------------------------------------------------------------
 // Recording a defect
 // ---------------------------------------------------------------------------

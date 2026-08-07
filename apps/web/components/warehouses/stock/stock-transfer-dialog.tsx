@@ -65,6 +65,7 @@ import {
 import type { StockBalanceListItem } from '@/lib/stock-api';
 import type { FinishedGoodsBalanceListItem } from '@/lib/finished-goods-api';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 /**
  * Унифицированный source-вариант для select-а исходного остатка. UI
@@ -477,11 +478,13 @@ export function StockTransferDialog({
         <span style={{ fontSize: '0.78rem', fontWeight: 500 }}>
           Куда переместить (склад) <span style={{ color: '#dc2626' }}>*</span>
         </span>
-        <select
+        <CreatableSelect
+          entity="warehouse"
           value={toWarehouseId}
-          onChange={(e) => setToWarehouseId(e.target.value)}
+          onValueChange={setToWarehouseId}
           required
           name="toWarehouseId"
+          existingValues={warehouses.map((w) => w.id)}
           style={{
             fontSize: '0.85rem',
             padding: '6px 8px',
@@ -499,18 +502,38 @@ export function StockTransferDialog({
               {w.code ? ` (${w.code})` : ''}
             </option>
           ))}
-        </select>
+        </CreatableSelect>
       </label>
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={{ fontSize: '0.78rem', fontWeight: 500 }}>
           Ячейка назначения
         </span>
-        <select
+        <CreatableSelect
+          entity="warehouseCell"
           value={toCellId}
-          onChange={(e) => setToCellId(e.target.value)}
+          onValueChange={setToCellId}
           name="toCellId"
           disabled={!toWarehouseId || cellsLoading}
+          disableCreate={!toWarehouseId || cellsLoading}
+          createContext={{
+            warehouseId: toWarehouseId,
+            warehouseName: destinationWarehouses.find(
+              (w) => w.id === toWarehouseId,
+            )?.name,
+            lockWarehouse: true,
+          }}
+          existingValues={destinationCells.map((c) => c.id)}
+          onCreated={(created) => {
+            // Линия создана в текущем складе: эффект перезагрузки ячеек
+            // не сработает (toWarehouseId не менялся) — мержим сами.
+            setDestinationCells((prev) => [
+              ...prev,
+              ...created.cells
+                .filter((c) => !prev.some((p) => p.id === c.id))
+                .map((c) => ({ id: c.id, code: c.code })),
+            ]);
+          }}
           style={{
             fontSize: '0.85rem',
             padding: '6px 8px',
@@ -529,7 +552,7 @@ export function StockTransferDialog({
               {c.code}
             </option>
           ))}
-        </select>
+        </CreatableSelect>
         <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
           {!toWarehouseId
             ? 'Сначала выберите склад'

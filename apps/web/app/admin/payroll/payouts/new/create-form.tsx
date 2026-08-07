@@ -11,6 +11,7 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import type { EmployeeListItemDto } from '@sewing/shared/employees';
 import { createPayrollPayoutAction } from '../actions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import type { PayrollPayoutActionState } from '../form-state';
 
 const initialState: PayrollPayoutActionState = {};
@@ -60,11 +61,13 @@ export function CreatePayrollPayoutForm({
 
       <div className="admin-field" style={{ gridColumn: '1 / -1' }}>
         <label htmlFor="create-payout-employee">Сотрудник *</label>
-        <select
+        <CreatableSelect
+          entity="employee"
           id="create-payout-employee"
           name="employeeId"
           required
           defaultValue=""
+          existingValues={employees.map((e) => e.id)}
         >
           <option value="" disabled>
             — выберите сотрудника —
@@ -74,7 +77,7 @@ export function CreatePayrollPayoutForm({
               {e.fullName}
             </option>
           ))}
-        </select>
+        </CreatableSelect>
       </div>
 
       <div className="admin-field">

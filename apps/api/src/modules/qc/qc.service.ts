@@ -6,6 +6,7 @@ import {
 import type { Prisma } from '@prisma/client';
 import { OperationCategory, PassportEventType, PassportStatus } from '@prisma/client';
 import type {
+  CreateDefectTypeDto,
   CreatePassportDefectDto,
   DefectTypeDto,
   EligibleReworkTargetDto,
@@ -21,6 +22,7 @@ import { loadActivePermitSubstitutions } from '../routes/route-work-permits.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
   DefectExceedsRemainingException,
+  DefectTypeCodeTakenException,
   DefectTypeInactiveException,
   DefectTypeNotFoundException,
   EmployeeInactiveException,
@@ -77,6 +79,54 @@ export class QcService {
       isActive: r.isActive,
       sortOrder: r.sortOrder,
     }));
+  }
+
+  /**
+   * Создание вида брака «на лету» из формы фиксации брака (контур
+   * «＋ Добавить…» в select-ах). Код опционален: без него подбирается
+   * свободный `DT-N`. `sortOrder = max + 10` — новые виды уходят в
+   * конец списка (после сидовых, включая «Прочее»).
+   */
+  async createDefectType(dto: CreateDefectTypeDto): Promise<DefectTypeDto> {
+    let code = dto.code ?? null;
+    if (!code) {
+      const existing = await this.prisma.defectType.findMany({
+        select: { code: true },
+      });
+      const taken = new Set(existing.map((r) => r.code));
+      let n = taken.size + 1;
+      while (taken.has(`DT-${n}`)) n += 1;
+      code = `DT-${n}`;
+    }
+    const maxSort = await this.prisma.defectType.aggregate({
+      _max: { sortOrder: true },
+    });
+    try {
+      const created = await this.prisma.defectType.create({
+        data: {
+          code,
+          name: dto.name,
+          isActive: true,
+          sortOrder: (maxSort._max.sortOrder ?? 0) + 10,
+        },
+      });
+      return {
+        id: created.id,
+        code: created.code,
+        name: created.name,
+        isActive: created.isActive,
+        sortOrder: created.sortOrder,
+      };
+    } catch (e) {
+      if (
+        typeof e === 'object' &&
+        e !== null &&
+        (e as { code?: string }).code === 'P2002'
+      ) {
+        throw new DefectTypeCodeTakenException(code);
+      }
+      throw e;
+    }
   }
 
   // -------------------------------------------------------------------------

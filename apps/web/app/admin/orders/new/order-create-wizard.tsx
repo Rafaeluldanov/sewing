@@ -102,6 +102,7 @@ import {
   AdminRouteSteps,
   PatternHeroPreview,
 } from '@/components/admin';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import { OrderApplicationsEditor } from '@/components/orders/order-applications-editor';
 import { createOrderForCalculationAction } from '@/app/orders/actions';
 import {
@@ -306,8 +307,15 @@ export function OrderCreateWizard({
     [techCardId, colorways],
   );
 
+  // Превью шаблонов, созданных «на лету» из select-а (контур
+  // ref-create): серверный `routePreviewMap` их ещё не знает.
+  const [extraRoutePreviews, setExtraRoutePreviews] = useState<
+    Record<string, RoutePreview>
+  >({});
   const selectedRoute = routeTemplateId
-    ? (routePreviewMap[routeTemplateId] ?? null)
+    ? (routePreviewMap[routeTemplateId] ??
+      extraRoutePreviews[routeTemplateId] ??
+      null)
     : null;
   const selectedClient = clients.find((c) => c.id === clientId) ?? null;
   const selectedDivision =
@@ -688,11 +696,13 @@ export function OrderCreateWizard({
                 <label htmlFor="wiz-client">
                   Клиент <span className="order-wizard__req">*</span>
                 </label>
-                <select
+                <CreatableSelect
+                  entity="client"
                   id="wiz-client"
                   value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
+                  onValueChange={setClientId}
                   aria-invalid={fieldError('clientId') ? true : undefined}
+                  existingValues={clients.map((c) => c.id)}
                 >
                   <option value="">— выберите клиента —</option>
                   {clients.map((c) => (
@@ -701,7 +711,7 @@ export function OrderCreateWizard({
                       {c.isActive ? '' : ' — архивный'}
                     </option>
                   ))}
-                </select>
+                </CreatableSelect>
                 {fieldError('clientId') && (
                   <span className="order-wizard__field-error">
                     {fieldError('clientId')}
@@ -711,10 +721,12 @@ export function OrderCreateWizard({
 
               <div className="admin-field">
                 <label htmlFor="wiz-division">Подразделение</label>
-                <select
+                <CreatableSelect
+                  entity="companyDivision"
                   id="wiz-division"
                   value={companyDivisionId}
-                  onChange={(e) => setCompanyDivisionId(e.target.value)}
+                  onValueChange={setCompanyDivisionId}
+                  existingValues={companyDivisions.map((d) => d.id)}
                 >
                   <option value="">— без подразделения —</option>
                   {companyDivisions.map((d) => (
@@ -723,7 +735,7 @@ export function OrderCreateWizard({
                       {d.isActive ? '' : ' — архив'}
                     </option>
                   ))}
-                </select>
+                </CreatableSelect>
               </div>
 
               <div className="admin-field">
@@ -799,12 +811,12 @@ export function OrderCreateWizard({
                     <label htmlFor="wiz-warehouse">
                       Склад выпуска готовой продукции
                     </label>
-                    <select
+                    <CreatableSelect
+                      entity="warehouse"
                       id="wiz-warehouse"
                       value={finishedGoodsWarehouseId}
-                      onChange={(e) =>
-                        setFinishedGoodsWarehouseId(e.target.value)
-                      }
+                      onValueChange={setFinishedGoodsWarehouseId}
+                      existingValues={warehouses.map((w) => w.id)}
                     >
                       <option value="">— не выбран —</option>
                       {warehouses
@@ -815,7 +827,7 @@ export function OrderCreateWizard({
                             {w.code ? ` (${w.code})` : ''}
                           </option>
                         ))}
-                    </select>
+                    </CreatableSelect>
                     <span className="admin-field__hint">
                       Куда поступит готовая продукция после упаковки. Это не
                       склад материалов.
@@ -1084,10 +1096,26 @@ export function OrderCreateWizard({
           <div className="order-wizard__body">
             <div className="admin-field">
               <label htmlFor="wiz-route">Шаблон маршрута</label>
-              <select
+              <CreatableSelect
+                entity="routeTemplate"
                 id="wiz-route"
                 value={routeTemplateId}
-                onChange={(e) => setRouteTemplateId(e.target.value)}
+                onValueChange={setRouteTemplateId}
+                existingValues={routeTemplates.map((t) => t.id)}
+                onCreated={(tpl) =>
+                  setExtraRoutePreviews((prev) => ({
+                    ...prev,
+                    [tpl.id]: {
+                      id: tpl.id,
+                      name: tpl.name,
+                      steps: tpl.steps.map((s) => ({
+                        id: s.id,
+                        index: s.index,
+                        name: s.operationName,
+                      })),
+                    },
+                  }))
+                }
               >
                 <option value="">— без маршрута —</option>
                 {routeTemplates.map((t) => (
@@ -1102,7 +1130,7 @@ export function OrderCreateWizard({
                       : ` — ${t.stepsCount} шагов`}
                   </option>
                 ))}
-              </select>
+              </CreatableSelect>
             </div>
             {selectedRoute && selectedRoute.steps.length > 0 ? (
               <div className="admin-order-route-preview">

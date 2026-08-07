@@ -18,12 +18,32 @@
  *
  * Никакой бизнес-логики и валидации: это только chrome нативного
  * `<select>` + `<optgroup>`, чтобы все экраны выглядели одинаково.
+ *
+ * Опциональный creatable-режим (контур ref-create): последним пунктом
+ * рендерится «＋ Добавить операцию…», открывающий модалку создания.
+ * Merge созданной операции — ответственность хоста
+ * (`onCreatedOperation`): хост держит список в state и после merge
+ * получает автовыбор через обычный `onChange`. Внутренних extra-опций,
+ * как у `CreatableSelect`, здесь нет — хосты фильтруют список
+ * (например, убирают уже привязанные операции), и «своя» опция
+ * ломала бы эту фильтрацию.
  */
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import {
   groupOperationsByCategory,
   type GroupableOperation,
+  type OperationDetailDto,
 } from '@sewing/shared/operations';
+import { CREATE_SENTINEL } from './ref-create/creatable-select';
+
+const CreateOperationModal = dynamic(
+  () =>
+    import('./ref-create/create-operation-modal').then(
+      (m) => m.CreateOperationModal,
+    ),
+  { ssr: false },
+);
 
 interface GroupedOperationSelectProps<T extends GroupableOperation> {
   operations: readonly T[];
@@ -53,6 +73,15 @@ interface GroupedOperationSelectProps<T extends GroupableOperation> {
    * «Оверлок · OVERLOCK», тогда передаёт `(op) => `${op.name} · ${op.code}``.
    */
   formatOption?: (op: T) => string;
+  /** Включает пункт «＋ Добавить операцию…» в конце списка. */
+  creatable?: boolean;
+  /**
+   * Созданная операция (полный DTO): хост мержит её в свой список
+   * операций. Автовыбор придёт следом через `onChange(op.id)`.
+   */
+  onCreatedOperation?: (op: OperationDetailDto) => void;
+  /** z-index модалки создания (для вложенных оверлеев). */
+  modalZIndex?: number;
 }
 
 export function GroupedOperationSelect<T extends GroupableOperation>({
@@ -69,9 +98,15 @@ export function GroupedOperationSelect<T extends GroupableOperation>({
   onChange,
   ariaLabel,
   formatOption,
+  creatable = false,
+  onCreatedOperation,
+  modalZIndex,
 }: GroupedOperationSelectProps<T>) {
   const generatedId = useId();
   const selectId = id ?? `op-select-${generatedId}`;
+  const [createOpen, setCreateOpen] = useState(false);
+  /** Последнее «настоящее» значение — для отката sentinel в uncontrolled-режиме. */
+  const lastValueRef = useRef(defaultValue ?? '');
   const groups = useMemo(
     () => groupOperationsByCategory(operations),
     [operations],
@@ -79,30 +114,58 @@ export function GroupedOperationSelect<T extends GroupableOperation>({
   const selectProps = value !== undefined ? { value } : { defaultValue };
 
   return (
-    <select
-      id={selectId}
-      name={name}
-      required={required}
-      disabled={disabled}
-      className={className}
-      aria-label={ariaLabel}
-      onChange={onChange ? (e) => onChange(e.target.value) : undefined}
-      {...selectProps}
-    >
-      {includePlaceholder && <option value="">{placeholder}</option>}
-      {groups.map((group) => (
-        <optgroup
-          key={group.category}
-          label={group.label}
-          data-category={group.category}
-        >
-          {group.operations.map((op) => (
-            <option key={op.id} value={op.id}>
-              {formatOption ? formatOption(op) : op.name}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
+    <>
+      <select
+        id={selectId}
+        name={name}
+        required={required}
+        disabled={disabled}
+        className={className}
+        aria-label={ariaLabel}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (creatable && next === CREATE_SENTINEL) {
+            // Не пробрасываем sentinel хосту. Controlled-хост откатится
+            // сам на ре-рендере; uncontrolled возвращаем руками.
+            e.target.value =
+              value !== undefined ? value : lastValueRef.current;
+            setCreateOpen(true);
+            return;
+          }
+          lastValueRef.current = next;
+          onChange?.(next);
+        }}
+        {...selectProps}
+      >
+        {includePlaceholder && <option value="">{placeholder}</option>}
+        {groups.map((group) => (
+          <optgroup
+            key={group.category}
+            label={group.label}
+            data-category={group.category}
+          >
+            {group.operations.map((op) => (
+              <option key={op.id} value={op.id}>
+                {formatOption ? formatOption(op) : op.name}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+        {creatable && (
+          <option value={CREATE_SENTINEL}>＋ Добавить операцию…</option>
+        )}
+      </select>
+      {createOpen && (
+        <CreateOperationModal
+          zIndex={modalZIndex}
+          onCancel={() => setCreateOpen(false)}
+          onCreated={(op) => {
+            onCreatedOperation?.(op);
+            onChange?.(op.id);
+            setCreateOpen(false);
+          }}
+        />
+      )}
+    </>
   );
 }

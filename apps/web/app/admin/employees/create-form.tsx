@@ -20,6 +20,7 @@ import {
   initialCreateEmployeeState,
   type CreateEmployeeState,
 } from './form-state';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 /**
  * Роль закройщика — единственная, для которой имеет смысл поле
@@ -185,19 +186,21 @@ export function CreateEmployeeForm({
       <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="emp-role">Роль</label>
-          <select
+          <CreatableSelect
+            entity="appRole"
             id="emp-role"
             name="role"
             value={role}
-            onChange={(e) => setRole(e.target.value)}
+            onValueChange={setRole}
             required
+            existingValues={roles.map((r) => r.code)}
           >
             {roles.map((r) => (
               <option key={r.code} value={r.code}>
                 {r.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
 
         <div className="admin-field">
@@ -299,11 +302,13 @@ export function CreateEmployeeForm({
         <div className="admin-form-grid">
           <div className="admin-field">
             <label htmlFor="emp-company-division">Подразделение</label>
-            <select
+            <CreatableSelect
+              entity="companyDivision"
               id="emp-company-division"
               name="companyDivisionId"
               value={companyDivisionId}
-              onChange={(e) => setCompanyDivisionId(e.target.value)}
+              onValueChange={setCompanyDivisionId}
+              existingValues={divisionOptions.map((d) => d.id)}
             >
               <option value="">— без привязки —</option>
               {divisionOptions.map((d) => (
@@ -311,7 +316,7 @@ export function CreateEmployeeForm({
                   {d.name} ({d.code})
                 </option>
               ))}
-            </select>
+            </CreatableSelect>
             <span
               id="emp-company-division-hint"
               className="admin-field__hint admin-muted"

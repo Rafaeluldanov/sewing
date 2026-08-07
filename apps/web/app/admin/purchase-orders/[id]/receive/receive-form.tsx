@@ -27,6 +27,7 @@ import {
 } from '@sewing/shared/purchase-orders';
 import { createPurchaseReceiptFromPurchaseOrderAction } from '../../../purchase-receipts/actions';
 import { initialCreatePurchaseReceiptState } from '../../../purchase-receipts/form-state';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
 interface CellOption {
   id: string;
@@ -337,10 +338,12 @@ function ReceiveLineRow({
         </div>
         <div className="admin-field">
           <label htmlFor={`cellId-${line.id}`}>Ячейка</label>
-          <select
+          <CreatableSelect
+            entity="warehouseCell"
             id={`cellId-${line.id}`}
             name={`cellId:${line.id}`}
             defaultValue=""
+            existingValues={cells.map((c) => c.id)}
           >
             <option value="">Не указана</option>
             {cells.map((c) => (
@@ -349,7 +352,7 @@ function ReceiveLineRow({
                 {c.warehouseName ? ` · ${c.warehouseName}` : ''}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
         <div className="admin-field">
           <label htmlFor={`batchNumber-${line.id}`}>Партия</label>

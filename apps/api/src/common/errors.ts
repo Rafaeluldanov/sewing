@@ -1365,6 +1365,16 @@ export class DefectTypeInactiveException extends BusinessException {
   }
 }
 
+export class DefectTypeCodeTakenException extends BusinessException {
+  constructor(code: string) {
+    super(
+      'DEFECT_TYPE_CODE_TAKEN',
+      `Вид брака с кодом «${code}» уже существует`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 /**
  * Паспорт ещё не доступен ОТК (см. `docs/flows.md §F5`).
  *

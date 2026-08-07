@@ -6,6 +6,8 @@ import { useMemo, useState } from 'react';
 import { PrintButton } from '@/components/print-button';
 import { buildPassportPrintPath } from '@/lib/browser-api-paths';
 import { AdminDateField } from '@/components/admin/admin-date-field';
+import { CREATE_SENTINEL } from '@/components/admin/ref-create/creatable-select';
+import { CreateEmployeeModal } from '@/components/employees/create-employee-modal';
 import {
   createPassportAction,
   type CreatePassportMode,
@@ -74,6 +76,13 @@ interface Props {
   creatorIsCutter: boolean;
   /** Список активных раскройщиков (`Employee.role = CUTTER && active`). */
   cutterOptions: CutterOption[];
+  /**
+   * Право «＋ Добавить раскройщика…» прямо из select-а (контур
+   * ref-create). Источник истины — эффективные роли на сервере
+   * (`page.tsx`): только ADMIN / SHOP_MANAGER, backend всё равно
+   * гейтит `POST /employees`.
+   */
+  canCreateCutter?: boolean;
 }
 
 const initialState: PassportFormState = {};
@@ -129,6 +138,7 @@ function NewPassportFormInner({
   isCutterAssistant,
   creatorIsCutter,
   cutterOptions,
+  canCreateCutter = false,
   onIssueAnother,
 }: Props & { onIssueAnother: () => void }) {
   // Помощник раскройщика на /work получает inline-режим: server action
@@ -158,8 +168,14 @@ function NewPassportFormInner({
   // По умолчанию — первый активный CUTTER, чтобы менеджер не тыкал
   // лишний раз (это не сильнее старого «по умолчанию seed `cutter`»
   // — теперь хотя бы видно, какой раскройщик подставлен).
-  const showCutterSelect = !creatorIsCutter && cutterOptions.length > 0;
-  const noActiveCutters = !creatorIsCutter && cutterOptions.length === 0;
+  // Контур ref-create: раскройщика можно завести «на лету» из select-а
+  // (ADMIN/SHOP_MANAGER) — список ведём локальным state для merge.
+  const [cutters, setCutters] = useState<CutterOption[]>(cutterOptions);
+  const [showCreateCutter, setShowCreateCutter] = useState(false);
+  const showCutterSelect =
+    !creatorIsCutter && (cutters.length > 0 || canCreateCutter);
+  const noActiveCutters =
+    !creatorIsCutter && cutters.length === 0 && !canCreateCutter;
   const [cutterId, setCutterId] = useState<string>(
     cutterOptions[0]?.id ?? '',
   );
@@ -317,14 +333,42 @@ function NewPassportFormInner({
               name="cutterId"
               required
               value={cutterId}
-              onChange={(e) => setCutterId(e.target.value)}
+              onChange={(e) => {
+                if (e.target.value === CREATE_SENTINEL) {
+                  // Controlled select откатится к прежнему значению на
+                  // ре-рендере — открываем модалку создания.
+                  setShowCreateCutter(true);
+                  return;
+                }
+                setCutterId(e.target.value);
+              }}
             >
-              {cutterOptions.map((c) => (
+              {cutters.length === 0 && <option value="">— выбрать —</option>}
+              {cutters.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.fullName} ({c.login})
                 </option>
               ))}
+              {canCreateCutter && (
+                <option value={CREATE_SENTINEL}>
+                  ＋ Добавить раскройщика…
+                </option>
+              )}
             </select>
+            {showCreateCutter && (
+              <CreateEmployeeModal
+                lockedRole="CUTTER"
+                onCancel={() => setShowCreateCutter(false)}
+                onCreated={(emp) => {
+                  setCutters((prev) => [
+                    ...prev.filter((c) => c.id !== emp.id),
+                    { id: emp.id, fullName: emp.fullName, login: emp.login },
+                  ]);
+                  setCutterId(emp.id);
+                  setShowCreateCutter(false);
+                }}
+              />
+            )}
             <div className="hint">
               Сдельное начисление за раскрой запишется выбранному
               сотруднику. См.{' '}

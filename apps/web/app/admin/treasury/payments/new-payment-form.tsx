@@ -7,6 +7,7 @@ import type {
   CashFlowItemDto,
 } from '@sewing/shared/treasury';
 import { createSupplierPaymentAction } from '../actions';
+import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 import {
   initialTreasuryFormState,
   type TreasuryFormState,
@@ -69,7 +70,14 @@ export function NewPaymentForm({
       <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="pay-supplier">Поставщик</label>
-          <select id="pay-supplier" name="supplierId" required defaultValue="">
+          <CreatableSelect
+            entity="supplier"
+            id="pay-supplier"
+            name="supplierId"
+            required
+            defaultValue=""
+            existingValues={suppliers.map((s) => s.id)}
+          >
             <option value="" disabled>
               Выберите поставщика
             </option>
@@ -78,7 +86,7 @@ export function NewPaymentForm({
                 {s.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
         <div className="admin-field">
           <label htmlFor="pay-po">Заказ поставщику</label>
@@ -107,7 +115,14 @@ export function NewPaymentForm({
       <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="pay-account">Счёт списания</label>
-          <select id="pay-account" name="accountId" required defaultValue="">
+          <CreatableSelect
+            entity="cashAccount"
+            id="pay-account"
+            name="accountId"
+            required
+            defaultValue=""
+            existingValues={accounts.map((a) => a.id)}
+          >
             <option value="" disabled>
               Выберите счёт
             </option>
@@ -116,11 +131,18 @@ export function NewPaymentForm({
                 {a.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
         <div className="admin-field">
           <label htmlFor="pay-item">Статья ДДС</label>
-          <select id="pay-item" name="itemId" required defaultValue="">
+          <CreatableSelect
+            entity="cashFlowItem"
+            id="pay-item"
+            name="itemId"
+            required
+            defaultValue=""
+            existingValues={items.map((it) => it.id)}
+          >
             <option value="" disabled>
               Выберите статью
             </option>
@@ -129,7 +151,7 @@ export function NewPaymentForm({
                 {it.name}
               </option>
             ))}
-          </select>
+          </CreatableSelect>
         </div>
         <div className="admin-field">
           <label htmlFor="pay-comment">Комментарий</label>
