@@ -22,6 +22,12 @@ if (TEST_DATABASE_URL) {
   // На тестах хотим короткий TTL для cookie, и фиксированный JWT_SECRET.
   process.env.JWT_SECRET ??= 'test-secret-please-do-not-use-in-prod';
   process.env.JWT_EXPIRES_IN ??= '1h';
+  // Ключ шифрования секретов at-rest (`common/pin-columns.ts`,
+  // `modules/integrations/secret-box.ts`). Без него `buildPinColumns`
+  // уходит в fail-soft ветку `NO_KEY`, `Employee.pinEnc` везде остаётся
+  // `null` — и весь путь «показать пароль» в интеграционных тестах не
+  // исполняется вовсе, оставаясь при этом зелёным. 32 байта, фиксированные.
+  process.env.INTEGRATION_SECRET_KEY ??= Buffer.alloc(32, 7).toString('base64');
 }
 
 /**

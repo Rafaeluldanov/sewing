@@ -36,3 +36,36 @@ export interface CreateEmployeeState {
 }
 
 export const initialCreateEmployeeState: CreateEmployeeState = {};
+
+/**
+ * Состояние формы «Смена PIN» в карточке сотрудника.
+ *
+ * Отдельно от `UpdateEmployeeState`, потому что и форма отдельная:
+ * сохранение зарплаты не должно иметь ни малейшего шанса сбросить код,
+ * по которому человек логинится в цехе.
+ */
+export interface UpdateEmployeePinState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialUpdateEmployeePinState: UpdateEmployeePinState = {};
+
+/**
+ * Результат нажатия «Показать» в блоке «Доступ».
+ *
+ * Три исхода, и все три — нормальные:
+ *   - `pin` — код показан;
+ *   - `notice` — показывать нечего (PIN задан до появления обратимого
+ *     хранения либо не настроен ключ шифрования): не ошибка, а
+ *     подсказка «задайте PIN заново формой ниже»;
+ *   - `error` — 403/404/сеть.
+ */
+export interface RevealEmployeePinState {
+  pin?: string;
+  notice?: string;
+  error?: string;
+  errorRequestId?: string;
+}

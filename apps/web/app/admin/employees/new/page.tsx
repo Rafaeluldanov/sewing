@@ -7,6 +7,7 @@ import {
 } from '@/components/admin';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
 import { listAppRolesSafe } from '@/lib/app-roles-api';
+import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { CreateEmployeeForm } from '../create-form';
 
 export const dynamic = 'force-dynamic';
@@ -24,17 +25,29 @@ export default async function AdminEmployeeNewPage() {
   // зашитого перечня в форме больше нет. `DISPLAY`/`SUPERADMIN`
   // исключаем — учётку монитора создаёт «Цеховой монитор», а
   // супер-админ живёт в control-plane.
-  const [divisions, appRoles] = await Promise.all([
+  const [divisions, appRoles, viewer] = await Promise.all([
     listCompanyDivisions({ includeInactive: false }).catch(() => []),
     listAppRolesSafe(),
+    getCurrentUserOrNull(),
   ]);
   const divisionOptions = divisions.map((d) => ({
     id: d.id,
     code: d.code,
     name: d.name,
   }));
+  // Роль «Администратор» показываем только администратору. Истина —
+  // на сервере (`EmployeesService.create` вернёт 403
+  // `EMPLOYEE_ADMIN_TARGET_FORBIDDEN`), здесь мы лишь не предлагаем
+  // начальнику цеха вариант, который заведомо отобьётся.
+  const viewerIsAdmin = (viewer?.user.roles ?? []).includes('ADMIN');
   const roleOptions = appRoles
-    .filter((r) => r.active && r.code !== 'DISPLAY' && r.code !== 'SUPERADMIN')
+    .filter(
+      (r) =>
+        r.active &&
+        r.code !== 'DISPLAY' &&
+        r.code !== 'SUPERADMIN' &&
+        (viewerIsAdmin || r.code !== 'ADMIN'),
+    )
     .map((r) => ({ code: r.code, name: r.name }));
 
   return (

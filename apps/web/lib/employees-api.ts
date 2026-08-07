@@ -12,6 +12,7 @@ import type {
   EmployeeBlockersResponse,
   EmployeeDetailDto,
   EmployeeListItemDto,
+  EmployeePinRevealDto,
   ListEmployeesQuery,
   UpdateEmployeeDto,
 } from '@sewing/shared/employees';
@@ -74,6 +75,23 @@ export function updateEmployee(
     method: 'PATCH',
     body,
   });
+}
+
+/**
+ * Показать текущий PIN сотрудника (блок «Доступ» карточки
+ * `/admin/employees/[id]`). Каждый вызов пишется в журнал аудита
+ * (`EMPLOYEE_PIN_VIEWED`) — дёргать «на всякий случай» при рендере
+ * страницы нельзя, только по явному нажатию менеджера.
+ *
+ * `pin: null` + `reason` — показать нечего (карточка заведена до
+ * появления обратимого хранения либо не настроен ключ шифрования);
+ * это успешный ответ, а не ошибка.
+ */
+export function revealEmployeePin(id: string): Promise<EmployeePinRevealDto> {
+  return apiFetch<EmployeePinRevealDto>(
+    `/employees/${encodeURIComponent(id)}/reveal-pin`,
+    { method: 'POST', body: {} },
+  );
 }
 
 /**

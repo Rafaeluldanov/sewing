@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import bcrypt from 'bcryptjs';
 import { CompensationType, Prisma, Role } from '@prisma/client';
 import type {
   CreateDisplayScreenDto,
@@ -11,6 +10,7 @@ import type { BulkArchiveResultDto } from '@sewing/shared/archive';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
+import { buildPinColumns } from '../../common/pin-columns.js';
 import {
   DisplayLoginTakenException,
   DisplayScreenNotFoundException,
@@ -30,12 +30,14 @@ import {
  * (см. `prisma/schema.prisma::DisplayScreenConfig.companyDivisionId`,
  * `docs/domain.md §«Подразделения заказа»`).
  *
- * PIN хешируется тем же `bcrypt.hash(pin, 10)`, что и в
- * `EmployeesService.create` / `prisma/seed.ts` / `AuthService` —
- * чтобы существующий login-flow работал для DISPLAY-учёток без
- * каких-либо ответвлений.
+ * PIN считается общим `common/pin-columns.ts` — тем же, что и в
+ * `EmployeesService`, `prisma/seed.ts`, `scripts/tenants/create-tenant.ts`.
+ * Это не только про одинаковый bcrypt-cost (иначе login-flow для
+ * DISPLAY-учёток пришлось бы ответвлять), но и про обратимую копию
+ * `Employee.pinEnc`: DISPLAY-учётка — обычная строка `Employee`, она
+ * видна в `/admin/employees/[id]`, и если писать здесь только `pinHash`,
+ * карточка после смены PIN'а монитора показывала бы ПРЕЖНИЙ код.
  */
-const PIN_HASH_COST = 10;
 
 @Injectable()
 export class DisplayScreensService {
@@ -134,9 +136,9 @@ export class DisplayScreensService {
    * включает `DISPLAY` в `EMPLOYEE_ROLES`.
    *
    * Шаги:
-   *   1. `bcrypt.hash(pin, 10)` — снаружи транзакции, потому что
-   *      хеширование тяжёлое (~50–200 мс) и не должно держать
-   *      открытую транзакцию.
+   *   1. `buildPinColumns(pin)` — снаружи транзакции, потому что
+   *      bcrypt тяжёлый (~50–200 мс) и не должен держать открытую
+   *      транзакцию. Возвращает пару колонок (хеш + обратимая копия).
    *   2. Валидируем существование `CompanyDivision` по
    *      `companyDivisionId`. Если карточки нет — 400
    *      `COMPANY_DIVISION_NOT_FOUND`, чтобы UI получил адресную
@@ -157,7 +159,9 @@ export class DisplayScreensService {
    * не должна влиять на ФОТ.
    */
   async create(dto: CreateDisplayScreenDto): Promise<DisplayScreenDetailDto> {
-    const pinHash = await bcrypt.hash(dto.pin, PIN_HASH_COST);
+    const { pinHash, pinEnc } = await buildPinColumns(dto.pin, (m) =>
+      this.logger.warn(m),
+    );
 
     // Валидация существования карточки до открытия транзакции —
     // read-only запрос, дешёвый и независимый от Employee-create.
@@ -183,6 +187,7 @@ export class DisplayScreensService {
             fullName: `Display: ${dto.name}`,
             login: dto.login,
             pinHash,
+            pinEnc,
             role: Role.DISPLAY,
             // Дисплей — не реальный сотрудник; «оклад» проставлять
             // нечем и не нужно. SALARY без `salaryPerHour` по
@@ -264,7 +269,7 @@ export class DisplayScreensService {
    * поэтому правка идёт одной транзакцией на обе записи:
    *
    *   config   → name, companyDivisionId
-   *   employee → login, pinHash, fullName («Display: <имя экрана>»)
+   *   employee → login, обе колонки PIN, fullName («Display: <имя экрана>»)
    *
    * `fullName` пересобирается при смене имени намеренно: это же имя
    * видно в `auth/me` и в журнале событий, и разъехавшееся «Display:
@@ -313,8 +318,8 @@ export class DisplayScreensService {
     }
 
     // Хеширование PIN'а — вне транзакции (~50-200 мс), как и в create().
-    const pinHash = dto.pin
-      ? await bcrypt.hash(dto.pin, PIN_HASH_COST)
+    const pinColumns = dto.pin
+      ? await buildPinColumns(dto.pin, (m) => this.logger.warn(m))
       : null;
 
     const configData: Prisma.DisplayScreenConfigUpdateInput = {};
@@ -325,7 +330,15 @@ export class DisplayScreensService {
 
     const employeeData: Prisma.EmployeeUpdateInput = {};
     if (dto.login !== undefined) employeeData.login = dto.login;
-    if (pinHash) employeeData.pinHash = pinHash;
+    if (pinColumns) {
+      // Ровно парой. Даже когда `pinEnc = null` (нет ключа шифрования)
+      // — колонку затираем осознанно: иначе в ней останется шифротекст
+      // ПРЕЖНЕГО кода, и карточка сотрудника `/admin/employees/[id]`
+      // (DISPLAY-учётка там обычная строка) показала бы менеджеру PIN,
+      // который монитор уже не пускает.
+      employeeData.pinHash = pinColumns.pinHash;
+      employeeData.pinEnc = pinColumns.pinEnc;
+    }
     if (dto.name !== undefined) employeeData.fullName = `Display: ${dto.name}`;
 
     try {
@@ -369,7 +382,9 @@ export class DisplayScreensService {
               ...(dto.login !== undefined && dto.login !== existing.employee.login
                 ? { loginFrom: existing.employee.login, loginTo: dto.login }
                 : {}),
-              ...(pinHash ? { pinChanged: true } : {}),
+              ...(pinColumns
+                ? { pinChanged: true, revealable: pinColumns.pinEnc !== null }
+                : {}),
               employeeId: existing.employeeId,
             },
           },
@@ -381,7 +396,7 @@ export class DisplayScreensService {
       this.logger.log(
         `event=display-screen.update id=${config.id} ` +
           `companyDivisionId=${config.companyDivisionId ?? 'null'} ` +
-          `login=${config.employee.login} pinChanged=${pinHash ? 1 : 0}`,
+          `login=${config.employee.login} pinChanged=${pinColumns ? 1 : 0}`,
       );
 
       return toListDto({

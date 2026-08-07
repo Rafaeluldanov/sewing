@@ -191,10 +191,11 @@ UI-потребители: `apps/web/components/employees/employee-qr-button.tsx
 | Метод | Путь                       | RBAC               | Описание |
 | ----- | -------------------------- | ------------------ | -------- |
 | GET   | `/api/employees`           | SHOP_MANAGER, ADMIN | List с фильтрами `ListEmployeesQuery` (active/role/comp/search/companyDivisionId). PHASE 2 STEP 2: каждая запись отдаёт `companyDivisionId` и краткие реквизиты `companyDivision { id, code, name }` (`null` для не привязанных). |
-| POST  | `/api/employees`           | SHOP_MANAGER, ADMIN | Body `CreateEmployeeDto`. Создаёт карточку (с `pinHash` через bcrypt). PHASE 2 STEP 2: тело принимает опциональный `companyDivisionId`; если карточка не найдена — 404 `COMPANY_DIVISION_NOT_FOUND`, если soft-deleted — 409 `COMPANY_DIVISION_INACTIVE`. |
+| POST  | `/api/employees`           | SHOP_MANAGER, ADMIN | Body `CreateEmployeeDto`. Создаёт карточку, записывая обе колонки PIN разом (`pinHash` + `pinEnc`, см. «Хранение PIN» ниже). **Не-ADMIN не может завести привилегированную учётку** (`ADMIN`, `SUPERADMIN` или кастомная роль, наследующая `ADMIN`) — 403 `EMPLOYEE_ADMIN_TARGET_FORBIDDEN`. Гейт симметричен запрету выдавать эти роли в `PATCH`: без него запрет обходился бы созданием нового админа. PHASE 2 STEP 2: тело принимает опциональный `companyDivisionId`; если карточка не найдена — 404 `COMPANY_DIVISION_NOT_FOUND`, если soft-deleted — 409 `COMPANY_DIVISION_INACTIVE`. |
 | GET   | `/api/employees/cutters`   | CUTTER_ASSISTANT, SHOP_MANAGER, ADMIN | Узкий справочник активных раскройщиков для select-а на форме выпуска паспорта. Hard-coded `role = CUTTER` AND `active = true`, sort `fullName ASC`. Ответ — `ActiveCutterListItemDto[]`, поля только `{ id, fullName, login }` (не отдаёт payroll-поля). См. RECON `docs/cutter-assistant-passport-release-recon.md §5`. |
-| GET   | `/api/employees/:id`       | SHOP_MANAGER, ADMIN | Карточка сотрудника. PHASE 2 STEP 2: ответ включает `companyDivisionId` и краткие `companyDivision { id, code, name }` (`null` без привязки). |
-| PATCH | `/api/employees/:id`       | SHOP_MANAGER, ADMIN | Body `UpdateEmployeeDto`. Правит management-поля. PHASE 2 STEP 2: поддерживает `companyDivisionId` (`null` — снять привязку, ID — переставить; те же 404/409, что и POST). |
+| GET   | `/api/employees/:id`       | SHOP_MANAGER, ADMIN | Карточка сотрудника. PHASE 2 STEP 2: ответ включает `companyDivisionId` и краткие `companyDivision { id, code, name }` (`null` без привязки). Плюс флаг `hasStoredPin` — сработает ли «Показать пароль» (см. `reveal-pin`). |
+| PATCH | `/api/employees/:id`       | SHOP_MANAGER, ADMIN | Body `UpdateEmployeeDto`. Правит management-поля. PHASE 2 STEP 2: поддерживает `companyDivisionId` (`null` — снять привязку, ID — переставить; те же 404/409, что и POST). Опциональный `pin` меняет пароль: перезаписывает `pinHash` + `pinEnc` одним апдейтом, пишет `EMPLOYEE_PIN_CHANGED` в аудит (флагом, без значения). Не-ADMIN не может сменить PIN админской учётке — 403 `EMPLOYEE_ADMIN_TARGET_FORBIDDEN`. |
+| POST  | `/api/employees/:id/reveal-pin` | SHOP_MANAGER, ADMIN | Показать текущий PIN (блок «Доступ» карточки `/admin/employees/[id]`). Ответ `EmployeePinRevealDto`. Пишет `EMPLOYEE_PIN_VIEWED` в аудит — потому и `POST`, а не `GET` (кэш/префетч засорили бы журнал). Не-ADMIN не может посмотреть PIN админской учётки — 403 `EMPLOYEE_ADMIN_TARGET_FORBIDDEN`; свой собственный PIN смотреть можно всегда. 200 с `pin: null` + `reason` (`NOT_STORED` / `NO_KEY` / `DECRYPT_FAILED`) — показывать нечего, это не ошибка. |
 | GET   | `/api/employees/:id/print` | Public             | HTML-этикетка с QR `EMPLOYEE:<id>`. Используется на `/master`. |
 | GET   | `/api/employees/:id/qr`    | Public             | PNG QR (`EMPLOYEE:<id>`, см. `EMPLOYEE_QR_PREFIX`). |
 
@@ -204,6 +205,43 @@ Side effects: `update` может менять `compensationType`,
 `salaryPerShift`, `cutterB2bSewingPercent` — мгновенно влияет на
 sync-логику окладной (`SalaryService.syncDailyForEmployee`) при
 следующем старте/стопе смены.
+
+**Хранение PIN.** С фичи «показать пароль сотрудника» PIN лежит в двух
+колонках `Employee`:
+
+- `pinHash` — bcrypt cost 10; **вход проверяется только по нему**
+  (`AuthService.login`), колонка обязательная;
+- `pinEnc` — AES-256-GCM (`v1.<base64>`, ключ из env
+  `INTEGRATION_SECRET_KEY`, тот же crypto-util, что у пароля
+  интеграции upgifts). Нужна ровно для `reveal-pin`.
+
+Колонки обязаны меняться ВМЕСТЕ, иначе карточка уверенно покажет
+менеджеру прежний, уже недействительный код. Единственная точка, где
+пара вычисляется, — **`apps/api/src/common/pin-columns.ts`**
+(`buildPinColumns`). Модуль общий, а не приватный метод сервиса,
+потому что `Employee` пишут четыре независимых места:
+`EmployeesService`, `DisplayScreensService` (заводит и правит
+DISPLAY-учётку напрямую), `prisma/seed.ts` и
+`scripts/tenants/create-tenant.ts`. Любой новый писатель `Employee`
+обязан звать этот же хелпер — сторож в
+`tests/smoke/employee-pin.smoke.test.ts` сплошняком сканирует
+`apps/api/src`, `prisma` и `scripts` и падает на втором вызове
+`bcrypt.hash` где угодно, кроме самого хелпера.
+
+`pinEnc = null` означает «показать нечего»: карточка заведена до фичи
+(бэкфилла нет и быть не может — bcrypt односторонний) либо в момент
+задания PIN'а не был настроен ключ. Отсутствие ключа не мешает ни
+создать сотрудника, ни сменить ему PIN — сохранится только хеш, а
+`hasStoredPin` придёт `false`. Ни `pinHash`, ни `pinEnc` не уезжают ни
+в одном DTO.
+
+**RBAC привилегированных учёток.** Гейты `create` / `update`(`pin`,
+роли) / `reveal-pin` / archive / restore / hard-delete ходят через
+`EmployeesService.isPrivilegedTarget` — это `grantsAdmin` (ADMIN +
+наследники) **плюс `SUPERADMIN`**. Отдельный предикат, а не правка
+`grantsAdmin`, сознательно: тем же `grantsAdmin` считается последний
+активный администратор, и если SUPERADMIN начнёт считаться «ещё одним
+админом», систему разрешат оставить без единого реального ADMIN.
 
 ---
 
@@ -2145,7 +2183,7 @@ DTO: `packages/shared/src/shopfloor.ts`. ADR: 0007, 0013.
 | GET   | `/api/display-screens`            | SHOP_MANAGER, ADMIN | Список конфигов. Каждая запись отдаёт `companyDivisionId` и краткие реквизиты `companyDivision { id, code, name }` (`null` — для конфигов без привязки к карточке). |
 | POST  | `/api/display-screens`            | SHOP_MANAGER, ADMIN | Body `CreateDisplayScreenDto`. В одной транзакции создаёт `Employee(role=DISPLAY)` + `DisplayScreenConfig` (1:1 по `employeeId`). Тело обязательно содержит `companyDivisionId` (FK на `CompanyDivision`); если карточка не найдена — 400 `COMPANY_DIVISION_NOT_FOUND`. |
 | GET   | `/api/display-screens/:id`        | SHOP_MANAGER, ADMIN | Один экран для карточки `/admin/display-screens/[id]`. Форма ответа — та же, что у элемента списка. Нет экрана — 404 `DISPLAY_SCREEN_NOT_FOUND`. |
-| PATCH | `/api/display-screens/:id`        | SHOP_MANAGER, ADMIN | Body `UpdateDisplayScreenDto` (`name?`, `companyDivisionId?`, `login?`, `pin?` — все необязательны, схема `.strict()`). Одной транзакцией правит ПАРУ «конфиг + учётка»: `DisplayScreenConfig.name/companyDivisionId` и `Employee.login/pinHash/fullName` (`fullName` пересобирается как `Display: <имя>`). Ошибки: 404 `DISPLAY_SCREEN_NOT_FOUND`, 400 `COMPANY_DIVISION_NOT_FOUND`, 409 `DISPLAY_LOGIN_TAKEN`. Пишет `AuditLog(DISPLAY_SCREEN_UPDATED)` с «было → стало» только по изменившимся полям; PIN — флагом `pinChanged: true`, без значения и хеша. |
+| PATCH | `/api/display-screens/:id`        | SHOP_MANAGER, ADMIN | Body `UpdateDisplayScreenDto` (`name?`, `companyDivisionId?`, `login?`, `pin?` — все необязательны, схема `.strict()`). Одной транзакцией правит ПАРУ «конфиг + учётка»: `DisplayScreenConfig.name/companyDivisionId` и `Employee.login` + **обе колонки PIN** (`pinHash` и `pinEnc`, см. «Хранение PIN» в §3b) + `fullName` (пересобирается как `Display: <имя>`). Писать здесь только `pinHash` нельзя: DISPLAY-учётка — обычная строка `Employee`, она видна в `/admin/employees/[id]`, и карточка показывала бы прежний код. Ошибки: 404 `DISPLAY_SCREEN_NOT_FOUND`, 400 `COMPANY_DIVISION_NOT_FOUND`, 409 `DISPLAY_LOGIN_TAKEN`. Пишет `AuditLog(DISPLAY_SCREEN_UPDATED)` с «было → стало» только по изменившимся полям; PIN — флагами `pinChanged: true` и `revealable`, без значения и хеша. |
 
 `isActive` в PATCH сознательно НЕ принимается (`.strict()` вернёт 400 на
 попытку): включением и выключением экрана заведует контур архива

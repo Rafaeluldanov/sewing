@@ -61,12 +61,20 @@ export class EmployeesController {
     return this.employees.list(query);
   }
 
+  /**
+   * `@CurrentUser()` здесь не для аудита, а для RBAC: сервис не даёт
+   * не-админу завести привилегированную учётку (403
+   * `EMPLOYEE_ADMIN_TARGET_FORBIDDEN`). Без этого запрет «SHOP_MANAGER
+   * не выдаёт роль ADMIN» в `PATCH` обходился бы созданием нового
+   * админа одним POST.
+   */
   @Post()
   create(
     @Body(new ZodValidationPipe(CreateEmployeeSchema))
     body: CreateEmployeeDto,
+    @CurrentUser() viewer: AuthPrincipal,
   ) {
-    return this.employees.create(body);
+    return this.employees.create(body, viewer);
   }
 
   /**
@@ -104,6 +112,28 @@ export class EmployeesController {
     @CurrentUser() viewer: AuthPrincipal,
   ) {
     return this.employees.update(id, body, viewer);
+  }
+
+  /**
+   * Показать текущий PIN сотрудника для карточки `/admin/employees/[id]`.
+   *
+   * `POST`, а не `GET`, сознательно: вызов пишет `EMPLOYEE_PIN_VIEWED`
+   * в журнал аудита, и его нельзя разрешать ни кэшу, ни префетчу
+   * ссылок — иначе журнал заполнится просмотрами, которых не было.
+   * Тела у запроса нет.
+   *
+   * RBAC — класс-уровневый `SHOP_MANAGER`/`ADMIN` плюс guard в сервисе:
+   * не-админ не может посмотреть PIN админской учётки
+   * (`EMPLOYEE_ADMIN_TARGET_FORBIDDEN`, 403).
+   *
+   * 200 с `pin: null` и причиной — если показать нечего (карточка
+   * старше фичи / не настроен ключ шифрования). Это не ошибка: UI
+   * предлагает задать PIN заново.
+   */
+  @Post(':id/reveal-pin')
+  @HttpCode(200)
+  revealPin(@Param('id') id: string, @CurrentUser() viewer: AuthPrincipal) {
+    return this.employees.revealPin(id, viewer);
   }
 
   /**

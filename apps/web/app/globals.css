@@ -8816,6 +8816,51 @@ body:has(.admin-layout) .app-header { display: none !important; }
   word-break: break-word;
 }
 
+/* Показ PIN сотрудника в блоке «Доступ» карточки `/admin/employees/[id]`.
+   Живёт внутри `<dd>` deflist-а, поэтому раскладка — inline-flex с
+   переносом: строка «кнопка + подсказка» не должна распирать колонку
+   значений, а подсказка («задан до включения показа…») длиннее самого
+   PIN'а в разы. */
+.admin-pin-reveal {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--admin-space-sm);
+  flex-wrap: wrap;
+}
+
+.admin-pin-reveal__value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 8px;
+  background: var(--admin-soft);
+}
+
+.admin-pin-reveal__error {
+  font-size: 0.82rem;
+  color: var(--admin-danger);
+}
+
+/* Подсказка/статус показа PIN. Живёт в постоянном `role="status"` —
+   он в DOM всегда, даже пустой (иначе скринридер не озвучит вставку),
+   поэтому пустое состояние не должно занимать место в строке. */
+.admin-pin-reveal__hint {
+  font-size: 0.82rem;
+}
+.admin-pin-reveal__hint:empty {
+  display: none;
+}
+
+/* Компактная кнопка для inline-контекстов (ячейка таблицы, `<dd>`
+   deflist-а): те же цвета и рамка, что у `.admin-btn`, но не ломает
+   высоту строки. */
+.admin-btn--sm {
+  padding: 0.22rem 0.5rem;
+  font-size: 0.82rem;
+  gap: 0.3rem;
+}
+
 /* Pagination ------------------------------------------------------------ */
 
 .admin-pagination {

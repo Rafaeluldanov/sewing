@@ -8,6 +8,7 @@ import {
   createEmployee,
   deleteEmployee,
   restoreEmployee,
+  revealEmployeePin,
   updateEmployee,
 } from '@/lib/employees-api';
 import {
@@ -23,7 +24,9 @@ import {
 } from '@sewing/shared/employees';
 import type {
   CreateEmployeeState,
+  RevealEmployeePinState,
   UpdateEmployeeState,
+  UpdateEmployeePinState,
 } from './form-state';
 
 /**
@@ -353,6 +356,83 @@ export async function updateEmployeeAction(
     }
     return { error: 'Не удалось сохранить сотрудника' };
   }
+}
+
+// ---------------------------------------------------------------------------
+// PIN сотрудника: показать текущий / задать новый.
+// ---------------------------------------------------------------------------
+
+/**
+ * «Показать» PIN в блоке «Доступ» карточки сотрудника.
+ *
+ * Вызывается по явному нажатию, а не при рендере страницы: каждый показ
+ * пишется в журнал аудита (`EMPLOYEE_PIN_VIEWED`), и подгружать PIN
+ * заранее — значит засорять журнал просмотрами, которых не было, и
+ * гонять пароль по сети без надобности.
+ *
+ * `pin: null` от backend'а — не ошибка: у карточки просто нет обратимой
+ * копии кода (заведена до появления фичи, либо не настроен
+ * `INTEGRATION_SECRET_KEY`). Лечение во всех случаях одно — задать PIN
+ * заново формой «Смена PIN», поэтому причины различаются только текстом.
+ */
+export async function revealEmployeePinAction(
+  employeeId: string,
+): Promise<RevealEmployeePinState> {
+  try {
+    const res = await revealEmployeePin(employeeId);
+    if (res.pin) return { pin: res.pin };
+    return {
+      notice:
+        res.reason === 'NO_KEY'
+          ? 'Показ пароля не настроен на сервере (нет ключа шифрования INTEGRATION_SECRET_KEY). Задайте PIN заново — тогда его можно будет показывать.'
+          : res.reason === 'DECRYPT_FAILED'
+          ? 'Сохранённый пароль не читается текущим ключом шифрования. Задайте PIN заново.'
+          : 'PIN этого сотрудника был задан до появления показа пароля — в базе только необратимый хеш. Задайте PIN заново, и его можно будет посмотреть.',
+    };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { error: errorText(e), errorRequestId: e.requestId };
+    }
+    return { error: 'Не удалось показать пароль' };
+  }
+}
+
+/**
+ * Смена PIN сотрудника — отдельным action'ом и отдельной формой.
+ *
+ * Поле повтора — защита от опечатки: если менеджер ошибётся, человек
+ * просто не войдёт в свою смену, и разбираться будут уже у станка.
+ * Backend перезапишет обе колонки (`pinHash` + обратимую `pinEnc`)
+ * одним апдейтом — см. `EmployeesService.buildPinColumns`.
+ */
+export async function updateEmployeePinAction(
+  employeeId: string,
+  _prev: UpdateEmployeePinState,
+  form: FormData,
+): Promise<UpdateEmployeePinState> {
+  const pin = String(form.get('pin') ?? '');
+  const pinRepeat = String(form.get('pinRepeat') ?? '');
+
+  if (pin.length < 4) {
+    return { error: 'PIN должен быть не короче 4 символов' };
+  }
+  if (pin !== pinRepeat) {
+    return { error: 'PIN и его повтор не совпадают' };
+  }
+
+  try {
+    await updateEmployee(employeeId, { pin });
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { error: errorText(e), errorRequestId: e.requestId };
+    }
+    return { error: 'Не удалось сменить PIN' };
+  }
+  revalidatePath(`/admin/employees/${employeeId}`);
+  return {
+    ok: true,
+    successMessage: 'PIN изменён — сотруднику придётся войти заново.',
+  };
 }
 
 /**

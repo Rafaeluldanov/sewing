@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import bcrypt from 'bcryptjs';
 import { CompensationType, Prisma, Role, SalaryRateMode } from '@prisma/client';
 import type {
   ActiveCutterListItemDto,
@@ -9,6 +8,7 @@ import type {
   EmployeeDetailDto,
   EmployeeHardDeleteBlockerDto,
   EmployeeListItemDto,
+  EmployeePinRevealDto,
   ListEmployeesQuery,
   UpdateEmployeeDto,
 } from '@sewing/shared/employees';
@@ -40,6 +40,18 @@ import {
 } from '../../common/errors.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
+import {
+  buildPinColumns,
+  type PinColumns,
+} from '../../common/pin-columns.js';
+// Crypto-util живёт в модуле интеграций (там появился первый шифруемый
+// at-rest секрет), но сам по себе это чистая функция без Nest-зависимостей
+// и без привязки к upgifts. Копировать её ради второго потребителя — значит
+// завести вторую схему формата и вторую точку ротации ключа.
+import {
+  decryptSecret,
+  isSecretKeyConfigured,
+} from '../integrations/secret-box.js';
 import { requiresHourlyRate, requiresMonthlyRate } from './compensation.js';
 
 /**
@@ -54,11 +66,17 @@ import { requiresHourlyRate, requiresMonthlyRate } from './compensation.js';
  * `archive` / `restore` / `hardDelete` ниже). Hard-delete доступен
  * только для свежих пустых карточек — контроль через `getBlockers`.
  *
- * PIN хранится только как bcrypt-hash в `Employee.pinHash`, наружу не
- * отдаётся ни одним DTO (см. `toListDto` / `toDetailDto`). Тот же
- * cost-factor (10), что и в `prisma/seed.ts`/`AuthService`.
+ * PIN хранится ДВУМЯ колонками и пишется всегда парой — см. общий
+ * `common/pin-columns.ts`:
+ *   - `pinHash` — bcrypt, cost 10; по нему и только по нему
+ *     проверяется вход;
+ *   - `pinEnc`  — AES-256-GCM, чтобы менеджер мог ПОКАЗАТЬ забытый PIN
+ *     в карточке, не сбрасывая его (`revealPin` ниже).
+ *
+ * Ни та, ни другая колонка не уезжает в DTO: `toDetailDto` отдаёт лишь
+ * флаг `hasStoredPin`, а сам PIN — отдельная аудируемая ручка
+ * `POST /api/employees/:id/reveal-pin`.
  */
-const PIN_HASH_COST = 10;
 
 /**
  * Единый include для чтения карточки сотрудника. Кроме подразделения
@@ -79,6 +97,96 @@ export class EmployeesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
   ) {}
+
+  // ===========================================================================
+  // PIN (см. `Employee.pinHash` / `Employee.pinEnc`)
+  // ===========================================================================
+
+  /**
+   * Обе колонки PIN'а — через общий `common/pin-columns.ts` (там же
+   * объяснено, почему модуль общий: `Employee` пишут четыре независимых
+   * места, и разъехавшиеся колонки дают худший баг фичи).
+   *
+   * bcrypt считается внутри (~50-200 мс) — звать ДО открытия транзакции.
+   */
+  private buildPinColumns(pin: string): Promise<PinColumns> {
+    return buildPinColumns(pin, (msg) => this.logger.warn(msg));
+  }
+
+  /**
+   * Показать текущий PIN сотрудника (`POST /api/employees/:id/reveal-pin`).
+   *
+   * Зачем ручка вообще существует: раньше забытый PIN лечился только
+   * сбросом, а менеджеру в цехе нужно продиктовать человеку его код —
+   * смена кода при этом ломает уже розданные бумажки и заученное.
+   *
+   * RBAC поверх класс-уровневого `SHOP_MANAGER`/`ADMIN`: начальник цеха
+   * НЕ может подсмотреть пароль администратора. Иначе это готовая
+   * эскалация привилегий — тем же путём, что закрыт в `update` для
+   * выдачи роли ADMIN. Свой собственный PIN смотреть можно всегда.
+   *
+   * Каждый успешный показ пишет `EMPLOYEE_PIN_VIEWED` в `AuditLog` —
+   * без значения PIN'а, только «кто, чей и когда». Аудит идёт ДО
+   * возврата и вне транзакции (fail-soft): потерять журнальную запись
+   * неприятно, но ронять из-за неё показ смысла нет.
+   */
+  async revealPin(
+    id: string,
+    viewer: AuthPrincipal,
+  ): Promise<EmployeePinRevealDto> {
+    const target = await this.prisma.employee.findUnique({
+      where: { id },
+      select: { id: true, login: true, role: true, roles: true, pinEnc: true },
+    });
+    if (!target) throw new EmployeeNotFoundException();
+
+    const isSelf = viewer.employeeId === id;
+    if (!isSelf && !viewer.roles.includes(Role.ADMIN)) {
+      if (await this.isPrivilegedTarget(rolesOf(target))) {
+        throw new EmployeeAdminTargetForbiddenException();
+      }
+    }
+
+    if (!target.pinEnc) {
+      // Карточка старше фичи (или PIN меняли SQL-ом мимо API): в БД
+      // только односторонний bcrypt-хеш. Различаем «нечего расшифровывать»
+      // и «нечем» — подсказка в UI разная, лечение одно (задать заново).
+      return {
+        employeeId: id,
+        pin: null,
+        reason: isSecretKeyConfigured() ? 'NOT_STORED' : 'NO_KEY',
+      };
+    }
+
+    let pin: string;
+    try {
+      pin = decryptSecret(target.pinEnc);
+    } catch (e) {
+      this.logger.warn(
+        `event=employee.reveal-pin.failed id=${id}: ${(e as Error).message}`,
+      );
+      return {
+        employeeId: id,
+        pin: null,
+        reason: isSecretKeyConfigured() ? 'DECRYPT_FAILED' : 'NO_KEY',
+      };
+    }
+
+    await this.audit.log({
+      event: 'EMPLOYEE_PIN_VIEWED',
+      entityType: 'EMPLOYEE',
+      entityId: id,
+      employeeId: viewer.employeeId,
+      // Значение PIN'а в журнале свело бы на нет весь смысл шифрования
+      // колонки — пишем только факт просмотра.
+      payload: { targetId: id, targetLogin: target.login, self: isSelf },
+    });
+    this.logger.log(
+      `event=employee.reveal-pin id=${id} by=${viewer.employeeId ?? 'null'}`,
+    );
+
+    return { employeeId: id, pin };
+  }
 
   // ===========================================================================
   // READ
@@ -170,7 +278,10 @@ export class EmployeesService {
    * c тем же cost-factor (10), что и `prisma/seed.ts` — чтобы у нового
    * сотрудника логин работал ровно так же, как у seed-аккаунтов.
    */
-  async create(dto: CreateEmployeeDto): Promise<EmployeeDetailDto> {
+  async create(
+    dto: CreateEmployeeDto,
+    viewer: AuthPrincipal,
+  ): Promise<EmployeeDetailDto> {
     const createRateMode = (dto.salaryRateMode ??
       SalaryRateMode.HOURLY) as SalaryRateMode;
     if (
@@ -213,9 +324,31 @@ export class EmployeesService {
 
     // Роль — ссылка на справочник (`AppRole.code`), а не enum: код
     // должен существовать, иначе сотрудник получит ноль прав молча.
-    await this.assertRolesExist(normalizeAssignedRoles(dto.role, dto.roles));
+    const assignedRoles = normalizeAssignedRoles(dto.role, dto.roles);
+    await this.assertRolesExist(assignedRoles);
 
-    const pinHash = await bcrypt.hash(dto.pin, PIN_HASH_COST);
+    // RBAC: не-админ не может ЗАВЕСТИ привилегированную учётку.
+    //
+    // Симметрично гейту в `update` — и без него тот гейт бессмыслен:
+    // запретить начальнику цеха выдать роль ADMIN существующему
+    // сотруднику, но разрешить создать нового админа одним POST — это
+    // ровно та же эскалация, просто в обход. А заодно рушится вся
+    // модель угроз показа PIN (`revealPin`): она держится на том, что
+    // не-админ админом стать не может.
+    //
+    // `assignedRoles` уже нормализован (содержит основную роль), а
+    // `isPrivilegedTarget` раскрывает наследование — кастомная роль с
+    // `inherits: ['ADMIN']` закрывается тем же кодом.
+    if (
+      !viewer.roles.includes(Role.ADMIN) &&
+      (await this.isPrivilegedTarget(assignedRoles))
+    ) {
+      throw new EmployeeAdminTargetForbiddenException();
+    }
+
+    // Обе колонки PIN'а сразу: bcrypt для входа + AES-копия, чтобы
+    // менеджер потом мог продиктовать код, не сбрасывая его.
+    const { pinHash, pinEnc } = await this.buildPinColumns(dto.pin);
 
     let created;
     try {
@@ -224,11 +357,12 @@ export class EmployeesService {
           fullName: dto.fullName,
           login: dto.login,
           pinHash,
+          pinEnc,
           role: dto.role as Role,
           // Фича «несколько ролей»: набор доступа всегда содержит
           // основную роль (`normalizeAssignedRoles`). Если менеджер не
           // прислал доп. роли — получаем `[role]`, поведение прежнее.
-          roles: normalizeAssignedRoles(dto.role, dto.roles) as Role[],
+          roles: assignedRoles as Role[],
           compensationType: dto.compensationType as CompensationType,
           // Вид окладной ставки: часовая (по умолчанию) или месячная.
           salaryRateMode: createRateMode,
@@ -299,6 +433,11 @@ export class EmployeesService {
    *
    * Если patch ломает инвариант — бросаем `EMPLOYEE_SALARY_RATE_REQUIRED`.
    * Это ловится на UI и подсвечивается на форме ставки.
+   *
+   * Отдельная ветка — `dto.pin`: смена PIN'а приезжает сюда же, но
+   * своей формой в карточке («Смена PIN»), а не вместе с зарплатой.
+   * Пишутся обе колонки разом (`buildPinColumns`) и пишется аудит —
+   * флагом, без значения.
    */
   async update(
     id: string,
@@ -307,6 +446,19 @@ export class EmployeesService {
   ): Promise<EmployeeDetailDto> {
     const current = await this.prisma.employee.findUnique({ where: { id } });
     if (!current) throw new EmployeeNotFoundException();
+
+    // Смена PIN привилегированной учётки — то же самое по последствиям,
+    // что выдача себе роли ADMIN: начальник цеха задаёт админу код и
+    // входит под ним. Поэтому тот же guard, что в ветке смены ролей
+    // ниже, и тот же, что в `revealPin`. Свой PIN менять можно.
+    if (
+      dto.pin !== undefined &&
+      viewer.employeeId !== id &&
+      !viewer.roles.includes(Role.ADMIN) &&
+      (await this.isPrivilegedTarget(rolesOf(current)))
+    ) {
+      throw new EmployeeAdminTargetForbiddenException();
+    }
 
     // -------------------------------------------------------------------------
     // Фича «несколько ролей»: смена основной роли и/или набора доступа.
@@ -342,20 +494,30 @@ export class EmployeesService {
         // запрет эскалации ниже. `viewer.roles` уже раскрыт `AuthGuard`-ом,
         // наборы сотрудника раскрываем здесь.
         const viewerIsAdmin = viewer.roles.includes(Role.ADMIN);
-        const [targetIsAdmin, willBeAdmin] = await Promise.all([
-          this.grantsAdmin(currentRoles),
-          this.grantsAdmin(nextRoles),
-        ]);
+        // Два РАЗНЫХ вопроса, поэтому два разных предиката:
+        //   isPrivilegedTarget — «кого не даём трогать не-админу»
+        //     (ADMIN + наследники + SUPERADMIN);
+        //   grantsAdmin — «кто администрирует систему», по нему
+        //     считается последний оставшийся админ.
+        const [targetPrivileged, willBePrivileged, targetIsAdmin, willBeAdmin] =
+          await Promise.all([
+            this.isPrivilegedTarget(currentRoles),
+            this.isPrivilegedTarget(nextRoles),
+            this.grantsAdmin(currentRoles),
+            this.grantsAdmin(nextRoles),
+          ]);
 
-        // RBAC: только ADMIN управляет ADMIN-доступом — не-админ не может
-        // ни трогать роли админа, ни выдать роль ADMIN кому-либо (защита
-        // от эскалации привилегий начальником цеха).
-        if (!viewerIsAdmin && (targetIsAdmin || willBeAdmin)) {
+        // RBAC: только ADMIN управляет привилегированным доступом —
+        // не-админ не может ни трогать роли админа/супер-админа, ни
+        // выдать такую роль кому-либо (защита от эскалации привилегий
+        // начальником цеха).
+        if (!viewerIsAdmin && (targetPrivileged || willBePrivileged)) {
           throw new EmployeeAdminTargetForbiddenException();
         }
 
         // Защита последнего активного админа: нельзя снять ADMIN с
-        // единственного оставшегося.
+        // единственного оставшегося. Считаем именно по `grantsAdmin` —
+        // SUPERADMIN администратором для этого счёта не является.
         if (targetIsAdmin && !willBeAdmin) {
           await this.assertNotLastActiveAdmin(id);
         }
@@ -414,7 +576,19 @@ export class EmployeesService {
       await this.assertCashFlowItemExists(dto.salaryCashFlowItemId);
     }
 
+    // Смена PIN'а. Считаем ПОСЛЕ всех валидаций (bcrypt ~50-200 мс —
+    // незачем жечь их на заведомо отбойном patch'е) и ДО записи в БД.
+    const pinColumns =
+      dto.pin !== undefined ? await this.buildPinColumns(dto.pin) : null;
+
     const data: Prisma.EmployeeUpdateInput = {};
+    if (pinColumns) {
+      // Ровно парой: см. `buildPinColumns`. Даже когда `pinEnc = null`
+      // (нет ключа шифрования) — колонку затираем осознанно, иначе
+      // «Показать» отдавало бы ПРЕДЫДУЩИЙ, уже недействительный PIN.
+      data.pinHash = pinColumns.pinHash;
+      data.pinEnc = pinColumns.pinEnc;
+    }
     if (roleChanged && nextPrimary && nextRoles) {
       data.role = nextPrimary;
       data.roles = { set: nextRoles };
@@ -489,6 +663,28 @@ export class EmployeesService {
       data,
       include: EMPLOYEE_DETAIL_INCLUDE,
     });
+
+    if (pinColumns) {
+      // Флагом, без значения и без хеша — как в `DisplayScreensService`.
+      // `revealable` пишем, чтобы по журналу было видно, почему у
+      // карточки потом не сработало «Показать» (не был настроен ключ).
+      await this.audit.log({
+        event: 'EMPLOYEE_PIN_CHANGED',
+        entityType: 'EMPLOYEE',
+        entityId: id,
+        employeeId: viewer.employeeId,
+        payload: {
+          targetId: id,
+          targetLogin: updated.login,
+          revealable: pinColumns.pinEnc !== null,
+        },
+      });
+      this.logger.log(
+        `event=employee.pin-changed id=${id} by=${viewer.employeeId ?? 'null'} ` +
+          `revealable=${pinColumns.pinEnc ? 1 : 0}`,
+      );
+    }
+
     return toDetailDto(updated);
   }
 
@@ -1013,7 +1209,7 @@ export class EmployeesService {
     const targetRoles =
       target.roles && target.roles.length > 0 ? target.roles : [target.role];
     if (
-      (await this.grantsAdmin(targetRoles)) &&
+      (await this.isPrivilegedTarget(targetRoles)) &&
       !viewer.roles.includes(Role.ADMIN)
     ) {
       throw new EmployeeAdminTargetForbiddenException();
@@ -1025,6 +1221,31 @@ export class EmployeesService {
    * (`AppRole.inherits`). Прямой код ADMIN отвечает без запроса; набор
    * только из системных ролей тоже: системные роли ничего не наследуют.
    */
+  /**
+   * «Привилегированная ли это учётка» — предикат для RBAC-гейтов
+   * (`create` / `update` / `revealPin` / `assertCanModifyTarget`).
+   *
+   * Шире, чем {@link grantsAdmin}, ровно на `SUPERADMIN`: тот в
+   * `SYSTEM_ROLE_CODES`, поэтому `grantsAdmin` для набора `['SUPERADMIN']`
+   * выходит по ветке `areAllSystemRoles` и отвечает `false` — хотя
+   * учётка строго привилегированнее ADMIN (`SuperadminGuard` не пускает
+   * туда даже обычного админа). Без этого предиката начальник цеха мог
+   * бы посмотреть и сменить PIN супер-админа.
+   *
+   * ВАЖНО: не «чинить» это внутри `grantsAdmin`. Тот же метод считает
+   * последнего активного администратора
+   * (`assertNotLastActiveAdmin`), и если SUPERADMIN начнёт считаться
+   * «ещё одним админом», систему разрешат оставить без единого
+   * реального ADMIN. Предикаты разные, потому что вопросы разные:
+   * «кого нельзя трогать» и «кто администрирует систему».
+   */
+  private async isPrivilegedTarget(
+    codes: readonly string[],
+  ): Promise<boolean> {
+    if (codes.includes(Role.SUPERADMIN)) return true;
+    return this.grantsAdmin(codes);
+  }
+
   private async grantsAdmin(codes: readonly string[]): Promise<boolean> {
     if (codes.includes(Role.ADMIN)) return true;
     if (areAllSystemRoles(codes)) return false;
@@ -1202,5 +1423,9 @@ function toDetailDto(e: EmployeeRow): EmployeeDetailDto {
         : Number(e.cutterB2bSewingPercent),
     salaryCashFlowItemId: e.salaryCashFlowItemId,
     salaryCashFlowItemName: e.salaryCashFlowItem?.name ?? null,
+    // Только ФЛАГ «сработает ли кнопка Показать». Ни `pinEnc`, ни
+    // `pinHash` наружу не уезжают — за самим PIN'ом нужен отдельный
+    // аудируемый `POST /api/employees/:id/reveal-pin`.
+    hasStoredPin: e.pinEnc !== null,
   };
 }

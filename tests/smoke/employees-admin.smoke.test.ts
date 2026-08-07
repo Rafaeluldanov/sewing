@@ -125,10 +125,14 @@ describe('backend employees контракт', () => {
     expect(src).not.toMatch(/PAYMENT_TYPES/);
   });
 
-  test('EmployeesService.create хеширует PIN через bcrypt и ловит P2002 как EMPLOYEE_LOGIN_TAKEN', () => {
+  test('EmployeesService.create считает обе колонки PIN и ловит P2002 как EMPLOYEE_LOGIN_TAKEN', () => {
     const src = readSrc('apps/api/src/modules/employees/employees.service.ts');
     expect(src).toMatch(/async create\(/);
-    expect(src).toMatch(/bcrypt\.hash/);
+    // Раньше здесь звался bcrypt.hash напрямую. С фичей «показать пароль»
+    // PIN стал парой колонок, и считает её общий common/pin-columns.ts —
+    // см. tests/smoke/employee-pin.smoke.test.ts, где этот инвариант
+    // проверяется по всем путям записи Employee.
+    expect(src).toMatch(/buildPinColumns/);
     expect(src).toMatch(/EmployeeLoginTakenException/);
     // UPDATE-флоу не должен быть тронут случайным рефакторингом.
     expect(src).toMatch(/async update\(/);

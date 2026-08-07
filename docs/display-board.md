@@ -226,9 +226,14 @@ model DisplayScreenConfig {
 - `POST /api/display-screens` —
   `DisplayScreensService.create(dto)`. В одной `$transaction`:
   - `Employee.create({ fullName: 'Display: <name>',
-    login, pinHash: bcrypt.hash(pin, 10), role: DISPLAY,
+    login, ...buildPinColumns(pin), role: DISPLAY,
     compensationType: SALARY, salaryPerShift: null,
-    active: true })`. `compensationType = SALARY` без
+    active: true })`. PIN пишется ПАРОЙ колонок
+    (`pinHash` + `pinEnc`) через общий
+    `apps/api/src/common/pin-columns.ts` — единственную точку
+    их вычисления: DISPLAY-учётка видна в
+    `/admin/employees/[id]`, и при записи одного хеша карточка
+    показывала бы устаревший код. `compensationType = SALARY` без
     `salaryPerShift` сознательно даёт ноль в `SalaryService`
     и не плодит сдельных начислений.
   - `DisplayScreenConfig.create({ name, companyDivisionId,

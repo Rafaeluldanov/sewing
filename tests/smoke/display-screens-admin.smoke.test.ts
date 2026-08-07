@@ -113,12 +113,16 @@ describe('backend display-screens контракт', () => {
     expect(createSchemaMatch![0]).not.toMatch(/employeeId/);
   });
 
-  test('DisplayScreensService.create — bcrypt + транзакция + DISPLAY_LOGIN_TAKEN', () => {
+  test('DisplayScreensService.create — обе колонки PIN + транзакция + DISPLAY_LOGIN_TAKEN', () => {
     const src = readSrc(
       'apps/api/src/modules/display-screens/display-screens.service.ts',
     );
     expect(src).toMatch(/async create\(/);
-    expect(src).toMatch(/bcrypt\.hash/);
+    // Раньше здесь звался bcrypt.hash напрямую. С фичей «показать пароль
+    // сотрудника» PIN стал парой колонок (pinHash + pinEnc), и считает
+    // её общий common/pin-columns.ts: DISPLAY-учётка — обычная строка
+    // Employee, она видна в /admin/employees/[id].
+    expect(src).toMatch(/buildPinColumns/);
     // Главный инвариант: одна транзакция, обе сущности или ни одной.
     expect(src).toMatch(/\$transaction/);
     expect(src).toMatch(/Role\.DISPLAY/);

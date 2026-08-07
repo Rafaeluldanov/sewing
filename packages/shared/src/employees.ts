@@ -298,9 +298,37 @@ const SalaryCashFlowItemIdField = z.preprocess(
   z.string().max(40, 'Некорректная статья ДДС').nullable().optional(),
 );
 
+/**
+ * PIN/пароль на вход.
+ *
+ * Хранится двумя колонками: `Employee.pinHash` (bcrypt — по нему
+ * проверяется вход) и `Employee.pinEnc` (AES-256-GCM — из него
+ * менеджер «показывает» пароль в карточке сотрудника). Обратимая
+ * копия появилась вместе с кнопкой «Показать» и пишется ТОЛЬКО при
+ * задании PIN'а через API; у карточек, заведённых раньше, её нет —
+ * такой PIN можно только задать заново (см. `hasStoredPin`).
+ *
+ * Минимум 4 символа — это и привычный 4-значный PIN, и короткий
+ * пароль для дев-аккаунтов. Верхняя граница (100) — чисто защитная:
+ * bcrypt всё равно режет до 72 байт, но не позволим прислать
+ * «миллион байт» в ручку.
+ */
+const PinField = z
+  .string()
+  .min(4, 'PIN должен быть не короче 4 символов')
+  .max(100, 'PIN слишком длинный (макс. 100 символов)');
+
 export const UpdateEmployeeSchema = z
   .object({
     compensationType: CompensationTypeSchema.optional(),
+    /**
+     * Новый PIN/пароль сотрудника. Присылается ТОЛЬКО когда его реально
+     * меняют — отдельной формой «Смена PIN» в карточке, а не вместе с
+     * зарплатой (случайный сброс кода, по которому человек логинится в
+     * цехе, — худший из возможных багов этой формы). `undefined` —
+     * колонки `pinHash`/`pinEnc` не трогаем.
+     */
+    pin: PinField.optional(),
     /**
      * Вид окладной ставки (`Employee.salaryRateMode`). `undefined` —
      * не трогаем колонку. Итоговая пара `(compensationType,
@@ -366,6 +394,7 @@ export const UpdateEmployeeSchema = z
   .refine(
     (obj) =>
       obj.compensationType !== undefined ||
+      obj.pin !== undefined ||
       obj.salaryRateMode !== undefined ||
       obj.salaryPerHour !== undefined ||
       obj.salaryPerMonth !== undefined ||
@@ -376,7 +405,7 @@ export const UpdateEmployeeSchema = z
       obj.cutterB2bSewingPercent !== undefined ||
       obj.companyDivisionId !== undefined ||
       obj.salaryCashFlowItemId !== undefined,
-    'Нечего обновлять: укажите compensationType, salaryRateMode, salaryPerHour, salaryPerMonth, active, role, roles, cutterB2bSewingPercent, companyDivisionId или salaryCashFlowItemId',
+    'Нечего обновлять: укажите compensationType, pin, salaryRateMode, salaryPerHour, salaryPerMonth, active, role, roles, cutterB2bSewingPercent, companyDivisionId или salaryCashFlowItemId',
   );
 export type UpdateEmployeeDto = z.infer<typeof UpdateEmployeeSchema>;
 
@@ -403,18 +432,6 @@ const FullNameField = z
   .trim()
   .min(1, 'ФИО обязательно')
   .max(200, 'ФИО слишком длинное (макс. 200 символов)');
-
-/**
- * PIN/пароль на вход. Хранится в БД как bcrypt-hash (`pinHash`),
- * наружу не отдаётся ни в одном DTO. Минимум 4 символа — это и
- * привычный 4-значный PIN, и короткий пароль для дев-аккаунтов.
- * Верхняя граница (100) — чисто защитная: bcrypt всё равно режет
- * до 72 байт, но не позволим прислать «миллион байт» в ручку.
- */
-const PinField = z
-  .string()
-  .min(4, 'PIN должен быть не короче 4 символов')
-  .max(100, 'PIN слишком длинный (макс. 100 символов)');
 
 /**
  * Тело `POST /api/employees` (см. `docs/api.md §3b`, ADR-0021).
@@ -621,6 +638,64 @@ export interface EmployeeDetailDto extends EmployeeListItemDto {
    */
   salaryCashFlowItemId?: string | null;
   salaryCashFlowItemName?: string | null;
+  /**
+   * Есть ли у карточки обратимая копия PIN'а (`Employee.pinEnc`), то
+   * есть сработает ли кнопка «Показать» в блоке «Доступ».
+   *
+   * `false` — PIN был задан до появления этой фичи (в БД только
+   * bcrypt-хеш) либо в момент задания не был настроен
+   * `INTEGRATION_SECRET_KEY`. Восстановить такой PIN невозможно
+   * математически — его можно только задать заново формой «Смена PIN».
+   *
+   * САМ PIN здесь не отдаётся никогда: за ним нужен отдельный
+   * аудируемый вызов `POST /api/employees/:id/reveal-pin`.
+   *
+   * Поле опционально (`?`) для backward-compat — старые потребители
+   * shared-пакета без пересборки продолжают компилироваться. Backend
+   * всегда отдаёт ключ.
+   */
+  hasStoredPin?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Reveal PIN (POST /api/employees/:id/reveal-pin)
+// ---------------------------------------------------------------------------
+
+/**
+ * Почему `POST /api/employees/:id/reveal-pin` не отдал PIN.
+ *
+ *   - `NOT_STORED` — карточка старше фичи (или PIN менялся в обход API):
+ *     в БД только bcrypt-хеш, восстановить нечего;
+ *   - `NO_KEY` — не задан `INTEGRATION_SECRET_KEY`, расшифровать нечем;
+ *   - `DECRYPT_FAILED` — шифротекст есть, но не поддаётся ключу
+ *     (ключ ротировали, не сохранив старый).
+ *
+ * Во всех трёх случаях лечение одно — задать PIN заново, поэтому UI
+ * различает их только текстом подсказки.
+ */
+export const EMPLOYEE_PIN_UNAVAILABLE_REASONS = [
+  'NOT_STORED',
+  'NO_KEY',
+  'DECRYPT_FAILED',
+] as const;
+export type EmployeePinUnavailableReason =
+  (typeof EMPLOYEE_PIN_UNAVAILABLE_REASONS)[number];
+
+/**
+ * Ответ `POST /api/employees/:id/reveal-pin` — расшифрованный PIN
+ * сотрудника для показа в карточке (`/admin/employees/[id]`).
+ *
+ * Ручка ОТДЕЛЬНАЯ, а не поле в `EmployeeDetailDto`, сознательно: PIN не
+ * должен уезжать в каждый список сотрудников и в каждый рендер карточки.
+ * Каждый вызов пишет `EMPLOYEE_PIN_VIEWED` в `AuditLog` — по журналу
+ * видно, кто и когда смотрел чужой пароль.
+ *
+ * `pin === null` ⇒ показать нечего, причина — в `reason`.
+ */
+export interface EmployeePinRevealDto {
+  employeeId: string;
+  pin: string | null;
+  reason?: EmployeePinUnavailableReason;
 }
 
 // ---------------------------------------------------------------------------

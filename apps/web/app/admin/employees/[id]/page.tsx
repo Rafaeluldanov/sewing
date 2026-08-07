@@ -35,6 +35,11 @@ import {
 } from '@/lib/admin-labels';
 import { SALARY_RATE_MODE_LABELS } from '@sewing/shared/employees';
 import { EmployeeEditForm } from './edit-form';
+import {
+  EmployeePinForm,
+  EmployeePinProvider,
+  EmployeePinReveal,
+} from './pin-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,14 +56,17 @@ function formatDateOnly(iso: string): string {
  *   - `AdminPageShell` с именем, ролью/active-бейджами и primary-action
  *     «Печать QR»;
  *   - две колонки на desktop, одна на mobile (`.admin-grid-2`):
- *       Левая: «Основная информация» + «Доступ»
+ *       Левая: «Основная информация» + «Доступ» + «Смена PIN»
  *       Правая: «QR сотрудника» + «Техническая информация»
  *   - длинных описаний и тех. кодов в основном UI больше нет;
  *     id/login/createdAt спрятаны в collapsible `<AdminTechInfo>`.
  *
- * Backend / DTO не меняем — `EmployeeEditForm` остаётся прежним и
- * по-прежнему правит compensationType/salaryPerShift/active. PIN и
- * login у Шага 19 остаются read-only management-полями (см. ADR-0021).
+ * `EmployeeEditForm` правит compensationType/salaryPerShift/active и
+ * PIN не трогает. PIN живёт в двух местах и обоими владеет
+ * `./pin-card.tsx`: «Показать» в блоке «Доступ» (аудируемый вызов
+ * `POST /api/employees/:id/reveal-pin`) и отдельная форма «Смена PIN» —
+ * отдельная, чтобы сохранение ставки не могло сбросить код входа.
+ * Логин по-прежнему read-only (см. ADR-0021).
  */
 export default async function AdminEmployeeDetailPage({
   params,
@@ -282,22 +290,38 @@ export default async function AdminEmployeeDetailPage({
             </dl>
           </AdminCard>
 
-          <AdminCard>
-            <AdminSectionHeader title="Доступ" />
-            <dl className="admin-deflist">
-              <dt>PIN</dt>
-              <dd className="admin-muted">скрыт</dd>
-              <dt>Логин</dt>
-              <dd>
-                <code style={{ fontSize: '0.85rem' }}>{employee.login}</code>
-              </dd>
-            </dl>
-            <EmployeeEditForm
-              employee={employee}
-              divisionOptions={divisionOptions}
-              cashFlowItems={cashFlowItems}
-            />
-          </AdminCard>
+          {/* Провайдер не рисует DOM — он только связывает показанный
+              PIN в «Доступе» с формой его смены, чтобы после успешной
+              смены в карточке не висел прежний, уже недействительный
+              код. */}
+          <EmployeePinProvider>
+            <AdminCard>
+              <AdminSectionHeader title="Доступ" />
+              <dl className="admin-deflist">
+                <dt>PIN</dt>
+                <dd>
+                  <EmployeePinReveal employee={employee} />
+                </dd>
+                <dt>Логин</dt>
+                <dd>
+                  <code style={{ fontSize: '0.85rem' }}>{employee.login}</code>
+                </dd>
+              </dl>
+              <EmployeeEditForm
+                employee={employee}
+                divisionOptions={divisionOptions}
+                cashFlowItems={cashFlowItems}
+              />
+            </AdminCard>
+
+            <AdminCard>
+              <AdminSectionHeader
+                title="Смена PIN"
+                hint="Отдельной формой, чтобы сохранение зарплаты не могло сбросить код входа"
+              />
+              <EmployeePinForm employee={employee} />
+            </AdminCard>
+          </EmployeePinProvider>
 
           <AdminCard>
             <AdminSectionHeader title="Зарплата за период" />

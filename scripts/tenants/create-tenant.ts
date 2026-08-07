@@ -20,8 +20,8 @@
  * `--db-url` имеет приоритет над `--db-name`. `--host` можно указать несколько раз.
  */
 import { execSync } from 'node:child_process';
-import bcrypt from 'bcryptjs';
 import { PrismaClient, Prisma, type OperationCategory } from '@prisma/client';
+import { buildPinColumns } from '../../apps/api/src/common/pin-columns.js';
 import { PrismaClient as ControlPlaneClient } from '.prisma/control-plane-client';
 import {
   REFERENCE_OPERATIONS,
@@ -184,18 +184,27 @@ async function main(): Promise<void> {
         create: { id: 'default', legalName: args.name, shortName: args.slug },
         update: {},
       });
-      const pinHash = await bcrypt.hash(args.adminPassword, 10);
+      // Обе колонки PIN'а разом (см. `apps/api/src/common/pin-columns.ts`):
+      // `pinHash` для входа + обратимая `pinEnc` для показа пароля в
+      // карточке сотрудника. Записать только хеш нельзя — при повторном
+      // прогоне поверх живого тенанта в `pinEnc` остался бы шифротекст
+      // прежнего пароля, и админка показывала бы его вместо нового.
+      const { pinHash, pinEnc } = await buildPinColumns(
+        args.adminPassword,
+        (m) => console.warn(`[tenant] ${m}`),
+      );
       await tenantDb.employee.upsert({
         where: { login: args.adminLogin },
         create: {
           login: args.adminLogin,
           pinHash,
+          pinEnc,
           fullName: args.adminName,
           role: 'ADMIN',
           roles: ['ADMIN'],
           compensationType: 'PIECEWORK',
         },
-        update: { pinHash, role: 'ADMIN', roles: ['ADMIN'] },
+        update: { pinHash, pinEnc, role: 'ADMIN', roles: ['ADMIN'] },
       });
     } finally {
       await tenantDb.$disconnect();

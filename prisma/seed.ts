@@ -15,18 +15,20 @@
  */
 
 import { Prisma, PrismaClient, Role } from '@prisma/client';
-import bcrypt from 'bcryptjs';
 import {
   REFERENCE_OPERATIONS,
   REFERENCE_SIZES,
   type ReferenceOperationSeed,
 } from '../apps/api/src/modules/bootstrap/reference-data.js';
+import { buildPinColumns } from '../apps/api/src/common/pin-columns.js';
 
 const prisma = new PrismaClient();
 
 /**
- * Общий демо-пароль для всех демо-учёток. Хранится в БД только как bcrypt-hash.
- * В проде заменяется на реальный флоу выдачи PIN/пароля.
+ * Общий демо-пароль для всех демо-учёток. Кладётся в обе колонки PIN'а:
+ * bcrypt-хеш `pinHash` (по нему вход) и обратимую копию `pinEnc` (из неё
+ * карточка `/admin/employees/[id]` показывает пароль менеджеру). На prod
+ * seed не запускается — там реальный флоу выдачи PIN через админку.
  */
 const DEMO_PASSWORD = 'Demo12345!';
 
@@ -213,7 +215,14 @@ const EMPLOYEES: readonly EmployeeSeed[] = [
 ];
 
 async function seedUsersEmployees() {
-  const pinHash = await bcrypt.hash(DEMO_PASSWORD, 10);
+  // Обе колонки PIN'а разом (см. `common/pin-columns.ts`). Записать
+  // здесь только `pinHash` нельзя: при повторном сиде поверх БД, где
+  // PIN уже меняли из админки, в `pinEnc` остался бы шифротекст того,
+  // прежнего кода — и карточка сотрудника показывала бы его вместо
+  // демо-пароля.
+  const { pinHash, pinEnc } = await buildPinColumns(DEMO_PASSWORD, (m) =>
+    console.warn(`[seed] ${m}`),
+  );
   let created = 0;
   let updated = 0;
   const byLogin: Record<string, string> = {};
@@ -235,8 +244,8 @@ async function seedUsersEmployees() {
     // отдельный admin-flow (см. ADR-0014 §6).
     const upserted = await prisma.employee.upsert({
       where: { login: e.login },
-      create: { login: e.login, pinHash, ...data },
-      update: { ...data, pinHash },
+      create: { login: e.login, pinHash, pinEnc, ...data },
+      update: { ...data, pinHash, pinEnc },
     });
     byLogin[e.login] = upserted.id;
     if (existing) updated += 1;

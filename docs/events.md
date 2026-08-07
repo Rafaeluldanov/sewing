@@ -362,8 +362,27 @@ ORDER_SAMPLE | EMPLOYEE | OPERATION |
 APP_ROLE
 ```
 
-- `EMPLOYEE` — событие `EMPLOYEE_DELETED` (физическое удаление пустой
-  учётки; снимок в `payload.targetSnapshot`).
+- `EMPLOYEE` — события:
+  - `EMPLOYEE_DELETED` — физическое удаление пустой учётки; снимок в
+    `payload.targetSnapshot`;
+  - `EMPLOYEE_ARCHIVED` / `EMPLOYEE_RESTORED` — мягкий архив
+    (`active` false/true);
+  - `EMPLOYEE_PIN_CHANGED` — смена пароля сотрудника
+    (`PATCH /api/employees/:id` с `pin`). Payload:
+    `{ targetId, targetLogin, revealable }`. Сам PIN и его хеш в журнал
+    НЕ пишутся; `revealable` показывает, легла ли обратимая копия
+    (`Employee.pinEnc`) — по нему потом видно, почему у карточки не
+    сработало «Показать»;
+  - `EMPLOYEE_PIN_VIEWED` — менеджер посмотрел пароль сотрудника
+    (`POST /api/employees/:id/reveal-pin`). Payload:
+    `{ targetId, targetLogin, self }`, `employeeId` — кто смотрел.
+    Пишется только при УСПЕШНОМ показе; значение PIN'а, разумеется, не
+    пишется. Ради этой записи ручка и сделана `POST`-ом: у `GET`-а
+    префетч и кэш нарисовали бы просмотры, которых не было.
+
+  Смена PIN у DISPLAY-учётки идёт своим путём
+  (`PATCH /api/display-screens/:id`) и пишет `DISPLAY_SCREEN_UPDATED`
+  с флагами `pinChanged` / `revealable` — см. `DISPLAY_SCREEN` выше.
 - `OPERATION` — событие `OPERATION_DELETED` (физическое удаление
   нигде не использованной операции; `payload.targetSnapshot =
   { code, name, category }`). Мягкое «удаление» (`active = false`)

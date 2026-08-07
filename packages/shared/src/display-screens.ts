@@ -51,8 +51,16 @@ const DisplayLoginField = z
 /**
  * PIN для DISPLAY-учётки. На MVP большой монитор тыкают физически,
  * пин-код короткий — 4 символа минимум, как у остальных сотрудников.
- * В БД хранится только `bcrypt.hash(pin, 10)`; сам PIN наружу не
- * отдаётся ни в одном DTO.
+ *
+ * Хранится так же, как PIN обычного сотрудника — парой колонок
+ * `Employee.pinHash` (bcrypt, по нему вход) и `Employee.pinEnc`
+ * (обратимая AES-копия), см. `apps/api/src/common/pin-columns.ts`.
+ * Ни одно DTO ЭТОГО модуля PIN не отдаёт, но посмотреть его можно:
+ * DISPLAY-учётка — обычная строка `Employee`, и в её карточке
+ * `/admin/employees/[id]` работает кнопка «Показать»
+ * (аудируемый `POST /api/employees/:id/reveal-pin`). Гейта на это нет
+ * сознательно: монитор настраивает мастер, привилегированной эта
+ * учётка не является.
  */
 const DisplayPinField = z
   .string()
@@ -100,9 +108,12 @@ export type CreateDisplayScreenDto = z.infer<typeof CreateDisplayScreenSchema>;
  * Элемент списка `/admin/display-screens`. Достаточно для таблицы:
  * имя, подразделение, логин привязанной DISPLAY-учётки, флаг.
  *
- * `pin` не возвращается принципиально (в БД его нет — только bcrypt-
- * hash, см. `Employee.pinHash`). Если оператор забыл PIN — он удаляет
- * экран и заводит заново.
+ * `pin` не возвращается принципиально: ни в этом DTO, ни в карточке
+ * экрана PIN не показывается. Забытый PIN монитора теперь не требует
+ * пересоздания экрана — его либо задают заново формой «PIN монитора»,
+ * либо СМОТРЯТ в карточке DISPLAY-учётки `/admin/employees/[id]`
+ * (аудируемый `POST /api/employees/:id/reveal-pin`; учётка монитора —
+ * такой же `Employee`).
  */
 export interface DisplayScreenListItemDto {
   id: string;
