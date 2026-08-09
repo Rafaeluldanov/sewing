@@ -62,6 +62,7 @@ import {
   matchPatternNormSources,
 } from '@sewing/shared/pattern-norms';
 import type {
+  MaterialLineForMatch,
   PatternNormSource,
   SizePlanEntry,
 } from '@sewing/shared/pattern-norms';
@@ -5098,6 +5099,60 @@ export class OrdersService {
     return new Prisma.Decimal(res.purchaseQty);
   }
 
+  /**
+   * ВТОРОЙ ЗАХОД сопоставления с номенклатурой: автоматическое расщепление
+   * единиц.
+   *
+   * Полотно и рибану закупают на вес, поэтому строка стоит в «кг». А
+   * поразмерная норма в номенклатуре ВСЕГДА в погонных метрах — «кг» у
+   * параметра означает лишь «пересчитать через ширину и плотность». Пара
+   * «строка в кг ↔ норма в метрах» несовместима по единицам, и первый заход
+   * её не берёт: положить длину в килограммовую ячейку хуже, чем ничего.
+   *
+   * Но развести единицы можно без единого вопроса менеджеру: если строка не
+   * нашла источник ТОЛЬКО из-за единицы, а поразмерная норма её роли в
+   * номенклатуре есть — строка получает единицу нормы «м пог.», а «кг»
+   * остаётся единицей закупки. Ровно то, ради чего поле и заведено.
+   *
+   * Молча ломать этим ничего нельзя: `unit` не меняется, значит сметы,
+   * складские балансы и обязательность ширины/плотности не двигаются.
+   * Правка нормы руками ставит `qtySource = ORDER`, такие строки сюда не
+   * попадают — намерение «моё число, не трогать» переживает и этот заход.
+   *
+   * Зовётся из ОБЕИХ веток пересборки: материализация из шаблона и
+   * recompute живых строк — иначе строка, схлопнутая в закупочную единицу
+   * селектом, теряла бы связь с номенклатурой (NOMENCLATURE → TEMPLATE)
+   * при первом же пересчёте.
+   *
+   * Мутирует `normsByLine` (дописывает найденное) и возвращает карту
+   * `key → единица нормы` для строк, расщеплённых этим заходом.
+   */
+  private retryLinearNormMatch(
+    matchInput: ReadonlyArray<MaterialLineForMatch>,
+    normsByLine: Map<string, PatternNormSource>,
+    normSources: ReadonlyArray<PatternNormSource>,
+  ): Map<string, string> {
+    const autoNormUnit = new Map<string, string>();
+    const unmatched = matchInput.filter((l) => !normsByLine.has(l.key));
+    if (unmatched.length === 0) return autoNormUnit;
+    const LINEAR_INPUT_UNIT = 'м пог.';
+    const retryInput = unmatched.map((l) => ({
+      ...l,
+      normUnit: LINEAR_INPUT_UNIT,
+    }));
+    // Матчим ТОЛЬКО против поразмерных источников: плоскую норму («Молния,
+    // 1 шт») расщеплять нечем и незачем.
+    const linearSources = normSources.filter(
+      (s) => s.kind === 'LINEAR_M_BY_SIZE',
+    );
+    const retry = matchPatternNormSources(retryInput, linearSources);
+    for (const [key, source] of retry) {
+      autoNormUnit.set(key, LINEAR_INPUT_UNIT);
+      normsByLine.set(key, source);
+    }
+    return autoNormUnit;
+  }
+
   private async rebuildMaterialRequirementsSnapshot(
     orderId: string,
     tx: Prisma.TransactionClient,
@@ -5462,20 +5517,27 @@ export class OrdersService {
       const nomenclatureRows = rows.filter(
         (r) => r.qtySource === 'NOMENCLATURE',
       );
+      const recomputeMatchInput = nomenclatureRows.map((r) => ({
+        key: r.id,
+        materialRole: r.materialRole,
+        name: r.name,
+        fabricType: r.fabricType,
+        unit: r.unit,
+        normUnit: r.normUnit,
+      }));
       const refreshedNorms =
         nomenclatureRows.length > 0
-          ? matchPatternNormSources(
-              nomenclatureRows.map((r) => ({
-                key: r.id,
-                materialRole: r.materialRole,
-                name: r.name,
-                fabricType: r.fabricType,
-                unit: r.unit,
-                normUnit: r.normUnit,
-              })),
-              normSources,
-            )
+          ? matchPatternNormSources(recomputeMatchInput, normSources)
           : new Map<string, PatternNormSource>();
+      // ВТОРОЙ ЗАХОД — тот же, что при материализации: NOMENCLATURE-строка,
+      // схлопнутая селектом в закупочную единицу («кг»), не должна терять
+      // связь с поразмерной нормой только из-за единицы — расщепление
+      // возрождается, норма снова живёт в метрах, «кг» остаётся закупкой.
+      const recomputeAutoNormUnit = this.retryLinearNormMatch(
+        recomputeMatchInput,
+        refreshedNorms,
+        normSources,
+      );
       for (const r of rows) {
         const bindings = (r.parameterBindings ??
           null) as TechCardParameterBindings | null;
@@ -5488,6 +5550,13 @@ export class OrdersService {
         const derivedNorm = refreshed
           ? derivePatternNormPerUnit(refreshed, g.sizePlan)
           : null;
+        // Единица нормы, выданная вторым заходом: строка снова расщеплена,
+        // номенклатурная норма пойдёт в метрах. Без источника (ячейка под
+        // слот-параметром) авто-расщеплению нечего расщеплять.
+        const autoUnit = refreshed
+          ? (recomputeAutoNormUnit.get(r.id) ?? null)
+          : null;
+        const nextNormUnit = autoUnit ?? r.normUnit;
         const { cells } = applyParametersToCells(
           {
             name: r.name,
@@ -5512,9 +5581,10 @@ export class OrdersService {
           data: {
             variantColor: g.variantColor,
             qtyPerUnit,
+            ...(autoUnit ? { normUnit: autoUnit } : {}),
             totalQty: this.computeLineTotalQty({
               qtyPerUnit,
-              normUnit: r.normUnit,
+              normUnit: nextNormUnit,
               unit: cells.unit,
               qty: g.qty,
               plannedWidthCm: cells.plannedWidthCm,
@@ -5575,40 +5645,13 @@ export class OrdersService {
       }));
       const normsByLine = matchPatternNormSources(matchInput, normSources);
 
-      // ВТОРОЙ ЗАХОД: автоматическое расщепление единиц.
-      //
-      // Полотно и рибану закупают на вес, поэтому строка стоит в «кг». А
-      // поразмерная норма в номенклатуре ВСЕГДА в погонных метрах — «кг» у
-      // параметра означает лишь «пересчитать через ширину и плотность». Пара
-      // «строка в кг ↔ норма в метрах» несовместима по единицам, и первый заход
-      // её не берёт: положить длину в килограммовую ячейку хуже, чем ничего.
-      //
-      // Но развести единицы здесь можно без единого вопроса менеджеру: если
-      // строка не нашла источник ТОЛЬКО из-за единицы, а поразмерная норма её
-      // роли в номенклатуре есть — строка получает единицу нормы «м пог.», а
-      // «кг» остаётся единицей закупки. Ровно то, ради чего поле и заведено.
-      //
-      // Молча ломать этим ничего нельзя: `unit` не меняется, значит сметы,
-      // складские балансы и обязательность ширины/плотности не двигаются.
-      const autoNormUnit = new Map<string, string>();
-      const unmatched = matchInput.filter((l) => !normsByLine.has(l.key));
-      if (unmatched.length > 0) {
-        const LINEAR_INPUT_UNIT = 'м пог.';
-        const retryInput = unmatched.map((l) => ({
-          ...l,
-          normUnit: LINEAR_INPUT_UNIT,
-        }));
-        // Матчим ТОЛЬКО против поразмерных источников: плоскую норму («Молния,
-        // 1 шт») расщеплять нечем и незачем.
-        const linearSources = normSources.filter(
-          (s) => s.kind === 'LINEAR_M_BY_SIZE',
-        );
-        const retry = matchPatternNormSources(retryInput, linearSources);
-        for (const [key, source] of retry) {
-          autoNormUnit.set(key, LINEAR_INPUT_UNIT);
-          normsByLine.set(key, source);
-        }
-      }
+      // ВТОРОЙ ЗАХОД: автоматическое расщепление единиц (см. док у
+      // `retryLinearNormMatch` — общий с recompute-веткой).
+      const autoNormUnit = this.retryLinearNormMatch(
+        matchInput,
+        normsByLine,
+        normSources,
+      );
       for (const l of lines.materialLines) {
         const compositeKey = `${vk(g.variantId)}|${
           composeMaterialMatchKey(
