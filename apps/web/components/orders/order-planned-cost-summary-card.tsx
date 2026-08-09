@@ -262,6 +262,17 @@ export async function OrderPlannedCostSummaryCard({
       }
     }
     buckets = bucketsFromWorkshopNeeds(needs);
+    // Ручные строки логистики («Добавить поле» в таблице «Операции»)
+    // потребностью цеха не являются, но в себестоимость входят —
+    // backend заводит их в смету позицией «Прочее». Пока сметы нет,
+    // добавляем их здесь, иначе прикидка занижена ровно на логистику.
+    // В ветке `estimate` этого делать НЕ надо: там они уже в `lines`.
+    for (const line of order.logisticsLines ?? []) {
+      const cost = Number(line.costRub);
+      if (Number.isFinite(cost) && cost > 0) {
+        addToBucket(buckets, 'OTHER', cost);
+      }
+    }
     source = bucketsAreEmpty(buckets) && !buckets.hasUsdLines
       ? 'empty'
       : 'workshopNeeds';

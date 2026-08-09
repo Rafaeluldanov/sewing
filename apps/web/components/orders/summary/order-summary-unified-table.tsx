@@ -859,6 +859,8 @@ export async function OrderSummaryUnifiedTable({
     materialRows,
     operationRows,
     currentCostEstimate: order.currentCostEstimate ?? null,
+    // Ручные строки логистики — те же деньги, что в таблице «Операции».
+    logisticsLines: order.logisticsLines ?? [],
     qtyTotal: order.qtyPlanTotal,
     // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
     // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).

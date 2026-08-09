@@ -158,6 +158,83 @@ describeWithDb('integration — order cost estimates', () => {
     );
   });
 
+  test('строка логистики после фиксации сметы пересчитывает себестоимость', async () => {
+    const orderId = await prepareCalculationOrder(t, seed, cookie);
+    const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });
+    for (const n of needs) {
+      await request(t.app.getHttpServer())
+        .patch(`/api/workshop-needs/${n.id}`)
+        .set('Cookie', cookie)
+        .send({ purchaseQty: '10', quotedPrice: '100', quotedCurrency: 'RUB' })
+        .expect(200);
+    }
+    const materialsRub = 10 * 100 * needs.length;
+
+    const v1 = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', cookie)
+      .send({})
+      .expect(201);
+    expect(Number(v1.body.totalCostRub)).toBeCloseTo(materialsRub, 2);
+
+    // Логистику заводят уже после расчёта — это ровно тот сценарий, в
+    // котором смета молча оставалась старой: строка появлялась во
+    // вкладке «Операции» и в её итоге, а себестоимость и «Сводно по
+    // заказу» (секция «Прочее» читает зафиксированную смету) её не
+    // видели.
+    const created = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/logistics-lines`)
+      .set('Cookie', cookie)
+      .send({ name: 'Доставка до склада', costRub: '12000' })
+      .expect(201);
+
+    const afterAdd = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    expect(Number(afterAdd.costEstimateTotalRub)).toBeCloseTo(
+      materialsRub + 12000,
+      2,
+    );
+    expect(afterAdd.costEstimateVersion).toBe(2);
+    expect(afterAdd.costEstimateStaleAt).toBeNull();
+
+    // Правка стоимости — та же история.
+    const lineId = (
+      created.body.logisticsLines as { id: string; name: string }[]
+    ).find((l) => l.name === 'Доставка до склада')!.id;
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/logistics-lines/${lineId}`)
+      .set('Cookie', cookie)
+      .send({ name: 'Доставка до склада', costRub: '15000' })
+      .expect(200);
+    const afterUpdate = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    expect(Number(afterUpdate.costEstimateTotalRub)).toBeCloseTo(
+      materialsRub + 15000,
+      2,
+    );
+
+    // И удаление: деньги ушли из заказа — обязаны уйти и из сметы.
+    await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/logistics-lines/${lineId}`)
+      .set('Cookie', cookie)
+      .expect(200);
+    const afterDelete = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    expect(Number(afterDelete.costEstimateTotalRub)).toBeCloseTo(
+      materialsRub,
+      2,
+    );
+    const activeLines = await t.prisma.orderCostEstimateLine.findMany({
+      where: { estimate: { orderId, status: 'COMPLETED' } },
+    });
+    expect(activeLines.filter((l) => l.sourceType === 'LOGISTICS')).toHaveLength(
+      0,
+    );
+  });
+
   test('смена политики «давальческое сырьё» пересчитывает зафиксированную смету', async () => {
     const orderId = await prepareCalculationOrder(t, seed, cookie);
     const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });

@@ -54,7 +54,11 @@ import type {
   MaterialIssueStatus,
 } from '@sewing/shared/material-issues';
 import type { OrderCostEstimateDto } from '@sewing/shared/order-cost-estimates';
-import type { OrderMaterialsAndHardwareCostPolicy } from '@sewing/shared/orders';
+import { ORDER_LOGISTICS_SOURCE_TYPE } from '@sewing/shared/order-extra-costs';
+import type {
+  OrderLogisticsLineDto,
+  OrderMaterialsAndHardwareCostPolicy,
+} from '@sewing/shared/orders';
 import type { OrderMaterialTableRow } from '@/components/orders/materials/build-order-material-rows';
 import type { OrderOperationTableRow } from '@/components/orders/operations/build-order-operation-rows';
 
@@ -437,6 +441,26 @@ interface BuildOrderSummaryRowsInput {
   operationRows: OrderOperationTableRow[];
   /** Snapshot завершённого расчёта (если есть). */
   currentCostEstimate?: OrderCostEstimateDto | null;
+  /**
+   * Ручные строки логистики заказа (кнопка «Добавить поле» в таблице
+   * «Операции», `OrderDetailDto.logisticsLines`). Это деньги заказа, и
+   * «Сводно» обязано их показывать в секции «Прочее».
+   *
+   * Основной источник — всё та же зафиксированная смета: backend
+   * заводит строку логистики позицией `sourceType = LOGISTICS`
+   * (`order-cost-estimates.service.ts`). Список нужен для двух случаев,
+   * когда сметной позиции ещё нет:
+   *
+   *   1. у заказа вообще нет активного расчёта (DRAFT / CALCULATION) —
+   *      сводка живёт по текущим данным, а не по документу;
+   *   2. смета есть, но автопересчёт не прошёл (нет курса USD, неполные
+   *      строки потребности) — тогда `Order.costEstimateStaleReason`
+   *      уже висит плашкой, и прятать строку сверх этого нельзя.
+   *
+   * Дедуп со сметой — по `sourceType`/`sourceId`, чтобы одна и та же
+   * логистика не легла в итог дважды.
+   */
+  logisticsLines?: OrderLogisticsLineDto[];
   /** Тираж заказа — для расчёта `unitCostRub` каждой строки. */
   qtyTotal: number;
   /**
@@ -472,6 +496,7 @@ export function buildOrderSummaryRows(
     materialRows,
     operationRows,
     currentCostEstimate = null,
+    logisticsLines = [],
     qtyTotal,
     materialsAndHardwareCostPolicy = 'INCLUDE',
   } = input;
@@ -557,6 +582,48 @@ export function buildOrderSummaryRows(
       warnings: [],
       // Строки сметы без workshopNeedId (лекало / прочие расходы) —
       // order-level, к расцветке не относятся.
+      orderVariantId: null,
+      variantColor: null,
+    });
+  }
+
+  // Ручные строки логистики, которых в зафиксированной смете ещё нет:
+  // заказ без активного расчёта либо неудавшийся автопересчёт. Молча
+  // прятать их нельзя — в таблице «Операции» строка уже видна со своей
+  // стоимостью, и «Сводно» обязано показывать те же деньги.
+  const estimatedLogisticsIds = new Set(
+    (currentCostEstimate?.lines ?? [])
+      .filter(
+        (l) => l.sourceType === ORDER_LOGISTICS_SOURCE_TYPE && l.sourceId,
+      )
+      .map((l) => l.sourceId as string),
+  );
+  for (const line of logisticsLines) {
+    if (estimatedLogisticsIds.has(line.id)) continue;
+    const totalRub = toFiniteNumber(line.costRub);
+    // Нулевая строка («доставка 0 ₽» как напоминание) в смету не идёт —
+    // не заводим её и здесь, иначе списки разойдутся.
+    if (totalRub == null || totalRub <= 0) continue;
+    buckets.OTHER.push({
+      id: `logistics:${line.id}`,
+      // См. комментарий выше про строки сметы: 'material' здесь —
+      // нейтральное значение, сумма у строки всегда задана.
+      sourceKind: 'material',
+      section: 'OTHER',
+      sectionLabel: ORDER_SUMMARY_SECTION_LABELS.OTHER,
+      article: line.name,
+      qty: 1,
+      qtyDisplay: '1',
+      unit: 'усл.',
+      priceDisplay: fmtRub(totalRub),
+      priceCurrency: 'RUB',
+      totalRub,
+      totalDisplay: fmtRub(totalRub),
+      unitCostRub: null,
+      comment: 'Логистика',
+      warnings: currentCostEstimate
+        ? ['Не входит в зафиксированную себестоимость — нужен пересчёт']
+        : [],
       orderVariantId: null,
       variantColor: null,
     });

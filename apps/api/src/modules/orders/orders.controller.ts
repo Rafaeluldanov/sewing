@@ -399,8 +399,9 @@ export class OrdersController {
     @Param('id') id: string,
     @Body(new ZodValidationPipe(CreateOrderLogisticsLineSchema))
     dto: CreateOrderLogisticsLineDto,
+    @CurrentUser() user: AuthPrincipal,
   ) {
-    return this.orders.addLogisticsLine(id, dto);
+    return this.orders.addLogisticsLine(id, dto, user.employeeId);
   }
 
   @Patch(':id/logistics-lines/:lineId')
@@ -409,16 +410,18 @@ export class OrdersController {
     @Param('lineId') lineId: string,
     @Body(new ZodValidationPipe(UpdateOrderLogisticsLineSchema))
     dto: UpdateOrderLogisticsLineDto,
+    @CurrentUser() user: AuthPrincipal,
   ) {
-    return this.orders.updateLogisticsLine(id, lineId, dto);
+    return this.orders.updateLogisticsLine(id, lineId, dto, user.employeeId);
   }
 
   @Delete(':id/logistics-lines/:lineId')
   deleteLogisticsLine(
     @Param('id') id: string,
     @Param('lineId') lineId: string,
+    @CurrentUser() user: AuthPrincipal,
   ) {
-    return this.orders.deleteLogisticsLine(id, lineId);
+    return this.orders.deleteLogisticsLine(id, lineId, user.employeeId);
   }
 }
 

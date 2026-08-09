@@ -4326,10 +4326,19 @@ export class OrdersService {
    * Доступно в любом статусе заказа — это не snapshot маршрута/техкарты,
    * а собственные редактируемые данные заказа, поэтому ORDER_LOCKED
    * guard здесь не применяется (см. JSDoc `model OrderLogisticsLine`).
+   *
+   * Строка логистики — деньги заказа: `assembleEstimatePlan` заводит её
+   * в смету отдельной позицией (`sourceType = LOGISTICS`, `kind = OTHER`,
+   * см. `order-cost-estimates.service.ts`). Поэтому после записи —
+   * `syncAfterNeedsChange`, ровно как у `OrderExtraCost`: иначе
+   * себестоимость и «Сводно по заказу» (секция «Прочее» собирается из
+   * зафиксированной сметы) остаются на старой версии, и даже отметки
+   * «устарела» не появляется.
    */
   async addLogisticsLine(
     orderId: string,
     dto: CreateOrderLogisticsLineDto,
+    actorEmployeeId?: string | null,
   ): Promise<OrderDetailDto> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -4356,17 +4365,25 @@ export class OrdersService {
         ...buildLogisticsLineData(dto),
       },
     });
+    // Best-effort и после записи: `syncAfterNeedsChange` сам решит —
+    // пересчитать смету, промолчать (сметы ещё нет) или поставить
+    // видимую отметку с причиной. Правку строки он не роняет.
+    await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
     return this.getOne(orderId);
   }
 
   /**
    * Изменить существующую строку логистики. UI пере-собирает форму
    * целиком, поэтому принимаем тот же контракт, что и create.
+   *
+   * Правка `costRub` — это правка себестоимости, поэтому здесь тот же
+   * `syncAfterNeedsChange`, что и в `addLogisticsLine`.
    */
   async updateLogisticsLine(
     orderId: string,
     lineId: string,
     dto: UpdateOrderLogisticsLineDto,
+    actorEmployeeId?: string | null,
   ): Promise<OrderDetailDto> {
     const line = await this.prisma.orderLogisticsLine.findFirst({
       where: { id: lineId, orderId },
@@ -4379,15 +4396,18 @@ export class OrdersService {
       where: { id: lineId },
       data: buildLogisticsLineData(dto),
     });
+    await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
     return this.getOne(orderId);
   }
 
   /**
-   * Удалить строку логистики заказа.
+   * Удалить строку логистики заказа. Удаление тоже меняет деньги —
+   * смета обязана догнать (см. `addLogisticsLine`).
    */
   async deleteLogisticsLine(
     orderId: string,
     lineId: string,
+    actorEmployeeId?: string | null,
   ): Promise<OrderDetailDto> {
     const line = await this.prisma.orderLogisticsLine.findFirst({
       where: { id: lineId, orderId },
@@ -4397,6 +4417,7 @@ export class OrdersService {
       throw new OrderLogisticsLineNotFoundException();
     }
     await this.prisma.orderLogisticsLine.delete({ where: { id: lineId } });
+    await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
     return this.getOne(orderId);
   }
 

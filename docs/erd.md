@@ -1257,6 +1257,31 @@ master-action'ом, удаление, упаковка прямо из ячей�
   `placedQty` и могут разблокировать крой даже при
   `WorkshopNeed.status != RECEIVED`.
 
+### 3.9a OrderLogisticsLine
+
+Источник: `prisma/schema.prisma::OrderLogisticsLine`,
+`apps/api/src/modules/orders/orders.service.ts`
+(`addLogisticsLine` / `updateLogisticsLine` / `deleteLogisticsLine`),
+`docs/domain.md §1.5`.
+
+- Ручная строка логистики заказа — кнопка «Добавить поле» под
+  таблицей «Операции» в карточке заказа. Операцией маршрута **не**
+  является: `Passport` / `OperationEntry` / `SalaryEntry` она не
+  порождает и в план операций (`Order.operationCostPlanRub`) не
+  входит.
+- Поля: `sortOrder` (новая строка идёт в конец), `name`,
+  `status?` (`OrderLogisticsStatus`: `PLANNED` / `IN_TRANSIT` /
+  `DELIVERED` / `CANCELLED`), `deliveryDeadline?`, `costRub`.
+- Это деньги заказа: `assembleEstimatePlan` заводит строку с
+  `costRub > 0` в `OrderCostEstimate` позицией `kind = OTHER`,
+  `sourceType = LOGISTICS`, `sourceId = <id строки>`. Нулевые
+  строки (заводят как напоминание) в смету не попадают.
+- CRUD разрешён в любом статусе заказа (это собственные данные, не
+  снимок), но каждая операция заканчивается
+  `OrderCostEstimatesService.syncAfterNeedsChange` — иначе
+  себестоимость и «Сводно по заказу» расходятся с таблицей
+  «Операции».
+
 ### 3.10 MaterialIssue / MaterialIssueLine
 
 Источник: `prisma/schema.prisma::MaterialIssue` /

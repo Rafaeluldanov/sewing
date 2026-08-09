@@ -360,6 +360,37 @@ Lifecycle:
 `purchaseItemNameSnapshot`, `usdRateRub`) — расчёт не должен «плыть»
 вслед за поздним переименованием.
 
+#### Правило: деньги заказа обновляются на всех поверхностях сразу
+
+Заказ показывает деньги в четырёх местах, и они обязаны сходиться —
+пользователь читает их как одну истину, а не как четыре независимых
+отчёта:
+
+| Поверхность | Файл | Откуда берёт |
+|---|---|---|
+| Вкладка «Операции» | `apps/web/components/orders/operations/order-operations-unified-table.tsx` | `order.routeSteps` + `order.logisticsLines`; итог = снимок `Order.operationCostPlanRub` + Σ логистики |
+| Себестоимость | `order-cost-estimates.service.ts::assembleEstimatePlan` | `WorkshopNeed` + `OrderExtraCost` + `OrderLogisticsLine` + разработка лекала. **Операций маршрута в смете нет** |
+| «Сводно по заказу» | `apps/web/components/orders/summary/build-order-summary-rows.ts` | материалы — `WorkshopNeed`, операции — `routeSteps` (сумма из снимка), **секция «Прочее» — только из зафиксированной сметы** |
+| Карточка «Плановая себестоимость» | `apps/web/components/orders/order-planned-cost-summary-card.tsx` | активная смета, иначе живые `WorkshopNeed` |
+
+Отсюда практические следствия для любой новой денежной сущности
+заказа:
+
+1. Ручка, меняющая источник сметы (`WorkshopNeed`, `OrderExtraCost`,
+   `OrderLogisticsLine`, поля заказа вроде
+   `materialsAndHardwareCostPolicy`), обязана закончиться
+   `OrderCostEstimatesService.syncAfterNeedsChange(orderId, actorEmployeeId)`.
+   Он сам решит: пересчитать, промолчать (активной сметы нет) или
+   поставить `Order.costEstimateStaleAt` + причину для плашки.
+2. Пока сущность не попала в смету, в «Сводно» её не будет —
+   секция «Прочее» читает документ, а не живые данные. Если строку
+   надо показывать и до пересчёта, её подмешивают в
+   `buildOrderSummaryRows` с дедупом по `sourceType`/`sourceId`.
+3. Правки денег проверяются тестом «завели / поменяли / удалили уже
+   ПОСЛЕ фиксации сметы» — окно после `completeCalculation` и есть
+   то место, где расхождение возникает
+   (`tests/integration/order-cost-estimates.test.ts`).
+
 ### 1.6 `OrderMaterialArrivalOverride` — override готовности к крою
 
 Источник: `prisma/schema.prisma::OrderMaterialArrivalOverride`,
