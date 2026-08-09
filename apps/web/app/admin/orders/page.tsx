@@ -21,8 +21,8 @@
  * «Контроль сроков заказа». Бакет считается на бэке через общий
  * helper `evaluateOrderDeadline` и приходит в `OrderListItemDto.deadline`
  * (см. `@sewing/shared/order-deadlines`). Web ничего не пересчитывает —
- * мы только показываем `deadline.label / tone / daysLeft / progressPercent`
- * и сортируем по `ORDER_DEADLINE_SORT_PRIORITY`.
+ * мы только показываем `deadline.label / tone / daysLeft / progressPercent`;
+ * порядок строк задаёт backend (по умолчанию — свежесозданные сверху).
  *
  * Старый `/orders/*` остаётся на месте: он используется ролью
  * `CUTTER_ASSISTANT` (см. `/orders/[id]/passports/new`) и detail-page
@@ -54,7 +54,6 @@ import {
 } from '@sewing/shared/orders';
 import {
   ORDER_DEADLINE_LABELS,
-  ORDER_DEADLINE_SORT_PRIORITY,
   ORDER_DEADLINE_STATUSES,
 } from '@sewing/shared/order-deadlines';
 import { ApiRequestError, errorText } from '@/lib/api';
@@ -239,23 +238,12 @@ export default async function AdminOrdersPage({
         null
       : null;
 
-  // Дефолтная управленческая сортировка: OVERDUE → AT_RISK → ON_TRACK
-  // → NO_DUE_DATE → DONE; внутри бакета — ближайший dueDate выше.
-  // Применяем только когда пользователь не задал явный `sort` И не идёт
-  // активный поиск: при поиске сохраняем порядок, заданный backend-ом
-  // (в частности «сначала текущий год» для запросов вида `24.07`) —
-  // deadline-сортировка нужна для обычного просмотра списка, не для выдачи.
+  // Порядок списка целиком задаёт backend (`OrdersService.list`):
+  // по умолчанию `createdAt_desc` — свежесозданные заказы сверху.
+  // Раньше здесь была in-memory пересортировка по deadline-бакетам
+  // (OVERDUE → AT_RISK → …) — убрана по решению от 09.08.2026; срезы
+  // по срокам остаются доступны через бакеты `?deadline=…`.
   const userPickedSort = (searchParams?.sort ?? '').length > 0;
-  if (!userPickedSort && !query.search) {
-    items = [...items].sort((a, b) => {
-      const pa = ORDER_DEADLINE_SORT_PRIORITY[a.deadline?.status ?? 'NO_DUE_DATE'];
-      const pb = ORDER_DEADLINE_SORT_PRIORITY[b.deadline?.status ?? 'NO_DUE_DATE'];
-      if (pa !== pb) return pa - pb;
-      const da = a.dueDate ? new Date(a.dueDate).getTime() : Number.POSITIVE_INFINITY;
-      const db = b.dueDate ? new Date(b.dueDate).getTime() : Number.POSITIVE_INFINITY;
-      return da - db;
-    });
-  }
 
   // `tab` держим во всех переходах внутри страницы (пагинация, поиск,
   // бакеты сроков), иначе любой клик выкидывал бы из архива в активные.

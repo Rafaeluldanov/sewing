@@ -122,8 +122,12 @@ describe('web — /admin/orders (список)', () => {
     expect(src).toMatch(/DeadlineCell/);
   });
 
-  test('сортировка по дефолту использует ORDER_DEADLINE_SORT_PRIORITY', () => {
-    expect(src).toMatch(/ORDER_DEADLINE_SORT_PRIORITY/);
+  test('дефолтная сортировка — createdAt_desc, без in-memory deadline-пересортировки', () => {
+    // Решение от 09.08.2026: список по умолчанию отдаёт backend
+    // (`createdAt_desc`, свежие сверху); страница НЕ пересортировывает
+    // выдачу по deadline-бакетам.
+    expect(src).toMatch(/'createdAt_desc'/);
+    expect(src).not.toMatch(/ORDER_DEADLINE_SORT_PRIORITY/);
   });
 
   test('listOrders в orders-api пробрасывает deadline и clientId', () => {
