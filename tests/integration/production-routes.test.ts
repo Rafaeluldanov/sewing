@@ -48,6 +48,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
       manager: loginAs(t, seed.employees['shop-chief']),
       seamstress: loginAs(t, seed.employees['seamstress']),
       qc: loginAs(t, seed.employees['qc']),
+      master: loginAs(t, seed.employees['master']),
     };
   });
 
@@ -1145,6 +1146,162 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
     expect(['PASSPORT_NOT_IN_CELL', 'PASSPORT_ALREADY_ISSUED']).toContain(
       issue.body.code,
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // G7. Доделка незакрытого шага (инцидент 06–10.08.2026, P-20260804-0009/0010)
+  // ---------------------------------------------------------------------------
+
+  test('G7. Незакрытый шаг позади не откат: любой на этой операции берёт паспорт сам, а закрытый — только через мастера', async () => {
+    // Полный сценарий инцидента: мастер снял паспорт с первой швейной
+    // операции, НЕ закрыв её (unassign намеренно не трогает шаг), паспорт
+    // ушёл вперёд на вторую и там закрылся. Раньше первая операция
+    // становилась недостижимой навсегда: вперёд её никто не проверял
+    // (`sequentialBefore` смотрит только интервал current→target), а
+    // назад держал `PASSPORT_ISSUE_BACKWARD`, и вернуть паспорт мог
+    // только мастер через `set-route-step`.
+    const tpl = await createTemplate(t, cookies.manager, 'ROUTE-WIP-G7', [
+      seed.operations.CUT_DIVISION.id,
+      seed.operations.SEW_OVERLOCK_1.id,
+      seed.operations.SEW_OVERLOCK_2.id,
+      seed.operations.QC.id,
+      seed.operations.PACKING.id,
+    ]);
+    const orderId = await createOrderWithRoute(
+      t,
+      seed,
+      cookies.manager,
+      [{ sizeId: seed.sizes.M, qtyPlan: 1 }],
+      tpl.id,
+    );
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/start`)
+      .set('Cookie', cookies.manager)
+      .expect(201);
+    const passport = await request(t.app.getHttpServer())
+      .post('/api/passports')
+      .set('Cookie', cookies.manager)
+      .send({
+        orderId,
+        sizeId: seed.sizes.M,
+        rollNumber: 'R-WIP-G7',
+        cutDate: '2026-04-15T00:00:00.000Z',
+        qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
+      })
+      .expect(201);
+    const passportId: string = passport.body.id;
+    // Первый уход с кроя требует размещения в ячейке
+    // (`assertPlacedBeforeLeavingCut`) — к маршрутным гейтам отношения
+    // не имеет, но без него до них дело не дойдёт.
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/place`)
+      .set('Cookie', cookies.manager)
+      .send({ cellId: seed.cells.A1.id })
+      .expect(201);
+
+    const startShift = async (cookie: string, operationId: string) => {
+      await request(t.app.getHttpServer())
+        .post('/api/shifts/start')
+        .set('Cookie', cookie)
+        .send({ equipmentId: seed.equipment['overlock-01'].id, operationId })
+        .expect(201);
+    };
+    const stopShift = async (cookie: string) => {
+      await request(t.app.getHttpServer())
+        .post('/api/shifts/stop')
+        .set('Cookie', cookie)
+        .expect(201);
+    };
+
+    // 1. Швея взяла паспорт на SEW_OVERLOCK_1 и НЕ завершила операцию.
+    await startShift(cookies.seamstress, seed.operations.SEW_OVERLOCK_1.id);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+    await stopShift(cookies.seamstress);
+
+    // 2. Мастер снял паспорт с неё. Шаг остаётся на незакрытой операции.
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/unassign`)
+      .set('Cookie', cookies.master)
+      .send({ reason: 'MANAGER_DECISION' })
+      .expect(201);
+
+    // 3. Паспорт уходит вперёд на SEW_OVERLOCK_2 и там закрывается —
+    //    именно так первая операция и «проваливается» за спину.
+    await startShift(cookies.seamstress, seed.operations.SEW_OVERLOCK_2.id);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/complete-operation`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+    await stopShift(cookies.seamstress);
+    const afterSkip = await t.prisma.passport.findUnique({
+      where: { id: passportId },
+      select: { currentRouteStepIndex: true },
+    });
+    expect(afterSkip?.currentRouteStepIndex).toBe(2);
+
+    // 4. ГЛАВНОЕ: сотрудник на SEW_OVERLOCK_1 берёт паспорт САМ — шаг
+    //    позади, но не закрыт, значит это доделка, а не откат.
+    await startShift(cookies.seamstress, seed.operations.SEW_OVERLOCK_1.id);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+    const afterCatchUp = await t.prisma.passport.findUnique({
+      where: { id: passportId },
+      select: { currentRouteStepIndex: true, currentOperationId: true },
+    });
+    expect(afterCatchUp?.currentRouteStepIndex).toBe(1);
+    expect(afterCatchUp?.currentOperationId).toBe(
+      seed.operations.SEW_OVERLOCK_1.id,
+    );
+
+    // 5. Долг закрывается штатным завершением — работа наконец попадает
+    //    в историю паспорта и в начисления.
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/complete-operation`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+    const finished = await t.prisma.passportEvent.findMany({
+      where: {
+        passportId,
+        type: 'OPERATION_FINISHED',
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+      },
+    });
+    expect(finished).toHaveLength(1);
+    await stopShift(cookies.seamstress);
+
+    // 6. Обратная сторона послабления: ЗАКРЫТЫЙ шаг позади остаётся
+    //    откатом. Возвращаем паспорт сканом на SEW_OVERLOCK_2 (вперёд,
+    //    разрешено) и пробуем снова на SEW_OVERLOCK_1 — теперь она
+    //    закрыта, и это уже настоящий возврат назад: только мастер.
+    await startShift(cookies.seamstress, seed.operations.SEW_OVERLOCK_2.id);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+    await stopShift(cookies.seamstress);
+    await startShift(cookies.seamstress, seed.operations.SEW_OVERLOCK_1.id);
+    const backToFinished = await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.seamstress)
+      .send({});
+    expect(backToFinished.status).toBe(409);
+    expect(backToFinished.body.code).toBe('PASSPORT_SCAN_BACKWARD');
   });
 });
 

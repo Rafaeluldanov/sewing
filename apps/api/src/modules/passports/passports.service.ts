@@ -1436,7 +1436,10 @@ export class PassportsService {
    *   - `backward` — целевой шаг идёт РАНЬШЕ текущего по «свёрнутому»
    *     рангу: операции одной параллельной группы делят общий ранг
    *     (= минимальный index группы), поэтому взять КИПЕРКУ после
-   *     РАСПОШИВА (одна группа) — НЕ «назад»;
+   *     РАСПОШИВА (одна группа) — НЕ «назад». И НЕ «назад» — доделка
+   *     незакрытого швейного шага, оставшегося позади (см.
+   *     `catchUpCandidate` в теле): откатом считается только возврат на
+   *     уже ЗАКРЫТУЮ операцию;
    *   - `groupIncomplete` — целевой шаг стоит ПОСЛЕ некой параллельной
    *     группы, в которой завершены ещё НЕ все операции (AND-гейт: на
    *     ОТК нельзя, пока не сделаны и КИПЕРКА, и РАСПОШИВ).
@@ -1451,6 +1454,22 @@ export class PassportsService {
       currentRouteStepIndex: number | null;
     },
     targetOperationId: string,
+    /**
+     * `allowCatchUp` — разрешить «доделку долга»: взять шаг, стоящий
+     * позади текущего, если он швейный и НЕ закрыт (см. `catchUpCandidate`
+     * в теле). Передают только каналы ВЗЯТИЯ (`issueToEmployee` /
+     * `scanOnOperation`) — там сотрудник осознанно встаёт на операцию, и
+     * паспорт переезжает на её шаг.
+     *
+     * Канал `complete` его НЕ передаёт намеренно. Завершение — это
+     * атрибуция уже сделанной работы, и там «операция позади текущего
+     * шага» означает ровно то, ради чего гейт писался: швея закрывает не
+     * ту операцию, на которую взяла паспорт (см. `PassportCompleteBackward`
+     * и тест B в `tests/integration/passports-complete-operation.test.ts`).
+     * Легальной доделке этот канал не нужен: взятие уже перевело паспорт
+     * на нужный шаг, и завершение идёт «в ноль», а не назад.
+     */
+    opts?: { allowCatchUp?: boolean },
   ): Promise<{
     targetIndex: number | null;
     backward: boolean;
@@ -1607,6 +1626,44 @@ export class PassportsService {
       }
     }
 
+    // ДОДЕЛКА НЕЗАКРЫТОГО ШАГА — это не «назад» (инцидент 06–10.08.2026,
+    // паспорта `P-20260804-0009/0010`).
+    //
+    // Сценарий: мастер снял паспорт с ПРЯМОСТРОЧКИ, не закрыв её
+    // (`MasterActionsService.unassign` намеренно не трогает
+    // `currentRouteStepIndex`), паспорт ушёл вперёд на ОВЕРЛОК и там
+    // закрылся. Шаг ПРЯМОСТРОЧКА остался позади незакрытым — и стал
+    // недостижимым: `sequentialBefore` смотрит только интервал
+    // (current, target), то есть шаг, оставшийся ПОЗАДИ, не проверяется
+    // больше никогда, а взять его снова мешал backward-гейт. Работу
+    // нельзя было ни доделать, ни увидеть — паспорт доехал бы до
+    // упаковки без прямострочки.
+    //
+    // Правило: если целевой шаг стоит позади текущего, но по нему НЕТ
+    // закрытия (с учётом заместителей и наряд-допусков — та же
+    // `isSatisfied`, что у гейтов ниже), это не откат, а доделка долга.
+    // Любой сотрудник на этой операции берёт паспорт сам, без мастера.
+    //
+    // Сужение до `SEWING` вне параллельной группы — принципиальное, и
+    // ровно то же, что у `sequentialBefore`:
+    //   - `OPERATION_FINISHED` пишут только швейные операции (крой
+    //     закрывается при выпуске, ОТК/ВТО/упаковка — на собственных
+    //     гейтах), поэтому для них «нет закрытия» означало бы «всегда
+    //     можно назад», и возврат на ОТК/ВТО перестал бы быть
+    //     прерогативой мастера (`MasterActionsService.setRouteStep`);
+    //   - шаг параллельной группы долгом быть не может: AND-гейт
+    //     (`groupIncomplete`) не выпустит паспорт за группу, пока она не
+    //     закрыта целиком.
+    //
+    // Уже закрытый шаг позади остаётся откатом (409) — повторный проход
+    // по нему открывает либо ОТК (`OPERATION_REWORK_OPENED`), либо
+    // мастер. Дополнительно его держит `assertOperationNotFinished`.
+    const catchUpCandidate =
+      backward &&
+      opts?.allowCatchUp === true &&
+      targetStep.parallelGroup == null &&
+      targetStep.operation.category === OperationCategory.SEWING;
+
     // Какие шаги обязаны быть завершены ДО входа на target:
     //
     //  1. AND-гейт параллельных групп: группа, целиком стоящая ДО target
@@ -1652,7 +1709,11 @@ export class PassportsService {
     // Запрос завершённых операций — только если есть что проверять
     // (обычный линейный маршрут без пропусков групп/швейных шагов —
     // пропускаем оба SELECT-а).
-    if (groupsBefore.length > 0 || sequentialBefore.length > 0) {
+    if (
+      groupsBefore.length > 0 ||
+      sequentialBefore.length > 0 ||
+      catchUpCandidate
+    ) {
       // Только substitutes для операций, реально проверяемых здесь —
       // иначе тянули бы весь справочник.
       const opsToCheck = [
@@ -1660,6 +1721,7 @@ export class PassportsService {
           (groupOps.get(g) ?? []).map((o) => o.operationId),
         ),
         ...sequentialBefore.map((s) => s.operationId),
+        ...(catchUpCandidate ? [targetStep.operationId] : []),
       ];
       const [finished, substitutes] = await Promise.all([
         this.prisma.passportEvent.findMany({
@@ -1713,6 +1775,14 @@ export class PassportsService {
       // маршрута (там же, где считали группы), чтобы не ходить в БД ещё раз.
       const nameOf = (opId: string): string =>
         steps.find((s) => s.operationId === opId)?.operation.name ?? opId;
+      // Доделка долга: целевой шаг позади, но не закрыт → снимаем
+      // backward. См. развёрнутый разбор у `catchUpCandidate` выше.
+      if (
+        catchUpCandidate &&
+        !isSatisfied(targetStep.operationId, targetIndex)
+      ) {
+        backward = false;
+      }
       for (const g of groupsBefore) {
         const ops = groupOps.get(g) ?? [];
         const unmet = ops.filter((o) => !isSatisfied(o.operationId, o.index));
@@ -2152,6 +2222,9 @@ export class PassportsService {
     const issueOrder = await this.evaluateRouteOrder(
       passport,
       targetOperationId,
+      // Доделка незакрытого швейного шага — не откат: любой сотрудник на
+      // этой операции берёт паспорт сам, без мастера (см. `catchUpCandidate`).
+      { allowCatchUp: true },
     );
     // Гейт «операции нет в маршруте заказа» — корневой для всей истории
     // работы мимо маршрута. Строгость задаёт `offRouteWorkPolicy`.
@@ -2622,6 +2695,8 @@ export class PassportsService {
     const scanOrder = await this.evaluateRouteOrder(
       passport,
       session.operationId,
+      // Симметрично `issueToEmployee`: скан — тоже канал взятия.
+      { allowCatchUp: true },
     );
     if (scanOrder.offRoute) {
       await this.enforceOffRoutePolicy(passport, session.operationId);
