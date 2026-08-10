@@ -195,6 +195,62 @@ describeWithDb('integration — WTO shift-gated scan flow', () => {
     expect(complete.body.status).toBe('IN_PROGRESS');
   });
 
+  /**
+   * Зеркало регрессии ОТК (инцидент 10.08.2026, см.
+   * `qc-shift-flow.test.ts`): «Завершить ВТО» тоже обязано снимать
+   * владельца, иначе паспорт навсегда остаётся «в работе» у отпарщика —
+   * следующий исполнитель ловит на «Взять крой» 409
+   * `PASSPORT_ALREADY_ISSUED`, а сам отпарщик не может переключить
+   * смену (`SHIFT_HAS_ACTIVE_PASSPORTS`). На проде так зависли 47
+   * паспортов на ВТО.
+   */
+  test('completeWto снимает паспорт с ВТО: currentEmployeeId=null, операция и шаг маршрута не тронуты', async () => {
+    const passportId = await prepareInProgressPassport(true);
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.ironing)
+      .send({
+        equipmentId: seed.equipment['ironing-station-01'].id,
+        operationId: seed.operations.IRONING.id,
+      })
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.ironing)
+      .send({})
+      .expect(201);
+
+    const before = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: {
+        currentEmployeeId: true,
+        currentOperationId: true,
+        currentRouteStepIndex: true,
+      },
+    });
+    expect(before.currentEmployeeId).toBe(seed.employees['ironing'].id);
+
+    await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({})
+      .expect(201);
+
+    const after = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: {
+        currentEmployeeId: true,
+        currentOperationId: true,
+        currentRouteStepIndex: true,
+        status: true,
+      },
+    });
+    expect(after.currentEmployeeId).toBeNull();
+    expect(after.currentOperationId).toBe(before.currentOperationId);
+    expect(after.currentRouteStepIndex).toBe(before.currentRouteStepIndex);
+    expect(after.status).toBe('IN_PROGRESS');
+  });
+
   test('GET /api/shifts/meta для IRONING возвращает ironing-station с allow-листом {IRONING} — start-shift форма получает то же, что у швеи', async () => {
     // Проверяем backend-side контракт, на который опирается
     // `SeamstressShiftStart` на /wto: оборудование `ironing-station-01`

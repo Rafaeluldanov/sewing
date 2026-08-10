@@ -348,6 +348,9 @@ export class QcService {
   ): Promise<QcPassportDetailDto> {
     const passport = await this.prisma.passport.findUnique({
       where: { id: passportId },
+      // `currentOperation.category` нужен для освобождения владельца
+      // после проверки (см. `releasesOwner` ниже).
+      include: { currentOperation: { select: { category: true } } },
     });
     if (!passport) {
       throw new NotFoundException({
@@ -406,6 +409,46 @@ export class QcService {
     // достаточно. Полный конкурент-safe-вариант потребовал бы partial
     // unique индекс — это уже миграция и выходит за рамки задачи.
     await this.prisma.$transaction(async (tx) => {
+      // ОСВОБОЖДЕНИЕ ВЛАДЕЛЬЦА (инцидент 10.08.2026, P-20260804-0007).
+      //
+      // Приняв паспорт, ОТК становится его `currentEmployeeId` (скан —
+      // `PassportsService.scanOnOperation`, выдача —
+      // `issueToEmployee`). У швеи владельца снимает явное «Завершить
+      // операцию» (`completeOperationByEmployee` → `currentEmployeeId:
+      // null`), а у ОТК такого шага нет: «Проверка выполнена» писала
+      // только `QC_PASSED`. Годный паспорт так и оставался «в работе» у
+      // контролёра — и следующий исполнитель получал на «Взять крой»
+      // 409 `PASSPORT_ALREADY_ISSUED` (ветка route-WIP без ячейки в
+      // `issueToEmployee`), а сам контролёр не мог переключить смену
+      // (`SHIFT_HAS_ACTIVE_PASSPORTS`). Брак паспорт освобождал
+      // (`returnToRework` ниже), годный — нет; чинить приходилось
+      // мастером через «Снять с сотрудника». На проде так зависли 67
+      // паспортов на ОТК (плюс 47 на ВТО — там же, в `WtoService`).
+      //
+      // Снимаем владельца, но НЕ трогаем `currentOperationId` /
+      // `currentRouteStepIndex` / `status`: это не движение по
+      // маршруту, а ровно то же освобождение, что делает мастер
+      // (`MasterActionsService.unassign`). Паспорт остаётся `IN_PROGRESS`
+      // на шаге ОТК — так его и увидит следующий исполнитель.
+      //
+      // Условие `standsOnQc` принципиально: освобождаем, только если
+      // паспорт физически стоит на ОТК. Контролёр может нажать
+      // «Проверка выполнена» и по паспорту, который числится за швеёй
+      // (её операция ещё не закрыта) — снимать её владельца нельзя.
+      //
+      // Апдейт стоит ДО идемпотентного `return` ниже намеренно: повтор
+      // «Проверка выполнена» по уже проверенному паспорту не пишет
+      // событий, но владельца снимает. Это чинит накопленный бэклог
+      // руками ОТК, без обращения к мастеру.
+      const standsOnQc =
+        passport.status === PassportStatus.IN_PROGRESS &&
+        passport.currentOperation?.category === OperationCategory.QC;
+      if (standsOnQc && passport.currentEmployeeId) {
+        await tx.passport.update({
+          where: { id: passportId },
+          data: { currentEmployeeId: null },
+        });
+      }
       // Для retroactive (`status==PACKED`) `currentOperationId`, как
       // правило, не на категории QC — пытаемся достать operationId
       // ОТК из маршрута заказа, иначе оставляем `currentOperationId`.

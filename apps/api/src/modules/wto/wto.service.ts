@@ -139,6 +139,28 @@ export class WtoService {
     // `QcService.completeQc` — здесь применяется тот же подход
     // «check-then-insert» под одной транзакцией.
     await this.prisma.$transaction(async (tx) => {
+      // Освобождение владельца — зеркало `QcService.completeQc` (см.
+      // подробный разбор там же, инцидент 10.08.2026). Приняв паспорт,
+      // ВТО становится его `currentEmployeeId`, а «Завершить ВТО»
+      // писало только `WTO_PASSED` — паспорт навсегда оставался «в
+      // работе» у отпарщика, следующий исполнитель ловил на «Взять
+      // крой» 409 `PASSPORT_ALREADY_ISSUED`, а сам отпарщик не мог
+      // переключить смену (`SHIFT_HAS_ACTIVE_PASSPORTS`). На проде так
+      // зависли 47 паспортов на ВТО.
+      //
+      // Снимаем только владельца: операция, шаг маршрута и статус —
+      // не наше дело (то же, что `MasterActionsService.unassign`).
+      // `isOnIroning` уже проверил, что паспорт физически стоит на ВТО;
+      // для retroactive-ветки (PACKED) владельца не трогаем — там его
+      // снял `PackingService`. Апдейт ДО идемпотентного `return`
+      // намеренно: повторное «Завершить ВТО» событий не пишет, но
+      // висящего владельца снимает.
+      if (isOnIroning && passport.currentEmployeeId) {
+        await tx.passport.update({
+          where: { id: passportId },
+          data: { currentEmployeeId: null },
+        });
+      }
       // Для retroactive (`status==PACKED`) `currentOperationId` обычно
       // не на категории IRONING — пытаемся достать operationId ВТО
       // из маршрута заказа, иначе оставляем `currentOperationId`.
