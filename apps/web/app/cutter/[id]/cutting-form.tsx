@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   CUTTING_TASK_MAX_LAYERS,
@@ -14,6 +14,13 @@ import {
   type CuttingTaskVariantDto,
   type SaveCuttingTaskProgressDto,
 } from '@sewing/shared/cutting-tasks';
+import {
+  layFromDto,
+  laysSignature,
+  mergeServerLays,
+  NEW_LAY_META,
+  type LayDraft,
+} from '@/lib/cutting-lay-drafts';
 import {
   completeCuttingLayAction,
   completeCuttingTaskAction,
@@ -36,45 +43,6 @@ import {
  * Внизу — «+ Добавить расклад», затем «Сохранить» / «Раскрой завершён».
  */
 
-interface RollDraft {
-  /** Локальный ключ для React (стабилен при добавлении/удалении). */
-  key: string;
-  ordinal: number;
-  layers: string;
-  /** Ф3 «Расцветки»: id расцветки рулона (`OrderVariant`) или `null`. */
-  variantId: string | null;
-}
-
-interface LayDraft {
-  key: string;
-  /**
-   * Номер расклада на сервере (`CuttingTaskLay.ordinal`). `null` — расклад
-   * ещё не сохранён (создан кнопкой «+ Добавить расклад»), номер выдаст
-   * backend.
-   *
-   * Обязателен в payload для существующих раскладов: сохранение — merge по
-   * `ordinal`, а не replace. Без него каждый автосейв пересоздавал бы
-   * расклады с новыми номерами, а `Passport.cuttingLayOrdinal` выпущенных
-   * паспортов указывал бы на чужой настил.
-   */
-  ordinal: number | null;
-  /** Частичное завершение: момент «Расклад готов» (ISO) или `null`. */
-  completedAt: string | null;
-  /** Кто закрыл расклад — подпись в шапке закрытого расклада. */
-  completedByName: string | null;
-  /** Сколько паспортов по раскладу уже выпущено / ожидается. */
-  releasedPassports: number;
-  totalPassports: number;
-  /** Сколько паспортов будет удалено при открытии расклада (см. DTO). */
-  reopenDeletesPassports: number;
-  /** Номера паспортов, уже ушедших в работу — они запирают расклад. */
-  reopenBlockedPassports: string[];
-  reopenBlockedTotal: number;
-  /** Выбранные размеры: `sizeId → perLayerQty` строкой. Наличие = выбран. */
-  sizes: Record<string, string>;
-  rolls: RollDraft[];
-}
-
 interface Props {
   taskId: string;
   /** План по размерам (снимок заказа) — что доступно для выбора. */
@@ -94,47 +62,6 @@ function clampInt(raw: string, max: number): number {
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.min(n, max);
-}
-
-/**
- * Поля нового (ещё не сохранённого) расклада: номера нет — его выдаст
- * backend при первом сохранении (append-only, max+1); закрытым он,
- * очевидно, тоже быть не может.
- */
-const NEW_LAY_META = {
-  ordinal: null,
-  completedAt: null,
-  completedByName: null,
-  releasedPassports: 0,
-  totalPassports: 0,
-  reopenDeletesPassports: 0,
-  reopenBlockedPassports: [] as string[],
-  reopenBlockedTotal: 0,
-} as const;
-
-function layFromDto(dto: CuttingTaskLayDto): LayDraft {
-  const sizes: Record<string, string> = {};
-  for (const s of dto.sizes) {
-    if (s.sizeId) sizes[s.sizeId] = s.perLayerQty === 0 ? '' : String(s.perLayerQty);
-  }
-  return {
-    key: `lay-${dto.id}`,
-    ordinal: dto.ordinal,
-    completedAt: dto.completedAt,
-    completedByName: dto.completedByName,
-    releasedPassports: dto.releasedPassports,
-    totalPassports: dto.totalPassports,
-    reopenDeletesPassports: dto.reopenDeletesPassports,
-    reopenBlockedPassports: dto.reopenBlockedPassports,
-    reopenBlockedTotal: dto.reopenBlockedTotal,
-    sizes,
-    rolls: dto.rolls.map((r) => ({
-      key: `roll-${r.id}`,
-      ordinal: r.ordinal,
-      layers: r.layers === 0 ? '' : String(r.layers),
-      variantId: r.variantId,
-    })),
-  };
 }
 
 export function CuttingForm({
@@ -179,6 +106,43 @@ export function CuttingForm({
     return [{ key: 'lay-init-1', ...NEW_LAY_META, sizes: {}, rolls: [] }];
   });
 
+  /**
+   * Номера раскладов, снесённых кнопкой «✕ Удалить расклад» и ещё не
+   * доехавших до сервера. Уходят в payload отдельным списком: backend
+   * удаляет ТОЛЬКО их (см. `SaveCuttingTaskProgressSchema`), отсутствие
+   * расклада в `lays` больше ничего не сносит.
+   */
+  const removedRef = useRef<number[]>([]);
+
+  // Стейт следует за сервером: после любого действия `router.refresh()`
+  // приносит свежие пропсы, и черновики пересобираются под них
+  // (`laysSignature` / `mergeServerLays`). Раньше стейт инициализировался
+  // один раз при монтировании и дальше расходился с БД — на этом
+  // рассинхроне форма стирала и дублировала настил.
+  const signature = laysSignature(lays);
+  const appliedSignature = useRef(signature);
+  useEffect(() => {
+    if (appliedSignature.current === signature) return;
+    appliedSignature.current = signature;
+    // Расклад, снесённый в форме, но ещё не сохранённый, обратно не
+    // воскрешаем: refresh от соседнего действия вернул бы его на экран.
+    const pending = removedRef.current;
+    const serverLays = pending.length
+      ? lays.filter((l) => !pending.includes(l.ordinal))
+      : lays;
+    setLayDrafts((prev) => {
+      const merged = mergeServerLays(prev, serverLays);
+      if (merged.length > 0 || readOnly) return merged;
+      // Раскладов не осталось — даём пустой под ввод, как при старте.
+      return [{ key: nextKey('lay'), ...NEW_LAY_META, sizes: {}, rolls: [] }];
+    });
+    // Что сервер уже удалил (или успел закрыть) — из списка убираем.
+    removedRef.current = pending.filter((o) =>
+      lays.some((l) => l.ordinal === o && !l.completedAt),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, lays, readOnly]);
+
   // --- Расчёты -------------------------------------------------------------
   const layLayers = (lay: LayDraft) =>
     lay.rolls.reduce((s, r) => s + clampInt(r.layers, CUTTING_TASK_MAX_LAYERS), 0);
@@ -221,7 +185,15 @@ export function CuttingForm({
   }
 
   function removeLay(key: string) {
-    setLayDrafts((prev) => prev.filter((l) => l.key !== key));
+    setLayDrafts((prev) => {
+      // Уже сохранённый расклад надо снести и на сервере — копим номер
+      // для `removedOrdinals` (просто «не прислать» больше не удаляет).
+      const gone = prev.find((l) => l.key === key);
+      if (gone?.ordinal != null && !removedRef.current.includes(gone.ordinal)) {
+        removedRef.current = [...removedRef.current, gone.ordinal];
+      }
+      return prev.filter((l) => l.key !== key);
+    });
     touched();
   }
 
@@ -307,7 +279,32 @@ export function CuttingForm({
             variantId: r.variantId,
           })),
         })),
+      // Удаление — только явным списком: backend не сносит расклад лишь
+      // потому, что его нет в `lays`.
+      removedOrdinals: [...removedRef.current],
     };
+  }
+
+  /**
+   * Разложить номера, выданные backend-ом, по черновикам без `ordinal`
+   * (порядок `ordinals` — это порядок открытых раскладов в payload).
+   *
+   * Делаем это сразу, не дожидаясь `router.refresh()`: пока черновик
+   * считается «новым», каждое следующее сохранение заводит ЕЩЁ ОДИН
+   * расклад — так на заказе 02-00013 «Раскрой завершён» через 9 секунд
+   * после «Расклад готов» создал копию настила.
+   */
+  function adoptOrdinals(ordinals: number[] | undefined) {
+    if (!ordinals || ordinals.length === 0) return;
+    setLayDrafts((prev) => {
+      let i = 0;
+      return prev.map((l) => {
+        if (l.completedAt) return l;
+        const ordinal = ordinals[i];
+        i += 1;
+        return l.ordinal == null && ordinal != null ? { ...l, ordinal } : l;
+      });
+    });
   }
 
   function handleSave() {
@@ -317,6 +314,7 @@ export function CuttingForm({
       const result = await saveCuttingProgressAction(taskId, buildPayload());
       if (!result.ok) setError(result.error ?? 'Не удалось сохранить');
       else {
+        adoptOrdinals(result.ordinals);
         setSavedNote('Сохранено');
         router.refresh();
       }
@@ -413,6 +411,7 @@ export function CuttingForm({
         setError(saved.error ?? 'Не удалось сохранить');
         return;
       }
+      adoptOrdinals(saved.ordinals);
       const ordinal = lay.ordinal ?? saved.ordinals?.[laySlotIndex(lay)] ?? null;
       if (ordinal == null) {
         setError('Расклад сохранён — нажмите «Расклад готов» ещё раз.');

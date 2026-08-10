@@ -218,18 +218,42 @@ export const CuttingTaskLayInputSchema = z.object({
 export type CuttingTaskLayInputDto = z.infer<typeof CuttingTaskLayInputSchema>;
 
 /**
- * Payload для `PATCH /api/cutting-tasks/:id` (автосохранение прогресса)
- * и `POST /api/cutting-tasks/:id/complete` (финальное сохранение +
- * перевод в DONE). Полностью перезаписывает набор раскладов задачи
- * (replace, не diff) — индекс элемента в `lays` = `ordinal` расклада
- * (1-based).
+ * Payload для `PATCH /api/cutting-tasks/:id` (сохранение прогресса) и
+ * `POST /api/cutting-tasks/:id/complete` (финальное сохранение + перевод
+ * в DONE). Сохранение — merge по `ordinal` (см.
+ * `CuttingTaskLayInputSchema`), а не replace.
  *
- * `lays` опционален: на ранних автосейвах раскладов может ещё не быть.
+ * `lays` опционален: на раннем сохранении раскладов может ещё не быть.
+ * Отсутствие расклада в `lays` НЕ означает «удали» — форма присылает
+ * только те расклады, которые сейчас держит (закрытые, например, не
+ * присылает вовсе).
  */
 export const SaveCuttingTaskProgressSchema = z.object({
   lays: z
     .array(CuttingTaskLayInputSchema)
     .max(CUTTING_TASK_MAX_LAYS, 'Слишком много раскладов')
+    .default([]),
+  /**
+   * Номера раскладов, которые раскройщик снёс кнопкой «✕ Удалить
+   * расклад». Удаление возможно ТОЛЬКО по этому списку и только для
+   * открытых раскладов.
+   *
+   * Почему явным списком, а не «чего нет в `lays`, то удалить» (как было
+   * до 10.08.2026). Форма держит расклады в локальном стейте, и любой
+   * его рассинхрон с БД молча стирал настил: инцидент по заказу
+   * 02-00013 — после «Открыть расклад» стейт формы продолжал считать
+   * расклад закрытым, закрытые в payload не уходят, и первое же
+   * «Сохранить» снесло расклад с 6 размерами и 15 рулонами. Явный
+   * список делает удаление намерением, а не следствием.
+   */
+  removedOrdinals: z
+    .array(
+      z
+        .number({ invalid_type_error: 'Номер расклада должен быть числом' })
+        .int('Номер расклада — целое')
+        .min(1, 'Номер расклада начинается с 1'),
+    )
+    .max(CUTTING_TASK_MAX_LAYS * 2, 'Слишком много удаляемых раскладов')
     .default([]),
 });
 export type SaveCuttingTaskProgressDto = z.infer<

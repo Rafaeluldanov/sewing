@@ -28,7 +28,10 @@
  *      паспорта расклада (иначе бумага разойдётся с новым настилом);
  *      паспорт, уже ушедший в работу, запирает расклад — 409
  *      `CUTTING_LAY_HAS_PASSPORTS` с его номером. Открытый расклад можно
- *      удалить целиком (кейс «закрыли лишний расклад»).
+ *      удалить целиком (кейс «закрыли лишний расклад») — но ТОЛЬКО явным
+ *      `removedOrdinals`: отсутствие расклада в payload ничего не сносит
+ *      (инцидент 10.08.2026, заказ 02-00013 — рассинхрон формы с БД
+ *      стирал настил при обычном «Сохранить»).
  *   6. «Раскрой завершён» закрывает оставшиеся расклады и ставит `DONE`.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
@@ -108,11 +111,16 @@ describeWithDb('integration — partial cutting completion by lay', () => {
     };
   }
 
-  function save(lays: unknown[]) {
+  /**
+   * Сохранение прогресса. `removedOrdinals` — то, что раскройщик снёс
+   * кнопкой «✕ Удалить расклад»: без этого списка backend не удаляет
+   * ничего, даже если расклада нет в `lays`.
+   */
+  function save(lays: unknown[], removedOrdinals: number[] = []) {
     return request(t.app.getHttpServer())
       .patch(`/api/cutting-tasks/${taskId}`)
       .set('Cookie', cutterCookie)
-      .send({ lays });
+      .send({ lays, removedOrdinals });
   }
 
   function completeLay(ordinal: number) {
@@ -224,11 +232,14 @@ describeWithDb('integration — partial cutting completion by lay', () => {
     const ordinals1 = r1.body.lays.map((l: { ordinal: number }) => l.ordinal);
     expect(ordinals1).toEqual([1, 2]);
 
-    // Удаляем второй (форма перестала его присылать) и добавляем новый.
-    const r2 = await save([
-      lay([{ ordinal: 1, layers: 5 }], { ordinal: 1 }),
-      lay([{ ordinal: 1, layers: 8 }]),
-    ]).expect(200);
+    // Удаляем второй («✕ Удалить расклад») и добавляем новый.
+    const r2 = await save(
+      [
+        lay([{ ordinal: 1, layers: 5 }], { ordinal: 1 }),
+        lay([{ ordinal: 1, layers: 8 }]),
+      ],
+      [2],
+    ).expect(200);
     const ordinals2 = r2.body.lays.map((l: { ordinal: number }) => l.ordinal);
     // Номер 2 освободился, но новый расклад получил 3: `cuttingLayOrdinal`
     // выпущенных паспортов не должен указывать на другой настил.
@@ -376,9 +387,31 @@ describeWithDb('integration — partial cutting completion by lay', () => {
     await completeLay(2).expect(201);
 
     await reopenLay(2).expect(201);
-    // Открытый расклад, которого нет в payload, удаляется (закрытый №1 цел).
-    const r = await save([]).expect(200);
+    // Открытый расклад сносится явным `removedOrdinals` (закрытый №1 цел).
+    const r = await save([], [2]).expect(200);
     expect(r.body.lays.map((l: { ordinal: number }) => l.ordinal)).toEqual([1]);
+  });
+
+  test('открытый расклад, которого нет в payload, НЕ удаляется', async () => {
+    // Инцидент 10.08.2026 (прод-заказ 02-00013). Расклад закрыли, выпустили
+    // по нему паспорта, нашли ошибку в настиле и нажали «Открыть расклад».
+    // Форма продолжала считать расклад закрытым, а закрытые она в payload
+    // не шлёт — и первое же «Сохранить» стирало настил целиком (6 размеров,
+    // 15 рулонов). Отсутствие расклада в `lays` больше не значит «удали».
+    await save([lay([{ ordinal: 1, layers: 4 }])]).expect(200);
+    await completeLay(1).expect(201);
+    await reopenLay(1).expect(201);
+
+    const r = await save([]).expect(200);
+    expect(r.body.lays).toHaveLength(1);
+    expect(r.body.lays[0]).toMatchObject({ ordinal: 1, completedAt: null });
+    expect(r.body.lays[0].rolls[0].layers).toBe(4);
+
+    // Удалить закрытый расклад нельзя даже явным списком.
+    await completeLay(1).expect(201);
+    const locked = await save([], [1]).expect(200);
+    expect(locked.body.lays).toHaveLength(1);
+    expect(locked.body.lays[0].completedAt).toEqual(expect.any(String));
   });
 
   // ---------------------------------------------------------------------------

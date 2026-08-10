@@ -95,12 +95,14 @@ export class CuttingTasksController {
   }
 
   /**
-   * Автосохранение прогресса: merge раскладов задачи по `ordinal`
-   * (размеры с «на настиле» + рулоны). Тело валидируется
+   * Сохранение прогресса: merge раскладов задачи по `ordinal` (размеры с
+   * «на настиле» + рулоны). Тело валидируется
    * `SaveCuttingTaskProgressSchema`.
    *
    * Уже ЗАКРЫТЫЕ расклады неприкосновенны: попытка их изменить —
    * `CUTTING_LAY_LOCKED` (см. `CuttingTasksService.persistProgress`).
+   * Удаление расклада — только явным `removedOrdinals`: отсутствие
+   * расклада в `lays` ничего не сносит.
    */
   @Patch(':id')
   @Roles('CUTTER', 'SHOP_MANAGER', 'ADMIN')

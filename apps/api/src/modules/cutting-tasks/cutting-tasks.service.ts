@@ -509,8 +509,8 @@ export class CuttingTasksService {
   }
 
   /**
-   * Сохранить прогресс (автосейв из формы): полностью перезаписать набор
-   * раскладов задачи. Требует статус `IN_PROGRESS`.
+   * Сохранить прогресс формы раскроя — merge раскладов по `ordinal`
+   * (см. `persistProgress`). Требует статус `IN_PROGRESS`.
    */
   async saveProgress(
     id: string,
@@ -555,8 +555,9 @@ export class CuttingTasksService {
    *     этот расклад (его размеры и рулоны переписываются целиком);
    *   - элемент без `ordinal` → НОВЫЙ расклад, номер = max(ordinal) + 1
    *     (append-only, номера никогда не переиспользуются);
-   *   - открытый расклад, которого нет в payload → удаляется (раскройщик
-   *     нажал «Удалить расклад»);
+   *   - открытый расклад удаляется, ТОЛЬКО если его номер пришёл в
+   *     `removedOrdinals` («✕ Удалить расклад»); просто отсутствие
+   *     расклада в payload — не повод его сносить (см. ниже);
    *   - ЗАКРЫТЫЙ расклад (`completedAt != null`) неприкосновенен: его
    *     нельзя ни изменить, ни удалить — `CUTTING_LAY_LOCKED`. Отсутствие
    *     закрытого расклада в payload игнорируем (форма могла его вообще
@@ -619,11 +620,28 @@ export class CuttingTasksService {
       }
       updates.push({ layId: existing.id, ordinal: lay.ordinal, lay });
     }
-    // Открытые расклады, которых в payload нет → удалить. Закрытые в
-    // расчёт не берём: их отсутствие в payload — норма.
+    // Удаляем только то, что раскройщик снёс ЯВНО («✕ Удалить расклад»).
+    //
+    // Было (до 10.08.2026): удалялся любой открытый расклад, которого нет
+    // в payload. Это ставило сохранность настила в зависимость от того,
+    // насколько локальный стейт формы совпал с БД, — и на прод-заказе
+    // 02-00013 первое же «Сохранить» после «Открыть расклад» стёрло
+    // расклад (форма всё ещё считала его закрытым, а закрытые она не
+    // присылает). Теперь отсутствие расклада в payload = «форма его не
+    // прислала», удаление — отдельное намерение.
+    //
+    // Закрытые не удаляем никогда: по ним уже выпущены паспорта
+    // (`Passport.cuttingLayOrdinal`). Расклад, пришедший и в `lays`, и в
+    // `removedOrdinals`, считаем правкой — данные важнее.
     const keptOrdinals = new Set(updates.map((u) => u.ordinal));
+    const removedOrdinals = new Set(dto.removedOrdinals ?? []);
     const layIdsToDelete = task.lays
-      .filter((l) => !l.completedAt && !keptOrdinals.has(l.ordinal))
+      .filter(
+        (l) =>
+          !l.completedAt &&
+          !keptOrdinals.has(l.ordinal) &&
+          removedOrdinals.has(l.ordinal),
+      )
       .map((l) => l.id);
     let nextOrdinal =
       task.lays.reduce((max, l) => Math.max(max, l.ordinal), 0) + 1;
