@@ -25,6 +25,8 @@ import {
   parseEmployeeQr,
   type MasterActionReason,
   type MasterCallPassportDto,
+  type MasterSelfOperationStepDto,
+  type MasterSelfOperationStepsDto,
 } from '@sewing/shared';
 import type {
   DefectTypeDto,
@@ -36,7 +38,9 @@ import { QrScannerModal } from '@/app/work/qr-scanner-modal';
 import {
   applyMasterQtyCorrectionAction,
   fetchMasterQcDetailAction,
+  fetchMasterSelfOperationStepsAction,
   masterReturnToCellAction,
+  masterSelfOperationAction,
   masterSetRouteStepAction,
   masterTransferToEmployeeAction,
   masterUnassignPassportAction,
@@ -49,6 +53,14 @@ import { DefectTypeCreatableSelect } from '@/components/qc/defect-type-creatable
 
 type ActionId = 'unassign' | 'transfer' | 'returnToCell' | 'setRouteStep';
 
+/**
+ * «Выполнить операцию самой» — отдельная ветка рендера
+ * (`SelfOperationBody`): мастер фиксирует СВОЮ работу, поэтому здесь
+ * нет поля «причина», зато есть подгрузка шагов маршрута с их
+ * доступностью (`fetchMasterSelfOperationStepsAction`).
+ */
+type WorkActionId = 'selfOperation';
+
 /** ОТК-действия мастера — отдельная ветка рендера (`QcActionBody`),
  *  без поля «причина», с подгрузкой ОТК-карточки паспорта. */
 type QcActionId = 'recordDefect' | 'returnToRework' | 'qtyCorrection';
@@ -60,7 +72,7 @@ type QcActionId = 'recordDefect' | 'returnToRework' | 'qtyCorrection';
  * layout (header сверху, scrollable body, кнопка «Назад»), не
  * раздваивая дерево компонентов.
  */
-type Mode = ActionId | QcActionId | 'history';
+type Mode = ActionId | QcActionId | WorkActionId | 'history';
 
 interface Props {
   passport: MasterCallPassportDto;
@@ -167,6 +179,22 @@ export function PassportActionsSheet({
 
         {mode === null && (
           <div className="master-actions-sheet__menu">
+            {/* «Выполнить операцию самой» — единственное действие, где
+                мастер фиксирует СВОЮ работу, а не правит чужую. Стоит
+                первым: это рутина у станка, а не разбор проблемы. */}
+            <button
+              type="button"
+              className="master-actions-sheet__menu-item master-actions-sheet__menu-item--work"
+              onClick={() => setMode('selfOperation')}
+            >
+              <span className="master-actions-sheet__menu-label">
+                Выполнить операцию самой
+              </span>
+              <span className="master-actions-sheet__menu-hint">
+                Вы делаете операцию сами: выберите её в маршруте заказа.
+                Паспорт перейдёт на этот шаг, как после работы швеи.
+              </span>
+            </button>
             {/* «Посмотреть историю» — read-only обзор PassportEvent;
                 логически идёт ПЕРЕД destructive-действиями, чтобы
                 мастер мог сначала разобраться, потом действовать. */}
@@ -236,6 +264,16 @@ export function PassportActionsSheet({
           />
         )}
 
+        {mode === 'selfOperation' && (
+          <SelfOperationBody
+            passport={passport}
+            onBack={() => setMode(null)}
+            onClose={onClose}
+            onSuccess={onSuccess}
+            onError={onError}
+          />
+        )}
+
         {(mode === 'recordDefect' ||
           mode === 'returnToRework' ||
           mode === 'qtyCorrection') && (
@@ -252,6 +290,7 @@ export function PassportActionsSheet({
 
         {mode !== null &&
           mode !== 'history' &&
+          mode !== 'selfOperation' &&
           mode !== 'recordDefect' &&
           mode !== 'returnToRework' &&
           mode !== 'qtyCorrection' && (
@@ -637,6 +676,261 @@ function ActionBody({
           onScan={handleScan}
           onClose={() => setScanner(null)}
         />
+      )}
+    </div>
+  );
+}
+
+interface SelfOperationBodyProps {
+  passport: MasterCallPassportDto;
+  onBack: () => void;
+  onClose: () => void;
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
+}
+
+/**
+ * «Выполнить операцию самой» — мастер делает операцию руками, и паспорт
+ * должен поехать дальше по маршруту.
+ *
+ * Экран показывает ВЕСЬ снимок маршрута заказа, а не только доступные
+ * шаги: недоступный шаг с причиной («сначала закройте КИПЕРКУ»)
+ * отвечает на вопрос мастера лучше, чем его отсутствие в списке.
+ * Доступность считает бэкенд тем же расчётом, что и «получить крой» у
+ * швеи (`previewOperationAvailability`) — своих правил у экрана нет.
+ *
+ * Станок спрашиваем, только если к операции их привязано несколько:
+ * у «ПУГОВИЦА» рабочее место одно и подставляется само.
+ */
+function SelfOperationBody({
+  passport,
+  onBack,
+  onClose,
+  onSuccess,
+  onError,
+}: SelfOperationBodyProps) {
+  const [data, setData] = useState<MasterSelfOperationStepsDto | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [equipmentId, setEquipmentId] = useState<string>('');
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const res = await fetchMasterSelfOperationStepsAction(passport.id);
+    if (res.ok) {
+      setData(res.result);
+      // Предвыбор — первый доступный шаг: чаще всего это и есть та
+      // операция, ради которой мастер открыла экран.
+      const first = res.result.steps.find((s) => s.available);
+      setPicked(first?.operationId ?? null);
+      setEquipmentId(
+        first && first.equipment.length === 1 ? first.equipment[0]!.id : '',
+      );
+    } else {
+      setLoadError(res.error);
+    }
+    setLoading(false);
+  }, [passport.id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const pickedStep =
+    data?.steps.find((s) => s.operationId === picked) ?? null;
+
+  const pick = useCallback((step: MasterSelfOperationStepDto) => {
+    setPicked(step.operationId);
+    // Один станок — подставляем молча, несколько — мастер выбирает
+    // сама (по `equipmentId` события считают загрузку оборудования).
+    setEquipmentId(step.equipment.length === 1 ? step.equipment[0]!.id : '');
+  }, []);
+
+  const noEquipment = !!pickedStep && pickedStep.equipment.length === 0;
+  const needsEquipmentChoice = !!pickedStep && pickedStep.equipment.length > 1;
+  const canSubmit =
+    !!pickedStep &&
+    pickedStep.available &&
+    !noEquipment &&
+    (!needsEquipmentChoice || equipmentId !== '');
+
+  const submit = useCallback(async () => {
+    if (!pickedStep || !canSubmit || busy) return;
+    setBusy(true);
+    let res: Awaited<ReturnType<typeof masterSelfOperationAction>>;
+    try {
+      res = await masterSelfOperationAction(passport.id, {
+        operationId: pickedStep.operationId,
+        ...(equipmentId ? { equipmentId } : {}),
+        ...(comment.trim() ? { comment: comment.trim() } : {}),
+      });
+    } finally {
+      setBusy(false);
+    }
+    if (res.ok) {
+      onSuccess(`Операция «${pickedStep.operationName}» выполнена`);
+      onClose();
+    } else {
+      onError(res.error);
+    }
+  }, [
+    busy,
+    canSubmit,
+    comment,
+    equipmentId,
+    onClose,
+    onError,
+    onSuccess,
+    passport.id,
+    pickedStep,
+  ]);
+
+  return (
+    <div className="master-actions-sheet__body">
+      <button
+        type="button"
+        className="master-actions-sheet__back"
+        onClick={onBack}
+      >
+        ← Назад к списку действий
+      </button>
+      <h4 className="master-actions-sheet__action-title">
+        Выполнить операцию самой
+      </h4>
+      <p className="master-actions-sheet__action-hint">
+        Операция запишется на вас: паспорт перейдёт на этот шаг маршрута,
+        как после работы швеи.
+      </p>
+
+      {loading && (
+        <p className="master-actions-sheet__action-hint">Загружаем маршрут…</p>
+      )}
+
+      {loadError && (
+        <p className="master-actions-sheet__error" role="alert">
+          {loadError}
+        </p>
+      )}
+
+      {data && !loading && (
+        <>
+          <div className="master-actions-sheet__field">
+            <label className="master-actions-sheet__label">
+              Операция маршрута{' '}
+              <span className="master-actions-sheet__required">*</span>
+            </label>
+            <ul className="master-actions-sheet__steps">
+              {data.steps.map((s) => {
+                const checked = picked === s.operationId;
+                return (
+                  <li key={`${s.index}-${s.operationId}`}>
+                    <label
+                      className={
+                        'master-actions-sheet__step' +
+                        (checked ? ' master-actions-sheet__step--active' : '') +
+                        (s.available
+                          ? ''
+                          : ' master-actions-sheet__step--blocked')
+                      }
+                    >
+                      <input
+                        type="radio"
+                        name="self-operation-target"
+                        value={s.operationId}
+                        checked={checked}
+                        onChange={() => pick(s)}
+                        disabled={busy || !s.available}
+                      />
+                      <span>
+                        <strong>{s.operationName}</strong>
+                        {s.isCurrent ? ' · текущий шаг' : ''}
+                        {s.finished ? ' · выполнена' : ''}
+                        {!s.available && s.blockedReason ? (
+                          <span className="master-actions-sheet__step-note">
+                            {s.blockedReason}
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+
+          {noEquipment && (
+            <p className="master-actions-sheet__error" role="alert">
+              К операции «{pickedStep?.operationName}» не привязано ни одного
+              активного рабочего места — привяжите станок в справочнике
+              оборудования.
+            </p>
+          )}
+
+          {needsEquipmentChoice && (
+            <div className="master-actions-sheet__field">
+              <label
+                className="master-actions-sheet__label"
+                htmlFor="self-operation-equipment"
+              >
+                Рабочее место{' '}
+                <span className="master-actions-sheet__required">*</span>
+              </label>
+              <select
+                id="self-operation-equipment"
+                className="master-actions-sheet__input"
+                value={equipmentId}
+                onChange={(e) => setEquipmentId(e.target.value)}
+                disabled={busy}
+              >
+                <option value="">— выберите станок —</option>
+                {pickedStep?.equipment.map((eq) => (
+                  <option key={eq.id} value={eq.id}>
+                    {eq.name} ({eq.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {!data.pieceworkPaid && (
+            <p className="master-actions-sheet__notice">
+              У вас оклад — сдельного начисления за операцию не будет. Работа
+              зачтётся в маршрут и в историю паспорта.
+            </p>
+          )}
+
+          <div className="master-actions-sheet__field">
+            <label
+              className="master-actions-sheet__label"
+              htmlFor="self-operation-comment"
+            >
+              Комментарий (необязательно)
+            </label>
+            <textarea
+              id="self-operation-comment"
+              className="master-actions-sheet__textarea"
+              rows={2}
+              maxLength={500}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="Например: пришила пуговицы, швея была на другой операции"
+              disabled={busy}
+            />
+          </div>
+
+          <button
+            type="button"
+            className="master-actions-sheet__confirm"
+            onClick={submit}
+            disabled={!canSubmit || busy}
+          >
+            {busy ? 'Выполняем…' : 'Выполнить операцию'}
+          </button>
+        </>
       )}
     </div>
   );

@@ -315,6 +315,78 @@ export interface FindMasterPassportByCodeResultDto {
 }
 
 // ---------------------------------------------------------------------------
+// «Выполнить операцию самой» (мастер работает руками)
+// ---------------------------------------------------------------------------
+
+/**
+ * Мастер иногда выполняет операцию сама — пришить пуговицу, поправить
+ * строчку. Чтобы паспорт после этого поехал дальше по маршруту, работу
+ * надо зафиксировать теми же событиями, что и у швеи
+ * (`ISSUED_TO_EMPLOYEE` + `OPERATION_FINISHED`), а у мастера нет ни
+ * экрана `/work`, ни смены: `/master` — единственный её экран.
+ *
+ * Контракт сознательно узкий:
+ *   - операция выбирается ТОЛЬКО из снимка маршрута заказа
+ *     (`OrderRouteStep`) — «работа мимо маршрута» остаётся отдельным
+ *     сценарием с нарядом-допуском;
+ *   - `equipmentId` нужен, лишь когда к операции привязано несколько
+ *     активных станков (ПРЯМОСТРОЧКА, ОВЕРЛОК). Для «ПУГОВИЦА» →
+ *     «ПУГОВИЧНАЯ МАШИНКА» станок один и подставляется сам;
+ *   - `reason` НЕ требуем (в отличие от остальных действий мастера):
+ *     мастер фиксирует свою работу, а не правит чужую.
+ */
+export const MasterSelfOperationSchema = z.object({
+  /** Операция из маршрута заказа этого паспорта. */
+  operationId: z.string().min(1),
+  /** Станок; обязателен, только если к операции привязано несколько. */
+  equipmentId: z.string().min(1).optional(),
+  comment: z.string().max(500).optional(),
+});
+export type MasterSelfOperationDto = z.infer<typeof MasterSelfOperationSchema>;
+
+/** Станок, привязанный к операции (`EquipmentOperation`). */
+export interface MasterSelfOperationEquipmentDto {
+  id: string;
+  code: string;
+  name: string;
+}
+
+/**
+ * Шаг маршрута заказа глазами мастера, которая хочет выполнить его
+ * сама. `available = false` НЕ означает «кнопка сломана»: это тот же
+ * гейт, что у швеи (откат назад, незакрытая параллельная группа, ОТК
+ * перед ВТО, уже завершённая операция), и `blockedReason` объясняет
+ * причину словами, которые мастер увидит в шторке.
+ */
+export interface MasterSelfOperationStepDto {
+  index: number;
+  operationId: string;
+  operationName: string;
+  /** Паспорт стоит на этом шаге прямо сейчас. */
+  isCurrent: boolean;
+  /** Операция уже закрыта по этому паспорту (`OPERATION_FINISHED`). */
+  finished: boolean;
+  available: boolean;
+  /** Бизнес-код отказа (`PASSPORT_ISSUE_BACKWARD` и т.п.) или `null`. */
+  blockedCode: string | null;
+  blockedReason: string | null;
+  /** Активные станки операции; пусто — операцию выполнить не на чем. */
+  equipment: MasterSelfOperationEquipmentDto[];
+}
+
+/** Ответ `GET /api/master-actions/passports/:id/self-operation-steps`. */
+export interface MasterSelfOperationStepsDto {
+  passportId: string;
+  steps: MasterSelfOperationStepDto[];
+  /**
+   * Получит ли актор сдельное начисление за выполненную операцию.
+   * У мастера на окладе — `false`, и UI обязан сказать это заранее:
+   * иначе выполненная работа выглядит потерянными деньгами.
+   */
+  pieceworkPaid: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Наряд-допуск мастера (`RouteWorkPermit`)
 // ---------------------------------------------------------------------------
 

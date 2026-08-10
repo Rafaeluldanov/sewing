@@ -2441,6 +2441,89 @@ export class MasterTargetOperationAlreadyFinishedException extends BusinessExcep
 }
 
 /**
+ * «Выполнить операцию самой»: к выбранной операции не привязано ни
+ * одного активного станка (`EquipmentOperation`), а событию нужен
+ * `equipmentId`. Лечится в справочнике оборудования — привязкой
+ * операции к станку, на котором её физически делают.
+ *
+ * Бросается из `MasterActionsService.performSelfOperation`.
+ */
+export class MasterSelfOperationNoEquipmentException extends BusinessException {
+  constructor(operationName: string) {
+    super(
+      'MASTER_SELF_OPERATION_NO_EQUIPMENT',
+      `К операции «${operationName}» не привязано ни одного активного рабочего места — привяжите станок в справочнике оборудования.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * «Выполнить операцию самой»: к операции привязано несколько станков
+ * (ПРЯМОСТРОЧКА, ОВЕРЛОК), и выбрать за мастера мы не имеем права —
+ * событие уйдёт с чужим `equipmentId`, а по нему считают загрузку
+ * оборудования. UI показывает выбор станка и повторяет запрос.
+ */
+export class MasterSelfOperationEquipmentRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'MASTER_SELF_OPERATION_EQUIPMENT_REQUIRED',
+      'К этой операции привязано несколько рабочих мест — укажите, на каком вы работали.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * «Выполнить операцию самой»: переданный станок не привязан к выбранной
+ * операции (или выключен). Отдельный код от `NO_EQUIPMENT` — тут
+ * виновата не настройка справочника, а конкретный запрос.
+ */
+export class MasterSelfOperationEquipmentNotAllowedException extends BusinessException {
+  constructor() {
+    super(
+      'MASTER_SELF_OPERATION_EQUIPMENT_NOT_ALLOWED',
+      'Это рабочее место не привязано к выбранной операции.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * «Выполнить операцию самой»: у актора уже открыта смена на ДРУГОЙ
+ * операции. Действие открывает техническую смену на время операции и
+ * закрывает её следом; трогать чужую открытую смену оно не должно —
+ * иначе сотрудник (мастер с ролями швеи, начальник цеха у станка)
+ * молча потеряет свою.
+ */
+export class MasterSelfOperationShiftBusyException extends BusinessException {
+  constructor(operationName: string) {
+    super(
+      'MASTER_SELF_OPERATION_SHIFT_BUSY',
+      `У вас открыта смена на операции «${operationName}» — закройте её или выполните эту операцию через свой рабочий экран.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * «Выполнить операцию самой»: по паспорту открыт возврат от ОТК на
+ * другую операцию. Взятие паспорта в этом состоянии уходит на операцию
+ * переделки (см. `PassportsService.resolveOperationForPassport`), то
+ * есть мастер нажала бы «Пришить пуговицу», а система закрыла бы
+ * «ОВЕРЛОК». Молча подменять операцию нельзя — отказываем явно.
+ */
+export class MasterSelfOperationReworkFirstException extends BusinessException {
+  constructor(operationNames: string[]) {
+    super(
+      'MASTER_SELF_OPERATION_REWORK_FIRST',
+      `По паспорту открыт возврат на «${operationNames.join('», «')}» — сначала выполните эту операцию.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Сотрудник пытается завершить операцию, которая стоит в маршруте
  * РАНЬШЕ текущего `currentRouteStepIndex` паспорта. Обычный
  * complete-operation не может откатывать паспорт назад — этим

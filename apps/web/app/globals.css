@@ -6203,6 +6203,30 @@ body:has(.master-page) .app-main {
   border-color: #4f46e5;
   background: #eef2ff;
 }
+/* Шаг маршрута, недоступный для «выполнить операцию самой» (гейт швеи:
+   откат назад, незакрытая параллельная группа, ОТК перед ВТО). Шаг
+   остаётся в списке — причина отказа отвечает мастеру лучше, чем его
+   отсутствие. */
+.master-actions-sheet__step--blocked {
+  background: #f1f1ef;
+  color: #8a8a86;
+  cursor: default;
+}
+.master-actions-sheet__step-note {
+  display: block;
+  font-size: 0.78rem;
+  color: #5f5f5c;
+}
+/* Предупреждение без ошибки: «у вас оклад — сдельного начисления не
+   будет». Тон дизайн-системы `--color-warn-soft`/`--color-warn-fg`. */
+.master-actions-sheet__notice {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.5rem;
+  background: #fcecc9;
+  color: #9a6f1e;
+  font-size: 0.85rem;
+}
 .master-actions-sheet__placement {
   display: flex;
   flex-direction: column;
@@ -6232,6 +6256,13 @@ body:has(.master-page) .app-main {
 .master-actions-sheet__menu-item--history {
   border-color: #c7d2fe;
   background: #eef2ff;
+}
+/* «Выполнить операцию самой» — единственный пункт, где мастер делает
+   работу, а не правит чужую. Бирюзовый акцент рифмуется с кнопкой
+   «Сканировать паспорт» (`.master-page__scan-passport`, #0f766e). */
+.master-actions-sheet__menu-item--work {
+  border-color: #99f6e4;
+  background: #f0fdfa;
 }
 /* ОТК-действия мастера («зафиксировать брак» / «вернуть на доработку»)
    — тёплый акцент, чтобы визуально отделить контроль качества от

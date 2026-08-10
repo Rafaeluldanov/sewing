@@ -174,6 +174,84 @@ describe('master-actions smoke — /master mobile UI', () => {
   });
 });
 
+describe('master-actions smoke — «выполнить операцию самой»', () => {
+  test('endpoints объявлены и отданы в MasterActionsService', () => {
+    const controllerSrc = readSrc(
+      'apps/api/src/modules/master-actions/master-actions.controller.ts',
+    );
+    expect(controllerSrc).toMatch(
+      /@Get\(['"]passports\/:id\/self-operation-steps['"]\)/,
+    );
+    expect(controllerSrc).toMatch(
+      /@Post\(['"]passports\/:id\/self-operation['"]\)/,
+    );
+    expect(controllerSrc).toMatch(/MasterSelfOperationSchema/);
+    expect(controllerSrc).toMatch(/listSelfOperationSteps/);
+    expect(controllerSrc).toMatch(/performSelfOperation/);
+  });
+
+  test('движение паспорта идёт каналом швеи, а не своей копией правил', () => {
+    const serviceSrc = readSrc(
+      'apps/api/src/modules/master-actions/master-actions.service.ts',
+    );
+    // Только `PassportsService`: issue + complete. Никаких прямых
+    // записей OPERATION_FINISHED мимо гейтов маршрута.
+    expect(serviceSrc).toMatch(/this\.passports\.issueToEmployee\(/);
+    expect(serviceSrc).toMatch(/this\.passports\.completeOperationByEmployee\(/);
+    // Единственная запись событий паспорта в этом сервисе —
+    // переоткрытие гейта на backward в `setRouteStep`. Прямой
+    // `OPERATION_FINISHED` мимо `PassportsService` означал бы обход
+    // гейтов маршрута и начислений.
+    const writtenEventTypes = [
+      ...serviceSrc.matchAll(
+        /passportEvent\.create\(\{[\s\S]{0,200}?type: PassportEventType\.(\w+)/g,
+      ),
+    ].map((m) => m[1]);
+    expect(writtenEventTypes).toEqual(['OPERATION_REWORK_OPENED']);
+    // Доступность шагов считает тот же расчёт, что и «получить крой».
+    expect(serviceSrc).toMatch(/previewOperationAvailability/);
+  });
+
+  test('техническая смена: создаётся напрямую и закрывается в finally', () => {
+    const serviceSrc = readSrc(
+      'apps/api/src/modules/master-actions/master-actions.service.ts',
+    );
+    expect(serviceSrc).toMatch(/shiftSession\.create/);
+    expect(serviceSrc).toMatch(/finally\s*\{/);
+    expect(serviceSrc).toMatch(/endedAt: new Date\(\)/);
+    // Штатный старт смены НЕ используем: он синхронизирует оклад и
+    // начислил бы мастеру повременные часы за минуту работы.
+    expect(serviceSrc).not.toMatch(/shifts\.start\(/);
+    expect(serviceSrc).not.toMatch(/syncDailySalary\(/);
+  });
+
+  test('UI: пункт в sheet, список шагов и предупреждение про оклад', () => {
+    const src = readSrc('apps/web/app/master/passport-actions-sheet.tsx');
+    expect(src).toMatch(/Выполнить операцию самой/);
+    expect(src).toMatch(/selfOperation/);
+    expect(src).toMatch(/fetchMasterSelfOperationStepsAction/);
+    expect(src).toMatch(/masterSelfOperationAction/);
+    // Недоступный шаг остаётся в списке с причиной отказа.
+    expect(src).toMatch(/blockedReason/);
+    expect(src).toMatch(/master-actions-sheet__step--blocked/);
+    // Оклад: предупреждение показывается ДО нажатия.
+    expect(src).toMatch(/pieceworkPaid/);
+    expect(src).toMatch(/сдельного начисления/);
+
+    const css = readSrc('apps/web/app/globals.css');
+    expect(css).toMatch(/\.master-actions-sheet__menu-item--work/);
+    expect(css).toMatch(/\.master-actions-sheet__step--blocked/);
+  });
+
+  test('server action валидирует тело и ревалидирует /master', () => {
+    const src = readSrc('apps/web/app/master/master-actions-actions.ts');
+    expect(src).toMatch(/MasterSelfOperationSchema/);
+    expect(src).toMatch(/masterSelfOperationAction/);
+    expect(src).toMatch(/fetchMasterSelfOperationStepsAction/);
+    expect(src).toMatch(/revalidatePath\(['"]\/master['"]\)/);
+  });
+});
+
 describe('master-actions smoke — что сознательно не делаем', () => {
   test('actions сервер-сайд не закрывает MasterCall автоматически', () => {
     const actionsSrc = readSrc(

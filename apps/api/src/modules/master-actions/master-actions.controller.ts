@@ -3,6 +3,7 @@ import {
   CreateRouteWorkPermitSchema,
   RevokeRouteWorkPermitSchema,
   FindMasterPassportByCodeSchema,
+  MasterSelfOperationSchema,
   ReturnPassportToCellSchema,
   SetRouteStepSchema,
   TransferPassportSchema,
@@ -10,6 +11,8 @@ import {
   type FindMasterPassportByCodeDto,
   type FindMasterPassportByCodeResultDto,
   type MasterActionResultDto,
+  type MasterSelfOperationDto,
+  type MasterSelfOperationStepsDto,
   type ReturnPassportToCellDto,
   type SetRouteStepDto,
   type TransferPassportDto,
@@ -227,6 +230,45 @@ export class MasterActionsController {
     dto: CreatePassportQtyCorrectionDto,
   ): Promise<ApprovePassportQtyCorrectionResultDto> {
     return this.qtyCorrections.applyByMaster(id, dto, user.employeeId);
+  }
+
+  // -------------------------------------------------------------------------
+  // «Выполнить операцию самой»: мастер работает руками
+  // -------------------------------------------------------------------------
+
+  /**
+   * `GET /api/master-actions/passports/:id/self-operation-steps` — шаги
+   * маршрута заказа с пометкой доступности для взятия на себя, станками
+   * каждой операции и флагом `pieceworkPaid` (см.
+   * `MasterActionsService.listSelfOperationSteps`). Read-only; UI мастера
+   * читает её при открытии режима «выполнить операцию самой».
+   */
+  @Get('passports/:id/self-operation-steps')
+  selfOperationSteps(
+    @CurrentUser() user: AuthPrincipal,
+    @Param('id') id: string,
+  ): Promise<MasterSelfOperationStepsDto> {
+    return this.service.listSelfOperationSteps(user, id);
+  }
+
+  /**
+   * `POST /api/master-actions/passports/:id/self-operation` — мастер
+   * выполнила операцию маршрута сама: одно действие вместо «открыть
+   * смену → скан → скан» (см.
+   * `MasterActionsService.performSelfOperation`).
+   *
+   * `reason` здесь сознательно НЕ требуется, в отличие от остальных
+   * действий этого контроллера: те правят чужую работу, а это —
+   * фиксация своей.
+   */
+  @Post('passports/:id/self-operation')
+  selfOperation(
+    @CurrentUser() user: AuthPrincipal,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(MasterSelfOperationSchema))
+    dto: MasterSelfOperationDto,
+  ): Promise<MasterActionResultDto> {
+    return this.service.performSelfOperation(user, id, dto);
   }
 
   // -------------------------------------------------------------------------

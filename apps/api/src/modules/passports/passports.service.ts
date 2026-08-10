@@ -2015,6 +2015,147 @@ export class PassportsService {
    * Канал `issue` его НЕ передаёт: «взять крой = встать на операцию
    * смены» — там источник истины именно смена.
    */
+  /**
+   * Операции с ОТКРЫТОЙ переделкой по паспорту (свежие сверху).
+   *
+   * «Открытая» = есть `OPERATION_REWORK_OPENED` и нет более позднего
+   * `OPERATION_FINISHED` для той же пары (passport, operation).
+   * Зеркалит логику `ShiftsService.getMyReworkPassports` и
+   * `assertOperationNotFinished`; вынесено из
+   * `resolveOperationForPassport`, чтобы тем же расчётом пользовались
+   * внешние вызывающие (`MasterActionsService.performSelfOperation`:
+   * взятие паспорта с открытым возвратом уезжает на операцию переделки,
+   * и мастеру об этом надо сказать, а не подменять операцию молча).
+   */
+  private async findOpenReworkOperationIds(
+    passportId: string,
+  ): Promise<string[]> {
+    const reworks = await this.prisma.passportEvent.findMany({
+      where: {
+        passportId,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+        operationId: { not: null },
+      },
+      select: { operationId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (reworks.length === 0) return [];
+
+    const seen = new Set<string>();
+    const openOps: string[] = [];
+    for (const r of reworks) {
+      const op = r.operationId;
+      if (!op || seen.has(op)) continue;
+      seen.add(op);
+      const finished = await this.prisma.passportEvent.findFirst({
+        where: {
+          passportId,
+          operationId: op,
+          type: PassportEventType.OPERATION_FINISHED,
+          createdAt: { gt: r.createdAt },
+        },
+        select: { id: true },
+      });
+      if (!finished) openOps.push(op);
+    }
+    return openOps;
+  }
+
+  /**
+   * Публичная обёртка над `findOpenReworkOperationIds` с названиями
+   * операций — для UI-предупреждений вне модуля паспортов.
+   */
+  async listOpenReworkOperations(
+    passportId: string,
+  ): Promise<{ id: string; name: string }[]> {
+    const ids = await this.findOpenReworkOperationIds(passportId);
+    if (ids.length === 0) return [];
+    const ops = await this.prisma.operation.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true },
+    });
+    const byId = new Map(ops.map((o) => [o.id, o.name]));
+    return ids.map((id) => ({ id, name: byId.get(id) ?? id }));
+  }
+
+  /**
+   * Можно ли ВЗЯТЬ паспорт на эту операцию — без побочных эффектов.
+   *
+   * Ровно те же проверки и в том же порядке, что делает
+   * `issueToEmployee` перед записью `ISSUED_TO_EMPLOYEE`: активность
+   * паспорта, «операция уже закрыта», порядок маршрута с
+   * `allowCatchUp` (доделка незакрытого шага позади — не откат),
+   * политика работы вне маршрута. Отдельной копии правил здесь нет
+   * сознательно: разошедшийся preview хуже отсутствующего — он обещает
+   * мастеру кнопку, которая потом откажет.
+   *
+   * Возвращает бизнес-код и текст отказа вместо исключения: вызывающий
+   * (`MasterActionsService.listSelfOperationSteps`) рисует список шагов,
+   * где недоступные объясняют себя.
+   */
+  async previewOperationAvailability(
+    passportId: string,
+    operationId: string,
+  ): Promise<{
+    available: boolean;
+    code: string | null;
+    message: string | null;
+  }> {
+    const passport = await this.prisma.passport.findUnique({
+      where: { id: passportId },
+      select: {
+        id: true,
+        orderId: true,
+        status: true,
+        currentRouteStepIndex: true,
+      },
+    });
+    if (!passport) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'PASSPORT_NOT_FOUND',
+        message: 'Паспорт не найден',
+      });
+    }
+    try {
+      this.assertPassportActive(passport.status);
+      await this.assertOperationNotFinished(
+        passport.id,
+        operationId,
+        passport.orderId,
+      );
+      const order = await this.evaluateRouteOrder(passport, operationId, {
+        allowCatchUp: true,
+      });
+      if (order.offRoute) {
+        await this.enforceOffRoutePolicy(passport, operationId);
+      }
+      if (order.backward) throw new PassportIssueBackwardException();
+      if (order.groupIncomplete) {
+        throw new PassportParallelGroupIncompleteException(
+          order.missingGroupOps,
+        );
+      }
+      if (order.sequentialIncomplete) {
+        throw new PassportPrecedingStepIncompleteException(
+          order.missingSequentialOps,
+        );
+      }
+      return { available: true, code: null, message: null };
+    } catch (e) {
+      if (e instanceof HttpException) {
+        const body = e.getResponse() as
+          | { code?: string; message?: string }
+          | string;
+        const code = typeof body === 'string' ? null : (body.code ?? null);
+        const message =
+          typeof body === 'string' ? body : (body.message ?? e.message);
+        return { available: false, code, message };
+      }
+      throw e;
+    }
+  }
+
   private async resolveOperationForPassport(
     passport: { id: string; orderId: string | null },
     session: { operationId: string; equipmentId: string },
@@ -2028,38 +2169,7 @@ export class PassportsService {
           opts.assignedTo,
         )) ?? session.operationId
       : session.operationId;
-    // Все REWORK_OPENED по паспорту (свежие сверху). Дедупим по операции
-    // и оставляем только «открытые» — без последующего OPERATION_FINISHED
-    // для той же пары (passport, operation). Зеркалит логику
-    // `ShiftsService.getMyReworkPassports` и `assertOperationNotFinished`.
-    const reworks = await this.prisma.passportEvent.findMany({
-      where: {
-        passportId: passport.id,
-        type: PassportEventType.OPERATION_REWORK_OPENED,
-        operationId: { not: null },
-      },
-      select: { operationId: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (reworks.length === 0) return fallbackOperationId;
-
-    const seen = new Set<string>();
-    const openOps: string[] = [];
-    for (const r of reworks) {
-      const op = r.operationId;
-      if (!op || seen.has(op)) continue;
-      seen.add(op);
-      const finished = await this.prisma.passportEvent.findFirst({
-        where: {
-          passportId: passport.id,
-          operationId: op,
-          type: PassportEventType.OPERATION_FINISHED,
-          createdAt: { gt: r.createdAt },
-        },
-        select: { id: true },
-      });
-      if (!finished) openOps.push(op);
-    }
+    const openOps = await this.findOpenReworkOperationIds(passport.id);
     if (openOps.length === 0) return fallbackOperationId;
 
     // Смена уже на нужной операции переделки — ничего не меняем

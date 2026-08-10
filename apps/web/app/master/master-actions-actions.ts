@@ -22,12 +22,14 @@
 import { revalidatePath } from 'next/cache';
 import {
   FindMasterPassportByCodeSchema,
+  MasterSelfOperationSchema,
   ReturnPassportToCellSchema,
   SetRouteStepSchema,
   TransferPassportSchema,
   UnassignPassportSchema,
   type FindMasterPassportByCodeResultDto,
   type MasterActionResultDto,
+  type MasterSelfOperationStepsDto,
   type PassportHistoryDto,
 } from '@sewing/shared';
 import {
@@ -45,6 +47,8 @@ import {
   applyMasterQtyCorrection,
   findMasterPassportByCode,
   getMasterPassportQcDetail,
+  getMasterSelfOperationSteps,
+  performMasterSelfOperation,
   recordMasterPassportDefect,
   returnMasterPassportToCell,
   returnMasterPassportToRework,
@@ -223,6 +227,63 @@ export async function findMasterPassportByCodeAction(
   }
   try {
     const result = await findMasterPassportByCode(parsed.data.code);
+    return { ok: true, result };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// «Выполнить операцию самой»: мастер работает руками.
+// ---------------------------------------------------------------------------
+
+export type MasterSelfOperationStepsResult =
+  | { ok: true; result: MasterSelfOperationStepsDto }
+  | { ok: false; error: string; errorRequestId?: string };
+
+/**
+ * Шаги маршрута для режима «выполнить операцию самой». Read-only —
+ * `revalidatePath` не нужен.
+ */
+export async function fetchMasterSelfOperationStepsAction(
+  passportId: string,
+): Promise<MasterSelfOperationStepsResult> {
+  if (!passportId) return { ok: false, error: 'Не передан паспорт.' };
+  try {
+    const result = await getMasterSelfOperationSteps(passportId);
+    return { ok: true, result };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/**
+ * Мастер выполнила операцию сама. Паспорт двигается по маршруту теми же
+ * событиями, что и у швеи, поэтому ревалидируем `/master` — карточки
+ * вызовов и доска «Движение тиража» обязаны это увидеть.
+ */
+export async function masterSelfOperationAction(
+  passportId: string,
+  raw: unknown,
+): Promise<MasterActionResult> {
+  const parsed = MasterSelfOperationSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Выберите операцию маршрута.',
+    };
+  }
+  try {
+    const result = await performMasterSelfOperation(passportId, parsed.data);
+    revalidatePath('/master');
     return { ok: true, result };
   } catch (e) {
     return {

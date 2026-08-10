@@ -13,6 +13,8 @@ import type {
   RouteWorkPermitDto,
   FindMasterPassportByCodeResultDto,
   MasterActionResultDto,
+  MasterSelfOperationDto,
+  MasterSelfOperationStepsDto,
   ReturnPassportToCellDto,
   SetRouteStepDto,
   TransferPassportDto,
@@ -75,6 +77,36 @@ export function findMasterPassportByCode(
   return apiFetch<FindMasterPassportByCodeResultDto>(
     `/master-actions/find-passport-by-code`,
     { method: 'POST', body: { code } },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// «Выполнить операцию самой»
+// ---------------------------------------------------------------------------
+
+/**
+ * Шаги маршрута заказа с доступностью для взятия на себя, станками и
+ * флагом `pieceworkPaid` (см. `MasterActionsService.
+ * listSelfOperationSteps`). Read-only — кэш не нужен, состояние
+ * паспорта меняется каждым сканом в цехе.
+ */
+export function getMasterSelfOperationSteps(
+  passportId: string,
+): Promise<MasterSelfOperationStepsDto> {
+  return apiFetch<MasterSelfOperationStepsDto>(
+    `/master-actions/passports/${encodeURIComponent(passportId)}/self-operation-steps`,
+    { cache: 'no-store' },
+  );
+}
+
+/** Мастер выполнила операцию маршрута сама (одно действие вместо смены и двух сканов). */
+export function performMasterSelfOperation(
+  passportId: string,
+  body: MasterSelfOperationDto,
+): Promise<MasterActionResultDto> {
+  return apiFetch<MasterActionResultDto>(
+    `/master-actions/passports/${encodeURIComponent(passportId)}/self-operation`,
+    { method: 'POST', body },
   );
 }
 

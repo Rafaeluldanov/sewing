@@ -827,6 +827,214 @@ describeWithDb('integration — master actions (Stage 2)', () => {
     expect(res.body?.code).toBe('PASSPORT_TERMINAL');
   });
 
+  // -------------------------------------------------------------------------
+  // 9. SELF-OPERATION — мастер выполняет операцию сама
+  // -------------------------------------------------------------------------
+
+  test('self-operation-steps: доступность шагов = гейт швеи, станок из операции', async () => {
+    const { passportId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get(`/api/master-actions/passports/${passportId}/self-operation-steps`)
+      .set('Cookie', cookies.master)
+      .expect(200);
+
+    expect(res.body.steps).toHaveLength(4);
+    const byOp = (id: string) =>
+      res.body.steps.find(
+        (s: { operationId: string }) => s.operationId === id,
+      );
+
+    // Текущий шаг маршрута — можно взять на себя, станок подставится сам.
+    const current = byOp(seed.operations.SEW_OVERLOCK_1.id);
+    expect(current).toMatchObject({ isCurrent: true, available: true });
+    expect(current.equipment).toHaveLength(1);
+    expect(current.equipment[0].code).toBe('overlock-01');
+
+    // Шаг раньше текущего и шаги за незакрытым — недоступны, и каждый
+    // объясняет причину словами (их UI показывает прямо в списке).
+    const backward = byOp(seed.operations.CUT_DIVISION.id);
+    expect(backward.available).toBe(false);
+    expect(backward.blockedReason).toBeTruthy();
+    const qc = byOp(seed.operations.QC.id);
+    expect(qc.available).toBe(false);
+    expect(qc.blockedReason).toBeTruthy();
+  });
+
+  test('self-operation: паспорт едет по маршруту, смена закрывается, оклад не трогаем', async () => {
+    const { passportId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+    // Мастер на окладе — как на проде (`compensationType = SALARY`).
+    await t.prisma.employee.update({
+      where: { id: seed.employees.master.id },
+      data: { compensationType: 'SALARY', salaryPerHour: 300 },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        comment: 'пришила пуговицы сама',
+      })
+      .expect(201);
+
+    expect(res.body.passport).toMatchObject({
+      id: passportId,
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+    expect(res.body.passport.currentOperation?.id).toBe(
+      seed.operations.SEW_OVERLOCK_1.id,
+    );
+
+    // События — те же, что у швеи, и от имени мастера.
+    const events = await t.prisma.passportEvent.findMany({
+      where: { passportId },
+      orderBy: { createdAt: 'asc' },
+      select: { type: true, employeeId: true, operationId: true },
+    });
+    expect(events.map((e) => e.type)).toEqual([
+      'ISSUED_TO_EMPLOYEE',
+      'OPERATION_FINISHED',
+    ]);
+    for (const e of events) {
+      expect(e.employeeId).toBe(seed.employees.master.id);
+      expect(e.operationId).toBe(seed.operations.SEW_OVERLOCK_1.id);
+    }
+
+    // Техническая смена: заведена и закрыта тем же действием.
+    const shifts = await t.prisma.shiftSession.findMany({
+      where: { employeeId: seed.employees.master.id },
+    });
+    expect(shifts).toHaveLength(1);
+    expect(shifts[0]!.endedAt).not.toBeNull();
+    expect(shifts[0]!.operationId).toBe(seed.operations.SEW_OVERLOCK_1.id);
+
+    // Ключевое решение: окладную синхронизацию не дёргаем, иначе мастер
+    // на почасовом окладе получила бы повременные часы за минуту работы.
+    const salary = await t.prisma.salaryEntry.count({
+      where: { employeeId: seed.employees.master.id },
+    });
+    expect(salary).toBe(0);
+    // И сдельного начисления окладнику тоже нет (см. `isPieceworkEligible`).
+    const earnings = await t.prisma.operationEntry.count({
+      where: { employeeId: seed.employees.master.id },
+    });
+    expect(earnings).toBe(0);
+
+    const audits = await t.prisma.auditLog.findMany({
+      where: { entityType: 'PASSPORT', entityId: passportId },
+    });
+    const selfAudit = audits.find(
+      (a) => a.event === 'MASTER_PASSPORT_SELF_OPERATION',
+    );
+    expect(selfAudit).toBeTruthy();
+    const payload = selfAudit!.payload as {
+      operationName: string;
+      technicalShift: boolean;
+      comment: string;
+    };
+    expect(payload.technicalShift).toBe(true);
+    expect(payload.comment).toBe('пришила пуговицы сама');
+  });
+
+  test('self-operation: операция вне маршрута заказа → 409', async () => {
+    const { passportId } = await setupPassport({ currentEmployeeId: null });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({ operationId: seed.operations.IRONING.id })
+      .expect(409);
+    expect(res.body?.code).toBe('ROUTE_STEP_NOT_IN_SNAPSHOT');
+  });
+
+  test('self-operation: несколько станков у операции → нужен выбор', async () => {
+    const { passportId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+    // Второй станок на ту же операцию — выбирать за мастера нельзя:
+    // по `equipmentId` события считают загрузку оборудования.
+    const second = await t.prisma.equipment.create({
+      data: {
+        code: 'overlock-02',
+        name: 'Оверлок 02',
+        qrCode: 'equipment:overlock-02-test',
+        active: true,
+        allowedOperations: {
+          create: [
+            { operationId: seed.operations.SEW_OVERLOCK_1.id, isActive: true },
+          ],
+        },
+      },
+    });
+
+    const conflict = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({ operationId: seed.operations.SEW_OVERLOCK_1.id })
+      .expect(409);
+    expect(conflict.body?.code).toBe('MASTER_SELF_OPERATION_EQUIPMENT_REQUIRED');
+
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        equipmentId: second.id,
+      })
+      .expect(201);
+
+    const finished = await t.prisma.passportEvent.findFirst({
+      where: { passportId, type: 'OPERATION_FINISHED' },
+      select: { equipmentId: true },
+    });
+    expect(finished?.equipmentId).toBe(second.id);
+  });
+
+  test('self-operation: чужая открытая смена не закрывается → 409', async () => {
+    const { passportId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+    const openShift = await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees.master.id,
+        equipmentId: seed.equipment['qc-station-01']!.id,
+        operationId: seed.operations.QC.id,
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({ operationId: seed.operations.SEW_OVERLOCK_1.id })
+      .expect(409);
+    expect(res.body?.code).toBe('MASTER_SELF_OPERATION_SHIFT_BUSY');
+
+    const stillOpen = await t.prisma.shiftSession.findUnique({
+      where: { id: openShift.id },
+    });
+    expect(stillOpen?.endedAt).toBeNull();
+  });
+
+  test('self-operation: швее ручка недоступна → 403', async () => {
+    const { passportId } = await setupPassport({ currentEmployeeId: null });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.seamstress)
+      .send({ operationId: seed.operations.SEW_OVERLOCK_1.id })
+      .expect(403);
+  });
+
   test('find-passport-by-code возвращает номер ПАСПОРТА, а не заказа', async () => {
     const { passportId } = await setupPassport({ currentEmployeeId: null });
     const passport = await t.prisma.passport.findUnique({

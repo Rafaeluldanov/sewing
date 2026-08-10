@@ -3,6 +3,7 @@ import { OrderCutIssueRulesModule } from '../order-cut-issue-rules/order-cut-iss
 import { WorkInProgressModule } from '../work-in-progress/work-in-progress.module.js';
 import { QcModule } from '../qc/qc.module.js';
 import { PassportQtyCorrectionsModule } from '../passport-qty-corrections/passport-qty-corrections.module.js';
+import { PassportsModule } from '../passports/passports.module.js';
 import { MasterActionsController } from './master-actions.controller.js';
 import { MasterActionsService } from './master-actions.service.js';
 
@@ -35,6 +36,12 @@ import { MasterActionsService } from './master-actions.service.js';
     WorkInProgressModule,
     QcModule,
     PassportQtyCorrectionsModule,
+    // `PassportsModule` — ради `PassportsService`: действие «выполнить
+    // операцию самой» двигает паспорт тем же каналом, что и швея
+    // (`issueToEmployee` + `completeOperationByEmployee`), а список
+    // шагов маршрута считает доступность через
+    // `previewOperationAvailability`.
+    PassportsModule,
   ],
   controllers: [MasterActionsController],
   providers: [MasterActionsService],

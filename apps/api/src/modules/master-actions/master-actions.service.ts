@@ -22,17 +22,28 @@ import {
   type CreateRouteWorkPermitDto,
   type RevokeRouteWorkPermitDto,
   type RouteWorkPermitDto,
+  type MasterSelfOperationDto,
+  type MasterSelfOperationEquipmentDto,
+  type MasterSelfOperationStepDto,
+  type MasterSelfOperationStepsDto,
 } from '@sewing/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-issue-rules.service.js';
 import { WorkInProgressService } from '../work-in-progress/work-in-progress.service.js';
+import { PassportsService } from '../passports/passports.service.js';
+import { isPieceworkEligible } from '../employees/compensation.js';
 import {
   CellInactiveException,
   CellNotFoundException,
   MasterBackwardRouteRequiresPlacementException,
   MasterOrderHasNoRouteSnapshotException,
   MasterRouteStepNotInSnapshotException,
+  MasterSelfOperationEquipmentNotAllowedException,
+  MasterSelfOperationEquipmentRequiredException,
+  MasterSelfOperationNoEquipmentException,
+  MasterSelfOperationReworkFirstException,
+  MasterSelfOperationShiftBusyException,
   MasterTargetEmployeeInactiveException,
   MasterTargetEmployeeNotFoundException,
   MasterTargetOperationAlreadyFinishedException,
@@ -74,6 +85,10 @@ export class MasterActionsService {
     private readonly audit: AuditService,
     private readonly orderCutIssueRules: OrderCutIssueRulesService,
     private readonly workInProgress: WorkInProgressService,
+    // «Выполнить операцию самой» переиспользует канал швеи
+    // (`issueToEmployee` + `completeOperationByEmployee`) — своей копии
+    // правил маршрута у мастера нет и быть не должно.
+    private readonly passports: PassportsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -921,6 +936,273 @@ export class MasterActionsService {
   }
 
   // -------------------------------------------------------------------------
+  // 6. SELF-OPERATION — мастер выполняет операцию сама
+  // -------------------------------------------------------------------------
+
+  /**
+   * Шаги маршрута заказа с пометкой «можно ли мне взять это на себя».
+   *
+   * Доступность каждого шага считает `PassportsService.
+   * previewOperationAvailability` — тот же расчёт, что и у швеи при
+   * «получить крой». Здесь НЕТ отдельных правил для мастера: если шаг
+   * недоступен, ответ объясняет причину теми же словами, которые
+   * вернула бы сама попытка.
+   */
+  async listSelfOperationSteps(
+    actor: AuthPrincipal,
+    passportId: string,
+  ): Promise<MasterSelfOperationStepsDto> {
+    const passport = await this.loadPassportOrThrow(passportId);
+    this.assertNotTerminal(passport);
+
+    const steps = await this.prisma.orderRouteStep.findMany({
+      where: { orderId: passport.orderId },
+      orderBy: { index: 'asc' },
+      select: {
+        index: true,
+        operationId: true,
+        operation: { select: { id: true, name: true } },
+      },
+    });
+    if (steps.length === 0) {
+      throw new MasterOrderHasNoRouteSnapshotException();
+    }
+
+    const equipmentByOperation = await this.loadEquipmentByOperation(
+      steps.map((s) => s.operationId),
+    );
+
+    const out: MasterSelfOperationStepDto[] = [];
+    for (const s of steps) {
+      const preview = await this.passports.previewOperationAvailability(
+        passport.id,
+        s.operationId,
+      );
+      out.push({
+        index: s.index,
+        operationId: s.operationId,
+        operationName: s.operation.name,
+        isCurrent: s.index === passport.currentRouteStepIndex,
+        finished: preview.code === 'PASSPORT_OPERATION_ALREADY_FINISHED',
+        available: preview.available,
+        blockedCode: preview.code,
+        blockedReason: preview.message,
+        equipment: equipmentByOperation.get(s.operationId) ?? [],
+      });
+    }
+
+    // Сдельная строка создаётся только сотруднику НЕ на чистом окладе
+    // (см. `EarningsService.createPendingForCompletedOperation`). Мастер
+    // на окладе — работа зачтётся в маршрут, но денег не принесёт, и
+    // сказать об этом надо до нажатия, а не после.
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: actor.employeeId },
+      select: { compensationType: true },
+    });
+
+    return {
+      passportId: passport.id,
+      steps: out,
+      pieceworkPaid: employee
+        ? isPieceworkEligible(employee.compensationType)
+        : false,
+    };
+  }
+
+  /**
+   * Выполнить операцию маршрута самой: одно действие вместо связки
+   * «открыть смену → скан → скан».
+   *
+   * Механика — техническая смена. Движение паспорта по маршруту умеет
+   * ровно один канал: `issueToEmployee` + `completeOperationByEmployee`,
+   * и оба требуют открытую `ShiftSession` (операция и рабочее место
+   * берутся из неё). Поэтому здесь смена открывается на время действия
+   * и закрывается сразу после — НАПРЯМУЮ, минуя `ShiftsService.
+   * start/stop`, чтобы не дёргать окладную синхронизацию: мастер на
+   * почасовом окладе иначе получила бы повременные часы за минуту
+   * работы (`SalaryService.syncDailySalary`).
+   *
+   * Никакой своей бизнес-логики маршрута тут нет: все гейты (откат
+   * назад, параллельные группы, ОТК перед ВТО, работа вне маршрута,
+   * подстановки операций) отрабатывают внутри вызываемых методов.
+   *
+   * Чужую открытую смену действие не трогает — это «Начальник цеха»,
+   * стоящий за станком, или мастер с ролью швеи: молча закрыв её, мы
+   * потеряли бы человеку часы.
+   */
+  async performSelfOperation(
+    actor: AuthPrincipal,
+    passportId: string,
+    dto: MasterSelfOperationDto,
+  ): Promise<MasterActionResultDto> {
+    const passport = await this.loadPassportOrThrow(passportId);
+    this.assertNotTerminal(passport);
+    const before = this.snapshot(passport);
+
+    const steps = await this.prisma.orderRouteStep.findMany({
+      where: { orderId: passport.orderId },
+      select: { operationId: true, operation: { select: { name: true } } },
+    });
+    if (steps.length === 0) {
+      throw new MasterOrderHasNoRouteSnapshotException();
+    }
+    const target = steps.find((s) => s.operationId === dto.operationId);
+    if (!target) throw new MasterRouteStepNotInSnapshotException();
+
+    // Открытый возврат от ОТК перехватывает взятие паспорта: он уводит
+    // его на операцию переделки, а не на выбранную (см.
+    // `PassportsService.resolveOperationForPassport`). Молчаливая
+    // подмена операции — худший из возможных исходов для мастера,
+    // поэтому отказываем с именами операций.
+    const openReworks = await this.passports.listOpenReworkOperations(
+      passport.id,
+    );
+    const foreignReworks = openReworks.filter(
+      (r) => r.id !== target.operationId,
+    );
+    if (foreignReworks.length > 0) {
+      throw new MasterSelfOperationReworkFirstException(
+        foreignReworks.map((r) => r.name),
+      );
+    }
+
+    const equipmentId = await this.resolveSelfOperationEquipment(
+      target.operationId,
+      target.operation.name,
+      dto.equipmentId,
+    );
+
+    // Смена: своя открытая на этой же операции — используем её (мастер
+    // могла открыть её как швея); открытая на другой — отказ; нет —
+    // заводим техническую и закроем в `finally`.
+    const openShift = await this.prisma.shiftSession.findFirst({
+      where: { employeeId: actor.employeeId, endedAt: null },
+      select: { id: true, operationId: true },
+    });
+    if (openShift && openShift.operationId !== target.operationId) {
+      const busyOp = await this.prisma.operation.findUnique({
+        where: { id: openShift.operationId },
+        select: { name: true },
+      });
+      throw new MasterSelfOperationShiftBusyException(
+        busyOp?.name ?? openShift.operationId,
+      );
+    }
+
+    let technicalShiftId: string | null = null;
+    if (!openShift) {
+      const created = await this.prisma.shiftSession.create({
+        data: {
+          employeeId: actor.employeeId,
+          equipmentId,
+          operationId: target.operationId,
+        },
+        select: { id: true },
+      });
+      technicalShiftId = created.id;
+    }
+
+    try {
+      await this.passports.issueToEmployee(passport.id, actor.employeeId);
+      await this.passports.completeOperationByEmployee(
+        passport.id,
+        actor.employeeId,
+      );
+    } finally {
+      if (technicalShiftId) {
+        await this.prisma.shiftSession.update({
+          where: { id: technicalShiftId },
+          data: { endedAt: new Date() },
+        });
+      }
+    }
+
+    const updated = await this.loadPassportOrThrow(passport.id);
+    await this.audit.log({
+      event: 'MASTER_PASSPORT_SELF_OPERATION',
+      entityType: 'PASSPORT',
+      entityId: passport.id,
+      employeeId: actor.employeeId,
+      payload: this.auditPayload({
+        comment: dto.comment,
+        operationId: target.operationId,
+        operationName: target.operation.name,
+        equipmentId,
+        technicalShift: technicalShiftId !== null,
+        before,
+        after: this.snapshot(updated),
+      }),
+    });
+
+    this.logger.log(
+      `event=master.self-operation passportId=${passport.id} actor=${actor.employeeId} operationId=${target.operationId} equipmentId=${equipmentId} technicalShift=${technicalShiftId !== null}`,
+    );
+
+    return {
+      passport: this.snapshot(updated),
+      before: this.beforeSnapshot(before),
+    };
+  }
+
+  /**
+   * Станок для события: у операции обычно ровно одно рабочее место
+   * («ПУГОВИЦА» → «ПУГОВИЧНАЯ МАШИНКА»), и спрашивать нечего. Если их
+   * несколько (ПРЯМОСТРОЧКА, ОВЕРЛОК) — выбор за мастером: по
+   * `equipmentId` в событиях считают загрузку оборудования.
+   */
+  private async resolveSelfOperationEquipment(
+    operationId: string,
+    operationName: string,
+    requestedEquipmentId?: string,
+  ): Promise<string> {
+    const links = await this.loadEquipmentByOperation([operationId]);
+    const list = links.get(operationId) ?? [];
+    if (requestedEquipmentId) {
+      const picked = list.find((e) => e.id === requestedEquipmentId);
+      if (!picked) {
+        throw new MasterSelfOperationEquipmentNotAllowedException();
+      }
+      return picked.id;
+    }
+    if (list.length === 0) {
+      throw new MasterSelfOperationNoEquipmentException(operationName);
+    }
+    if (list.length > 1) {
+      throw new MasterSelfOperationEquipmentRequiredException();
+    }
+    return list[0]!.id;
+  }
+
+  /** Активные станки, привязанные к операциям (`EquipmentOperation`). */
+  private async loadEquipmentByOperation(
+    operationIds: string[],
+  ): Promise<Map<string, MasterSelfOperationEquipmentDto[]>> {
+    const rows = await this.prisma.equipmentOperation.findMany({
+      where: {
+        operationId: { in: operationIds },
+        isActive: true,
+        equipment: { active: true },
+      },
+      orderBy: [{ sortOrder: 'asc' }],
+      select: {
+        operationId: true,
+        equipment: { select: { id: true, code: true, name: true } },
+      },
+    });
+    const map = new Map<string, MasterSelfOperationEquipmentDto[]>();
+    for (const r of rows) {
+      const list = map.get(r.operationId) ?? [];
+      list.push({
+        id: r.equipment.id,
+        code: r.equipment.code,
+        name: r.equipment.name,
+      });
+      map.set(r.operationId, list);
+    }
+    return map;
+  }
+
+  // -------------------------------------------------------------------------
   // helpers
   // -------------------------------------------------------------------------
 
@@ -1025,8 +1307,17 @@ export class MasterActionsService {
   }
 
   private auditPayload(input: {
-    reason: string;
+    /**
+     * Причина есть у всех действий, КРОМЕ «выполнить операцию самой»:
+     * там мастер фиксирует свою работу, а не правит чужую, и требовать
+     * оправдание не за что (см. `performSelfOperation`).
+     */
+    reason?: string;
     comment?: string;
+    operationName?: string;
+    equipmentId?: string;
+    /** Смена была заведена самим действием и закрыта следом. */
+    technicalShift?: boolean;
     before: MasterActionPassportSnapshotDto;
     after: MasterActionPassportSnapshotDto;
     targetEmployeeId?: string;
@@ -1056,11 +1347,14 @@ export class MasterActionsService {
       status: s.status,
     });
     const payload: Record<string, unknown> = {
-      reason: input.reason,
       before: compact(input.before),
       after: compact(input.after),
     };
+    if (input.reason) payload.reason = input.reason;
     if (input.comment) payload.comment = input.comment;
+    if (input.operationName) payload.operationName = input.operationName;
+    if (input.equipmentId) payload.equipmentId = input.equipmentId;
+    if (input.technicalShift) payload.technicalShift = true;
     if (input.targetEmployeeId) payload.targetEmployeeId = input.targetEmployeeId;
     if (input.cellId) payload.cellId = input.cellId;
     if (input.cellCode) payload.cellCode = input.cellCode;

@@ -1018,8 +1018,20 @@ DTO: `packages/shared/src/master-calls.ts`.
 | POST  | `/api/master-actions/passports/:id/return-to-cell`                    | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `ReturnPassportToCellDto` (`{ cellId, reason }`). Возвращает паспорт в активную ячейку. |
 | POST  | `/api/master-actions/passports/:id/set-route-step`                    | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `SetRouteStepDto` (`{ index, reason }`). Назначает паспорт на конкретный шаг snapshot маршрута. |
 | POST  | `/api/master-actions/find-passport-by-code`                           | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `FindMasterPassportByCodeDto` (`{ code }` — QR / номер / id). Read-only pre-step для кнопки «Сканировать паспорт» на `/master`: резолвит паспорт перед открытием `PassportActionsSheet`. Возвращает `FindMasterPassportByCodeResultDto` (НЕ `MasterActionResultDto`, audit не пишется). |
+| GET   | `/api/master-actions/passports/:id/self-operation-steps`              | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Read-only. Шаги снимка маршрута заказа с доступностью для взятия на себя (`available` + `blockedReason` — расчёт `PassportsService.previewOperationAvailability`, тот же гейт, что у «получить крой»), станками операции (`EquipmentOperation`) и флагом `pieceworkPaid`. Возвращает `MasterSelfOperationStepsDto`. |
+| POST  | `/api/master-actions/passports/:id/self-operation`                    | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `MasterSelfOperationDto` (`{ operationId, equipmentId?, comment? }`; `reason` НЕ требуется — мастер фиксирует свою работу). Мастер выполнила операцию маршрута сама: техническая смена → `issueToEmployee` → `completeOperationByEmployee` → закрытие смены. Audit `MASTER_PASSPORT_SELF_OPERATION`. |
 
 DTO: `packages/shared` (re-export через `@sewing/shared`).
+
+«Выполнить операцию самой» (`self-operation`) — единственное действие
+мастера, которое ДВИГАЕТ паспорт по маршруту, а не правит его атрибуты.
+Своей копии правил маршрута у него нет: оба шага идут через
+`PassportsService`, поэтому гейты (откат назад, параллельные группы, ОТК
+перед ВТО, работа вне маршрута, подстановки операций) и начисления
+работают ровно так же, как у швеи на `/work`. Смена заводится напрямую и
+закрывается в `finally`, минуя `ShiftsService.start/stop`: штатный старт
+синхронизирует оклад, и мастер на почасовой ставке получила бы
+повременные часы за минуту работы.
 
 ---
 
