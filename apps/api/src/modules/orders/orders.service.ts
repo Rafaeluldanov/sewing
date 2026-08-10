@@ -114,6 +114,17 @@ import { TechCardsService } from '../tech-cards/tech-cards.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { WorkshopNeedsService } from '../workshop-needs/workshop-needs.service.js';
 
+/**
+ * Единица НОРМЫ поразмерного параметра лекала. В ячейках
+ * `PatternItemSizeParameterValue` всегда лежат погонные метры на изделие,
+ * а `parameter.unit` («кг» у трикотажа) описывает единицу ЗАКУПКИ — во что
+ * эти метры пересчитать через ширину и плотность. Константа общая для
+ * `retryLinearNormMatch` (расщепляет живую строку) и для посева строки
+ * спецификации из параметра: разойдись они — строка потеряла бы источник
+ * нормы на первом же пересчёте.
+ */
+const LINEAR_NORM_UNIT = 'м пог.';
+
 type OrderWithItems = Prisma.OrderGetPayload<{
   include: {
     items: { include: { size: true } };
@@ -5156,10 +5167,9 @@ export class OrdersService {
     const autoNormUnit = new Map<string, string>();
     const unmatched = matchInput.filter((l) => !normsByLine.has(l.key));
     if (unmatched.length === 0) return autoNormUnit;
-    const LINEAR_INPUT_UNIT = 'м пог.';
     const retryInput = unmatched.map((l) => ({
       ...l,
-      normUnit: LINEAR_INPUT_UNIT,
+      normUnit: LINEAR_NORM_UNIT,
     }));
     // Матчим ТОЛЬКО против поразмерных источников: плоскую норму («Молния,
     // 1 шт») расщеплять нечем и незачем.
@@ -5168,7 +5178,7 @@ export class OrdersService {
     );
     const retry = matchPatternNormSources(retryInput, linearSources);
     for (const [key, source] of retry) {
-      autoNormUnit.set(key, LINEAR_INPUT_UNIT);
+      autoNormUnit.set(key, LINEAR_NORM_UNIT);
       normsByLine.set(key, source);
     }
     return autoNormUnit;
@@ -5782,6 +5792,99 @@ export class OrdersService {
           qtySourceRef: derivedNorm ? (normSource?.sourceId ?? null) : null,
         });
       }
+
+      // ---------------------------------------------------------------------
+      // Параметр лекала, под который строки в техкарте НЕТ. Типовой случай —
+      // роль `RIB`: «Рибана»/«Кашкорсе» ведутся поразмерными метрами в
+      // карточке номенклатуры, а техкарта их не описывает вовсе.
+      //
+      // До этой ветки такой материал в спецификацию не попадал — и был
+      // невидим в расцветке: показать нечем, править нечем, убрать из заказа
+      // нечем. В потребность он при этом шёл (category-driven расчёт читает
+      // параметры лекала напрямую), и состав заказа переставал быть истиной:
+      // менеджер оставил 9 строк, в закупку уезжало 11.
+      //
+      // Сеем параметр обычной строкой снимка. Дальше она живёт как все:
+      // recompute освежает ей норму (`qtySource = NOMENCLATURE`), расчёт
+      // потребности находит её обогащением по роли, а удаление ГАСИТ
+      // потребность (гейт в ветке `LINEAR_M_BY_SIZE`
+      // `WorkshopNeedsService.calculateForOrder`).
+      //
+      // ТОЛЬКО `LINEAR_M_BY_SIZE`. Плоская норма фурнитуры без строки в
+      // спецификации уже гасится тем же гейтом (`isNormRemovedFromSpec`), а
+      // площадь закрывает роль целиком — сеять их значит менять числа там,
+      // где никто не просил.
+      //
+      // Ветка живёт в МАТЕРИАЛИЗАЦИИ, не в recompute, и это принципиально:
+      // recompute не ходит в шаблон, поэтому удалённая менеджером строка не
+      // возвращается — ровно как у строк техкарты.
+      // ---------------------------------------------------------------------
+      const takenSourceIds = new Set(
+        [...normsByLine.values()].map((s) => s.sourceId),
+      );
+      const maxLineSortOrder = lines.materialLines.reduce(
+        (max, l) => Math.max(max, l.sortOrder),
+        0,
+      );
+      let seededOrdinal = 0;
+      for (const source of normSources) {
+        if (source.kind !== 'LINEAR_M_BY_SIZE') continue;
+        if (takenSourceIds.has(source.sourceId)) continue;
+        const seededNorm = derivePatternNormPerUnit(source, g.sizePlan);
+        if (!seededNorm) continue;
+        seededOrdinal += 1;
+        // Единица закупки — из параметра («кг» у трикотажа), единица нормы —
+        // всегда погонные метры. То же расщепление, что `retryLinearNormMatch`
+        // делает живой строке, только здесь строку заводим мы сами.
+        const seededUnit = (source.unit ?? '').trim() || LINEAR_NORM_UNIT;
+        const seededQtyPerUnit = new Prisma.Decimal(seededNorm.qtyPerUnit);
+        data.push({
+          orderId,
+          orderVariantId: g.variantId,
+          variantColor: g.variantColor,
+          // Строки шаблона под этот материал нет — связывать не с чем.
+          sourceTechCardLineId: null,
+          sortOrder: maxLineSortOrder + seededOrdinal * 10,
+          name: source.label ?? source.roleKey,
+          unit: seededUnit,
+          normUnit: LINEAR_NORM_UNIT,
+          qtyPerUnit: seededQtyPerUnit,
+          // Ширины и плотности у параметра нет, поэтому пересчёт метров в
+          // «кг» невозможен и `computeLineTotalQty` честно оставит метры.
+          // Заполнить их менеджер теперь может прямо в строке расцветки —
+          // ровно этого и просит предупреждение расчёта потребности.
+          totalQty: this.computeLineTotalQty({
+            qtyPerUnit: seededQtyPerUnit,
+            normUnit: LINEAR_NORM_UNIT,
+            unit: seededUnit,
+            qty: g.qty,
+            plannedWidthCm: null,
+            densityGsm: null,
+          }),
+          note: null,
+          materialRole: source.roleKey,
+          fabricType: source.label,
+          densityGsm: null,
+          plannedWidthCm: null,
+          // Ткань красится в цвет расцветки — то же правило, что у полотна и
+          // дублерина, которые приходят из техкарты с `ORDER_COLOR`.
+          colorRule: 'ORDER_COLOR',
+          fixedColorText: null,
+          resolvedColorText: resolveColorText('ORDER_COLOR', null, g.color),
+          requiresColorSelection: false,
+          selectedColorText: null,
+          hardwareSizeText: null,
+          hardwareMaterialText: null,
+          materialImageUrl: null,
+          materialImageOriginalFileName: null,
+          subtypeKey: null,
+          characteristics: Prisma.DbNull,
+          parameterBindings: Prisma.DbNull,
+          sourceTechCardId: g.techCardId,
+          qtySource: 'NOMENCLATURE',
+          qtySourceRef: source.sourceId,
+        });
+      }
     }
 
     // Сносим строки ТОЛЬКО тех групп, которые перематериализуем, плюс группы,
@@ -5813,6 +5916,32 @@ export class OrdersService {
     }
     if (data.length > 0) {
       await tx.orderMaterialRequirement.createMany({ data });
+    }
+
+    // Отметка «снимок собран новым правилом»: в спецификацию материализуются
+    // и поразмерные параметры лекала, а не только строки техкарты. По ней
+    // расчёт потребности понимает, что отсутствие строки под параметр — это
+    // «материал убрали из заказа», а не «строки тут никогда не было».
+    //
+    // Вывести признак из самих данных нельзя: удали менеджер все посеянные
+    // строки, он исчез бы вместе с ними и материал вернулся бы в закупку на
+    // первом же пересчёте. Исторические заказы остаются с `null` — их снимок
+    // собран старым правилом, и гейт к ним не применяется.
+    //
+    // `updateMany` с `null` в `where` — чтобы отметка ставилась ровно один раз
+    // и не дёргала `updatedAt` заказа на каждой пересборке.
+    //
+    // Отметка на ЗАКАЗЕ, а не на группе: если у старого заказа
+    // перематериализуется одна расцветка (сменили её техкарту), правило
+    // включается сразу на весь заказ, и вторая расцветка со старым снимком
+    // потеряет параметр без строки. Случай узкий (только заказы на стадии
+    // расчёта, только при явной смене техкарты) и разрешается в сторону
+    // нового правила «состав заказа — истина», поэтому колонку не дробим.
+    if (groupsToMaterialize.length > 0) {
+      await tx.order.updateMany({
+        where: { id: orderId, specPatternParamsSeededAt: null },
+        data: { specPatternParamsSeededAt: new Date() },
+      });
     }
   }
 

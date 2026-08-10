@@ -1444,6 +1444,20 @@ export class WorkshopNeedsService {
       });
       linearByParam.set(v.categoryParameterId, list);
     }
+    // Сколько поразмерных параметров делят одну роль. Нужно гейту «убрано из
+    // спецификации» ниже: пока параметр в роли ОДИН, его строку в заказе
+    // можно узнать по роли; как только их несколько («Рибана» + «Кашкорсе»,
+    // обе `RIB`), поиск по роли отдаёт соседнюю строку — и связь берётся
+    // только явная, через `qtySourceRef`.
+    const linearParamCountByRole = new Map<string, number>();
+    for (const values of linearByParam.values()) {
+      const role = values[0]?.roleKey;
+      if (!role) continue;
+      linearParamCountByRole.set(
+        role,
+        (linearParamCountByRole.get(role) ?? 0) + 1,
+      );
+    }
     let methodMaterialArea = 0;
     let methodLinearBySize = 0;
 
@@ -1604,6 +1618,46 @@ export class WorkshopNeedsService {
             })
           : null;
         if (linearMatched) enrichedLineIds.add(linearMatched.id);
+        // Материал убрали из спецификации заказа → потребности по нему нет.
+        // Зеркало гейта у норм фурнитуры выше: правка состава, сделанная
+        // менеджером, обязана быть конечной — иначе удалённая строка
+        // возвращалась бы в закупку на ближайшем пересчёте, ведь параметр
+        // живёт в номенклатуре и один на все заказы.
+        //
+        // Гейт применяется ТОЛЬКО к заказам, чья спецификация собрана новым
+        // правилом (`specPatternParamsSeededAt` — параметры лекала посеяны в
+        // снимок отдельными строками). У исторических заказов такой строки не
+        // было и быть не могло: её отсутствие означает не «убрали», а
+        // «система её не заводила». Гасить по ней рибану значит молча вынуть
+        // материал из закупки уже посчитанного заказа.
+        //
+        // Владельца строки ищем ЯВНОЙ привязкой (`qtySourceRef`), и только
+        // при единственном параметре в роли доверяем поиску по роли:
+        // «Рибана» и «Кашкорсе» обе `RIB`, и удали менеджер одну —
+        // `findEnrichmentLine` отдал бы соседнюю (единственный кандидат по
+        // роли), удаление перестало бы что-либо значить.
+        const linearHead = values[0];
+        if (order.specPatternParamsSeededAt != null && linearHead) {
+          const ownerLine =
+            g.sourceLines.find(
+              (l) => l.qtySourceRef === categoryParameterId,
+            ) ??
+            ((linearParamCountByRole.get(linearHead.roleKey) ?? 0) <= 1
+              ? linearMatched
+              : null);
+          if (
+            this.isNormRemovedFromSpec({
+              norm: {
+                id: categoryParameterId,
+                labelSnapshot: linearHead.labelSnapshot,
+              },
+              sourceLines: g.sourceLines,
+              matchedLine: ownerLine,
+            })
+          ) {
+            continue;
+          }
+        }
         const computedLinear = this.computeLinearBySizeParameter({
           categoryParameterId,
           values,

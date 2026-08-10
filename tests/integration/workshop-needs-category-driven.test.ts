@@ -890,4 +890,178 @@ describeWithDb('integration — workshop needs category-driven', () => {
     expect(fabricAfter!.unit).toBe('кг');
     expect(Number(fabricAfter!.calculatedQty)).toBeCloseTo(39.96, 4);
   });
+
+  // -------------------------------------------------------------------------
+  // Scenario: параметр лекала, под который строки в техкарте НЕТ
+  // -------------------------------------------------------------------------
+
+  /**
+   * Засада, ради которой тест написан (заказ 02-00015, 10.08.2026).
+   *
+   * «Рибана» и «Кашкорсе» ведутся поразмерными метрами в карточке
+   * номенклатуры, а техкарта их не описывает — строк под них там нет. До
+   * правки такой материал в спецификацию заказа не попадал: в расцветке его
+   * не видно, убрать из заказа нечем — а в потребность он шёл. Менеджер
+   * оставил в составе 9 строк, в закупку уезжало 11, и вернуть их к согласию
+   * было нечем.
+   *
+   * Обе роли `RIB` намеренно: пока параметр в роли один, его строку можно
+   * узнать по роли; как только их два, поиск по роли отдаёт соседнюю строку,
+   * и удаление одного параметра перестало бы что-либо значить.
+   */
+  test('параметр лекала без строки в техкарте: виден в составе заказа и гасится его удалением', async () => {
+    catCounter += 1;
+    const catRes = await request(t.app.getHttpServer())
+      .post('/api/pattern-categories')
+      .set('Cookie', t.adminCookie)
+      .send({
+        name: `Поло rib ${catCounter}`,
+        iconKey: 'HOODIE',
+        parameters: [
+          {
+            roleKey: 'MAIN_FABRIC',
+            label: 'Основное полотно',
+            inputType: 'LINEAR_M_BY_SIZE',
+            unit: 'м пог.',
+          },
+          {
+            roleKey: 'RIB',
+            label: 'Рибана',
+            inputType: 'LINEAR_M_BY_SIZE',
+            unit: 'м пог.',
+          },
+          {
+            roleKey: 'RIB',
+            label: 'Кашкорсе',
+            inputType: 'LINEAR_M_BY_SIZE',
+            unit: 'м пог.',
+          },
+        ],
+      })
+      .expect(201);
+    const cat: CategoryWithParams = {
+      id: catRes.body.id,
+      parameters: catRes.body.parameters,
+    };
+    const main = findParam(cat, 'Основное полотно');
+    const ribana = findParam(cat, 'Рибана');
+    const kashkorse = findParam(cat, 'Кашкорсе');
+
+    const patternId = await createPattern({
+      categoryId: cat.id,
+      article: 'P-CAT-RIB',
+    });
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/size-parameter-values`)
+      .set('Cookie', t.adminCookie)
+      .send({
+        values: [
+          { categoryParameterId: main.id, sizeId: seed.sizes.M, value: '1.2' },
+          { categoryParameterId: ribana.id, sizeId: seed.sizes.M, value: '0.2' },
+          {
+            categoryParameterId: kashkorse.id,
+            sizeId: seed.sizes.M,
+            value: '0.3',
+          },
+        ],
+      })
+      .expect(200);
+
+    // Техкарта описывает ТОЛЬКО полотно — рибаны и кашкорсе в ней нет.
+    const tcId = await createTechCard({
+      name: 'TC rib-less',
+      materialLines: [
+        {
+          name: 'Кулирка',
+          unit: 'м пог.',
+          qtyPerUnit: '1',
+          materialRole: 'MAIN_FABRIC',
+          fabricType: 'Кулирка',
+          densityGsm: 180,
+          plannedWidthCm: 185,
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
+    const orderId = await createOrder({
+      techCardId: tcId,
+      patternItemId: patternId,
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+      color: 'серый',
+    });
+
+    // 1. Состав заказа: параметры без строки техкарты посеяны наравне с ней.
+    const specRes = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/tech-card-parameters`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+    const specLines = (
+      specRes.body.variants as Array<{
+        lines: Array<{
+          id: string;
+          name: string;
+          unit: string;
+          normUnit: string | null;
+          materialRole: string | null;
+          isManual: boolean;
+          qtySource: string | null;
+        }>;
+      }>
+    ).flatMap((g) => g.lines);
+    expect(specLines.map((l) => l.name).sort()).toEqual([
+      'Кашкорсе',
+      'Кулирка',
+      'Рибана',
+    ]);
+    const ribLine = specLines.find((l) => l.name === 'Рибана')!;
+    expect(ribLine.materialRole).toBe('RIB');
+    // Посеяла её пересборка, а не человек: шаблон о ней не знает, но и
+    // «ручной» она не является — иначе пересчёт обходил бы её стороной.
+    expect(ribLine.isManual).toBe(false);
+    expect(ribLine.qtySource).toBe('NOMENCLATURE');
+    // Единица закупки — из параметра, единица нормы — погонные метры.
+    expect(ribLine.normUnit).toBe('м пог.');
+
+    // 2. Потребность: по одной строке на параметр, без дублей от посева.
+    const calc = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+    const ribNeeds = (
+      calc.body.needs as Array<{
+        materialRole: string | null;
+        sourceName: string;
+        calculatedQty: string;
+      }>
+    ).filter((n) => n.materialRole === 'RIB');
+    expect(ribNeeds.map((n) => n.sourceName).sort()).toEqual([
+      'Кашкорсе',
+      'Рибана',
+    ]);
+    expect(
+      Number(ribNeeds.find((n) => n.sourceName === 'Рибана')!.calculatedQty),
+    ).toBeCloseTo(20, 4);
+
+    // 3. Менеджер убирает «Кашкорсе» из состава заказа.
+    const kashLine = specLines.find((l) => l.name === 'Кашкорсе')!;
+    await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/tech-card/lines/${kashLine.id}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+
+    // 4. Пересчёт правку УВАЖАЕТ: кашкорсе не возвращается, рибана на месте.
+    const after = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+    const ribAfter = (
+      after.body.needs as Array<{
+        materialRole: string | null;
+        sourceName: string;
+      }>
+    ).filter((n) => n.materialRole === 'RIB');
+    expect(ribAfter.map((n) => n.sourceName)).toEqual(['Рибана']);
+  });
 });
