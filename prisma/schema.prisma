@@ -4529,6 +4529,15 @@ model PatternItem {
   /// `PatternMaterialArea` для погонных метров НЕ используется —
   /// там семантика про areaM2 (см. ТЗ §5).
   sizeParameterValues PatternItemSizeParameterValue[]
+  /// Этап 1 «Материалы в номенклатуре» (план «техкарты → номенклатура»):
+  /// состав материалов изделия — то, что раньше жило ТОЛЬКО в строках
+  /// техкарты (`TechCardMaterialLine`). Аддитивно: техкарты продолжают
+  /// работать, пока заказ не переключён на номенклатуру (этап 3).
+  materialSpecLines   PatternItemMaterialLine[]
+  /// Этап 1 «Материалы в номенклатуре»: слоты-параметры спецификации
+  /// (аналог `TechCardParameter`) — значения вводятся в заказе, на
+  /// каждой расцветке.
+  specParameters      PatternItemSpecParameter[]
   /// Soft-pattern MVP (этап 2 «Лекала»): обратная связь от заказов,
   /// у которых выбрано это лекало. На API на этапе 2 не используется
   /// (заказ читает лекало через `Order.patternItem`); связь нужна,
@@ -4943,6 +4952,129 @@ model PatternItemSizeParameterValue {
   @@index([categoryParameterId])
   @@index([sizeId])
   @@index([roleKey])
+}
+
+/// Этап 1 плана «техкарты → номенклатура» (анализ 11.08.2026): строка
+/// СОСТАВА МАТЕРИАЛОВ в карточке номенклатуры — зеркало
+/// `TechCardMaterialLine` один-в-один по колонкам. Дублирование
+/// сознательное и временное: пока заказы материализуют снапшот из
+/// техкарты, обе таблицы живут параллельно; на этапе 3 источником
+/// снапшота (`OrderMaterialRequirement`) становится эта таблица, на
+/// этапе 5 `TechCard*` удаляются.
+///
+/// Отличия от техкарты:
+///   - привязка к ИЗДЕЛИЮ (`patternItemId`), а не к переиспользуемому
+///     шаблону — спецификация одна на изделие (решение §1 анализа);
+///   - `normUnit` редактируется прямо в форме (в техкарте колонка
+///     существовала, но заполнялась только «Вынести в справочник»);
+///   - НОРМА (`qtyPerUnit`) здесь — фолбэк: первичный источник нормы —
+///     поразмерные значения карточки (`PatternMaterialArea` /
+///     `PatternItemSizeParameterValue` / `PatternItemParameterNorm`),
+///     сопоставляемые со строкой по роли/имени, как в
+///     `matchPatternNormSources` (`@sewing/shared/pattern-norms`).
+///
+/// Full-replace через `PUT /api/patterns/:id/material-spec`
+/// (deleteMany + createMany, id пересоздаются при каждом сейве — ровно
+/// как `TechCardsService.update`); поэтому привязка «ячейка → параметр»
+/// лежит JSON-ом `parameterBindings`, а не FK-таблицей.
+model PatternItemMaterialLine {
+  id            String @id @default(cuid())
+  patternItemId String
+  /// Порядок отображения; backend нормализует как `(i + 1) * 10`.
+  sortOrder     Int
+  /// Свободное человекочитаемое имя материала. Участвует в
+  /// сопоставлении с нормами номенклатуры (`matchPatternNormSources`).
+  name          String
+  /// Единица ЗАКУПКИ (кг, м пог., шт). Семантика идентична
+  /// `TechCardMaterialLine.unit` — уезжает в снапшот заказа как
+  /// `OrderMaterialRequirement.unit` (этап 3).
+  unit          String
+  /// Единица НОРМЫ, если отличается от закупочной («м пог.» при закупке
+  /// в «кг»). `null` — норма и закупка в одной единице.
+  normUnit      String?
+  /// Норма расхода на одну единицу изделия в `normUnit ?? unit` —
+  /// ФОЛБЭК на случай, когда поразмерного источника в карточке нет.
+  qtyPerUnit    Decimal @db.Decimal(12, 4)
+  note          String?
+  /// Роль материала из `PATTERN_CATEGORY_PARAMETER_GROUPS` (валидация
+  /// списком `TECH_CARD_MATERIAL_ROLE_KEYS`, без Prisma enum — список
+  /// расширяется без миграции).
+  materialRole  String?
+  /// Характеристика полотна/материала (кулирка, двунитка, …) —
+  /// свободная строка + пополняемый справочник
+  /// `MaterialCharacteristicOption`.
+  fabricType    String?
+  /// Legacy-зеркала характеристик (как у техкарты): downstream читает
+  /// плотность/ширину из плоских колонок. Источник истины —
+  /// `characteristics`, сервис зеркалит при записи.
+  densityGsm     Int?
+  plannedWidthCm Int?
+  /// Правило выбора цвета — `ORDER_COLOR` / `FIXED_COLOR` / `NO_COLOR` /
+  /// `ORDER_SELECTED_COLOR`. Именно оно даёт расцветкам заказа разные
+  /// итоговые цвета при ОДНОЙ спецификации изделия (решение §1).
+  colorRule      String?
+  /// Только при `colorRule = FIXED_COLOR`; сервис зачищает для других
+  /// правил.
+  fixedColorText String?
+  /// Фурнитура (роль PACKAGING): размер/материал. Для других ролей
+  /// сервис зачищает в null.
+  hardwareSizeText     String?
+  hardwareMaterialText String?
+  /// Изображение строки материала (URL + оригинальное имя файла).
+  materialImageUrl              String?
+  materialImageOriginalFileName String?
+  /// Ключ подтипа материала (`MATERIAL_SUBTYPES`,
+  /// `@sewing/shared/material-characteristics`).
+  subtypeKey      String?
+  /// Значения характеристик подтипа `{ ключ: значение }`. Цвет здесь
+  /// НЕ хранится — за него отвечает `colorRule`/`fixedColorText`.
+  characteristics Json?
+  /// Привязка ячеек строки к параметрам спецификации —
+  /// `{ "char:density": "main_density" }`, ячейки из whitelist
+  /// `TECH_CARD_PARAMETER_TARGETS`. JSON, а не таблица — строки
+  /// пересоздаются при каждом сейве (см. JSDoc модели).
+  parameterBindings Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  patternItem PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
+
+  @@index([patternItemId, sortOrder])
+  @@index([materialRole])
+}
+
+/// Этап 1 плана «техкарты → номенклатура»: ПАРАМЕТР СПЕЦИФИКАЦИИ —
+/// именованный слот, подставляемый в ячейку строки материала
+/// («Полотно основное → плотность»). Зеркало `TechCardParameter`;
+/// значение по-прежнему вводится в ЗАКАЗЕ, на каждой расцветке
+/// (`OrderTechCardParameter` — снапшотный слой не меняется).
+///
+/// НЕ ПУТАТЬ с `PatternCategoryParameter`: тот про НОРМЫ РАСХОДА ПО
+/// РАЗМЕРАМ (ось = размер), здесь — слот в ячейке строки материала
+/// (ось = расцветка заказа). Контракт: `@sewing/shared/tech-card-parameters`.
+model PatternItemSpecParameter {
+  id            String @id @default(cuid())
+  patternItemId String
+  /// lower_snake, уникален в рамках изделия. На него ссылаются биндинги.
+  key           String
+  label         String
+  /// NUMBER | TEXT | ENUM. Строкой — список расширяется без миграции.
+  inputType     String  @default("TEXT")
+  /// Для ENUM — массив допустимых значений.
+  options       Json?
+  unit          String?
+  isRequired    Boolean @default(true)
+  defaultValue  String?
+  /// MANUAL | ERP — задел под интеграцию (как у `TechCardParameter`).
+  owner         String  @default("MANUAL")
+  sortOrder     Int     @default(100)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  patternItem PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
+
+  @@unique([patternItemId, key])
+  @@index([patternItemId, sortOrder])
 }
 
 model CutReleasePolicy {

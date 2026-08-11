@@ -26,6 +26,7 @@ import type {
   ReplacePatternMaterialAreasDto,
   UpdatePatternDto,
 } from '@sewing/shared/patterns';
+import type { ReplacePatternItemMaterialSpecDto } from '@sewing/shared/pattern-item-spec';
 import { apiFetch, apiFetchMultipart } from './api';
 
 export function listPatterns(
@@ -250,6 +251,23 @@ export function replacePatternItemSizeParameterValues(
   const body: ReplacePatternItemSizeParameterValuesDto = { values };
   return apiFetch<PatternDetailDto>(
     `/patterns/${encodeURIComponent(patternId)}/size-parameter-values`,
+    { method: 'PUT', body },
+  );
+}
+
+/**
+ * Full-replace спецификации материалов карточки номенклатуры
+ * (`PUT /api/patterns/:id/material-spec`) — этап 1 плана
+ * «техкарты → номенклатура». Backend в одной транзакции переписывает
+ * строки состава (`PatternItemMaterialLine`) и слоты-параметры
+ * (`PatternItemSpecParameter`); id строк пересоздаются при каждом сейве.
+ */
+export function replacePatternItemMaterialSpec(
+  patternId: string,
+  body: ReplacePatternItemMaterialSpecDto,
+): Promise<PatternDetailDto> {
+  return apiFetch<PatternDetailDto>(
+    `/patterns/${encodeURIComponent(patternId)}/material-spec`,
     { method: 'PUT', body },
   );
 }

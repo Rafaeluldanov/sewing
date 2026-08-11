@@ -136,3 +136,18 @@ export interface ClonePatternState {
 }
 
 export const initialClonePatternState: ClonePatternState = {};
+
+/**
+ * State формы «Материалы (спецификация)» карточки номенклатуры —
+ * этап 1 плана «техкарты → номенклатура» (см.
+ * `apps/web/app/admin/patterns/[id]/material-spec-form.tsx` и
+ * `replacePatternItemMaterialSpecAction` в `actions.ts`).
+ */
+export interface MaterialSpecState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialMaterialSpecState: MaterialSpecState = {};

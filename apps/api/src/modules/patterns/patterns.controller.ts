@@ -35,6 +35,10 @@ import {
   type ReplacePatternMaterialAreasDto,
   type UpdatePatternDto,
 } from '@sewing/shared/patterns';
+import {
+  ReplacePatternItemMaterialSpecSchema,
+  type ReplacePatternItemMaterialSpecDto,
+} from '@sewing/shared/pattern-item-spec';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
@@ -287,5 +291,22 @@ export class PatternsController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<PatternDetailDto> {
     return this.patterns.replaceSizeParameterValues(id, body, user.employeeId);
+  }
+
+  /**
+   * Этап 1 плана «техкарты → номенклатура» (анализ 11.08.2026):
+   * атомарный full-replace СОСТАВА МАТЕРИАЛОВ карточки (строки +
+   * слоты-параметры) — как PATCH техкарты, но одной ручкой и всегда с
+   * полным итоговым состоянием (см.
+   * `PatternsService.replaceMaterialSpec`).
+   */
+  @Put(':id/material-spec')
+  replaceMaterialSpec(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(ReplacePatternItemMaterialSpecSchema))
+    body: ReplacePatternItemMaterialSpecDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<PatternDetailDto> {
+    return this.patterns.replaceMaterialSpec(id, body, user.employeeId);
   }
 }

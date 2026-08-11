@@ -136,6 +136,11 @@ export async function resetDatabase(prisma: {
     // подчинены `PatternItem`/`PatternCategoryParameter`/`Size` через
     // `ON DELETE CASCADE`, но truncate явный — для читаемости.
     'PatternItemSizeParameterValue',
+    // Этап 1 «Материалы в номенклатуре» (план «техкарты → номенклатура»):
+    // состав материалов + слоты спецификации. Подчинены `PatternItem`
+    // через `ON DELETE CASCADE`, truncate явный ради читаемости.
+    'PatternItemMaterialLine',
+    'PatternItemSpecParameter',
     'PatternSizeFile',
     'PatternItem',
     // Этап «Категории номенклатуры»: справочник категорий + параметры.

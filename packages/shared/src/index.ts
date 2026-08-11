@@ -63,6 +63,7 @@ export * from './order-tech-cards';
 export * from './norm-purchase';
 export * from './pattern-norms';
 export * from './patterns';
+export * from './pattern-item-spec';
 export * from './pattern-categories';
 export * from './workshop-needs';
 export * from './suppliers';

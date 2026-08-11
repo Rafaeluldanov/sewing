@@ -38,6 +38,8 @@ import {
   type CreatePatternCategoryDto,
   type PatternCategoryParameterInputDto,
 } from '@sewing/shared/pattern-categories';
+import { ReplacePatternItemMaterialSpecSchema } from '@sewing/shared/pattern-item-spec';
+import { getTechCardMaterialRoleLabel } from '@sewing/shared/tech-cards';
 import { CreateSizeSchema } from '@sewing/shared/sizes';
 import { createSize } from '@/lib/orders-api';
 import type { ActionResult } from '@/lib/action-result';
@@ -50,6 +52,7 @@ import {
   deletePatternSizeFile,
   restorePatterns,
   restorePatternSizeFile,
+  replacePatternItemMaterialSpec,
   replacePatternItemParameterNorms,
   replacePatternItemSizeParameterValues,
   replacePatternMaterialAreas,
@@ -71,6 +74,7 @@ import type {
   CreatePatternState,
   CreateSizeState,
   MaterialAreasState,
+  MaterialSpecState,
   ParameterNormsState,
   ReplaceCategoryParametersState,
   SizeParameterValuesState,
@@ -980,4 +984,223 @@ function parseParametersFromForm(form: FormData): PatternCategoryParameterInputD
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// «Материалы (спецификация)» — этап 1 плана «техкарты → номенклатура»
+// ---------------------------------------------------------------------------
+
+/**
+ * Парсер динамических строк формы спецификации: `specline[<key>][<field>]`
+ * и `specparam[<key>][<field>]`. Локальная копия `parseLines` из
+ * `app/admin/tech-cards/actions.ts` — импортировать её нельзя: файл с
+ * `'use server'` экспортирует только async-функции. Копия умирает вместе
+ * с формой техкарты (этап 5 плана).
+ */
+function parseSpecRows(
+  form: FormData,
+  prefix: 'specline' | 'specparam',
+): Array<Record<string, string>> {
+  const re = new RegExp(`^${prefix}\\[([^\\]]+)\\]\\[([^\\]]+)\\]$`);
+  const orderKeys: string[] = [];
+  const seen = new Set<string>();
+  const map = new Map<string, Record<string, string>>();
+  for (const [key, rawVal] of form.entries()) {
+    const m = re.exec(key);
+    if (!m) continue;
+    const [, rowKey, fieldName] = m;
+    const value = String(rawVal ?? '').trim();
+    if (!seen.has(rowKey)) {
+      seen.add(rowKey);
+      orderKeys.push(rowKey);
+      map.set(rowKey, {});
+    }
+    const obj = map.get(rowKey);
+    if (obj) obj[fieldName] = value;
+  }
+  return orderKeys
+    .map((k) => map.get(k) as Record<string, string>)
+    .filter((row) => Boolean(row));
+}
+
+/**
+ * Слоты-параметры спецификации + их цели. Как в форме техкарты: в UI цель
+ * («в какую ячейку какой строки подставляется») — свойство ПАРАМЕТРА, в БД
+ * привязка хранится на СТРОКЕ (`parameterBindings`) — здесь происходит
+ * разворот через `formKey` строки.
+ */
+function buildSpecParameters(form: FormData): {
+  parameters: Array<{
+    key: string;
+    label: string;
+    inputType: string;
+    options?: string[];
+    unit: string | null;
+    isRequired: boolean;
+    defaultValue: string | null;
+  }>;
+  bindingsByRowKey: Map<string, Record<string, string>>;
+} {
+  const parameters: ReturnType<typeof buildSpecParameters>['parameters'] = [];
+  const bindingsByRowKey = new Map<string, Record<string, string>>();
+  for (const r of parseSpecRows(form, 'specparam')) {
+    const key = (r.key ?? '').trim();
+    const label = (r.label ?? '').trim();
+    if (!key || !label) continue;
+    const inputType = (r.inputType ?? 'TEXT').trim() || 'TEXT';
+    const optionsRaw = (r.options ?? '').trim();
+    const options =
+      inputType === 'ENUM' && optionsRaw !== ''
+        ? optionsRaw
+            .split(',')
+            .map((o) => o.trim())
+            .filter((o) => o !== '')
+        : undefined;
+    parameters.push({
+      key,
+      label,
+      inputType,
+      options,
+      unit: (r.unit ?? '').trim() || null,
+      isRequired: r.isRequired === 'on',
+      defaultValue: (r.defaultValue ?? '').trim() || null,
+    });
+    const target = (r.target ?? '').trim();
+    if (!target) continue;
+    const [rowKey, field] = target.split('|');
+    if (!rowKey || !field) continue;
+    const current = bindingsByRowKey.get(rowKey) ?? {};
+    current[field] = key;
+    bindingsByRowKey.set(rowKey, current);
+  }
+  return { parameters, bindingsByRowKey };
+}
+
+/**
+ * Строки спецификации из формы. В отличие от формы техкарты, здесь
+ * `unit` (закупка), `normUnit` (норма), `qtyPerUnit` и `note` — видимые
+ * поля; фолбэки нужны только имени (характеристика → лейбл роли).
+ */
+function buildSpecMaterialLines(
+  form: FormData,
+  bindingsByRowKey: Map<string, Record<string, string>>,
+): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const r of parseSpecRows(form, 'specline')) {
+    const trimOrNull = (k: string): string | null => {
+      const v = (r[k] ?? '').trim();
+      return v === '' ? null : v;
+    };
+    const materialRole = trimOrNull('materialRole');
+    const fabricType = trimOrNull('fabricType');
+    const subtypeKey = trimOrNull('subtypeKey');
+    const characteristics: Record<string, string> = {};
+    for (const [k, v] of Object.entries(r)) {
+      if (!k.startsWith('char_')) continue;
+      const val = (v ?? '').trim();
+      if (val === '') continue;
+      characteristics[k.slice('char_'.length)] = val;
+    }
+    const hasCharacteristics = Object.keys(characteristics).length > 0;
+    const densityGsm = trimOrNull('densityGsm');
+    const plannedWidthCm = trimOrNull('plannedWidthCm');
+    const colorRule = trimOrNull('colorRule');
+    const fixedColorText = trimOrNull('fixedColorText');
+    const hardwareSizeText = trimOrNull('hardwareSizeText');
+    const hardwareMaterialText = trimOrNull('hardwareMaterialText');
+    const materialImageUrl = trimOrNull('materialImageUrl');
+    const materialImageOriginalFileName = trimOrNull(
+      'materialImageOriginalFileName',
+    );
+    const rawName = (r.name ?? '').trim();
+    const normUnit = trimOrNull('normUnit');
+    const rawUnit = (r.unit ?? '').trim();
+    const rawQty = (r.qtyPerUnit ?? '').trim();
+    const note = trimOrNull('note');
+
+    // Полностью пустая «черновая» строка — не отправляем.
+    const hasAnyContent =
+      rawName.length > 0 ||
+      rawQty.length > 0 ||
+      note != null ||
+      materialRole != null ||
+      fabricType != null ||
+      subtypeKey != null ||
+      hasCharacteristics ||
+      densityGsm != null ||
+      plannedWidthCm != null ||
+      colorRule != null ||
+      fixedColorText != null ||
+      hardwareSizeText != null ||
+      hardwareMaterialText != null ||
+      materialImageUrl != null;
+    if (!hasAnyContent) continue;
+
+    const name =
+      rawName.length > 0
+        ? rawName
+        : fabricType ??
+          ((materialRole ? getTechCardMaterialRoleLabel(materialRole) : '') ||
+            'Материал');
+    // Единица закупки: из select-а; фолбэк — единица нормы, потом «кг».
+    const unit = rawUnit.length > 0 ? rawUnit : normUnit ?? 'кг';
+    // Норма — фолбэк-число (первичный источник — поразмерные нормы
+    // карточки); Zod требует > 0, поэтому пустое значение → '1'.
+    const qtyPerUnit = rawQty.length > 0 && rawQty !== '0' ? rawQty : '1';
+
+    out.push({
+      name,
+      unit,
+      normUnit,
+      qtyPerUnit,
+      note,
+      materialRole,
+      fabricType,
+      densityGsm,
+      plannedWidthCm,
+      colorRule,
+      fixedColorText,
+      hardwareSizeText,
+      hardwareMaterialText,
+      materialImageUrl,
+      materialImageOriginalFileName,
+      subtypeKey,
+      characteristics: hasCharacteristics ? characteristics : null,
+      parameterBindings:
+        bindingsByRowKey.get((r.formKey ?? '').trim()) ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Сохранить «Материалы (спецификацию)» карточки номенклатуры —
+ * `PUT /api/patterns/:id/material-spec` (full-replace строк и слотов).
+ */
+export async function replacePatternItemMaterialSpecAction(
+  patternId: string,
+  _prev: MaterialSpecState,
+  form: FormData,
+): Promise<MaterialSpecState> {
+  const { parameters, bindingsByRowKey } = buildSpecParameters(form);
+  const materialLines = buildSpecMaterialLines(form, bindingsByRowKey);
+  const parsed = ReplacePatternItemMaterialSpecSchema.safeParse({
+    materialLines,
+    parameters,
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      error: issue?.message ?? 'Невалидные данные спецификации',
+    };
+  }
+  try {
+    await replacePatternItemMaterialSpec(patternId, parsed.data);
+    revalidatePath('/admin/patterns');
+    revalidatePath(`/admin/patterns/${patternId}`);
+    return { ok: true, successMessage: 'Материалы сохранены.' };
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
 }

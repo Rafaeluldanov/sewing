@@ -26,6 +26,18 @@ import type {
   PatternCategoryDto,
   PatternCategoryParameterDto,
 } from '@sewing/shared/pattern-categories';
+import type {
+  PatternItemMaterialLineDto,
+  PatternItemSpecParameterDto,
+  ReplacePatternItemMaterialSpecDto,
+} from '@sewing/shared/pattern-item-spec';
+import type { MaterialCharacteristics } from '@sewing/shared/material-characteristics';
+import type { TechCardMaterialColorRule } from '@sewing/shared/tech-cards';
+import type {
+  TechCardParameterBindings,
+  TechCardParameterInputType,
+  TechCardParameterOwner,
+} from '@sewing/shared/tech-card-parameters';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { mapConstructorTaskSummary } from '../constructor-tasks/constructor-task-mappers.js';
 import {
@@ -46,6 +58,10 @@ import {
   PatternsStorageService,
   type UploadedFileLike,
 } from './patterns-storage.service.js';
+import {
+  patternMaterialLineCreateData,
+  patternSpecParameterCreateData,
+} from './pattern-material-spec.util.js';
 
 /**
  * Сервис «Лекала» (изолированный модуль, MVP-1).
@@ -208,6 +224,12 @@ export class PatternsService {
             { categoryParameter: { label: 'asc' } },
             { size: { sortOrder: 'asc' } },
           ],
+        },
+        // Этап 1 «Материалы в номенклатуре»: состав материалов + слоты
+        // спецификации. Сортировка стабильная — как в `TechCardsService`.
+        materialSpecLines: { orderBy: { sortOrder: 'asc' } },
+        specParameters: {
+          orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
         },
         category: {
           include: {
@@ -705,6 +727,10 @@ export class PatternsService {
         materialAreas: true,
         parameterNorms: true,
         sizeParameterValues: true,
+        // Этап 1 «Материалы в номенклатуре»: спецификация клонируется
+        // вместе с карточкой — иначе копия молча теряла бы состав.
+        materialSpecLines: true,
+        specParameters: true,
       },
     });
     if (!source) throw new PatternNotFoundException();
@@ -827,6 +853,60 @@ export class PatternsService {
           })),
         });
       }
+      // Этап 1 «Материалы в номенклатуре»: копия состава + слотов.
+      // Копируем колонки как есть (без нормализации) — источник уже
+      // прошёл её при своём сохранении.
+      if (source.materialSpecLines.length > 0) {
+        await tx.patternItemMaterialLine.createMany({
+          data: source.materialSpecLines.map((l) => ({
+            patternItemId: createdId,
+            sortOrder: l.sortOrder,
+            name: l.name,
+            unit: l.unit,
+            normUnit: l.normUnit,
+            qtyPerUnit: l.qtyPerUnit,
+            note: l.note,
+            materialRole: l.materialRole,
+            fabricType: l.fabricType,
+            densityGsm: l.densityGsm,
+            plannedWidthCm: l.plannedWidthCm,
+            colorRule: l.colorRule,
+            fixedColorText: l.fixedColorText,
+            hardwareSizeText: l.hardwareSizeText,
+            hardwareMaterialText: l.hardwareMaterialText,
+            materialImageUrl: l.materialImageUrl,
+            materialImageOriginalFileName: l.materialImageOriginalFileName,
+            subtypeKey: l.subtypeKey,
+            characteristics:
+              l.characteristics === null
+                ? Prisma.DbNull
+                : (l.characteristics as Prisma.InputJsonValue),
+            parameterBindings:
+              l.parameterBindings === null
+                ? Prisma.DbNull
+                : (l.parameterBindings as Prisma.InputJsonValue),
+          })),
+        });
+      }
+      if (source.specParameters.length > 0) {
+        await tx.patternItemSpecParameter.createMany({
+          data: source.specParameters.map((p) => ({
+            patternItemId: createdId,
+            key: p.key,
+            label: p.label,
+            inputType: p.inputType,
+            options:
+              p.options === null
+                ? Prisma.DbNull
+                : (p.options as Prisma.InputJsonValue),
+            unit: p.unit,
+            isRequired: p.isRequired,
+            defaultValue: p.defaultValue,
+            owner: p.owner,
+            sortOrder: p.sortOrder,
+          })),
+        });
+      }
       await this.audit.log(
         {
           event: 'PATTERN_CLONED',
@@ -843,6 +923,8 @@ export class PatternsService {
             materialAreasCount: source.materialAreas.length,
             parameterNormsCount: source.parameterNorms.length,
             sizeParameterValuesCount: source.sizeParameterValues.length,
+            materialSpecLinesCount: source.materialSpecLines.length,
+            specParametersCount: source.specParameters.length,
           },
           employeeId: actorEmployeeId ?? null,
         },
@@ -1549,6 +1631,96 @@ export class PatternsService {
     return new Set<string>(params.map((p) => p.roleKey));
   }
 
+  /**
+   * Этап 1 плана «техкарты → номенклатура»
+   * (`PUT /api/patterns/:id/material-spec`): атомарный full-replace
+   * состава материалов и слотов-параметров карточки — как
+   * `TechCardsService.update` (deleteMany + createMany; id строк
+   * пересоздаются при каждом сейве, поэтому привязка «ячейка → параметр»
+   * живёт JSON-ом `parameterBindings` в самой строке).
+   *
+   * Кросс-проверка «биндинг ссылается на объявленный параметр» уже
+   * выполнена схемой (`ReplacePatternItemMaterialSpecSchema`): в отличие
+   * от PATCH техкарты запрос всегда несёт полное итоговое состояние
+   * обеих частей.
+   */
+  async replaceMaterialSpec(
+    patternItemId: string,
+    dto: ReplacePatternItemMaterialSpecDto,
+    actorEmployeeId?: string | null,
+  ): Promise<PatternDetailDto> {
+    const pattern = await this.prisma.patternItem.findUnique({
+      where: { id: patternItemId },
+      select: { id: true },
+    });
+    if (!pattern) throw new PatternNotFoundException();
+
+    // Legacy-роли, уже лежащие в БД (например, `APPLICATION` из бэкфилла
+    // техкарт — этап 2), при full-replace сохраняемы: менеджер должен
+    // уметь пересохранить карточку, не редактируя legacy-строку (та же
+    // политика, что у `TechCardsService.update`).
+    const existingLegacyRoleKeys = new Set(
+      (
+        await this.prisma.patternItemMaterialLine.findMany({
+          where: { patternItemId },
+          select: { materialRole: true },
+        })
+      )
+        .map((r) => r.materialRole)
+        .filter((k): k is string => k != null && k.length > 0),
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.patternItemMaterialLine.deleteMany({
+        where: { patternItemId },
+      });
+      if (dto.materialLines.length > 0) {
+        await tx.patternItemMaterialLine.createMany({
+          data: dto.materialLines.map((l, i) =>
+            patternMaterialLineCreateData(patternItemId, l, i, {
+              existingRoleKeys: existingLegacyRoleKeys,
+            }),
+          ),
+        });
+      }
+      await tx.patternItemSpecParameter.deleteMany({
+        where: { patternItemId },
+      });
+      if (dto.parameters.length > 0) {
+        await tx.patternItemSpecParameter.createMany({
+          data: dto.parameters.map((p, i) =>
+            patternSpecParameterCreateData(patternItemId, p, i),
+          ),
+        });
+      }
+      await this.audit.log(
+        {
+          event: 'PATTERN_MATERIAL_SPEC_REPLACED',
+          entityType: 'PATTERN',
+          entityId: patternItemId,
+          payload: {
+            materialLinesCount: dto.materialLines.length,
+            parametersCount: dto.parameters.length,
+            roleKeys: Array.from(
+              new Set(
+                dto.materialLines
+                  .map((l) => l.materialRole)
+                  .filter((k): k is string => k != null),
+              ),
+            ),
+          },
+          employeeId: actorEmployeeId ?? null,
+        },
+        tx,
+      );
+    });
+    this.logger.log(
+      `event=pattern.material_spec_replace pattern=${patternItemId} ` +
+        `lines=${dto.materialLines.length} params=${dto.parameters.length}`,
+    );
+    return this.getOne(patternItemId);
+  }
+
   private toDetailDto(
     row: Prisma.PatternItemGetPayload<{
       include: {
@@ -1556,6 +1728,8 @@ export class PatternsService {
         materialAreas: { include: { size: true } };
         parameterNorms: { include: { categoryParameter: true } };
         sizeParameterValues: { include: { size: true } };
+        materialSpecLines: true;
+        specParameters: true;
         category: {
           include: {
             parameters: true;
@@ -1685,6 +1859,48 @@ export class PatternsService {
         updatedAt: v.updatedAt.toISOString(),
       }));
 
+    // Этап 1 «Материалы в номенклатуре»: состав материалов + слоты
+    // спецификации. Контракт строки — 1-в-1 со строкой техкарты
+    // (см. `@sewing/shared/pattern-item-spec`).
+    const materialSpecLines: PatternItemMaterialLineDto[] =
+      row.materialSpecLines.map((l) => ({
+        id: l.id,
+        sortOrder: l.sortOrder,
+        name: l.name,
+        unit: l.unit,
+        normUnit: l.normUnit,
+        qtyPerUnit: l.qtyPerUnit.toString(),
+        note: l.note,
+        parameterBindings:
+          (l.parameterBindings as TechCardParameterBindings | null) ?? null,
+        materialRole: l.materialRole,
+        fabricType: l.fabricType,
+        densityGsm: l.densityGsm,
+        plannedWidthCm: l.plannedWidthCm,
+        colorRule: (l.colorRule as TechCardMaterialColorRule | null) ?? null,
+        fixedColorText: l.fixedColorText,
+        hardwareSizeText: l.hardwareSizeText,
+        hardwareMaterialText: l.hardwareMaterialText,
+        materialImageUrl: l.materialImageUrl,
+        materialImageOriginalFileName: l.materialImageOriginalFileName,
+        subtypeKey: l.subtypeKey,
+        characteristics:
+          (l.characteristics as MaterialCharacteristics | null) ?? null,
+      }));
+    const specParameters: PatternItemSpecParameterDto[] =
+      row.specParameters.map((p) => ({
+        id: p.id,
+        key: p.key,
+        label: p.label,
+        inputType: p.inputType as TechCardParameterInputType,
+        options: (p.options as string[] | null) ?? null,
+        unit: p.unit,
+        isRequired: p.isRequired,
+        defaultValue: p.defaultValue,
+        owner: p.owner as TechCardParameterOwner,
+        sortOrder: p.sortOrder,
+      }));
+
     return {
       id: row.id,
       name: row.name,
@@ -1702,6 +1918,8 @@ export class PatternsService {
       materialAreas,
       parameterNorms,
       sizeParameterValues,
+      materialSpecLines,
+      specParameters,
       // Этап «Конструкторское бюро»: включаем patternItem-данные
       // в summary (они нужны UI карточки «Источник» на /admin/patterns/[id]
       // — название и артикул совпадают с самим лекалом).

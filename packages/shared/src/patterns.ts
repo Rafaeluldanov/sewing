@@ -23,6 +23,10 @@
 
 import { z } from 'zod';
 import type { ConstructorTaskSummaryDto } from './constructor-tasks';
+import type {
+  PatternItemMaterialLineDto,
+  PatternItemSpecParameterDto,
+} from './pattern-item-spec';
 
 import {
   MATERIAL_ROLES,
@@ -928,6 +932,15 @@ export interface PatternDetailDto {
    * параметры дают столбцы, а значения — содержимое ячеек по размерам.
    */
   sizeParameterValues: PatternItemSizeParameterValueDto[];
+  /**
+   * Этап 1 плана «техкарты → номенклатура»: состав материалов изделия
+   * (строки `PatternItemMaterialLine`) + слоты-параметры спецификации
+   * (`PatternItemSpecParameter`). Опционально (`?`) — старые потребители
+   * shared продолжают компилироваться без пересборки; backend всегда
+   * отдаёт массивы (пустые, если спецификация не заведена).
+   */
+  materialSpecLines?: PatternItemMaterialLineDto[];
+  specParameters?: PatternItemSpecParameterDto[];
   /**
    * Этап «Конструкторское бюро»: связанная задача `ConstructorTask`,
    * если pattern был создан через flow «Отправить конструктору». UI

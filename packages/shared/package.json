@@ -57,6 +57,7 @@
     "./purchase-units": "./src/purchase-units.ts",
     "./pattern-norms": "./src/pattern-norms.ts",
     "./patterns": "./src/patterns.ts",
+    "./pattern-item-spec": "./src/pattern-item-spec.ts",
     "./pattern-categories": "./src/pattern-categories.ts",
     "./workshop-needs": "./src/workshop-needs.ts",
     "./suppliers": "./src/suppliers.ts",

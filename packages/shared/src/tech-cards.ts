@@ -614,7 +614,7 @@ const CharacteristicsField = MaterialCharacteristicsSchema.nullable().optional()
  *     для `materialRole = PACKAGING` (фурнитура). Сервис на бэке
  *     зачищает их в null для других ролей.
  */
-export const TechCardMaterialLineInputSchema = z
+export const TechCardMaterialLineInputBaseSchema = z
   .object({
     name: LineNameField,
     unit: LineUnitRequiredField,
@@ -640,20 +640,32 @@ export const TechCardMaterialLineInputSchema = z
      * кросс-валидацией на уровне карты, см. `withParameterCrossChecks`).
      */
     parameterBindings: TechCardParameterBindingsSchema.nullish(),
-  })
-  .superRefine((line, ctx) => {
-    if (line.colorRule === 'FIXED_COLOR') {
-      const text = line.fixedColorText;
-      if (text == null || text.length === 0) {
-        ctx.addIssue({
-          path: ['fixedColorText'],
-          code: z.ZodIssueCode.custom,
-          message:
-            'Для правила «Фиксированный цвет» нужно указать сам цвет',
-        });
-      }
-    }
   });
+
+/**
+ * Кросс-проверка строки: при `colorRule = FIXED_COLOR` обязателен сам цвет.
+ * Вынесена именованной функцией: тот же инвариант нужен строке спецификации
+ * номенклатуры (`@sewing/shared/pattern-item-spec`, этап 1 плана
+ * «техкарты → номенклатура»).
+ */
+export function materialLineFixedColorCheck(
+  line: { colorRule?: string | null; fixedColorText?: string | null },
+  ctx: z.RefinementCtx,
+): void {
+  if (line.colorRule === 'FIXED_COLOR') {
+    const text = line.fixedColorText;
+    if (text == null || text.length === 0) {
+      ctx.addIssue({
+        path: ['fixedColorText'],
+        code: z.ZodIssueCode.custom,
+        message: 'Для правила «Фиксированный цвет» нужно указать сам цвет',
+      });
+    }
+  }
+}
+
+export const TechCardMaterialLineInputSchema =
+  TechCardMaterialLineInputBaseSchema.superRefine(materialLineFixedColorCheck);
 export type TechCardMaterialLineInputDto = z.infer<
   typeof TechCardMaterialLineInputSchema
 >;
@@ -706,7 +718,7 @@ const ParametersField = z
  *     ячейка молча осталась бы значением из шаблона, а менеджер думал бы,
  *     что она параметризована.
  */
-function withParameterCrossChecks<
+export function withParameterCrossChecks<
   T extends {
     materialLines?: Array<{ parameterBindings?: unknown }>;
     parameters?: Array<{ key: string }>;

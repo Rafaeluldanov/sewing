@@ -44,6 +44,7 @@ import { PatternPreviewUploadForm } from './preview-upload-form';
 import { PatternSizesManager } from './pattern-sizes-manager';
 import { PatternItemParameterNormsForm } from './parameter-norms-form';
 import { PatternItemSizeParameterValuesForm } from './size-parameter-values-form';
+import { PatternMaterialSpecForm } from './material-spec-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -321,6 +322,26 @@ export default async function AdminPatternDetailPage({
               hint="Норма «количество на изделие» по параметрам категории (нитки, наполнитель, фурнитура, маркировка)"
             />
             <PatternParameterNormsBlock pattern={pattern} />
+          </AdminCard>
+
+          {/*
+            Этап 1 плана «техкарты → номенклатура» (анализ 11.08.2026):
+            состав материалов изделия живёт в карточке номенклатуры.
+            Пока заказы материализуют снапшот из техкарты (до этапа 3)
+            блок аддитивный — на существующие процессы не влияет.
+          */}
+          <AdminCard>
+            <AdminSectionHeader
+              icon={<Package size={18} strokeWidth={1.6} aria-hidden />}
+              title="Материалы (спецификация)"
+              hint="Состав материалов изделия: строки с характеристиками, правилами цвета и параметрами. Заменит техкарту — нормы берутся из блоков выше"
+            />
+            <PatternMaterialSpecForm
+              patternId={pattern.id}
+              lines={pattern.materialSpecLines ?? []}
+              parameters={pattern.specParameters ?? []}
+              categoryParameters={pattern.category?.parameters ?? []}
+            />
           </AdminCard>
         </div>
 
