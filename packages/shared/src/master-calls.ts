@@ -18,6 +18,7 @@
  */
 
 import { z } from 'zod';
+import { parseSewingEmployeeQrPayload } from './employee-qr';
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -61,6 +62,46 @@ export function parseEmployeeQr(raw: string | null | undefined): string | null {
   return id.length > 0 ? id : null;
 }
 
+/**
+ * Результат разбора ЛЮБОГО QR сотрудника, какой встречается в цехе:
+ *
+ *   - `badge`  — бумажная этикетка `/api/employees/:id/print`
+ *                (`EMPLOYEE:<id>`), в ней голый `Employee.id`;
+ *   - `signed` — «Мой QR-код» с терминала сотрудника
+ *                (`SEWING_EMPLOYEE:<token>`), подписанный токен со
+ *                сроком жизни 12 часов.
+ *
+ * Второй формат нельзя разобрать на клиенте — из него достаётся только
+ * сама строка токена, а `employeeId` появляется после `verify` на
+ * backend'е (`MeService.verifyEmployeeQrToken`).
+ */
+export type EmployeeQrScan =
+  | { kind: 'badge'; employeeId: string }
+  | { kind: 'signed'; token: string };
+
+/**
+ * Разбирает оба формата QR сотрудника.
+ *
+ * Зачем: до 11.08.2026 действия мастера принимали ТОЛЬКО `EMPLOYEE:<id>`
+ * с бумажной этикетки, а в цехе у людей на руках телефон с «Мой
+ * QR-код» — и сканирование бейджа кончалось невнятным
+ * `INVALID_EMPLOYEE_QR`. Один парсер на оба формата держит `/master`
+ * и backend в согласии.
+ *
+ * Порядок проверки не важен: префиксы `EMPLOYEE:` и `SEWING_EMPLOYEE:`
+ * не пересекаются — второй проверяется первым именно поэтому явно, а
+ * не по случайности (`'SEWING_EMPLOYEE:x'` не начинается с `EMPLOYEE:`).
+ */
+export function parseAnyEmployeeQr(
+  raw: string | null | undefined,
+): EmployeeQrScan | null {
+  const token = parseSewingEmployeeQrPayload(raw);
+  if (token) return { kind: 'signed', token };
+  const employeeId = parseEmployeeQr(raw);
+  if (employeeId) return { kind: 'badge', employeeId };
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Request bodies
 // ---------------------------------------------------------------------------
@@ -91,10 +132,13 @@ export const ResolveMasterCallByQrSchema = z.object({
     .string()
     .trim()
     .min(EMPLOYEE_QR_PREFIX.length + 1, 'QR должен содержать EMPLOYEE:<id>')
-    .max(200)
+    // Подписанный `SEWING_EMPLOYEE:<token>` длиннее двух сотен символов
+    // (base64 payload + подпись) — прежний `max(200)` резал его ещё до
+    // сервера.
+    .max(1024)
     .refine(
-      (v) => parseEmployeeQr(v) !== null,
-      'Некорректный QR сотрудника (ожидается EMPLOYEE:<id>)',
+      (v) => parseAnyEmployeeQr(v) !== null,
+      'Некорректный QR сотрудника (ожидается бейдж сотрудника)',
     ),
 });
 export type ResolveMasterCallByQrDto = z.infer<

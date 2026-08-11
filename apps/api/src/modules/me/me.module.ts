@@ -23,5 +23,10 @@ import { MeService } from './me.service.js';
 @Module({
   controllers: [MeController],
   providers: [MeService],
+  // `MeService` экспортируется ради `verifyEmployeeQrToken`: действия
+  // мастера и закрытие вызова сканом принимают «Мой QR-код»
+  // (`SEWING_EMPLOYEE:<token>`), а секрет подписи читается здесь —
+  // второе место чтения `JWT_SECRET` разъехалось бы с первым.
+  exports: [MeService],
 })
 export class MeModule {}

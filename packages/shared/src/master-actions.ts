@@ -104,7 +104,10 @@ const CellTargetFields = {
  * списка активных сотрудников без QR-печати).
  */
 const EmployeeTargetFields = {
-  employeeQr: z.string().trim().min(1).max(200).optional(),
+  // `max(1024)`, а не 200: `SEWING_EMPLOYEE:<token>` («Мой QR-код» с
+  // терминала сотрудника) — подписанный токен на несколько сотен
+  // символов, и прежний лимит резал его ещё до backend'а.
+  employeeQr: z.string().trim().min(1).max(1024).optional(),
   employeeId: z.string().trim().min(1).max(64).optional(),
 };
 
@@ -379,6 +382,36 @@ export interface MasterTransferCandidateDto {
 export interface MasterTransferCandidatesDto {
   passportId: string | null;
   rows: MasterTransferCandidateDto[];
+}
+
+/**
+ * `POST /api/master-actions/resolve-employee-qr`.
+ *
+ * Отсканированный QR сотрудника → карточка человека. Нужна потому, что
+ * второй формат бейджа (`SEWING_EMPLOYEE:<token>`, «Мой QR-код» с
+ * терминала) на клиенте не разбирается: `employeeId` спрятан за
+ * подписью и появляется только после `verify` на backend'е. UI мастера
+ * зовёт эту ручку сразу после скана и подсвечивает человека в списке —
+ * мастер видит, КОГО выбрал, до нажатия «Подтвердить».
+ */
+export const ResolveEmployeeQrSchema = z.object({
+  qr: z.string().trim().min(1).max(1024),
+});
+export type ResolveEmployeeQrDto = z.infer<typeof ResolveEmployeeQrSchema>;
+
+/**
+ * Ответ `POST /api/master-actions/resolve-employee-qr`.
+ *
+ * `active = false` не ошибка на этом шаге: карточку показываем, а
+ * отказ («сотрудник деактивирован») даёт уже само действие — так
+ * мастер видит, кого именно отсканировал.
+ */
+export interface ResolvedEmployeeQrDto {
+  employeeId: string;
+  fullName: string;
+  /** `Employee.role` (enum) — UI вешает свою подпись. */
+  role: string;
+  active: boolean;
 }
 
 // ---------------------------------------------------------------------------

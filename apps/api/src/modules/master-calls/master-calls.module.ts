@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { MeModule } from '../me/me.module.js';
 import { MasterCallsController } from './master-calls.controller.js';
 import { MasterCallsService } from './master-calls.service.js';
 
@@ -14,6 +15,10 @@ import { MasterCallsService } from './master-calls.service.js';
  * — он раздаётся `@Global()` `PrismaModule`.
  */
 @Module({
+  // `MeModule` — ради `MeService.verifyEmployeeQrToken`: закрытие
+  // вызова сканом принимает «Мой QR-код» сотрудника, подписанный
+  // `JWT_SECRET` (секрет читается там же, где подписывается).
+  imports: [MeModule],
   controllers: [MasterCallsController],
   providers: [MasterCallsService],
   exports: [MasterCallsService],

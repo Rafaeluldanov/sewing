@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  parseEmployeeQr,
+  parseAnyEmployeeQr,
   type MasterCallDto,
   type MasterCallPassportDto,
 } from '@sewing/shared/master-calls';
@@ -344,12 +344,16 @@ export function MasterPageClient({
       }
 
       // Историческая ветка — закрытие вызова по QR сотрудника.
+      // Принимаем оба бейджа: бумажный `EMPLOYEE:<id>` и «Мой QR-код»
+      // с телефона (`SEWING_EMPLOYEE:<token>`). Из подписанного токена
+      // id на клиенте не достать — сотрудника берём из ответа сервера.
       if (resolving) return;
-      const parsed = parseEmployeeQr(decodedText);
-      if (!parsed) {
+      if (!parseAnyEmployeeQr(decodedText)) {
         setScannerMode(null);
         setActiveCallId(null);
-        setError('QR не распознан как сотрудник (ожидается EMPLOYEE:<id>)');
+        setError(
+          'Это не QR сотрудника. Отсканируйте бейдж или «Мой QR-код» на его терминале.',
+        );
         return;
       }
       setResolving(true);
@@ -357,7 +361,8 @@ export function MasterPageClient({
       try {
         const res = await resolveMasterCallByEmployeeQrAction(decodedText);
         if (res.ok) {
-          setItems((prev) => prev.filter((c) => c.employee.id !== parsed));
+          const resolvedId = res.call.employee.id;
+          setItems((prev) => prev.filter((c) => c.employee.id !== resolvedId));
           showToast('Вызов закрыт');
           setError(null);
         } else {

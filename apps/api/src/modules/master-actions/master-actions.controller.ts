@@ -5,6 +5,7 @@ import {
   FindMasterPassportByCodeSchema,
   MasterSelfOperationSchema,
   MasterTransferCandidatesQuerySchema,
+  ResolveEmployeeQrSchema,
   ReturnPassportToCellSchema,
   SetRouteStepSchema,
   TransferPassportSchema,
@@ -16,6 +17,8 @@ import {
   type MasterSelfOperationStepsDto,
   type MasterTransferCandidatesDto,
   type MasterTransferCandidatesQuery,
+  type ResolveEmployeeQrDto,
+  type ResolvedEmployeeQrDto,
   type ReturnPassportToCellDto,
   type SetRouteStepDto,
   type TransferPassportDto,
@@ -162,6 +165,25 @@ export class MasterActionsController {
     query: MasterTransferCandidatesQuery,
   ): Promise<MasterTransferCandidatesDto> {
     return this.service.listTransferCandidates(query.passportId);
+  }
+
+  /**
+   * `POST /api/master-actions/resolve-employee-qr` — отсканированный QR
+   * сотрудника → карточка человека (см.
+   * `MasterActionsService.resolveEmployeeQr`).
+   *
+   * Принимает оба формата бейджа: `EMPLOYEE:<id>` с бумажной этикетки и
+   * `SEWING_EMPLOYEE:<token>` из «Мой QR-код» на терминале сотрудника.
+   * Второй на клиенте не разбирается — `employeeId` спрятан за
+   * подписью, поэтому резолв и живёт на сервере. Read-only, audit не
+   * пишем.
+   */
+  @Post('resolve-employee-qr')
+  resolveEmployeeQr(
+    @Body(new ZodValidationPipe(ResolveEmployeeQrSchema))
+    dto: ResolveEmployeeQrDto,
+  ): Promise<ResolvedEmployeeQrDto> {
+    return this.service.resolveEmployeeQr(dto.qr);
   }
 
   // -------------------------------------------------------------------------

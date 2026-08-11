@@ -368,6 +368,74 @@ describeWithDb('integration — master actions (Stage 2)', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 2c. QR сотрудника — оба формата бейджа
+  // -------------------------------------------------------------------------
+
+  /** «Мой QR-код» сотрудника — тот же payload, что видит мастер камерой. */
+  async function seamstressQrPayload(): Promise<string> {
+    const res = await request(t.app.getHttpServer())
+      .get('/api/me/employee-qr')
+      .set('Cookie', cookies.seamstress)
+      .expect(200);
+    return res.body.qrPayload as string;
+  }
+
+  test('resolve-employee-qr: подписанный «Мой QR-код» отдаёт карточку сотрудника', async () => {
+    const qr = await seamstressQrPayload();
+    expect(qr.startsWith('SEWING_EMPLOYEE:')).toBe(true);
+
+    const res = await request(t.app.getHttpServer())
+      .post('/api/master-actions/resolve-employee-qr')
+      .set('Cookie', cookies.master)
+      .send({ qr })
+      .expect(201);
+    expect(res.body.employeeId).toBe(seed.employees.seamstress.id);
+    expect(res.body.active).toBe(true);
+  });
+
+  test('resolve-employee-qr: бумажная этикетка EMPLOYEE:<id> тоже принимается', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/master-actions/resolve-employee-qr')
+      .set('Cookie', cookies.master)
+      .send({ qr: `EMPLOYEE:${seed.employees.seamstress.id}` })
+      .expect(201);
+    expect(res.body.employeeId).toBe(seed.employees.seamstress.id);
+  });
+
+  test('resolve-employee-qr: чужой QR → 400 INVALID_EMPLOYEE_QR', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/master-actions/resolve-employee-qr')
+      .set('Cookie', cookies.master)
+      .send({ qr: 'passport:not-an-employee' })
+      .expect(400);
+    expect(res.body?.code).toBe('INVALID_EMPLOYEE_QR');
+  });
+
+  test('resolve-employee-qr: битая подпись → 400 EMPLOYEE_QR_TOKEN_INVALID', async () => {
+    const qr = await seamstressQrPayload();
+    const res = await request(t.app.getHttpServer())
+      .post('/api/master-actions/resolve-employee-qr')
+      .set('Cookie', cookies.master)
+      .send({ qr: `${qr}tampered` })
+      .expect(400);
+    expect(res.body?.code).toBe('EMPLOYEE_QR_TOKEN_INVALID');
+  });
+
+  test('transfer-to-employee: принимает «Мой QR-код» сотрудника', async () => {
+    const qr = await seamstressQrPayload();
+    const { passportId } = await setupPassport({ currentEmployeeId: null });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/transfer-to-employee`)
+      .set('Cookie', cookies.master)
+      .send({ reason: 'SHIFT_HANDOVER', employeeQr: qr })
+      .expect(201);
+    expect(res.body.passport.currentEmployeeId).toBe(
+      seed.employees.seamstress.id,
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // 3. RETURN TO CELL
   // -------------------------------------------------------------------------
 

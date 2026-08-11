@@ -10,7 +10,7 @@ import {
   type Prisma,
 } from '@prisma/client';
 import {
-  parseEmployeeQr,
+  parseAnyEmployeeQr,
   type FindMasterPassportByCodeResultDto,
   type MasterActionPassportSnapshotDto,
   type MasterActionResultDto,
@@ -28,16 +28,19 @@ import {
   type MasterSelfOperationStepsDto,
   type MasterTransferCandidateDto,
   type MasterTransferCandidatesDto,
+  type ResolvedEmployeeQrDto,
 } from '@sewing/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-issue-rules.service.js';
 import { WorkInProgressService } from '../work-in-progress/work-in-progress.service.js';
 import { PassportsService } from '../passports/passports.service.js';
+import { MeService } from '../me/me.service.js';
 import { isPieceworkEligible } from '../employees/compensation.js';
 import {
   CellInactiveException,
   CellNotFoundException,
+  EmployeeQrTokenInvalidException,
   MasterBackwardRouteRequiresPlacementException,
   MasterOrderHasNoRouteSnapshotException,
   MasterRouteStepNotInSnapshotException,
@@ -91,6 +94,10 @@ export class MasterActionsService {
     // (`issueToEmployee` + `completeOperationByEmployee`) — своей копии
     // правил маршрута у мастера нет и быть не должно.
     private readonly passports: PassportsService,
+    // `MeService` — ради `verifyEmployeeQrToken`: «Мой QR-код»
+    // сотрудника подписан `JWT_SECRET`, и читать секрет вторым местом
+    // нельзя, разъедется с местом подписи.
+    private readonly me: MeService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -1350,20 +1357,57 @@ export class MasterActionsService {
     }
   }
 
+  /**
+   * `employeeId` из тела или из отсканированного QR — в цехе их два
+   * формата, и оба обязаны работать:
+   *
+   *   - `EMPLOYEE:<id>` — бумажная этикетка `/api/employees/:id/print`;
+   *   - `SEWING_EMPLOYEE:<token>` — «Мой QR-код» с терминала самого
+   *     сотрудника, подписанный токен на 12 часов.
+   *
+   * Второй раньше не принимался вовсе: `INVALID_EMPLOYEE_QR` на бейдж,
+   * который сотрудник показывает с телефона, — это отказ по формату
+   * там, где человек всё сделал правильно.
+   */
   private async resolveEmployeeId(dto: {
     employeeId?: string;
     employeeQr?: string;
   }): Promise<string> {
     if (dto.employeeId) return dto.employeeId;
-    const fromQr = parseEmployeeQr(dto.employeeQr ?? '');
-    if (!fromQr) {
+    const scan = parseAnyEmployeeQr(dto.employeeQr ?? '');
+    if (!scan) {
       throw new BadRequestException({
         statusCode: 400,
         code: 'INVALID_EMPLOYEE_QR',
-        message: 'Некорректный QR сотрудника (ожидается EMPLOYEE:<id>).',
+        message:
+          'Это не QR сотрудника — отсканируйте бейдж или выберите человека в списке.',
       });
     }
-    return fromQr;
+    if (scan.kind === 'badge') return scan.employeeId;
+    const payload = this.me.verifyEmployeeQrToken(scan.token);
+    if (!payload) throw new EmployeeQrTokenInvalidException();
+    return payload.employeeId;
+  }
+
+  /**
+   * Отсканированный QR → карточка сотрудника (см.
+   * `ResolvedEmployeeQrDto`). Read-only: UI мастера зовёт её сразу
+   * после скана, чтобы показать, КОГО выбрали, до подтверждения
+   * действия. Деактивированного тоже отдаём — отказ даст само действие.
+   */
+  async resolveEmployeeQr(qr: string): Promise<ResolvedEmployeeQrDto> {
+    const employeeId = await this.resolveEmployeeId({ employeeQr: qr });
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { id: true, fullName: true, role: true, active: true },
+    });
+    if (!employee) throw new MasterTargetEmployeeNotFoundException();
+    return {
+      employeeId: employee.id,
+      fullName: employee.fullName,
+      role: employee.role,
+      active: employee.active,
+    };
   }
 
   private async resolveCell(

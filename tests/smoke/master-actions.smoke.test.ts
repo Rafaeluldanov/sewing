@@ -20,6 +20,7 @@ import {
   MASTER_ACTION_REASONS,
   MASTER_ACTION_REASON_LABELS,
 } from '../../packages/shared/src/master-actions';
+import { parseAnyEmployeeQr } from '../../packages/shared/src/master-calls';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 
@@ -283,12 +284,51 @@ describe('master-actions smoke — выбор получателя из спис
     // Отправляем employeeId — сырой QR-строки в теле больше нет.
     expect(src).toMatch(/employeeId/);
     expect(src).not.toMatch(/placeholder="EMPLOYEE:/);
-    // Скан бейджа остаётся, но разбирается на клиенте.
-    expect(src).toMatch(/parseEmployeeQr/);
+    // Скан бейджа остаётся: формат проверяем на клиенте, а карточку
+    // человека резолвит backend (подписанный «Мой QR-код»).
+    expect(src).toMatch(/parseAnyEmployeeQr/);
+    expect(src).toMatch(/resolveMasterEmployeeQrAction/);
 
     const css = readSrc('apps/web/app/globals.css');
     expect(css).toMatch(/\.master-actions-sheet__people/);
     expect(css).toMatch(/\.master-actions-sheet__person\b/);
+  });
+
+  test('оба формата бейджа: parseAnyEmployeeQr в shared', () => {
+    expect(parseAnyEmployeeQr('EMPLOYEE:emp-1')).toEqual({
+      kind: 'badge',
+      employeeId: 'emp-1',
+    });
+    expect(parseAnyEmployeeQr('SEWING_EMPLOYEE:body.sig')).toEqual({
+      kind: 'signed',
+      token: 'body.sig',
+    });
+    // Чужие QR цеха не должны выглядеть как сотрудник.
+    expect(parseAnyEmployeeQr('passport:abc')).toBeNull();
+    expect(parseAnyEmployeeQr('cell:abc')).toBeNull();
+    expect(parseAnyEmployeeQr('')).toBeNull();
+  });
+
+  test('backend резолвит подписанный токен через MeService', () => {
+    const serviceSrc = readSrc(
+      'apps/api/src/modules/master-actions/master-actions.service.ts',
+    );
+    expect(serviceSrc).toMatch(/parseAnyEmployeeQr/);
+    expect(serviceSrc).toMatch(/me\.verifyEmployeeQrToken/);
+    expect(serviceSrc).toMatch(/EmployeeQrTokenInvalidException/);
+    expect(serviceSrc).toMatch(/resolveEmployeeQr/);
+
+    // Закрытие вызова сканом — тот же контур, чтобы «Мой QR-код»
+    // работал на обоих экранах мастера.
+    const callsSrc = readSrc(
+      'apps/api/src/modules/master-calls/master-calls.service.ts',
+    );
+    expect(callsSrc).toMatch(/parseAnyEmployeeQr/);
+    expect(callsSrc).toMatch(/me\.verifyEmployeeQrToken/);
+
+    // Лимит длины поднят: подписанный токен длиннее прежних 200.
+    const sharedSrc = readSrc('packages/shared/src/master-actions.ts');
+    expect(sharedSrc).toMatch(/employeeQr: z\.string\(\)\.trim\(\)\.min\(1\)\.max\(1024\)/);
   });
 });
 

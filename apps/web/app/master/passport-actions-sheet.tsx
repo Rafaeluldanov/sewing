@@ -23,7 +23,7 @@ import {
   MASTER_ACTION_REASON_LABELS,
   MASTER_ACTION_REASONS,
   SYSTEM_ROLE_LABELS,
-  parseEmployeeQr,
+  parseAnyEmployeeQr,
   type MasterActionReason,
   type MasterCallPassportDto,
   type MasterSelfOperationStepDto,
@@ -48,6 +48,7 @@ import {
   masterTransferToEmployeeAction,
   masterUnassignPassportAction,
   recordMasterDefectAction,
+  resolveMasterEmployeeQrAction,
   returnMasterToReworkAction,
   type MasterActionResult,
 } from './master-actions-actions';
@@ -386,23 +387,34 @@ function ActionBody({
   ]);
 
   const handleScan = useCallback(
-    (decoded: string) => {
+    async (decoded: string) => {
       if (scanner === 'employee') {
-        // Бумажная этикетка сотрудника (`/api/employees/:id/print`)
-        // несёт `EMPLOYEE:<id>` — разбираем на месте и подсвечиваем
-        // человека в списке. Чужой QR (паспорт, ячейка, «Мой QR-код»
-        // с терминала) до сервера не доходит: он бы вернулся
-        // невнятным `INVALID_EMPLOYEE_QR`.
-        const parsed = parseEmployeeQr(decoded);
-        if (!parsed) {
+        // В цехе два бейджа: бумажная этикетка `EMPLOYEE:<id>` и «Мой
+        // QR-код» с телефона (`SEWING_EMPLOYEE:<token>`). Второй
+        // подписан — `employeeId` из него достаёт только backend,
+        // поэтому за карточкой человека идём на сервер. Чужой QR
+        // (паспорт, ячейка) отсекаем здесь же, до запроса.
+        setScanner(null);
+        if (!parseAnyEmployeeQr(decoded)) {
           onError(
-            'Это не QR сотрудника. Отсканируйте бейдж с этикетки или выберите человека в списке.',
+            'Это не QR сотрудника. Отсканируйте бейдж или выберите человека в списке.',
           );
-          setScanner(null);
           return;
         }
-        setEmployeeId(parsed);
-      } else if (scanner === 'cell') {
+        const res = await resolveMasterEmployeeQrAction(decoded);
+        if (!res.ok) {
+          onError(res.error);
+          return;
+        }
+        setEmployeeId(res.result.employeeId);
+        if (!res.result.active) {
+          onError(
+            `${res.result.fullName} деактивирован — выберите другого сотрудника.`,
+          );
+        }
+        return;
+      }
+      if (scanner === 'cell') {
         setCellQr(decoded);
       }
       setScanner(null);

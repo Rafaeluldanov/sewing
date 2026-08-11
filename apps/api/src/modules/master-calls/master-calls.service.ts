@@ -10,8 +10,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import {
-  EMPLOYEE_QR_PREFIX,
-  parseEmployeeQr,
+  parseAnyEmployeeQr,
   type CreateMasterCallDto,
   type MasterCallDto,
   type MasterCallPassportDto,
@@ -19,6 +18,8 @@ import {
 } from '@sewing/shared/master-calls';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { MeService } from '../me/me.service.js';
+import { EmployeeQrTokenInvalidException } from '../../common/errors.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 
 /**
@@ -49,6 +50,10 @@ export class MasterCallsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    // `MeService` — ради `verifyEmployeeQrToken`: сотрудник показывает
+    // мастеру «Мой QR-код» с телефона (`SEWING_EMPLOYEE:<token>`), а не
+    // бумажную этикетку.
+    private readonly me: MeService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -252,9 +257,13 @@ export class MasterCallsService {
    * Закрыть вызов сотрудника по сканированному QR.
    *
    * Алгоритм:
-   *   1. Распарсить `qr` (`EMPLOYEE:<id>`); если payload не подходит —
-   *      `400 INVALID_EMPLOYEE_QR` (Zod уже отсекает большую часть, но
-   *      здесь страхуемся ещё раз);
+   *   1. Распарсить `qr` — принимаем ОБА формата бейджа:
+   *      `EMPLOYEE:<id>` с бумажной этикетки и
+   *      `SEWING_EMPLOYEE:<token>` из «Мой QR-код» на терминале
+   *      сотрудника (подпись проверяет `MeService`). Не подошло ни то,
+   *      ни другое — `400 INVALID_EMPLOYEE_QR`, протухший токен —
+   *      `400 EMPLOYEE_QR_TOKEN_INVALID` (Zod отсекает большую часть,
+   *      но здесь страхуемся ещё раз);
    *   2. Найти `Employee` по id; нет — `404 EMPLOYEE_NOT_FOUND`;
    *   3. Найти его самый давний `OPEN`-вызов; нет — `404
    *      MASTER_CALL_NOT_FOUND` (закрывать нечего);
@@ -265,13 +274,21 @@ export class MasterCallsService {
     actor: AuthPrincipal,
     dto: ResolveMasterCallByQrDto,
   ): Promise<MasterCallDto> {
-    const employeeId = parseEmployeeQr(dto.qr);
-    if (!employeeId) {
+    const scan = parseAnyEmployeeQr(dto.qr);
+    if (!scan) {
       throw new BadRequestException({
         statusCode: 400,
         code: 'INVALID_EMPLOYEE_QR',
-        message: `Некорректный QR сотрудника (ожидается ${EMPLOYEE_QR_PREFIX}<id>).`,
+        message: 'Это не QR сотрудника — отсканируйте бейдж сотрудника.',
       });
+    }
+    let employeeId: string;
+    if (scan.kind === 'badge') {
+      employeeId = scan.employeeId;
+    } else {
+      const payload = this.me.verifyEmployeeQrToken(scan.token);
+      if (!payload) throw new EmployeeQrTokenInvalidException();
+      employeeId = payload.employeeId;
     }
 
     const employee = await this.prisma.employee.findUnique({

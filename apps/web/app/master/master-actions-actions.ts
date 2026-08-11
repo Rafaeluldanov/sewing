@@ -32,6 +32,7 @@ import {
   type MasterSelfOperationStepsDto,
   type MasterTransferCandidatesDto,
   type PassportHistoryDto,
+  type ResolvedEmployeeQrDto,
 } from '@sewing/shared';
 import {
   CreatePassportDefectSchema,
@@ -51,6 +52,7 @@ import {
   getMasterSelfOperationSteps,
   listMasterTransferCandidates,
   performMasterSelfOperation,
+  resolveMasterEmployeeQr,
   recordMasterPassportDefect,
   returnMasterPassportToCell,
   returnMasterPassportToRework,
@@ -231,6 +233,31 @@ export async function fetchMasterTransferCandidatesAction(
 ): Promise<MasterTransferCandidatesResult> {
   try {
     const result = await listMasterTransferCandidates(passportId);
+    return { ok: true, result };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+export type ResolveEmployeeQrResult =
+  | { ok: true; result: ResolvedEmployeeQrDto }
+  | { ok: false; error: string; errorRequestId?: string };
+
+/**
+ * Отсканированный бейдж → карточка сотрудника. Оба формата разбирает
+ * backend: подписанный `SEWING_EMPLOYEE:<token>` («Мой QR-код» с
+ * терминала) на клиенте не раскрывается. Read-only — `revalidatePath`
+ * не нужен.
+ */
+export async function resolveMasterEmployeeQrAction(
+  qr: string,
+): Promise<ResolveEmployeeQrResult> {
+  try {
+    const result = await resolveMasterEmployeeQr(qr);
     return { ok: true, result };
   } catch (e) {
     return {

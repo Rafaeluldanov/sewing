@@ -16,6 +16,7 @@ import type {
   MasterSelfOperationDto,
   MasterSelfOperationStepsDto,
   MasterTransferCandidatesDto,
+  ResolvedEmployeeQrDto,
   ReturnPassportToCellDto,
   SetRouteStepDto,
   TransferPassportDto,
@@ -78,6 +79,20 @@ export function findMasterPassportByCode(
   return apiFetch<FindMasterPassportByCodeResultDto>(
     `/master-actions/find-passport-by-code`,
     { method: 'POST', body: { code } },
+  );
+}
+
+/**
+ * Отсканированный QR сотрудника → карточка человека. Оба формата
+ * бейджа разбирает backend: `SEWING_EMPLOYEE:<token>` подписан, и
+ * `employeeId` из него на клиенте не достать.
+ */
+export function resolveMasterEmployeeQr(
+  qr: string,
+): Promise<ResolvedEmployeeQrDto> {
+  return apiFetch<ResolvedEmployeeQrDto>(
+    '/master-actions/resolve-employee-qr',
+    { method: 'POST', body: { qr } },
   );
 }
 

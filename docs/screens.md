@@ -1434,7 +1434,10 @@ Source of truth: `apps/web/app/master/passport-actions-sheet.tsx`,
 - Кнопка «← Назад к списку действий» сверху.
 - Заголовок и подсказка действия.
 - Action-specific поля:
-  - `transfer` → input `EMPLOYEE:<id>` + кнопка «Сканировать QR»
+  - `transfer` → список активных сотрудников с их открытой сменой
+    (`GET /api/master-actions/transfer-candidates`, сверху — смена на
+    текущем шаге паспорта) + кнопка «Сканировать бейдж» (принимает и
+    бумажный `EMPLOYEE:<id>`, и «Мой QR-код» `SEWING_EMPLOYEE:<token>`)
     (общий `<QrScannerModal>`).
   - `returnToCell` → input `cell:<id>` или код + «Сканировать QR».
   - `setRouteStep` → радиогруппа из `routeSteps` (snapshot маршрута
