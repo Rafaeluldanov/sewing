@@ -6,7 +6,6 @@ import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { ProductDto, SizeDto } from '@sewing/shared/orders';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
-import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { createOrderAction, type FormActionState } from '../actions';
 import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
 
@@ -25,7 +24,6 @@ interface Props {
    * ADR-0022). Список может быть пустым — тогда select скрыт и заказ
    * создаётся без snapshot материалов/внешних потребностей.
    */
-  techCards: TechCardTemplateSummaryDto[];
   /**
    * Активные карточки подразделений (см.
    * `docs/domain.md §«Подразделения заказа»`) для select-а
@@ -61,7 +59,6 @@ export function NewOrderForm({
   sizes,
   products,
   routeTemplates,
-  techCards,
   companyDivisions,
   clients,
   today,
@@ -226,32 +223,6 @@ export function NewOrderForm({
             заказа в производство — UI на /work будет подсказывать швее
             текущий и следующий шаг. Это «мягкий» маршрут: scan «не туда»
             не блокируется.
-          </div>
-        </div>
-      </div>
-
-      <div className="form-row">
-        <label htmlFor="techCardId">Техкарта</label>
-        <div>
-          <CreatableSelect
-            entity="techCard"
-            id="techCardId"
-            name="techCardId"
-            defaultValue=""
-            existingValues={techCards.map((tc) => tc.id)}
-          >
-            <option value="">— без техкарты —</option>
-            {techCards.map((tc) => (
-              <option key={tc.id} value={tc.id}>
-                {tc.name} ({tc.code})
-              </option>
-            ))}
-          </CreatableSelect>
-          <div className="hint">
-            Опционально. Строки материалов и внешних подрядных размещений
-            зафиксируются snapshot-ом при запуске заказа в производство —
-            план потребностей на карточке заказа станет read-only и
-            перестанет зависеть от поздних правок шаблона.
           </div>
         </div>
       </div>

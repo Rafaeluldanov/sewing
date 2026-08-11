@@ -76,7 +76,6 @@ import {
 } from '@sewing/shared/order-applications';
 import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
-import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import type { PatternCategoryListItemDto } from '@sewing/shared/pattern-categories';
 import {
   AdminCard,
@@ -89,7 +88,6 @@ import {
   CreatableSelect,
   CREATE_SENTINEL,
 } from '@/components/admin/ref-create/creatable-select';
-import { CreateTechCardWindow } from '@/app/admin/orders/new/create-tech-card-window';
 import { formatOrderStatus } from '@/lib/admin-labels';
 import {
   SendPatternToConstructorButton,
@@ -142,7 +140,6 @@ interface Props {
   sizes: SizeDto[];
   routeTemplates: RouteTemplateSummaryDto[];
   routePreviewMap: Record<string, RoutePreview>;
-  techCards: TechCardTemplateSummaryDto[];
   clients: ClientDto[];
   patterns: PatternListItemDto[];
   /**
@@ -227,7 +224,6 @@ export function AdminEditOrderForm({
   sizes,
   routeTemplates,
   routePreviewMap,
-  techCards,
   clients,
   patterns,
   patternCategories,
@@ -276,22 +272,6 @@ export function AdminEditOrderForm({
     ? (routePreviewMap[routeTemplateId] ?? extraRoutePreviews[routeTemplateId])
     : undefined;
 
-  const [techCardId, setTechCardId] = useState<string>(
-    order.techCardId ?? '',
-  );
-  // Техкарты, созданные «на лету» из select-а (окно CreateTechCardWindow):
-  // merge с пришедшими от RSC, дедуп по id.
-  const [extraTechCards, setExtraTechCards] = useState<
-    TechCardTemplateSummaryDto[]
-  >([]);
-  const allTechCards = useMemo(
-    () => [
-      ...techCards,
-      ...extraTechCards.filter((x) => !techCards.some((t) => t.id === x.id)),
-    ],
-    [techCards, extraTechCards],
-  );
-  const [showCreateTechCard, setShowCreateTechCard] = useState(false);
 
   const [patternItemId, setPatternItemId] = useState<string>(
     order.patternItemId ?? '',
@@ -453,7 +433,6 @@ export function AdminEditOrderForm({
       colorways
         .map((cw) => ({
           color: cw.color.trim(),
-          techCardId: cw.techCardId,
           sizes: Object.entries(cw.sizes)
             .filter(([sid, q]) => allSizeIds.has(sid) && q > 0)
             .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan })),
@@ -584,9 +563,6 @@ export function AdminEditOrderForm({
   const showCurrentRouteFallback = Boolean(
     order.routeTemplateId &&
       !routeTemplates.some((t) => t.id === order.routeTemplateId),
-  );
-  const showCurrentTechCardFallback = Boolean(
-    order.techCardId && !techCards.some((t) => t.id === order.techCardId),
   );
   const showCurrentPatternFallback = Boolean(
     order.patternItemId &&
@@ -1139,8 +1115,6 @@ export function AdminEditOrderForm({
                   </div>
                   <CreateProductInline
                     initialCategories={patternCategories}
-                    initialTechCards={techCards}
-                    initialPatterns={patterns}
                     sizes={sizes}
                     initialValue={savedInlineProduct}
                     initialTab={inlineInitialTab}
@@ -1320,69 +1294,6 @@ export function AdminEditOrderForm({
               </header>
 
               <div className="admin-form-grid">
-                {/* Фича «Расцветки»: техкарта выбирается на КАЖДЫЙ цвет в
-                    карточках расцветок, поэтому общий выбор техкарты
-                    прячем, чтобы не дублировать. Без расцветок — обычный
-                    выбор техкарты. */}
-                {!colorwaysEnabled && (
-                  <div className="admin-field">
-                    <label htmlFor="techCardId">Техкарта</label>
-                    <select
-                      id="techCardId"
-                      name="techCardId"
-                      value={techCardId}
-                      onChange={(e) => {
-                        if (e.target.value === CREATE_SENTINEL) {
-                          // Controlled select откатится сам — открываем окно.
-                          setShowCreateTechCard(true);
-                          return;
-                        }
-                        setTechCardId(e.target.value);
-                      }}
-                      disabled={!isDraft}
-                    >
-                      <option value="">— без техкарты —</option>
-                      {showCurrentTechCardFallback && order.techCardId && (
-                        <option value={order.techCardId}>
-                          {order.techCardName ?? 'Текущая техкарта'} — неактивна
-                        </option>
-                      )}
-                      {allTechCards.map((tc) => (
-                        <option key={tc.id} value={tc.id}>
-                          {tc.name}
-                        </option>
-                      ))}
-                      {isDraft && (
-                        <option value={CREATE_SENTINEL}>
-                          ＋ Добавить техкарту…
-                        </option>
-                      )}
-                    </select>
-                    {showCreateTechCard && (
-                      <CreateTechCardWindow
-                        onCancel={() => setShowCreateTechCard(false)}
-                        onCreated={(tc) => {
-                          setExtraTechCards((prev) => [
-                            ...prev.filter((x) => x.id !== tc.id),
-                            tc,
-                          ]);
-                          setTechCardId(tc.id);
-                          setShowCreateTechCard(false);
-                        }}
-                        patternItems={patterns.map((p) => ({
-                          id: p.id,
-                          name: p.name,
-                          article: p.article,
-                        }))}
-                        patternCategories={patternCategories.map((c) => ({
-                          id: c.id,
-                          name: c.name,
-                        }))}
-                      />
-                    )}
-                  </div>
-                )}
-
                 <div className="admin-field">
                   <label htmlFor="routeTemplateId">Маршрут</label>
                   <CreatableSelect
@@ -1474,7 +1385,6 @@ export function AdminEditOrderForm({
                 <OrderColorwaysFieldset
                   availableSizes={availableSizes}
                   allSizes={sortedSizes}
-                  techCards={techCards}
                   value={colorways}
                   onChange={setColorways}
                   initialExtraSizeIds={initialExtraSizeIds}
@@ -1492,7 +1402,6 @@ export function AdminEditOrderForm({
                     <OrderColorwaysFieldset
                       availableSizes={availableSizes}
                       allSizes={sortedSizes}
-                      techCards={techCards}
                       value={colorways}
                       onChange={setColorways}
                       initialExtraSizeIds={initialExtraSizeIds}

@@ -22,7 +22,6 @@ import type { PrinterDetailDto } from '@sewing/shared/printers';
 import type { AppRoleDto } from '@sewing/shared/app-roles';
 import type { EmployeeDetailDto } from '@sewing/shared/employees';
 import type { RouteTemplateDetailDto } from '@sewing/shared/routes';
-import type { TechCardTemplateDetailDto } from '@sewing/shared/tech-cards';
 
 /**
  * Справочники, для которых CreatableSelect умеет открывать модалку
@@ -41,8 +40,7 @@ export type RefEntityKind =
   | 'appRole'
   | 'warehouseCell'
   | 'employee'
-  | 'routeTemplate'
-  | 'techCard';
+  | 'routeTemplate';
 
 /** Контекст создания для суб-сущностей (сейчас — только ячейки склада). */
 export interface RefCreateContext {
@@ -75,7 +73,6 @@ export interface RefCreatedDtoMap {
   warehouseCell: CreatedWarehouseCells;
   employee: EmployeeDetailDto;
   routeTemplate: RouteTemplateDetailDto;
-  techCard: TechCardTemplateDetailDto;
 }
 
 export type RefCreatedDto = RefCreatedDtoMap[RefEntityKind];

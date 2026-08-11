@@ -1152,6 +1152,44 @@ export class OrdersService {
         });
       }
 
+      // Этап 4 «техкарты → номенклатура»: новое изделие сразу получает
+      // СПЕЦИФИКАЦИЮ МАТЕРИАЛОВ из активных параметров группы (кроме
+      // TEXT_ONLY — это текстовые услуги, не материалы). Раньше состав
+      // давала техкарта, выбранная в модалке; без спецификации заказ
+      // упёрся бы в гейт `ORDER_TECH_CARD_REQUIRED` на переходе в расчёт.
+      // То же правило предзаполнения, что у кнопки «Подтянуть из группы»
+      // на карточке номенклатуры (дедуп по роль+лейбл, фурнитура получает
+      // «Указать в заказе», ткани — «Цвет заказа»).
+      if (category) {
+        const seenSpecSeed = new Set<string>();
+        const specSeedData: Prisma.PatternItemMaterialLineCreateManyInput[] =
+          [];
+        for (const p of category.parameters) {
+          if (p.inputType === 'TEXT_ONLY') continue;
+          const dedupeKey = `${p.roleKey}::${p.label
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, ' ')}`;
+          if (seenSpecSeed.has(dedupeKey)) continue;
+          seenSpecSeed.add(dedupeKey);
+          specSeedData.push({
+            patternItemId: newPattern.id,
+            sortOrder: (specSeedData.length + 1) * 10,
+            name: p.label,
+            unit: p.unit,
+            qtyPerUnit: new Prisma.Decimal('1'),
+            materialRole: p.roleKey,
+            fabricType: p.label,
+            subtypeKey: p.subtypeKey ?? null,
+            colorRule:
+              p.roleKey === 'PACKAGING' ? 'ORDER_SELECTED_COLOR' : 'ORDER_COLOR',
+          });
+        }
+        if (specSeedData.length > 0) {
+          await tx.patternItemMaterialLine.createMany({ data: specSeedData });
+        }
+      }
+
       const legacyProductId = await this.ensureLegacyProductForPattern(
         newPattern.id,
         tx,

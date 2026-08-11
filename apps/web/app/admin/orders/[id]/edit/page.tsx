@@ -29,7 +29,6 @@ import type {
   RouteTemplateDetailDto,
   RouteTemplateSummaryDto,
 } from '@sewing/shared/routes';
-import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import type { PatternCategoryListItemDto } from '@sewing/shared/pattern-categories';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import { ApiRequestError } from '@/lib/api';
@@ -43,7 +42,6 @@ import { getOrder, listSizes } from '@/lib/orders-api';
 import { getPattern, listPatterns } from '@/lib/patterns-api';
 import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
-import { getTechCard, listTechCards } from '@/lib/tech-cards-api';
 import { listWarehouses } from '@/lib/warehouses-api';
 import { getOrderColorways } from '@/lib/colorways-api';
 import { getOrderApplications } from '@/lib/order-applications-api';
@@ -85,7 +83,6 @@ export default async function AdminOrderEditPage({ params }: Params) {
 
   let sizes: SizeDto[] = [];
   let routeTemplates: RouteTemplateSummaryDto[] = [];
-  let techCards: TechCardTemplateSummaryDto[] = [];
   let clients: ClientDto[] = [];
   let patterns: PatternListItemDto[] = [];
   let patternCategories: PatternCategoryListItemDto[] = [];
@@ -99,10 +96,9 @@ export default async function AdminOrderEditPage({ params }: Params) {
     // PHASE 1 «CompanyDivision как master-справочник»: подгружаем
     // активные карточки подразделений вместе с остальными
     // справочниками.
-    const [sz, rt, tc, cl, pt, cd, wh, pcat] = await Promise.allSettled([
+    const [sz, rt, cl, pt, cd, wh, pcat] = await Promise.allSettled([
       listSizes(),
       listRouteTemplates({ isActive: true }),
-      listTechCards({ isActive: true }),
       listClients(),
       listPatterns({ status: 'ACTIVE' }),
       listCompanyDivisions(),
@@ -118,7 +114,6 @@ export default async function AdminOrderEditPage({ params }: Params) {
     if (sz.status === 'fulfilled') sizes = sz.value;
     else throw sz.reason;
     routeTemplates = rt.status === 'fulfilled' ? rt.value : [];
-    techCards = tc.status === 'fulfilled' ? tc.value : [];
     clients = cl.status === 'fulfilled' ? cl.value : [];
     patterns = pt.status === 'fulfilled' ? pt.value : [];
     companyDivisions = cd.status === 'fulfilled' ? cd.value : [];
@@ -168,33 +163,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
       // graceful — UI покажет fallback-опцию «неактивен» из формы.
     }
   }
-  if (
-    order.techCardId &&
-    !techCards.some((t) => t.id === order.techCardId)
-  ) {
-    try {
-      const detail = await getTechCard(order.techCardId);
-      techCards = [
-        ...techCards,
-        {
-          id: detail.id,
-          code: detail.code,
-          name: detail.name,
-          isActive: detail.isActive,
-          materialLinesCount: detail.materialLines.length,
-          outsourceLinesCount: detail.outsourceLines.length,
-          createdAt: detail.createdAt,
-          updatedAt: detail.updatedAt,
-        },
-      ];
-    } catch {
-      // graceful — UI покажет fallback-опцию «неактивна» из формы.
-    }
-  }
-  // Soft-pattern MVP (этап 2 «Лекала»): если у заказа уже привязано
-  // лекало, которого нет в активном списке (например, его архивировали
-  // после привязки), доgrузим карточку и подложим её в массив. Это
-  // та же схема, что для clients/routes/techCards.
+  // та же схема, что для clients/routes.
   if (
     order.patternItemId &&
     !patterns.some((p) => p.id === order.patternItemId)
@@ -274,7 +243,6 @@ export default async function AdminOrderEditPage({ params }: Params) {
       const cw = await getOrderColorways(order.id);
       initialColorways = cw.variants.map((v) => ({
         color: v.color,
-        techCardId: v.techCardId,
         sizes: Object.fromEntries(
           v.sizes.map((s) => [s.sizeId, s.qtyPlan]),
         ),
@@ -349,7 +317,6 @@ export default async function AdminOrderEditPage({ params }: Params) {
         sizes={sizes}
         routeTemplates={routeTemplates}
         routePreviewMap={routePreviewMap}
-        techCards={techCards}
         clients={clients}
         patterns={patterns}
         patternCategories={patternCategories}

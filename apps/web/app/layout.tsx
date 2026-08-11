@@ -142,7 +142,6 @@ export default async function RootLayout({
                 <Link href="/admin/warehouses"><Icon name="warehouses" /><span>Склад</span></Link>
                 <Link href="/admin/operations"><Icon name="operations" /><span>Операции</span></Link>
                 <Link href="/admin/routes"><Icon name="arrow-right" /><span>Маршруты</span></Link>
-                <Link href="/admin/tech-cards"><Icon name="orders" /><span>Техкарты</span></Link>
                 <Link href="/admin/employees"><Icon name="employees" /><span>Сотрудники</span></Link>
                 <Link href="/admin/printers"><Icon name="equipment" /><span>Принтеры</span></Link>
               </>

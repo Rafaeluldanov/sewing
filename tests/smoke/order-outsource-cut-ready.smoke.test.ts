@@ -101,20 +101,3 @@ describe('order detail page — readiness indicator', () => {
   });
 });
 
-describe('admin tech card form — triggerType select', () => {
-  test('форма содержит select triggerType с обеими подписями', () => {
-    const src = readSrc('apps/web/app/admin/tech-cards/tech-card-form.tsx');
-    expect(src).toMatch(/outsource\[\$\{row\.key\}\]\[triggerType\]/);
-    expect(src).toMatch(/value="MANUAL"/);
-    expect(src).toMatch(/value="CUT_READY"/);
-    expect(src).toMatch(/Вручную/);
-    expect(src).toMatch(/Когда крой размещён в ячейки/);
-  });
-
-  test('server action парсит triggerType из FormData', () => {
-    const src = readSrc('apps/web/app/admin/tech-cards/actions.ts');
-    expect(src).toMatch(/triggerType/);
-    expect(src).toMatch(/'CUT_READY'/);
-    expect(src).toMatch(/'MANUAL'/);
-  });
-});

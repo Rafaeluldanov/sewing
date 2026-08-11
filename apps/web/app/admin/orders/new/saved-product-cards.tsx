@@ -89,12 +89,6 @@ export function SavedInlineProductCard({
             <span className="admin-muted">не указана</span>
           )}
         </dd>
-        <dt>Техкарта</dt>
-        <dd>
-          {payload.techCardName ?? (
-            <span className="admin-muted">не выбрана</span>
-          )}
-        </dd>
         <dt>Размеры / тираж</dt>
         <dd>
           {payload.sizes.length === 0 ? (

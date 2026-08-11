@@ -20,11 +20,9 @@
 import { useState } from 'react';
 import { Palette, Plus, Trash2, X } from 'lucide-react';
 import type { SizeDto } from '@sewing/shared/sizes';
-import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 
 export interface ColorwayDraft {
   color: string;
-  techCardId: string | null;
   sizes: Record<string, number>;
 }
 
@@ -71,13 +69,12 @@ function swatchHex(name: string): string {
 }
 
 export function makeEmptyColorway(): ColorwayDraft {
-  return { color: '', techCardId: null, sizes: {} };
+  return { color: '', sizes: {} };
 }
 
 export function OrderColorwaysFieldset({
   availableSizes,
   allSizes,
-  techCards,
   value,
   onChange,
   initialExtraSizeIds,
@@ -86,7 +83,6 @@ export function OrderColorwaysFieldset({
   availableSizes: SizeDto[];
   /** Все размеры справочника — источник для кнопки «+» (доп. размеры). */
   allSizes: SizeDto[];
-  techCards: TechCardTemplateSummaryDto[];
   value: ColorwayDraft[];
   onChange: (next: ColorwayDraft[]) => void;
   /**
@@ -269,21 +265,6 @@ export function OrderColorwaysFieldset({
                       </button>
                     )}
                   </div>
-
-                  <select
-                    className="cwf-input cwf-tech"
-                    value={c.techCardId ?? ''}
-                    onChange={(e) =>
-                      patch(idx, { techCardId: e.target.value || null })
-                    }
-                  >
-                    <option value="">Техкарта: не выбрана</option>
-                    {techCards.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        Техкарта: {t.name}
-                      </option>
-                    ))}
-                  </select>
 
                   <div className="cwf-sizes">
                     {displayedSizes.map((s) => {

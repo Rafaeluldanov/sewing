@@ -20,23 +20,15 @@
 
 import {
   CreatePatternCategorySchema,
-  type CompatibleTechCardsResponseDto,
   type CreatePatternCategoryDto,
   type PatternCategoryDto,
 } from '@sewing/shared/pattern-categories';
-import {
-  CreateTechCardSchema,
-  type CreateTechCardDto,
-  type TechCardTemplateDetailDto,
-} from '@sewing/shared/tech-cards';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   createPatternCategory,
-  getCompatibleTechCards,
   getPatternCategory,
   uploadPatternCategoryIcon,
 } from '@/lib/pattern-categories-api';
-import { createTechCard } from '@/lib/tech-cards-api';
 
 export interface InlineActionFailure {
   error: string;
@@ -63,44 +55,6 @@ export async function createPatternCategoryFromOrderModalAction(
   try {
     const created = await createPatternCategory(dto);
     return { ok: true, category: created };
-  } catch (e) {
-    return { error: explainApiError(e) };
-  }
-}
-
-export interface InlineCreateTechCardResult {
-  ok?: boolean;
-  techCard?: TechCardTemplateDetailDto;
-  error?: string;
-}
-
-export async function createTechCardFromOrderModalAction(
-  raw: unknown,
-): Promise<InlineCreateTechCardResult> {
-  const parsed = CreateTechCardSchema.safeParse(raw);
-  if (!parsed.success) {
-    return {
-      error:
-        parsed.error.issues[0]?.message ?? 'Не удалось создать техкарту',
-    };
-  }
-  const dto = parsed.data as CreateTechCardDto;
-  try {
-    const created = await createTechCard(dto);
-    return { ok: true, techCard: created };
-  } catch (e) {
-    return { error: explainApiError(e) };
-  }
-}
-
-export async function loadCompatibleTechCardsAction(
-  categoryId: string,
-): Promise<CompatibleTechCardsResponseDto | { error: string }> {
-  if (!categoryId) {
-    return { error: 'Не указана группа номенклатуры' };
-  }
-  try {
-    return await getCompatibleTechCards(categoryId);
   } catch (e) {
     return { error: explainApiError(e) };
   }

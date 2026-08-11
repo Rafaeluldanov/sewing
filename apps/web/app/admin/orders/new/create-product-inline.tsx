@@ -34,43 +34,30 @@ import {
 } from 'react';
 import { Paperclip, Plus, Upload, X } from 'lucide-react';
 import type {
-  CompatibleTechCardDto,
-  CompatibleTechCardsResponseDto,
   PatternCategoryDto,
   PatternCategoryListItemDto,
   PatternCategoryParameterDto,
 } from '@sewing/shared/pattern-categories';
 import type { SizeDto } from '@sewing/shared/orders';
-import type { PatternListItemDto } from '@sewing/shared/patterns';
-import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import {
   CONSTRUCTOR_TASK_FILE_MAX_COUNT,
   CONSTRUCTOR_TASK_FILE_MAX_SIZE_BYTES,
   type SaveConstructorDraftResultDto,
 } from '@sewing/shared/constructor-tasks';
-import {
-  loadCompatibleTechCardsAction,
-  loadPatternCategoryDetailAction,
-} from './inline-product-actions';
+import { loadPatternCategoryDetailAction } from './inline-product-actions';
 import { saveConstructorDraftAction } from './constructor-task-action';
 import { CreateCategoryWindow } from './create-category-window';
-import {
-  CreateTechCardWindow,
-  type PrefilledMaterialLineSeed,
-} from './create-tech-card-window';
 
 /**
  * Локальный «снимок» сохранённого inline-изделия. Хранится в state
  * родительской формы и сериализуется в hidden input при сабмите заказа.
- * Поля `categoryName` / `techCardName` / `sizeCodes` нужны только для
+ * Поля `categoryName` / `sizeCodes` нужны только для
  * UI-резюме «Изделие №1» — backend их игнорирует и читает только
- * `categoryId / techCardId / patternDevelopmentCostRub / sizes`.
+ * `categoryId / patternDevelopmentCostRub / sizes`.
  */
 export interface SavedInlineProductPayload {
   categoryId: string | null;
   categoryName: string | null;
-  techCardId: string | null;
-  techCardName: string | null;
   patternDevelopmentCostRub: string | null;
   /**
    * Чекбокс «входит в текущий расчёт себестоимости» рядом с полем
@@ -133,16 +120,8 @@ type TabId = 'calculate' | 'constructor';
 interface Props {
   /** Активные группы номенклатуры. */
   initialCategories: PatternCategoryListItemDto[];
-  /** Активные техкарты. */
-  initialTechCards: TechCardTemplateSummaryDto[];
   /** Справочник размеров. */
   sizes: SizeDto[];
-  /**
-   * Активные номенклатуры — нужны селектy «Подтянуть номенклатуры»
-   * внутри `CreateTechCardWindow`. Если в проекте нет ни одной,
-   * массив пуст — модалка просто покажет disabled-сообщение.
-   */
-  initialPatterns?: PatternListItemDto[];
   /**
    * Колбэк сохранения. Discriminated union: либо локальный payload
    * для расчёта (`kind: 'calculate'`), либо результат уже созданной
@@ -232,12 +211,10 @@ function rowsFromInitial(
 
 export function CreateProductInline({
   initialCategories,
-  initialTechCards,
   sizes,
   onSave,
   onCancel,
   initialValue = null,
-  initialPatterns = [],
   initialTab = 'calculate',
   createDraftOrderOnConstructor = false,
   orderClientId,
@@ -247,20 +224,12 @@ export function CreateProductInline({
 
   const [categories, setCategories] =
     useState<PatternCategoryListItemDto[]>(initialCategories);
-  const [techCards, setTechCards] =
-    useState<TechCardTemplateSummaryDto[]>(initialTechCards);
-
   const [categoryId, setCategoryId] = useState<string>(
     initialValue?.categoryId ?? '',
-  );
-  const [techCardId, setTechCardId] = useState<string>(
-    initialValue?.techCardId ?? '',
   );
   const [categoryDetail, setCategoryDetail] =
     useState<PatternCategoryDto | null>(null);
   const [categoryLoading, setCategoryLoading] = useState(false);
-  const [compatibility, setCompatibility] =
-    useState<CompatibleTechCardsResponseDto | null>(null);
 
   const [rows, setRows] = useState<SizeRowState[]>(() =>
     rowsFromInitial(initialValue),
@@ -282,7 +251,6 @@ export function CreateProductInline({
   const [calcSubmitting, setCalcSubmitting] = useState(false);
 
   const [showCategoryWindow, setShowCategoryWindow] = useState(false);
-  const [showTechCardWindow, setShowTechCardWindow] = useState(false);
 
   // ── Вкладка `constructor` («Отправить изделие конструктору») ────────
   // Локальный state, который при «Сохранить изделие» отправляется на
@@ -327,31 +295,20 @@ export function CreateProductInline({
   }, [categoryDetail]);
 
   useEffect(() => {
-    // При смене категории сбрасываем выбранную техкарту, грузим
-    // карточку категории + список совместимых техкарт.
-    if (initialValue && initialValue.categoryId === categoryId) {
-      // На первом монтировании при редактировании НЕ сбрасываем
-      // techCardId — он пришёл из initialValue.
-    } else {
-      setTechCardId('');
-    }
-    setCompatibility(null);
+    // При смене категории грузим её карточку — колонки таблицы расхода.
+    // Состав материалов нового изделия теперь сеет backend из параметров
+    // группы (спецификация номенклатуры), техкарта больше не выбирается.
     if (!categoryId) {
       setCategoryDetail(null);
       return;
     }
     let cancelled = false;
     setCategoryLoading(true);
-    Promise.all([
-      loadPatternCategoryDetailAction(categoryId),
-      loadCompatibleTechCardsAction(categoryId),
-    ])
-      .then(([cat, compat]) => {
+    Promise.all([loadPatternCategoryDetailAction(categoryId)])
+      .then(([cat]) => {
         if (cancelled) return;
         if ('error' in cat) setCategoryDetail(null);
         else setCategoryDetail(cat);
-        if ('error' in compat) setCompatibility(null);
-        else setCompatibility(compat);
       })
       .finally(() => {
         if (!cancelled) setCategoryLoading(false);
@@ -420,25 +377,6 @@ export function CreateProductInline({
     },
     [],
   );
-
-  const activeCompatibility = useMemo<
-    Map<string, CompatibleTechCardDto>
-  >(() => {
-    const m = new Map<string, CompatibleTechCardDto>();
-    if (!compatibility) return m;
-    for (const t of compatibility.techCards) m.set(t.id, t);
-    return m;
-  }, [compatibility]);
-
-  const techCardSeedLines = useMemo<PrefilledMaterialLineSeed[]>(() => {
-    return areaParameters.map((p) => ({
-      name: p.label,
-      materialRole: p.roleKey,
-      fabricType: p.label,
-      unit: 'кг',
-      qtyPerUnit: '1.0000',
-    }));
-  }, [areaParameters]);
 
   // При первом переключении на вкладку конструктора инициализируем
   // строки погонных метров. Источник — `initialValue.sizes` (то, что
@@ -594,7 +532,6 @@ export function CreateProductInline({
       // `order-cost-estimates.service.ts::completeCalculation`).
       const calcPayload = {
         categoryId: initialValue.categoryId,
-        techCardId: initialValue.techCardId,
         patternDevelopmentCostRub: initialValue.patternDevelopmentCostRub,
         patternDevelopmentCostInCostPrice:
           initialValue.patternDevelopmentCostInCostPrice,
@@ -693,15 +630,9 @@ export function CreateProductInline({
     const categoryName = categoryId
       ? (categories.find((c) => c.id === categoryId)?.name ?? null)
       : null;
-    const techCardName = techCardId
-      ? (techCards.find((t) => t.id === techCardId)?.name ?? null)
-      : null;
-
     const payload: SavedInlineProductPayload = {
       categoryId: categoryId === '' ? null : categoryId,
       categoryName,
-      techCardId: techCardId === '' ? null : techCardId,
-      techCardName,
       patternDevelopmentCostRub:
         devCost.trim() === '' ? null : devCost.trim().replace(',', '.'),
       patternDevelopmentCostInCostPrice: devCostInCostPrice,
@@ -790,61 +721,6 @@ export function CreateProductInline({
               таблица расхода материалов появится после выбора группы
               с параметрами «Площадь по размерам».
             </span>
-          </div>
-
-          {/* Техкарта — опциональна. */}
-          <div className="cpi-field">
-            <label htmlFor="cpi-techcard">Техкарта</label>
-            <div className="cpi-inline-row">
-              <select
-                id="cpi-techcard"
-                value={techCardId}
-                onChange={(e) => setTechCardId(e.target.value)}
-                disabled={categoryLoading}
-              >
-                <option value="">— не выбрана —</option>
-                {techCards
-                  .filter((tc) => tc.isActive)
-                  .map((tc) => {
-                    const c = activeCompatibility.get(tc.id);
-                    const lvl = c?.compatibility;
-                    const suffix = lvl
-                      ? lvl === 'FULL'
-                        ? ' · ✓ совместима'
-                        : lvl === 'PARTIAL'
-                          ? ' · ⚠ покрывает не все материалы'
-                          : ' · ✕ не совместима'
-                      : '';
-                    return (
-                      <option key={tc.id} value={tc.id}>
-                        {tc.name}
-                        {suffix}
-                      </option>
-                    );
-                  })}
-              </select>
-              <button
-                type="button"
-                className="cpi-btn cpi-btn--ghost"
-                onClick={() => setShowTechCardWindow(true)}
-              >
-                <Plus size={14} strokeWidth={1.8} aria-hidden /> Добавить
-                техкарту
-              </button>
-            </div>
-            {compatibility && techCardId &&
-              (() => {
-                const c = activeCompatibility.get(techCardId);
-                if (!c || c.missingRoleKeys.length === 0) return null;
-                return (
-                  <div className="cpi-warn">
-                    Техкарта не покрывает:{' '}
-                    {c.missingRoleKeys.join(', ')}. При сохранении заказа
-                    backend вернёт ошибку
-                    TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY.
-                  </div>
-                );
-              })()}
           </div>
 
           {/* Таблица «Размерная матрица и расход». */}
@@ -1106,12 +982,6 @@ export function CreateProductInline({
             <span>
               {initialValue.categoryName ?? (
                 <span className="cpi-muted">не указана</span>
-              )}
-            </span>
-            <span style={{ color: '#475569' }}>Техкарта</span>
-            <span>
-              {initialValue.techCardName ?? (
-                <span className="cpi-muted">не выбрана</span>
               )}
             </span>
             <span style={{ color: '#475569' }}>Размеров / тираж</span>
@@ -1406,57 +1276,6 @@ export function CreateProductInline({
             ]);
             setCategoryId(cat.id);
             setShowCategoryWindow(false);
-          }}
-        />
-      )}
-
-      {showTechCardWindow && (
-        <CreateTechCardWindow
-          patternCategoryId={categoryId || null}
-          prefilledMaterialLines={techCardSeedLines}
-          patternItems={initialPatterns.map((p) => ({
-            id: p.id,
-            name: p.name,
-            article: p.article,
-          }))}
-          patternCategories={categories.map((c) => ({
-            id: c.id,
-            name: c.name,
-          }))}
-          suggestedCode={
-            categoryDetail
-              ? `${categoryDetail.slug.toUpperCase()}-${Date.now()
-                  .toString(36)
-                  .toUpperCase()
-                  .slice(-4)}`
-              : ''
-          }
-          suggestedName={
-            categoryDetail ? `Техкарта · ${categoryDetail.name}` : ''
-          }
-          onCancel={() => setShowTechCardWindow(false)}
-          onCreated={(tc) => {
-            setTechCards((prev) => [
-              ...prev.filter((t) => t.id !== tc.id),
-              {
-                id: tc.id,
-                code: tc.code,
-                name: tc.name,
-                isActive: tc.isActive,
-                patternCategoryId: tc.patternCategoryId ?? null,
-                materialLinesCount: tc.materialLines.length,
-                outsourceLinesCount: tc.outsourceLines.length,
-                createdAt: tc.createdAt,
-                updatedAt: tc.updatedAt,
-              },
-            ]);
-            setTechCardId(tc.id);
-            if (categoryId) {
-              loadCompatibleTechCardsAction(categoryId).then((compat) => {
-                if (!('error' in compat)) setCompatibility(compat);
-              });
-            }
-            setShowTechCardWindow(false);
           }}
         />
       )}

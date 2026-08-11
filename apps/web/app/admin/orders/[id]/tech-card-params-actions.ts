@@ -17,7 +17,6 @@ import {
   CreateOrderTechCardLineSchema,
   CreateOrderTechCardLinesSchema,
   CreateOrderTechCardParameterSchema,
-  SaveOrderTechCardAsTemplateSchema,
   SetOrderTechCardParameterValueSchema,
   UpdateOrderTechCardLineSchema,
   type OrderTechCardParametersDto,
@@ -34,7 +33,6 @@ import {
   getOrderTechCardParameters,
   reloadOrderTechCardFromTemplate,
   reloadOrderTechCardNorms,
-  saveOrderTechCardAsTemplate,
   setOrderTechCardParameterValue,
   updateOrderTechCardLine,
 } from '@/lib/order-tech-card-api';
@@ -44,7 +42,6 @@ export interface TechCardParamsActionResult {
   error?: string;
   data?: OrderTechCardParametersDto;
   /** Для «сохранить как шаблон»: что получилось. */
-  savedTemplate?: { id: string; code: string; name: string };
 }
 
 function revalidateOrder(orderId: string): void {
@@ -263,6 +260,30 @@ export async function deleteTechCardLineAction(
 }
 
 /**
+ * «Обновить нормы из номенклатуры»: снять правки норм, сделанные в заказе
+ * (`qtySource = ORDER` → `NOMENCLATURE`), и пересчитать снимок — нормы снова
+ * ведёт карточка номенклатуры. Ручные строки не трогаются.
+ */
+export async function reloadTechCardNormsAction(
+  orderId: string,
+): Promise<TechCardParamsActionResult> {
+  try {
+    await reloadOrderTechCardNorms(orderId);
+    const data = await getOrderTechCardParameters(orderId);
+    revalidateOrder(orderId);
+    return { ok: true, data };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        error: errorText(e, 'Не удалось обновить нормы из номенклатуры'),
+      };
+    }
+    throw e;
+  }
+}
+
+/**
  * «Обновить из шаблона»: подтянуть изменившийся справочник в этот заказ.
  * Действие РАЗРУШИТЕЛЬНОЕ — правки структуры, сделанные в заказе, теряются;
  * значения параметров переживают. Эндпоинт отдаёт {ok}, поэтому свежий DTO
@@ -284,56 +305,3 @@ export async function reloadTechCardFromTemplateAction(
   }
 }
 
-/**
- * «Обновить нормы из номенклатуры»: перечитать числа норм из карточки
- * номенклатуры. Структуру строк, параметры и характеристики не трогает —
- * в отличие от «Обновить из шаблона». Ручные строки остаются со своими
- * числами: в номенклатуре их нет.
- */
-export async function reloadTechCardNormsAction(
-  orderId: string,
-): Promise<TechCardParamsActionResult> {
-  try {
-    const data = await reloadOrderTechCardNorms(orderId);
-    revalidateOrder(orderId);
-    return { ok: true, data };
-  } catch (e) {
-    if (e instanceof ApiRequestError) {
-      return {
-        ok: false,
-        error: errorText(e, 'Не удалось обновить нормы из номенклатуры'),
-      };
-    }
-    throw e;
-  }
-}
-
-export async function saveTechCardAsTemplateAction(
-  orderId: string,
-  payload: unknown,
-): Promise<TechCardParamsActionResult> {
-  const parsed = SaveOrderTechCardAsTemplateSchema.safeParse(payload);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: parsed.error.issues[0]?.message ?? 'Укажите код и название',
-    };
-  }
-  try {
-    const tpl = await saveOrderTechCardAsTemplate(orderId, parsed.data);
-    // Справочник техкарт изменился — его страницы тоже надо освежить.
-    revalidatePath('/admin/tech-cards');
-    return {
-      ok: true,
-      savedTemplate: { id: tpl.id, code: tpl.code, name: tpl.name },
-    };
-  } catch (e) {
-    if (e instanceof ApiRequestError) {
-      return {
-        ok: false,
-        error: errorText(e, 'Не удалось сохранить как шаблон'),
-      };
-    }
-    throw e;
-  }
-}

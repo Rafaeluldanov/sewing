@@ -40,7 +40,6 @@ function exists(rel: string): boolean {
 
 const WEB_ROOT = path.join(repoRoot, 'apps/web');
 const PATTERN_FILE = 'apps/web/lib/code-pattern.ts';
-const TECH_CARD_FORM = 'apps/web/app/admin/tech-cards/tech-card-form.tsx';
 const ROUTE_TEMPLATE_FORM = 'apps/web/app/admin/routes/route-template-form.tsx';
 const SHARED_TECH_CARDS = 'packages/shared/src/tech-cards.ts';
 const SHARED_ROUTES = 'packages/shared/src/routes.ts';
@@ -97,13 +96,6 @@ describe('CODE_PATTERN — общая константа для HTML pattern', (
 // ---------------------------------------------------------------------------
 
 describe('admin-формы — pattern={CODE_PATTERN} вместо сырой строки', () => {
-  test('tech-card-form импортирует CODE_PATTERN из @/lib/code-pattern', () => {
-    const src = read(TECH_CARD_FORM);
-    expect(src).toMatch(
-      /import\s*\{[^}]*CODE_PATTERN[^}]*\}\s*from\s*['"]@\/lib\/code-pattern['"]/,
-    );
-    expect(src).toMatch(/pattern=\{CODE_PATTERN\}/);
-  });
 
   test('route-template-form импортирует CODE_PATTERN из @/lib/code-pattern', () => {
     const src = read(ROUTE_TEMPLATE_FORM);
@@ -113,8 +105,7 @@ describe('admin-формы — pattern={CODE_PATTERN} вместо сырой с
     expect(src).toMatch(/pattern=\{CODE_PATTERN\}/);
   });
 
-  test('обе формы используют title={CODE_PATTERN_TITLE}', () => {
-    expect(read(TECH_CARD_FORM)).toMatch(/title=\{CODE_PATTERN_TITLE\}/);
+  test('форма маршрутов использует title={CODE_PATTERN_TITLE}', () => {
     expect(read(ROUTE_TEMPLATE_FORM)).toMatch(/title=\{CODE_PATTERN_TITLE\}/);
   });
 });

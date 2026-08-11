@@ -129,7 +129,6 @@ function buildGroups(modules: ModuleFlags): NavGroup[] {
         ...(modules.patterns
           ? [{ href: '/admin/patterns', label: 'Номенклатура', Icon: Scissors }]
           : []),
-        { href: '/admin/tech-cards', label: 'Техкарты', Icon: ClipboardList },
         { href: '/admin/routes', label: 'Маршруты', Icon: Activity },
         { href: '/admin/operations', label: 'Операции', Icon: Scissors },
         {

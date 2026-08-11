@@ -62,12 +62,6 @@ describe('Admin UI Polish — списки без технических код�
     expect(src).toMatch(/tpl\.name/);
   });
 
-  test('/admin/tech-cards не показывает tc.code в таблице', () => {
-    const src = readSrc('apps/web/app/admin/tech-cards/page.tsx');
-    expect(src).not.toMatch(/<code>\{tc\.code\}<\/code>/);
-    expect(src).not.toMatch(/tc\.code/);
-    expect(src).toMatch(/tc\.name/);
-  });
 
   test('/admin/warehouses не показывает w.code в таблице', () => {
     const src = readSrc('apps/web/app/admin/warehouses/page.tsx');
@@ -101,7 +95,6 @@ describe('Admin UI Polish — иконки на lucide-react', () => {
     'apps/web/app/admin/equipment/page.tsx',
     'apps/web/app/admin/operations/page.tsx',
     'apps/web/app/admin/routes/page.tsx',
-    'apps/web/app/admin/tech-cards/page.tsx',
     'apps/web/app/admin/warehouses/page.tsx',
     'apps/web/app/admin/printers/page.tsx',
   ];
@@ -219,7 +212,6 @@ describe('Admin UI Polish — /admin как dashboard', () => {
       '/admin/equipment',
       '/admin/operations',
       '/admin/routes',
-      '/admin/tech-cards',
       '/admin/warehouses',
       '/admin/printers',
       '/admin/diagnostics',
@@ -403,7 +395,6 @@ describe('Admin UI 2.0 — sidebar', () => {
       '/admin/equipment',
       '/admin/operations',
       '/admin/routes',
-      '/admin/tech-cards',
       '/admin/warehouses',
       '/admin/printers',
       '/admin/diagnostics',
@@ -446,7 +437,6 @@ describe('Admin UI 2.0 — dashboard со счётчиками', () => {
     expect(src).toMatch(/listEquipment/);
     expect(src).toMatch(/listOperations/);
     expect(src).toMatch(/listRouteTemplates/);
-    expect(src).toMatch(/listTechCards/);
     expect(src).toMatch(/listWarehouses/);
     expect(src).toMatch(/listPrinters/);
     // Карточка статистики и склонение по ru-RU.

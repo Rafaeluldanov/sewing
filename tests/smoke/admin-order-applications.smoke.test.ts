@@ -482,23 +482,6 @@ describe('WorkshopNeedsService — учитывает OrderApplication', () => {
 // 10. Tech-card UI больше не предлагает APPLICATION/PACKAGING как новые роли
 // ---------------------------------------------------------------------------
 
-describe('Tech-card form: APPLICATION недоступен как новая роль; PACKAGING — «Фурнитура»', () => {
-  const FORM = 'apps/web/app/admin/tech-cards/tech-card-form.tsx';
-
-  test('форма берёт роли из PATTERN_CATEGORY_PARAMETER_GROUPS (через TECH_CARD_MATERIAL_ROLE_KEYS)', () => {
-    const src = read(FORM);
-    // Этап «Доработка UI и контракта техкарты» (см. ТЗ §1):
-    // источник ролей теперь — `PATTERN_CATEGORY_PARAMETER_GROUPS`
-    // (включает PACKAGING, исключает APPLICATION). UI-метка для
-    // PACKAGING — «Фурнитура» (через `getTechCardMaterialRoleLabel`).
-    expect(src).toMatch(/TECH_CARD_MATERIAL_ROLE_KEYS/);
-    expect(src).toMatch(/getTechCardMaterialRoleLabel\(/);
-    // Legacy-fallback: если пришла строка с APPLICATION (или иной
-    // unknown roleKey), показываем её как «(legacy)».
-    expect(src).toMatch(/isKnownTechCardMaterialRoleKey/);
-    expect(src).toMatch(/\(legacy\)/);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // 11. Маршрут НЕ изменён

@@ -159,36 +159,6 @@ describe('Admin Legacy Cleanup — order detail 2.0', () => {
 
 // ---------------------------------------------------------------------------
 // 3. Tech-cards form cleanup
-// ---------------------------------------------------------------------------
-
-describe('Admin Legacy Cleanup — tech-cards form', () => {
-  test('tech-card-form не содержит <Icon name=…> и не импортирует @/components/icon', () => {
-    const src = readSrc('apps/web/app/admin/tech-cards/tech-card-form.tsx');
-    expect(src).not.toMatch(/<Icon\s+name=/);
-    expect(src).not.toMatch(/from ['"]@\/components\/icon['"]/);
-  });
-
-  test('tech-card-form использует lucide-react и admin-form классы', () => {
-    const src = readSrc('apps/web/app/admin/tech-cards/tech-card-form.tsx');
-    expect(src).toMatch(/from ['"]lucide-react['"]/);
-    expect(src).toMatch(/admin-form/);
-    expect(src).toMatch(/admin-field/);
-    expect(src).toMatch(/admin-actions-row/);
-  });
-
-  test('tech-cards/[id] и tech-cards/new — admin shell + admin card', () => {
-    for (const file of [
-      'apps/web/app/admin/tech-cards/new/page.tsx',
-      'apps/web/app/admin/tech-cards/[id]/page.tsx',
-    ]) {
-      const src = readSrc(file);
-      expect(src).toMatch(/AdminPageShell/);
-      expect(src).toMatch(/AdminCard/);
-      expect(src).toMatch(/from ['"]lucide-react['"]/);
-      expect(src).not.toMatch(/<Icon\s+name=/);
-    }
-  });
-});
 
 // ---------------------------------------------------------------------------
 // 4. Production-dashboard cleanup

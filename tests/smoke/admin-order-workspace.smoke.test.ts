@@ -186,7 +186,6 @@ describe('/admin/orders/new — мастер создания вместо од�
     expect(formSrc).toMatch(/OrderColorwaysFieldset/);
     expect(formSrc).toMatch(/SizePlanSelector/);
     expect(formSrc).toMatch(/routeTemplateId/);
-    expect(formSrc).toMatch(/TechCardCombobox/);
     expect(formSrc).toMatch(/OrderApplicationsEditor/);
   });
 
@@ -502,7 +501,6 @@ describe('/admin/orders/[id]/edit — использует OrderWorkspaceLayout 
     expect(formSrc).toMatch(/name="companyDivisionId"/);
     expect(formSrc).toMatch(/name="color"/);
     expect(formSrc).toMatch(/name="comment"/);
-    expect(formSrc).toMatch(/name="techCardId"/);
     expect(formSrc).toMatch(/name="routeTemplateId"/);
     expect(formSrc).toMatch(/name="customerUnitPrice"/);
     expect(formSrc).toMatch(/name="customerCurrency"/);

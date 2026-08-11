@@ -19,7 +19,7 @@
  *     «Маршрут» рисовал превью `AdminRouteSteps` без ожидания;
  *   - `clients`, `companyDivisions`, `warehouses` — для select-ов
  *     шага «Клиент»;
- *   - `patterns`, `patternCategories`, `techCards`, `sizes` — для
+ *   - `patterns`, `patternCategories`, `sizes` — для
  *     шага «Изделие» и модалки «Создать изделие».
  *
  * Backend / DTO / Prisma не менялись: мастер ходит в те же
@@ -39,7 +39,6 @@ import type {
   RouteTemplateDetailDto,
   RouteTemplateSummaryDto,
 } from '@sewing/shared/routes';
-import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
@@ -54,7 +53,6 @@ import { listSizes } from '@/lib/orders-api';
 import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { listPatterns } from '@/lib/patterns-api';
 import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
-import { listTechCards } from '@/lib/tech-cards-api';
 import { listWarehouses } from '@/lib/warehouses-api';
 import { AdminCard, AdminPageShell } from '@/components/admin';
 import { OrderCreateWizard } from './order-create-wizard';
@@ -69,7 +67,6 @@ export default async function AdminOrderNewPage() {
 
   let sizes: SizeDto[] = [];
   let routeTemplates: RouteTemplateSummaryDto[] = [];
-  let techCards: TechCardTemplateSummaryDto[] = [];
   let clients: ClientDto[] = [];
   let patterns: PatternListItemDto[] = [];
   let patternCategories: PatternCategoryListItemDto[] = [];
@@ -80,10 +77,9 @@ export default async function AdminOrderNewPage() {
     // Этап «Номенклатура = Лекала»: больше не грузим список Product —
     // в форме его нет, backend сам подставит legacy Product через
     // `OrdersService.ensureLegacyProductForPattern()`.
-    const [sz, rt, tc, cl, pt, pcat, cd, wh] = await Promise.allSettled([
+    const [sz, rt, cl, pt, pcat, cd, wh] = await Promise.allSettled([
       listSizes(),
       listRouteTemplates({ isActive: true }),
-      listTechCards({ isActive: true }),
       listClients(),
       // Этап «Номенклатура = Лекала»: только активные карточки лекал —
       // это единственная видимая номенклатура, менеджер не должен
@@ -107,7 +103,6 @@ export default async function AdminOrderNewPage() {
     if (sz.status === 'fulfilled') sizes = sz.value;
     else throw sz.reason;
     routeTemplates = rt.status === 'fulfilled' ? rt.value : [];
-    techCards = tc.status === 'fulfilled' ? tc.value : [];
     clients = cl.status === 'fulfilled' ? cl.value : [];
     patterns = pt.status === 'fulfilled' ? pt.value : [];
     patternCategories = pcat.status === 'fulfilled' ? pcat.value : [];
@@ -166,7 +161,6 @@ export default async function AdminOrderNewPage() {
         sizes={sizes}
         routeTemplates={routeTemplates}
         routePreviewMap={routePreviewMap}
-        techCards={techCards}
         clients={clients}
         patterns={patterns}
         patternCategories={patternCategories}

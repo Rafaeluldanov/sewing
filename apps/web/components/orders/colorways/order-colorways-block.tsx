@@ -56,12 +56,11 @@ function swatchHex(name: string): string {
 }
 
 interface DraftSize { sizeId: string; qtyPlan: number }
-interface Draft { color: string; techCardId: string | null; sizes: DraftSize[] }
+interface Draft { color: string; sizes: DraftSize[] }
 
 function toDraft(v: OrderColorwaysDto['variants'][number]): Draft {
   return {
     color: v.color,
-    techCardId: v.techCardId,
     sizes: v.sizes.map((s) => ({ sizeId: s.sizeId, qtyPlan: s.qtyPlan })),
   };
 }
@@ -172,7 +171,7 @@ export function OrderColorwaysBlock({
         Object.fromEntries(r.data.variants.map((v) => [v.id, toDraft(v)])),
       );
       setError(null);
-      // Смена техкарты расцветки пересобирает СПЕЦИФИКАЦИЮ (материалы +
+      // Правка расцветки пересобирает СПЕЦИФИКАЦИЮ (материалы +
       // параметры) на бэке, но `updateColorwayAction` возвращает только
       // расцветки. Материалы раньше подтягивались лишь через
       // `router.refresh()` → проп → useEffect, и это срабатывало
@@ -231,7 +230,6 @@ export function OrderColorwaysBlock({
       applyResult(
         await updateColorwayAction(orderId, vid, {
           color: d.color,
-          techCardId: d.techCardId,
           sizes: d.sizes,
         }),
       );
@@ -243,7 +241,6 @@ export function OrderColorwaysBlock({
       applyResult(
         await createColorwayAction(orderId, {
           color: 'новый цвет',
-          techCardId: null,
           sizes: [],
         }),
       );
@@ -358,41 +355,6 @@ export function OrderColorwaysBlock({
                 )}
               </div>
 
-              <label className="cwl-field">
-                <span className="cwl-label">Техкарта материалов</span>
-                <CreatableSelect
-                  entity="techCard"
-                  className="cwl-input"
-                  value={d.techCardId ?? ''}
-                  onValueChange={(next) =>
-                    patchDraft(v.id, { techCardId: next || null })
-                  }
-                  disabled={ro}
-                  disableCreate={ro}
-                  existingValues={data.techCards.map((t) => t.id)}
-                  onCreated={(tc) =>
-                    // Merge в общий список блока: новую техкарту сразу
-                    // видят селекты ВСЕХ расцветок, а не только текущая.
-                    setData((prev) =>
-                      prev.techCards.some((t) => t.id === tc.id)
-                        ? prev
-                        : {
-                            ...prev,
-                            techCards: [
-                              ...prev.techCards,
-                              { id: tc.id, name: tc.name },
-                            ],
-                          },
-                    )
-                  }
-                >
-                  <option value="">— по умолчанию заказа —</option>
-                  {data.techCards.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </CreatableSelect>
-              </label>
-
               <div className="cwl-field">
                 <span className="cwl-label">План по размерам, шт</span>
                 <div className="cwl-sizes">
@@ -462,12 +424,7 @@ export function OrderColorwaysBlock({
               )}
 
               <footer className="cwl-card__foot">
-                <span className="cwl-muted">
-                  Σ {rowTotal} шт ·{' '}
-                  {d.techCardId
-                    ? (data.techCards.find((t) => t.id === d.techCardId)?.name ?? 'своя техкарта')
-                    : 'техкарта заказа'}
-                </span>
+                <span className="cwl-muted">Σ {rowTotal} шт</span>
                 {!ro && (
                   <button
                     type="button"

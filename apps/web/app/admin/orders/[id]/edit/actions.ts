@@ -123,10 +123,6 @@ function parseVariantsJson(form: FormData): UpdateOrderDto['variants'] {
     const rec = v as Record<string, unknown>;
     const color = typeof rec.color === 'string' ? rec.color.trim() : '';
     if (color === '') continue;
-    const techCardId =
-      typeof rec.techCardId === 'string' && rec.techCardId.length > 0
-        ? rec.techCardId
-        : null;
     const sizesRaw = Array.isArray(rec.sizes) ? rec.sizes : [];
     const sizes: { sizeId: string; qtyPlan: number }[] = [];
     for (const s of sizesRaw) {
@@ -137,7 +133,7 @@ function parseVariantsJson(form: FormData): UpdateOrderDto['variants'] {
       if (sizeId === '' || !Number.isFinite(qtyPlan) || qtyPlan <= 0) continue;
       sizes.push({ sizeId, qtyPlan: Math.trunc(qtyPlan) });
     }
-    out.push({ color, techCardId, sizes });
+    out.push({ color, sizes });
   }
   return out.length > 0 ? out : undefined;
 }
@@ -258,7 +254,6 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     items: variants ? undefined : items.length > 0 ? items : undefined,
     variants,
     routeTemplateId: optionalNullableString(form.get('routeTemplateId')),
-    techCardId: optionalNullableString(form.get('techCardId')),
     // Этап «Номенклатура = Лекала»: семантика та же — поля нет
     // = не трогать, пустая строка = снять, иначе переустановить.
     // При смене лекала backend атомарно пересинхронизирует

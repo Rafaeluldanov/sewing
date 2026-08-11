@@ -13,7 +13,6 @@ import type {
   CreateOrderTechCardLinesDto,
   CreateOrderTechCardParameterDto,
   OrderTechCardParametersDto,
-  SaveOrderTechCardAsTemplateDto,
   SetOrderTechCardParameterValueDto,
   UpdateOrderTechCardLineDto,
 } from '@sewing/shared/order-tech-cards';
@@ -158,13 +157,3 @@ export function reloadOrderTechCardNorms(
   );
 }
 
-/** Вынести техкарту расцветки в справочник как новый шаблон. */
-export function saveOrderTechCardAsTemplate(
-  orderId: string,
-  body: SaveOrderTechCardAsTemplateDto,
-): Promise<TechCardTemplateDetailDto> {
-  return apiFetch<TechCardTemplateDetailDto>(
-    `/orders/${encodeURIComponent(orderId)}/tech-card/save-as-template`,
-    { method: 'POST', body },
-  );
-}

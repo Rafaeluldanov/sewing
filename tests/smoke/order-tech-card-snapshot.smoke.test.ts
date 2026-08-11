@@ -100,27 +100,7 @@ describe('order detail page — tech card snapshot blocks', () => {
   });
 });
 
-describe('order new form — tech card select', () => {
-  test('NewOrderForm содержит select techCardId с empty-option', () => {
-    const src = readSrc('apps/web/app/orders/new/new-order-form.tsx');
-    expect(src).toMatch(/name="techCardId"/);
-    expect(src).toMatch(/Техкарта/);
-    expect(src).toMatch(/без техкарты/);
-  });
 
-  test('Edit form тоже содержит select techCardId', () => {
-    const src = readSrc('apps/web/app/orders/[id]/edit/edit-order-form.tsx');
-    expect(src).toMatch(/name="techCardId"/);
-  });
-});
-
-describe('admin nav — tech cards link', () => {
-  test('layout содержит ссылку /admin/tech-cards', () => {
-    const src = readSrc('apps/web/app/layout.tsx');
-    expect(src).toMatch(/href="\/admin\/tech-cards"/);
-    expect(src).toMatch(/Техкарты/);
-  });
-});
 
 describe('shared DTO contracts', () => {
   test('OrderDetailDto содержит techCardId, materialRequirements, outsourceRequirements', () => {

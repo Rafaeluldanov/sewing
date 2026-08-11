@@ -161,13 +161,4 @@ export const REF_CREATE_REGISTRY: {
     toOptions: (dto) => [{ value: dto.id, label: `${dto.name} (${dto.code})` }],
     createLabel: '＋ Добавить маршрут…',
   },
-  techCard: {
-    Modal: dynamic(
-      () =>
-        import('./create-tech-card-modal').then((m) => m.CreateTechCardModal),
-      { ssr: false },
-    ),
-    toOptions: (dto) => [{ value: dto.id, label: `${dto.name} (${dto.code})` }],
-    createLabel: '＋ Добавить техкарту…',
-  },
 };

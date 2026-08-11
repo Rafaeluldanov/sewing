@@ -111,7 +111,6 @@ describe('admin/orders/[id]/edit — страница и форма редакт
     expect(src).toMatch(/name="companyDivisionId"/);
     expect(src).toMatch(/name="color"/);
     expect(src).toMatch(/name="comment"/);
-    expect(src).toMatch(/name="techCardId"/);
     expect(src).toMatch(/name="routeTemplateId"/);
     // План по размерам собирает `qty[<sizeId>]` через AdminSizeGrid;
     // здесь достаточно убедиться, что сам грид подключён в форму
@@ -152,7 +151,6 @@ describe('admin/orders/[id]/edit — страница и форма редакт
       'color',
       'comment',
       'routeTemplateId',
-      'techCardId',
       'clientId',
       'dueDate',
       'companyDivisionId',

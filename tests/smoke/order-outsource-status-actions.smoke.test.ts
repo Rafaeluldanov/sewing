@@ -205,15 +205,6 @@ describe('web — UI buttons component + page wiring', () => {
     );
   });
 
-  test('admin tech-card form НЕ тронута MVP-3 (нет executionStatus в admin)', () => {
-    // Контракт MVP-3: ручной статус живёт только на snapshot заказа,
-    // в шаблоне его нет. Admin-форма техкарт должна остаться как
-    // была (только triggerType-select из MVP-2).
-    const src = readSrc('apps/web/app/admin/tech-cards/tech-card-form.tsx');
-    expect(src).not.toMatch(/executionStatus/);
-    expect(src).not.toMatch(/displayStatus/);
-    expect(src).not.toMatch(/Отметить как заказано/);
-  });
 
   test('страница заказа НЕ содержит inline <select> для ручной смены статуса', () => {
     // Контракт «не ERP-форма»: выбор «нового статуса» через

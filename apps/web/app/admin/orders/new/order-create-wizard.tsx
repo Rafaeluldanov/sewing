@@ -80,7 +80,6 @@ import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { PatternCategoryListItemDto } from '@sewing/shared/pattern-categories';
 import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
-import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import type {
   CreateOrderDto,
@@ -127,7 +126,6 @@ import {
   type ColorwayDraft,
 } from './order-create-colorways';
 import { SizePlanSelector } from './size-plan-selector';
-import { TechCardCombobox } from './tech-card-combobox';
 import type { RoutePreview } from './route-preview';
 import {
   WIZARD_STEPS,
@@ -139,7 +137,6 @@ interface Props {
   sizes: SizeDto[];
   routeTemplates: RouteTemplateSummaryDto[];
   routePreviewMap: Record<string, RoutePreview>;
-  techCards: TechCardTemplateSummaryDto[];
   clients: ClientDto[];
   patterns: PatternListItemDto[];
   patternCategories: PatternCategoryListItemDto[];
@@ -157,7 +154,6 @@ export function OrderCreateWizard({
   sizes,
   routeTemplates,
   routePreviewMap,
-  techCards,
   clients,
   patterns,
   patternCategories,
@@ -195,7 +191,6 @@ export function OrderCreateWizard({
   // --- Шаг 2: изделие ----------------------------------------------------
   const [branch, setBranch] = useState<ProductBranch>('EXISTING');
   const [patternItemId, setPatternItemId] = useState('');
-  const [techCardId, setTechCardId] = useState('');
   const [savedInlineProduct, setSavedInlineProduct] =
     useState<SavedInlineProductPayload | null>(null);
   const [savedConstructorTask, setSavedConstructorTask] =
@@ -266,7 +261,6 @@ export function OrderCreateWizard({
       colorways
         .map((cw) => ({
           color: cw.color.trim(),
-          techCardId: cw.techCardId,
           sizes: Object.entries(cw.sizes)
             .filter(([sid, q]) => allSizeIds.has(sid) && q > 0)
             .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan })),
@@ -294,18 +288,6 @@ export function OrderCreateWizard({
     }
     return [...agg.entries()].map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan }));
   }, [colorwaysEnabled, quantities, variantsPayload, allSizeIds]);
-
-  /**
-   * Техкарта, которую увидит гейт `startCalculation`. При включённых
-   * расцветках order-level `techCardId` пустой, и backend поднимает её
-   * из первой расцветки с техкартой (`OrdersService.create`,
-   * `resolvedTechCardId`). Считаем так же, чтобы предупредить о
-   * `ORDER_TECH_CARD_REQUIRED` на шаге проверки, а не после клика.
-   */
-  const resolvedTechCardId = useMemo(
-    () => techCardId || colorways.find((c) => c.techCardId)?.techCardId || '',
-    [techCardId, colorways],
-  );
 
   // Превью шаблонов, созданных «на лету» из select-а (контур
   // ref-create): серверный `routePreviewMap` их ещё не знает.
@@ -423,7 +405,6 @@ export function OrderCreateWizard({
     const dto = buildBasicsDto();
     dto.patternItemId = patternItemId || undefined;
     dto.items = itemsPayload;
-    if (techCardId) dto.techCardId = techCardId;
     if (colorwaysEnabled && variantsPayload.length > 0) {
       dto.variants = variantsPayload;
     }
@@ -432,7 +413,6 @@ export function OrderCreateWizard({
     buildBasicsDto,
     patternItemId,
     itemsPayload,
-    techCardId,
     colorwaysEnabled,
     variantsPayload,
   ]);
@@ -897,8 +877,6 @@ export function OrderCreateWizard({
             ) : inlineOpen ? (
               <CreateProductInline
                 initialCategories={patternCategories}
-                initialTechCards={techCards}
-                initialPatterns={patterns}
                 sizes={sortedSizes}
                 initialValue={savedInlineProduct}
                 initialTab={inlineTab}
@@ -917,7 +895,6 @@ export function OrderCreateWizard({
                     productMode: 'CREATE_FOR_CALCULATION' as const,
                     newProductCalculation: {
                       categoryId: payload.categoryId,
-                      techCardId: payload.techCardId,
                       patternDevelopmentCostRub: payload.patternDevelopmentCostRub,
                       patternDevelopmentCostInCostPrice:
                         payload.patternDevelopmentCostInCostPrice,
@@ -1030,25 +1007,6 @@ export function OrderCreateWizard({
                         )}
                       </div>
 
-                      {/*
-                        Техкарта по умолчанию для заказа. При включённых
-                        расцветках техкарта выбирается на КАЖДЫЙ цвет
-                        (шаг 3), поэтому общий селект прячем — иначе два
-                        контрола об одном.
-                      */}
-                      {!colorwaysEnabled && (
-                        <div className="admin-field">
-                          <label htmlFor="wiz-techcard">Техкарта</label>
-                          <TechCardCombobox
-                            id="wiz-techcard"
-                            name="techCardId"
-                            techCards={techCards}
-                            categories={patternCategories}
-                            value={techCardId}
-                            onChange={setTechCardId}
-                          />
-                        </div>
-                      )}
                     </div>
 
                     {selectedPattern && (
@@ -1070,7 +1028,6 @@ export function OrderCreateWizard({
               <OrderColorwaysFieldset
                 availableSizes={availableSizes}
                 allSizes={sortedSizes}
-                techCards={techCards}
                 value={colorways}
                 onChange={setColorways}
               />
@@ -1250,23 +1207,6 @@ export function OrderCreateWizard({
                 расчёт. Вернитесь на шаг «Расцветки и размеры».
               </p>
             )}
-            {/*
-              Гейт `startCalculation` требует техкарту (400
-              `ORDER_TECH_CARD_REQUIRED`). При расцветках order-level
-              поле пустое, и backend поднимает техкарту из первой
-              расцветки — считаем так же и предупреждаем ДО клика, а не
-              ошибкой после него.
-            */}
-            {!awaitingPattern && !resolvedTechCardId && (
-              <p className="order-wizard__warn">
-                Техкарта не выбрана — без неё заказ не уйдёт в расчёт и
-                материалы не рассчитаются. Укажите её{' '}
-                {colorwaysEnabled
-                  ? 'в карточке расцветки на шаге «Расцветки и размеры»'
-                  : 'на шаге «Изделие»'}
-                .
-              </p>
-            )}
             {!awaitingPattern && skipped.has('applications') && (
               <p className="order-wizard__warn">
                 Нанесение пропущено. На крое будет заблокирована раскладка,
@@ -1324,20 +1264,14 @@ export function OrderCreateWizard({
             className="admin-btn admin-btn--primary"
             onClick={() => finish('calculation')}
             disabled={
-              pending ||
-              !orderId ||
-              awaitingPattern ||
-              sizesTotal === 0 ||
-              !resolvedTechCardId
+              pending || !orderId || awaitingPattern || sizesTotal === 0
             }
             title={
               awaitingPattern
                 ? 'Заказ ждёт лекала от конструктора'
                 : sizesTotal === 0
                   ? 'Заполните план по размерам'
-                  : !resolvedTechCardId
-                    ? 'Выберите техкарту'
-                    : undefined
+                  : undefined
             }
           >
             {pending && <Loader2 size={16} className="admin-spin" aria-hidden />}

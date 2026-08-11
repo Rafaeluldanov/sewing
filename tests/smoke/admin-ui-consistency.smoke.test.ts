@@ -54,7 +54,6 @@ const DETAIL_PAGES = [
   'apps/web/app/admin/equipment/[id]/page.tsx',
   'apps/web/app/admin/operations/[id]/page.tsx',
   'apps/web/app/admin/routes/[id]/page.tsx',
-  'apps/web/app/admin/tech-cards/[id]/page.tsx',
   'apps/web/app/admin/warehouses/[id]/page.tsx',
   'apps/web/app/admin/printers/[id]/page.tsx',
 ];
@@ -136,7 +135,6 @@ const LIST_PAGES = [
   'apps/web/app/admin/equipment/page.tsx',
   'apps/web/app/admin/operations/page.tsx',
   'apps/web/app/admin/routes/page.tsx',
-  'apps/web/app/admin/tech-cards/page.tsx',
   'apps/web/app/admin/warehouses/page.tsx',
   'apps/web/app/admin/printers/page.tsx',
 ];

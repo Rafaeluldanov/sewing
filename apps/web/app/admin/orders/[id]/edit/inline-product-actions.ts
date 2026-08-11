@@ -105,10 +105,11 @@ export async function createInlineProductForEditAction(
     if (areas.length > 0) {
       await replacePatternMaterialAreas(pattern.id, areas);
     }
-    // 3) PATCH заказа — выставляем patternItemId + techCardId.
+    // 3) PATCH заказа — выставляем patternItemId. Состав материалов
+    // теперь даёт спецификация номенклатуры (сеется на карточке),
+    // техкарта к заказу больше не привязывается.
     await updateOrder(orderId, {
       patternItemId: pattern.id,
-      techCardId: payload.techCardId ?? null,
     });
     revalidatePath(`/admin/orders/${orderId}`);
     revalidatePath(`/admin/orders/${orderId}/edit`);

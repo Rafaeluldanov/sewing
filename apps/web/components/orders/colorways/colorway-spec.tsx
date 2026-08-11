@@ -64,7 +64,6 @@ import {
   deleteTechCardParamAction,
   reloadTechCardFromTemplateAction,
   reloadTechCardNormsAction,
-  saveTechCardAsTemplateAction,
   setTechCardParamValueAction,
   updateTechCardLineAction,
   type TechCardParamsActionResult,
@@ -266,9 +265,6 @@ export function ColorwaySpec({
    */
   const [queue, setQueue] = useState<string[] | null>(null);
   const [adHoc, setAdHoc] = useState<typeof emptyAdHoc | null>(null);
-  const [saveAs, setSaveAs] = useState<{ code: string; name: string } | null>(
-    null,
-  );
   /** Строка, у которой раскрыта панель параметров (одна за раз). */
   const [openLine, setOpenLine] = useState<string | null>(null);
   const router = useRouter();
@@ -323,13 +319,6 @@ export function ColorwaySpec({
     }
     setError(null);
     if (r.data) onData(r.data);
-    if (r.savedTemplate) {
-      setNotice(
-        `Шаблон «${r.savedTemplate.code} — ${r.savedTemplate.name}» создан. ` +
-          'Значения остались в заказе.',
-      );
-      setSaveAs(null);
-    }
     // Снимок материалов и потребность пересобраны на бэке — серверные части
     // карточки заказа надо перечитать.
     router.refresh();
@@ -1382,7 +1371,7 @@ export function ColorwaySpec({
             Обновить нормы из номенклатуры
           </button>
 
-          {/* «Обновить из шаблона» — только в окне планирования. Действие
+          {/* «Обновить из номенклатуры» — только в окне планирования. Действие
               пересоздаёт строки снимка (новые id), а после расчёта на них
               уже ссылаются строки потребностей (`WorkshopNeed.sourceId`) —
               связь порвалась бы молча. Бэкенд это же окно и держит
@@ -1392,13 +1381,13 @@ export function ColorwaySpec({
               type="button"
               className="cws-btn"
               disabled={pending}
-              title="Перечитать шаблон: структура строк заказа будет перезаписана"
+              title="Перечитать спецификацию номенклатуры: структура строк заказа будет перезаписана"
               onClick={() => {
                 const ok = window.confirm(
-                  'Перечитать техкарту из шаблона?\n\n' +
-                    'Строки из шаблона будут заменены на актуальные, ваши правки ' +
-                    'шаблонных строк сбросятся. Материалы, добавленные в заказе, ' +
-                    'и значения параметров сохранятся.',
+                  'Перечитать состав из спецификации номенклатуры?\n\n' +
+                    'Строки из спецификации будут заменены на актуальные, ваши ' +
+                    'правки таких строк сбросятся. Материалы, добавленные в ' +
+                    'заказе, и значения параметров сохранятся.',
                 );
                 if (!ok) return;
                 startTransition(async () =>
@@ -1406,67 +1395,10 @@ export function ColorwaySpec({
                 );
               }}
             >
-              Обновить из шаблона
+              Обновить из номенклатуры
             </button>
           )}
 
-          {saveAs === null ? (
-            <button
-              type="button"
-              className="cws-btn"
-              onClick={() => setSaveAs({ code: '', name: '' })}
-            >
-              Сохранить как новый шаблон
-            </button>
-          ) : (
-            <div className="cws-form cws-form--saveas">
-              <p className="cws-muted">
-                В справочник уедет <strong>структура</strong> (строки и
-                параметры). Значения останутся в заказе.
-              </p>
-              <input
-                type="text"
-                placeholder="Код (TK-KULIRKA-OS)"
-                value={saveAs.code}
-                onChange={(e) =>
-                  setSaveAs((s) => (s ? { ...s, code: e.target.value } : s))
-                }
-              />
-              <input
-                type="text"
-                placeholder="Название"
-                value={saveAs.name}
-                onChange={(e) =>
-                  setSaveAs((s) => (s ? { ...s, name: e.target.value } : s))
-                }
-              />
-              <button
-                type="button"
-                className="cws-btn cws-btn--primary"
-                disabled={pending || !saveAs.code.trim() || !saveAs.name.trim()}
-                onClick={() =>
-                  startTransition(async () =>
-                    apply(
-                      await saveTechCardAsTemplateAction(orderId, {
-                        orderVariantId: writeVariantId,
-                        code: saveAs.code.trim(),
-                        name: saveAs.name.trim(),
-                      }),
-                    ),
-                  )
-                }
-              >
-                Сохранить
-              </button>
-              <button
-                type="button"
-                className="cws-btn"
-                onClick={() => setSaveAs(null)}
-              >
-                Отмена
-              </button>
-            </div>
-          )}
         </div>
       )}
     </div>

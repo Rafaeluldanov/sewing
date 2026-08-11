@@ -110,15 +110,15 @@ describe('ref-create — точки встройки (выборочно)', () =
     }
   });
 
-  test('формы заказов: маршрут и техкарта креатабельны', () => {
+  test('формы заказов: маршрут креатабелен (техкарта удалена — этап 4 «техкарты → номенклатура»)', () => {
     const legacyNew = readSrc('apps/web/app/orders/new/new-order-form.tsx');
     expect(legacyNew).toMatch(/entity="routeTemplate"/);
-    expect(legacyNew).toMatch(/entity="techCard"/);
+    expect(legacyNew).not.toMatch(/entity="techCard"/);
     const adminEdit = readSrc(
       'apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx',
     );
     expect(adminEdit).toMatch(/entity="routeTemplate"/);
-    expect(adminEdit).toMatch(/CreateTechCardWindow/);
+    expect(adminEdit).not.toMatch(/CreateTechCardWindow/);
   });
 
   test('payroll: сотрудник креатабелен в документах начисления и выплатах', () => {

@@ -42,7 +42,6 @@ import { listEquipment } from '@/lib/equipment-api';
 import { listOperations } from '@/lib/operations-api';
 import { listOrders } from '@/lib/orders-api';
 import { listRouteTemplates } from '@/lib/routes-api';
-import { listTechCards } from '@/lib/tech-cards-api';
 import { listWarehouses } from '@/lib/warehouses-api';
 import { listPrinters } from '@/lib/printers-api';
 
@@ -124,7 +123,6 @@ export default async function AdminHomePage() {
     equipmentCount,
     operationsCount,
     routesCount,
-    techCardsCount,
     warehousesCount,
     printersCount,
     deadlineKpis,
@@ -133,7 +131,6 @@ export default async function AdminHomePage() {
     safeCount(listEquipment()),
     safeCount(listOperations()),
     safeCount(listRouteTemplates()),
-    safeCount(listTechCards()),
     safeCount(listWarehouses()),
     safeCount(listPrinters()),
     loadDeadlineKpis(),
@@ -191,15 +188,6 @@ export default async function AdminHomePage() {
       tone: 'blue',
       count: routesCount,
       unitForms: ['шаблон', 'шаблона', 'шаблонов'],
-    },
-    {
-      href: '/admin/tech-cards',
-      title: 'Техкарты',
-      description: 'Материалы и подряды на единицу.',
-      Icon: ClipboardList,
-      tone: 'green',
-      count: techCardsCount,
-      unitForms: ['техкарта', 'техкарты', 'техкарт'],
     },
     {
       href: '/admin/warehouses',
