@@ -29,6 +29,8 @@
  * как есть и продолжает использоваться в `app/orders/layout.tsx`.
  */
 
+import { SYSTEM_ROLE_LABELS } from '@sewing/shared/app-roles';
+
 export type Role =
   | 'ADMIN'
   | 'SHOP_MANAGER'
@@ -363,6 +365,38 @@ const PRIMARY_WORKSPACE_BY_ROLE: Record<Role, string> = {
 export function getPrimaryWorkspace(role: string | undefined | null): string {
   if (!role) return '/';
   return PRIMARY_WORKSPACE_BY_ROLE[role as Role] ?? '/';
+}
+
+/**
+ * Участок, на котором сотрудник стоит СЕЙЧАС: `activeRole` (последнее
+ * переключение), а без него — основная роль.
+ *
+ * Единая точка для всех терминалов. До этого каждый кабинет решал сам
+ * и все решали одинаково неправильно — брали `Employee.role`, поэтому
+ * сотрудница с ролями ОТК+ВТО, перейдя на ВТО, видела в шапке «ОТК», а
+ * `/work` показывал швейный экран человеку, переключившемуся на участок
+ * помощника раскройщика.
+ */
+export function getActiveWorkplaceRole(user: {
+  role: string;
+  activeRole?: string | null;
+}): string {
+  return user.activeRole ?? user.role;
+}
+
+/**
+ * Подпись активного участка для бейджа в шапке терминала. Название
+ * считает сервер (`AuthUserDto.activeRoleLabel`) — в справочнике живут
+ * и кастомные роли, а `/api/app-roles` терминалам не открыт. Fallback
+ * `formatRole` покрывает старые сессии и системные коды.
+ */
+export function getActiveWorkplaceLabel(user: {
+  role: string;
+  activeRole?: string | null;
+  activeRoleLabel?: string;
+}): string {
+  const role = getActiveWorkplaceRole(user);
+  return user.activeRoleLabel ?? SYSTEM_ROLE_LABELS[role] ?? role;
 }
 
 /**

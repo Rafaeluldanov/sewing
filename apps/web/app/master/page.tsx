@@ -13,7 +13,11 @@ import {
   isOrderAmendmentsEnabled,
   isQtyCorrectionEnabled,
 } from '@/lib/feature-flags';
-import { canSeeEmployeeQrButton, canSeeMasterPage } from '@/lib/rbac';
+import {
+  canSeeEmployeeQrButton,
+  canSeeMasterPage,
+  getActiveWorkplaceLabel,
+} from '@/lib/rbac';
 import { MasterPageClient } from './master-page-client';
 
 export const dynamic = 'force-dynamic';
@@ -117,6 +121,7 @@ export default async function MasterPage() {
       defectTypes={defectTypes}
       showEmployeeQr={canSeeEmployeeQrButton(me.user.roles ?? me.user.role)}
       fullName={me.user.fullName}
+      roleLabel={getActiveWorkplaceLabel(me.user)}
       qtyCorrectionEnabled={qtyCorrectionEnabled}
       initialQtyCorrections={initialQtyCorrections}
     />

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { getActiveWorkplaceLabel } from '@/lib/rbac';
 import { listDefectTypes, listQcIncomingReworks } from '@/lib/qc-api';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
 import { isQtyCorrectionEnabled } from '@/lib/feature-flags';
@@ -8,12 +9,6 @@ import { TerminalShell } from '@/components/terminal-shell';
 import { QcTerminal } from './qc-terminal';
 
 export const dynamic = 'force-dynamic';
-
-const ROLE_LABELS: Record<string, string> = {
-  ADMIN: 'Администратор',
-  SHOP_MANAGER: 'Начальник цеха',
-  QC: 'ОТК',
-};
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -113,7 +108,7 @@ export default async function QcPage() {
       ]
     : [];
 
-  const roleLabel = ROLE_LABELS[employee.role] ?? employee.role;
+  const roleLabel = getActiveWorkplaceLabel(me.user);
 
   return (
     <TerminalShell

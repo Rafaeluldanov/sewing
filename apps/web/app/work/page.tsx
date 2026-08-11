@@ -9,7 +9,11 @@ import {
 } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listOrdersReadyForRelease } from '@/lib/cutting-tasks-api';
-import { getPrimaryWorkspace } from '@/lib/rbac';
+import {
+  getActiveWorkplaceLabel,
+  getActiveWorkplaceRole,
+  getPrimaryWorkspace,
+} from '@/lib/rbac';
 import { RoleHeaderCard } from '@/components/role-header-card';
 import { ShiftStartForm } from './shift-start-form';
 import {
@@ -23,24 +27,6 @@ import { OperationSwitcher } from './operation-switcher';
 import { operationsForEquipment } from '@/lib/equipment-operations';
 
 export const dynamic = 'force-dynamic';
-
-/**
- * Подписи ролей для шапки `/work`. Сюда попадают только те роли,
- * которые реально могут оказаться на этом экране после
- * primary-workspace-редиректа ниже: швея, помощник раскройщика,
- * раскройщик и менеджеры/админ. QC/IRONING/PACKING сюда не
- * приходят — у них собственные scan-driven терминалы (`/qc`,
- * `/wto`, `/packing`), а `/work` для этих ролей делает
- * server-side redirect в их primary workspace (см. ниже и
- * `apps/web/lib/rbac.ts`).
- */
-const ROLE_LABELS: Record<string, string> = {
-  ADMIN: 'Администратор',
-  SHOP_MANAGER: 'Начальник цеха',
-  CUTTER: 'Раскройщик',
-  CUTTER_ASSISTANT: 'Помощник раскройщика',
-  SEAMSTRESS: 'Швея',
-};
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -140,7 +126,7 @@ export default async function WorkPage() {
     role: me.user.role,
   };
 
-  const roleLabel = ROLE_LABELS[employee.role] ?? employee.role;
+  const roleLabel = getActiveWorkplaceLabel(me.user);
   const isActive = !!(currentShift && currentShift.active);
 
   const headerFields = isActive
@@ -158,8 +144,15 @@ export default async function WorkPage() {
       ]
     : [];
 
-  const isSeamstress = employee.role === 'SEAMSTRESS';
-  const isCutterAssistant = employee.role === 'CUTTER_ASSISTANT';
+  // Какой из двух экранов `/work` показать, решает АКТИВНЫЙ участок, а
+  // не основная роль: «Швея» и «Помощник раскройщика» делят один путь,
+  // и у совместителя (роли SEAMSTRESS + CUTTER_ASSISTANT) второй экран
+  // иначе недостижим — он всегда видел бы экран основной роли.
+  // Совместитель, ни разу не переключавшийся, попадает на свою основную
+  // роль, как и раньше.
+  const activeWorkplace = getActiveWorkplaceRole(me.user);
+  const isSeamstress = activeWorkplace === 'SEAMSTRESS';
+  const isCutterAssistant = activeWorkplace === 'CUTTER_ASSISTANT';
   // Обе роли получают «mobile clean» режим /work без верхнего меню
   // (см. `components/app-header.tsx`). Поэтому им нужны:
   //   - тот же `work--seamstress` модификатор для safe-area отступа
@@ -205,7 +198,7 @@ export default async function WorkPage() {
         }
       />
 
-      {employee.role === 'CUTTER_ASSISTANT' ? (
+      {isCutterAssistant ? (
         // Помощник раскройщика теперь работает строго в контексте
         // активной смены на оборудовании — как и остальные рабочие
         // роли (см. `docs/flows.md §F2`, `docs/screens.md §3`). Это
@@ -230,7 +223,7 @@ export default async function WorkPage() {
         ) : (
           <SeamstressShiftStart meta={meta} employee={employee} />
         )
-      ) : employee.role === 'SEAMSTRESS' ? (
+      ) : isSeamstress ? (
         // Швея = mobile-first однокнопочный flow: перед стартом смены
         // QR оборудования + выбор операции из allow-листа этого
         // станка; после старта — устойчивый блок «Текущий крой» +

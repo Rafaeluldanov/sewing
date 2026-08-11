@@ -1,16 +1,13 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { canSeeConstructor, canSeeEmployeeQrButton } from '@/lib/rbac';
+import {
+  canSeeConstructor,
+  canSeeEmployeeQrButton,
+  getActiveWorkplaceLabel,
+} from '@/lib/rbac';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
 import { TerminalShell } from '@/components/terminal-shell';
-
-/** Подписи ролей для синей шапки-профиля. */
-const ROLE_LABELS: Record<string, string> = {
-  CONSTRUCTOR: 'Конструктор',
-  SHOP_MANAGER: 'Начальник цеха',
-  ADMIN: 'Администратор',
-};
 
 /**
  * Route-level guard для всего раздела `/constructor/*` (кабинет
@@ -42,7 +39,7 @@ export default async function ConstructorSectionLayout({
   if (!canSeeConstructor(roles)) redirect('/');
 
   const showEmployeeQr = canSeeEmployeeQrButton(roles);
-  const roleLabel = ROLE_LABELS[me.user.role] ?? me.user.role;
+  const roleLabel = getActiveWorkplaceLabel(me.user);
 
   return (
     <>

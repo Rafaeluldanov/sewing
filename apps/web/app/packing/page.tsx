@@ -14,6 +14,7 @@ import {
   getShiftMeta,
 } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { getActiveWorkplaceLabel } from '@/lib/rbac';
 import { ApiRequestError } from '@/lib/api';
 import { operationsForEquipment } from '@/lib/equipment-operations';
 import { TerminalShell } from '@/components/terminal-shell';
@@ -25,12 +26,6 @@ export const dynamic = 'force-dynamic';
 interface SearchParams {
   status?: string;
 }
-
-const ROLE_LABELS: Record<string, string> = {
-  ADMIN: 'Администратор',
-  SHOP_MANAGER: 'Начальник цеха',
-  PACKING: 'Упаковка',
-};
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
@@ -212,7 +207,7 @@ export default async function PackingPage({
     return (
       <TerminalShell
         name={employee.fullName}
-        role={ROLE_LABELS.PACKING}
+        role={getActiveWorkplaceLabel(me.user)}
         fields={headerFields}
         shiftActive={isShiftActive}
         statusText={

@@ -72,6 +72,13 @@ interface Props {
   showEmployeeQr: boolean;
   /** Имя мастера для синей шапки-профиля `RoleHeaderCard`. */
   fullName: string;
+  /**
+   * Подпись бейджа в шапке — активный участок (`getActiveWorkplaceLabel`
+   * в `page.tsx`). Раньше здесь стоял литерал «Мастер цеха»: у мастера
+   * почти всегда одна роль, но литерал врал начальнику цеха, который
+   * заходит на тот же экран.
+   */
+  roleLabel: string;
   /** Фича «Корректировка количества» (флаг `FEATURE_QTY_CORRECTION`). */
   qtyCorrectionEnabled: boolean;
   /** SSR-снимок очереди открытых корректировок (для вкладки/бейджа). */
@@ -93,6 +100,7 @@ export function MasterPageClient({
   defectTypes,
   showEmployeeQr,
   fullName,
+  roleLabel,
   qtyCorrectionEnabled,
   initialQtyCorrections,
   orderRoutesEnabled,
@@ -387,7 +395,7 @@ export function MasterPageClient({
       <SeamstressActionsMenu shiftActive={false} />
       <RoleHeaderCard
         name={fullName}
-        role="Мастер цеха"
+        role={roleLabel}
         statusText="Очередь активных вызовов — отсканируйте QR сотрудника, чтобы закрыть"
       />
       {showEmployeeQr ? (

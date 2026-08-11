@@ -8,6 +8,7 @@ import {
 } from '@sewing/shared/auth';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { UnauthenticatedException } from '../../common/errors.js';
+import { AppRolesService } from '../app-roles/app-roles.service.js';
 import { AuthService } from './auth.service.js';
 import { FeatureModulesService } from './feature-modules.service.js';
 import { CurrentUser, Public } from './auth.decorators.js';
@@ -37,6 +38,7 @@ export class AuthController {
     @Inject(AuthService) private readonly auth: AuthService,
     @Inject(FeatureModulesService)
     private readonly featureModules: FeatureModulesService,
+    @Inject(AppRolesService) private readonly appRoles: AppRolesService,
   ) {}
 
   @Public()
@@ -96,6 +98,11 @@ export class AuthController {
         roles: principal.roles,
         assignedRoles: principal.assignedRoles,
         activeRole: principal.activeRole,
+        // Подпись бейджа в шапке терминала: сотрудник видит участок, на
+        // котором стоит сейчас, а не свою основную роль.
+        activeRoleLabel: await this.appRoles.labelFor(
+          principal.activeRole ?? principal.role,
+        ),
         // Рабочий экран считает сервер по справочнику ролей — веб
         // больше не держит собственную матрицу «роль → экран».
         workspace: principal.workspace,

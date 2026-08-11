@@ -1,17 +1,12 @@
 import { redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { getActiveWorkplaceLabel } from '@/lib/rbac';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
 import { TerminalShell } from '@/components/terminal-shell';
 import { WtoTerminal } from './wto-terminal';
 
 export const dynamic = 'force-dynamic';
-
-const ROLE_LABELS: Record<string, string> = {
-  ADMIN: 'Администратор',
-  SHOP_MANAGER: 'Начальник цеха',
-  IRONING: 'ВТО',
-};
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -88,7 +83,7 @@ export default async function WtoPage() {
       ]
     : [];
 
-  const roleLabel = ROLE_LABELS[employee.role] ?? employee.role;
+  const roleLabel = getActiveWorkplaceLabel(me.user);
 
   return (
     <TerminalShell

@@ -255,7 +255,12 @@ describe('cutter-assistant /work simplified UI', () => {
     // (см. комментарий в файле). Внутри своей ветки CUTTER_ASSISTANT
     // тоже ходит через `isActive`, но первое попадание в файле — это
     // ровно эта внутренняя проверка.
-    const idxRole = src.indexOf("employee.role === 'CUTTER_ASSISTANT'");
+    // Ветка выбирается по АКТИВНОМУ участку (`getActiveWorkplaceRole`),
+    // а не по основной роли: «Швея» и «Помощник раскройщика» делят путь
+    // `/work`, и совместителю иначе недоступен второй экран.
+    expect(src).toMatch(/getActiveWorkplaceRole/);
+    expect(src).toMatch(/activeWorkplace === 'CUTTER_ASSISTANT'/);
+    const idxRole = src.indexOf('{isCutterAssistant ? (');
     const idxIsActive = src.indexOf('isActive ? (');
     expect(idxRole).toBeGreaterThan(0);
     expect(idxIsActive).toBeGreaterThan(0);
@@ -319,39 +324,40 @@ describe('legacy /work disabled for QC / IRONING / PACKING', () => {
     expect(idxCurrentShift).toBeGreaterThan(idxRedirect);
   });
 
-  test('ROLE_LABELS в work/page.tsx больше не содержит ролей с собственным терминалом', () => {
-    const src = readSrc('apps/web/app/work/page.tsx');
-    const labelsStart = src.indexOf('const ROLE_LABELS');
-    const labelsEnd = src.indexOf('};', labelsStart);
-    expect(labelsStart).toBeGreaterThan(0);
-    expect(labelsEnd).toBeGreaterThan(labelsStart);
-    const labelsBlock = src.slice(labelsStart, labelsEnd);
-    // QC / IRONING / PACKING на этот экран больше не приходят
-    // (см. SSR-редирект выше) — лишних подписей оставлять не нужно.
-    expect(labelsBlock).not.toMatch(/\bQC:/);
-    expect(labelsBlock).not.toMatch(/\bIRONING:/);
-    expect(labelsBlock).not.toMatch(/\bPACKING:/);
+  test('терминалы не держат своих словарей подписей ролей — бейдж берётся из общего хелпера', () => {
+    // 11.08.2026: подписи ролей были скопированы в 4 терминала плюс два
+    // хардкода («Упаковка» в /packing, «Мастер цеха» в /master), из-за
+    // чего бейдж врал совместителю. Теперь единственный источник —
+    // `getActiveWorkplaceLabel` (название считает сервер по справочнику
+    // ролей и отдаёт в `AuthUserDto.activeRoleLabel`).
+    const terminals = [
+      'apps/web/app/work/page.tsx',
+      'apps/web/app/qc/page.tsx',
+      'apps/web/app/wto/page.tsx',
+      'apps/web/app/packing/page.tsx',
+      'apps/web/app/cutter/layout.tsx',
+      'apps/web/app/constructor/layout.tsx',
+    ];
+    for (const file of terminals) {
+      const src = readSrc(file);
+      expect(src, file).not.toMatch(/const ROLE_LABELS/);
+      expect(src, file).toMatch(/getActiveWorkplaceLabel/);
+    }
+    // Кабинет мастера получает подпись пропом из своей RSC-страницы.
+    expect(readSrc('apps/web/app/master/master-page-client.tsx')).not.toMatch(
+      /role="Мастер цеха"/,
+    );
+    expect(readSrc('apps/web/app/master/page.tsx')).toMatch(
+      /roleLabel=\{getActiveWorkplaceLabel\(me\.user\)\}/,
+    );
   });
 
-  test('ROLE_LABELS в work/page.tsx показывает CUTTER_ASSISTANT как «Помощник раскройщика» (канон admin-labels)', () => {
+  test('канонический лейбл CUTTER_ASSISTANT — «Помощник раскройщика»', () => {
     // Регресс-щит для опечатки «Помощник закройщика» (см.
-    // `docs/cutter-assistant-passport-release-recon.md §8`):
-    // канонический лейбл живёт в `apps/web/lib/admin-labels.ts`.
-    // Любая обратная замена ловится в CI.
-    const src = readSrc('apps/web/app/work/page.tsx');
-    const labelsStart = src.indexOf('const ROLE_LABELS');
-    const labelsEnd = src.indexOf('};', labelsStart);
-    expect(labelsStart).toBeGreaterThan(0);
-    expect(labelsEnd).toBeGreaterThan(labelsStart);
-    const labelsBlock = src.slice(labelsStart, labelsEnd);
-    expect(labelsBlock).toMatch(
-      /CUTTER_ASSISTANT:\s*'Помощник раскройщика'/,
-    );
-    expect(labelsBlock).not.toMatch(/закройщик/);
-    // Канонический словарь должен совпадать по этой роли. Справочник
-    // ролей (28.07.2026): названия системных ролей переехали из
-    // `apps/web/lib/admin-labels.ts` в `@sewing/shared/app-roles`
-    // (`SYSTEM_ROLE_DEFAULTS`) — оттуда же их сидирует миграция.
+    // `docs/cutter-assistant-passport-release-recon.md §8`). Справочник
+    // ролей (28.07.2026): названия системных ролей живут в
+    // `@sewing/shared/app-roles` (`SYSTEM_ROLE_DEFAULTS`) — оттуда же их
+    // сидирует миграция, и оттуда же их берёт бейдж терминала.
     const canon = readSrc('packages/shared/src/app-roles.ts');
     const block = canon.slice(
       canon.indexOf('CUTTER_ASSISTANT: {'),

@@ -1,7 +1,11 @@
 import { redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { canSeeCutter, canSeeEmployeeQrButton } from '@/lib/rbac';
+import {
+  canSeeCutter,
+  canSeeEmployeeQrButton,
+  getActiveWorkplaceLabel,
+} from '@/lib/rbac';
 import { getCurrentShift } from '@/lib/shifts-api';
 import { listOrdersReadyForRelease } from '@/lib/cutting-tasks-api';
 import { CallMasterButton } from '@/components/call-master-button';
@@ -9,13 +13,6 @@ import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
 import { TerminalShell } from '@/components/terminal-shell';
 import { CutterTabs } from './cutter-tabs';
-
-/** Подписи ролей для синей шапки-профиля. */
-const ROLE_LABELS: Record<string, string> = {
-  CUTTER: 'Раскройщик',
-  SHOP_MANAGER: 'Начальник цеха',
-  ADMIN: 'Администратор',
-};
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -72,7 +69,7 @@ export default async function CutterSectionLayout({
   if (!canSeeCutter(roles)) redirect('/');
 
   const showEmployeeQr = canSeeEmployeeQrButton(roles);
-  const roleLabel = ROLE_LABELS[me.user.role] ?? me.user.role;
+  const roleLabel = getActiveWorkplaceLabel(me.user);
 
   let currentShift = null;
   try {

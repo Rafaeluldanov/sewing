@@ -97,6 +97,22 @@ export class AppRolesService {
   }
 
   /**
+   * Название роли для показа сотруднику (бейдж активного участка в
+   * шапке терминала, `/api/auth/me`). У системных ролей название зашито
+   * в `SYSTEM_ROLE_DEFAULTS` — в БД не ходим: это горячий путь, а почти
+   * все учётки цеха системные. Неизвестный код возвращаем как есть.
+   */
+  async labelFor(code: string | null | undefined): Promise<string | undefined> {
+    if (!code) return undefined;
+    if (isSystemRoleCode(code)) return SYSTEM_ROLE_DEFAULTS[code].name;
+    const row = await this.prisma.appRole.findUnique({
+      where: { code },
+      select: { name: true },
+    });
+    return row?.name ?? code;
+  }
+
+  /**
    * Рабочий экран сотрудника по его ИСХОДНОМУ набору ролей (см.
    * `resolveRoleWorkspace` — считается до раскрытия наследования).
    * Отдаётся в `/api/auth/me` и кладётся в session-cookie, чтобы
