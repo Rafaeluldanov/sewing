@@ -10,6 +10,7 @@ import {
   purgeEmployeesAction,
   restoreEmployeesAction,
 } from './archive-actions';
+import { EmployeeRolesSection } from './employee-roles-section';
 import {
   AdminCard,
   AdminEmptyState,
@@ -64,6 +65,12 @@ function formatMoney(value: number | null): React.ReactNode {
  * Backend / DTO не меняем — `GET /api/employees` отдаёт всех. Активные
  * и архивные показываем в отдельных табах (URL `?tab=archived`),
  * пагинация считается на клиенте через `paginate()`.
+ *
+ * Третья вкладка — «Доступы» (`?tab=access`): матрица «человек → роли»,
+ * переехавшая сюда из «Настроек компании» (11.08.2026). Она не список
+ * учёток, а сводка по ЛЮДЯМ (несколько логинов одного человека склеены
+ * в строку), поэтому рендерится вместо таблицы целиком — без bulk-архива
+ * и пагинации, со своим поиском внутри секции.
  */
 export default async function AdminEmployeesListPage({
   searchParams,
@@ -84,11 +91,23 @@ export default async function AdminEmployeesListPage({
   // Текущий пользователь нужен на каждый ряд: чтобы скрыть «Архивировать» /
   // «Удалить» на собственной карточке и спрятать hard-delete у не-ADMIN'а.
   const viewer = await getCurrentUserOrNull();
-  // Названия ролей — из справочника (`/admin/roles`): роли заводятся из
-  // админки, и без словаря кастомная роль показалась бы кодом.
-  const roleLabels = buildRoleLabels(await listAppRolesSafe());
+  // Справочник ролей (`/admin/roles`) — источник и названий для колонки
+  // «Роли» (без словаря кастомная роль показалась бы кодом), и списка
+  // чипов на вкладке «Доступы».
+  const appRoles = await listAppRolesSafe();
+  const roleLabels = buildRoleLabels(appRoles);
+  // Роль ADMIN выдаёт только ADMIN. Backend всё равно режет эскалацию
+  // привилегий — здесь просто гасим чип, чтобы SHOP_MANAGER не бился в 403.
+  const canAssignAdmin = (viewer?.user.roles ?? [viewer?.user.role]).includes(
+    'ADMIN',
+  );
 
-  const tab = searchParams?.tab === 'archived' ? 'archived' : 'active';
+  const tab: 'active' | 'archived' | 'access' =
+    searchParams?.tab === 'archived'
+      ? 'archived'
+      : searchParams?.tab === 'access'
+        ? 'access'
+        : 'active';
   const active = items.filter((e) => e.active);
   const archived = items.filter((e) => !e.active);
   const visible = tab === 'archived' ? archived : active;
@@ -142,56 +161,74 @@ export default async function AdminEmployeesListPage({
           >
             Архив ({archived.length})
           </Link>
+          <Link
+            href="/admin/employees?tab=access"
+            className={`admin-tab ${tab === 'access' ? 'admin-tab--active' : ''}`}
+          >
+            Доступы
+          </Link>
         </div>
 
-        {/* Этап «Архив справочников»: массовые «В архив» / «Вернуть» /
-            «Удалить навсегда». Гейты раздела (открытая смена, история,
-            «нельзя на себе», последний админ) считает backend и
-            возвращает причину по каждой пропущенной строке. */}
-        <BulkArchiveProvider
-          mode={tab === 'archived' ? 'archive' : 'active'}
-          allIds={visible.map((e) => e.id)}
-          actions={{
-            archive: archiveEmployeesAction,
-            restore: restoreEmployeesAction,
-            purge: purgeEmployeesAction,
-          }}
-          labels={{
-            one: 'сотрудника',
-            many: 'сотрудников',
-            archiveHint:
-              'Учётки перестанут пускать в систему. История, смены и начисления сохранятся.',
-            purgeHint:
-              'Карточка пропадёт из БД (в аудите останется снимок). Сотрудники с историей будут пропущены.',
-          }}
-        >
-          <AdminSectionHeader
-            title={tab === 'archived' ? 'Архив' : 'Активные'}
-            hint={
-              tab === 'archived'
-                ? `В архиве: ${visible.length}. Удаление навсегда — только отсюда.`
-                : `${visible.length}`
-            }
-            actions={<BulkArchiveHeaderButton />}
+        {tab === 'access' ? (
+          <EmployeeRolesSection
+            employees={items}
+            canAssignAdmin={canAssignAdmin}
+            roleOptions={appRoles}
           />
+        ) : (
+          <>
+            {/* Этап «Архив справочников»: массовые «В архив» / «Вернуть» /
+                «Удалить навсегда». Гейты раздела (открытая смена, история,
+                «нельзя на себе», последний админ) считает backend и
+                возвращает причину по каждой пропущенной строке. */}
+            <BulkArchiveProvider
+              mode={tab === 'archived' ? 'archive' : 'active'}
+              allIds={visible.map((e) => e.id)}
+              actions={{
+                archive: archiveEmployeesAction,
+                restore: restoreEmployeesAction,
+                purge: purgeEmployeesAction,
+              }}
+              labels={{
+                one: 'сотрудника',
+                many: 'сотрудников',
+                archiveHint:
+                  'Учётки перестанут пускать в систему. История, смены и начисления сохранятся.',
+                purgeHint:
+                  'Карточка пропадёт из БД (в аудите останется снимок). Сотрудники с историей будут пропущены.',
+              }}
+            >
+              <AdminSectionHeader
+                title={tab === 'archived' ? 'Архив' : 'Активные'}
+                hint={
+                  tab === 'archived'
+                    ? `В архиве: ${visible.length}. Удаление навсегда — только отсюда.`
+                    : `${visible.length}`
+                }
+                actions={<BulkArchiveHeaderButton />}
+              />
 
-          <EmployeesTable
-            items={pageItems}
-            muted={tab === 'archived'}
-            viewerId={viewer?.user.id ?? null}
-            viewerRole={viewer?.user.role ?? ''}
-            roleLabels={roleLabels}
-          />
-        </BulkArchiveProvider>
+              <EmployeesTable
+                items={pageItems}
+                muted={tab === 'archived'}
+                viewerId={viewer?.user.id ?? null}
+                viewerRole={viewer?.user.role ?? ''}
+                roleLabels={roleLabels}
+              />
+            </BulkArchiveProvider>
 
-        <AdminPagination
-          page={page}
-          pageSize={pageSize}
-          total={total}
-          basePath="/admin/employees"
-          preserveParams={{ tab: tab === 'archived' ? 'archived' : undefined }}
-          label="сотрудников"
-        />
+            <AdminPagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              basePath="/admin/employees"
+              preserveParams={{
+                tab: tab === 'archived' ? 'archived' : undefined,
+              }}
+              label="сотрудников"
+            />
+          </>
+        )}
       </AdminCard>
     </AdminPageShell>
   );

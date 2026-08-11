@@ -6,12 +6,12 @@ import { Pencil, Save, Search, ShieldCheck, Star, X, XCircle } from 'lucide-reac
 import type { AppRoleDto } from '@sewing/shared/app-roles';
 import { EMPLOYEE_ROLES, type EmployeeListItemDto } from '@sewing/shared/employees';
 import { buildRoleLabels, formatRole } from '@/lib/admin-labels';
-import { AdminCard, AdminSectionHeader } from '@/components/admin';
-import { updateEmployeeRolesAction } from '../employees/actions';
+import { AdminSectionHeader } from '@/components/admin';
+import { updateEmployeeRolesAction } from './actions';
 import {
   initialUpdateEmployeeState,
   type UpdateEmployeeState,
-} from '../employees/form-state';
+} from './form-state';
 
 interface Props {
   employees: EmployeeListItemDto[];
@@ -344,9 +344,16 @@ function EmployeeRolesEditor({
 }
 
 /**
- * Секция «Роли сотрудников» в «Настройках компании» (вкладка «Доступ»).
- * По ТЗ редактирование ролей живёт в настройках, а не в карточке
- * сотрудника.
+ * Секция «Роли сотрудников» — вкладка «Доступы» списка сотрудников
+ * (`/admin/employees?tab=access`).
+ *
+ * Раньше жила в «Настройках компании» (вкладка «Доступ»). Перенесена
+ * 11.08.2026 в «Персонал»: матрица ролей — данные ПРО ЛЮДЕЙ (меняются
+ * при каждом найме/переводе), а в настройках компании лежит то, что
+ * настраивают раз на организацию (реквизиты, подразделения, гейт
+ * «мимо маршрута», интеграции). Требование исходного ТЗ («роли правим
+ * не в карточке сотрудника») при этом соблюдено: правка осталась
+ * отдельным списком-матрицей, в карточку она не переехала.
  *
  * UX: обзор-список — строка на ЧЕЛОВЕКА (ФИО), а не на учётную запись.
  * Одному человеку исторически заводили отдельный логин на каждый
@@ -390,8 +397,11 @@ export function EmployeeRolesSection({
     );
   }, [groups, query]);
 
+  // Своей `AdminCard` секция не заводит: каркас списка сотрудников — одна
+  // карточка (вкладки → содержимое), вложенная карточка нарисовала бы рамку
+  // в рамке.
   return (
-    <AdminCard>
+    <>
       <AdminSectionHeader
         icon={<ShieldCheck size={18} strokeWidth={1.6} aria-hidden />}
         title="Роли сотрудников"
@@ -492,6 +502,6 @@ export function EmployeeRolesSection({
           })}
         </ul>
       )}
-    </AdminCard>
+    </>
   );
 }

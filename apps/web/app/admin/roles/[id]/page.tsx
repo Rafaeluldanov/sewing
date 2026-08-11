@@ -68,7 +68,7 @@ export default async function AdminRoleCardPage({
           actions={
             role.employeeCount > 0 ? (
               <Link
-                href="/admin/company-settings?tab=access"
+                href="/admin/employees?tab=access"
                 className="admin-btn admin-btn--ghost"
               >
                 <Users size={15} strokeWidth={1.6} aria-hidden />

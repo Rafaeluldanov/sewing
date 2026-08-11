@@ -1,19 +1,12 @@
 import Link from 'next/link';
-import {
-  Building2,
-  Factory,
-  Layers,
-  Plug,
-  Settings,
-  ShieldCheck,
-} from 'lucide-react';
+import { redirect } from 'next/navigation';
+import { Building2, Factory, Layers, Plug, Settings } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type {
   CompanySettingsDto,
   OffRouteReadinessDto,
 } from '@sewing/shared/company-settings';
-import type { EmployeeListItemDto } from '@sewing/shared/employees';
 import type { IntegrationSettingsDto } from '@sewing/shared/integration';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
@@ -23,9 +16,6 @@ import {
 } from '@/lib/company-settings-api';
 import { getIntegrationSettings } from '@/lib/integration-api';
 import { isErpIntegrationEnabled } from '@/lib/feature-flags';
-import { listEmployees } from '@/lib/employees-api';
-import { listAppRolesSafe } from '@/lib/app-roles-api';
-import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { AdminCard, AdminPageShell } from '@/components/admin';
 import {
   CompanySettingsForm,
@@ -34,7 +24,6 @@ import {
 import { DivisionsSection } from './divisions-section';
 import { MaterialStockDivisionOverridesSection } from './material-stock-division-overrides-section';
 import { OffRoutePolicySection } from './off-route-policy-section';
-import { EmployeeRolesSection } from './employee-roles-section';
 import { IntegrationsSection } from './integrations-section';
 
 export const dynamic = 'force-dynamic';
@@ -54,9 +43,14 @@ export const dynamic = 'force-dynamic';
  *                      «Подразделений и склада»: это правило
  *                      производственного потока, к материалам оно
  *                      отношения не имеет;
- *   - `access`       — Доступ: роли сотрудников;
  *   - `integrations` — Интеграции: ERP upgifts (только под флагом
  *                      FEATURE_ERP_INTEGRATION, иначе вкладки нет).
+ *
+ * Вкладки «Доступ» (матрица «сотрудник → роли») здесь больше нет — она
+ * переехала в «Персонал» (`/admin/employees?tab=access`, 11.08.2026):
+ * доступы — данные про людей, а не разовая настройка организации.
+ * Старый `?tab=access` из закладок редиректим на новое место, чтобы
+ * человек не попал молча на «Организацию» и не решил, что фичу убрали.
  *
  * Backend GET `/api/company-settings` идемпотентно создаёт singleton-
  * строку, если её ещё нет (см. `CompanySettingsService.getOrCreate`),
@@ -66,12 +60,7 @@ export const dynamic = 'force-dynamic';
  * редиректит остальных пользователей.
  */
 
-type TabKey =
-  | 'org'
-  | 'divisions'
-  | 'production'
-  | 'access'
-  | 'integrations';
+type TabKey = 'org' | 'divisions' | 'production' | 'integrations';
 
 function TabLink({
   active,
@@ -101,6 +90,9 @@ export default async function AdminCompanySettingsPage({
 }: {
   searchParams?: { tab?: string };
 }) {
+  // Закладки на уехавшую вкладку «Доступ» — сразу в «Персонал».
+  if (searchParams?.tab === 'access') redirect('/admin/employees?tab=access');
+
   let settings: CompanySettingsDto | null = null;
   let divisions: CompanyDivisionDto[] = [];
   let error: string | null = null;
@@ -117,26 +109,11 @@ export default async function AdminCompanySettingsPage({
         : 'Не удалось загрузить настройки компании';
   }
 
-  // Список сотрудников + права текущего пользователя для секции «Роли
-  // сотрудников». Падение этих запросов не должно ронять страницу
-  // настроек — деградируем до пустого списка / без права на ADMIN.
-  // Справочник ролей (`/admin/roles`) — источник и списка ролей для
-  // чипов, и их названий: роли заводятся из админки, захардкоженного
-  // перечня больше нет.
   // Готовность к блокировке — вспомогательная read-модель поверх
   // AuditLog. Её падение не должно ронять страницу настроек: секция
   // просто покажется без блока цифр.
   const offRouteReadiness: OffRouteReadinessDto | null =
     await getOffRouteReadiness().catch(() => null);
-
-  const [employees, viewer, appRoles] = await Promise.all([
-    listEmployees().catch((): EmployeeListItemDto[] => []),
-    getCurrentUserOrNull().catch(() => null),
-    listAppRolesSafe(),
-  ]);
-  const canAssignAdmin = (viewer?.user.roles ?? [viewer?.user.role]).includes(
-    'ADMIN',
-  );
 
   // Раздел «Интеграции» — под флагом FEATURE_ERP_INTEGRATION. Падение
   // запроса не должно ронять страницу настроек (деградируем до без раздела).
@@ -152,7 +129,6 @@ export default async function AdminCompanySettingsPage({
   const tab: TabKey =
     requestedTab === 'divisions' ||
     requestedTab === 'production' ||
-    requestedTab === 'access' ||
     (requestedTab === 'integrations' && integrationsAvailable)
       ? (requestedTab as TabKey)
       : 'org';
@@ -161,7 +137,7 @@ export default async function AdminCompanySettingsPage({
     <AdminPageShell
       icon={<Settings size={22} strokeWidth={1.6} aria-hidden />}
       title="Настройки компании"
-      subtitle="Реквизиты, подразделения и склад, производство, доступ, интеграции"
+      subtitle="Реквизиты, подразделения и склад, производство, интеграции"
     >
       {error && (
         <div className="error-box" role="alert">
@@ -188,12 +164,6 @@ export default async function AdminCompanySettingsPage({
             href="/admin/company-settings?tab=production"
             Icon={Factory}
             label="Производство"
-          />
-          <TabLink
-            active={tab === 'access'}
-            href="/admin/company-settings?tab=access"
-            Icon={ShieldCheck}
-            label="Доступ"
           />
           {integrationsAvailable && (
             <TabLink
@@ -225,14 +195,6 @@ export default async function AdminCompanySettingsPage({
         <OffRoutePolicySection
           settings={settings}
           readiness={offRouteReadiness}
-        />
-      )}
-
-      {tab === 'access' && (
-        <EmployeeRolesSection
-          employees={employees}
-          canAssignAdmin={canAssignAdmin}
-          roleOptions={appRoles}
         />
       )}
 
