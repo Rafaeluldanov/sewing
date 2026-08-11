@@ -29,15 +29,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   MasterActiveShiftDto,
   MasterActiveShiftsDto,
+  MasterEmployeeAccessDto,
   MasterEmployeeDrillDto,
   MasterEmployeeStatRowDto,
   MasterEmployeeStatsDto,
 } from '@sewing/shared';
+import { MASTER_ASSIGNABLE_ROLES } from '@sewing/shared';
+import { formatRole } from '@/lib/admin-labels';
 import {
   closeActiveShiftAction,
   loadActiveShiftsAction,
+  loadEmployeeAccessAction,
   loadEmployeeStatsAction,
   loadEmployeeStatsDrillAction,
+  saveEmployeeAccessAction,
 } from './employee-stats-actions';
 
 // Пресеты периода в днях. Оставлен только «Сегодня» (стартовый режим);
@@ -245,8 +250,185 @@ function ActiveShiftCard({
   );
 }
 
+/**
+ * Карточка сотрудника в режиме «Доступы»: участки чипами, редактор —
+ * тот же паттерн, что в админских «Ролях сотрудников» (клик по чипу
+ * включает/выключает участок, ★ делает его основным), но список ролей
+ * ограничен цеховыми (`MASTER_ASSIGNABLE_ROLES`).
+ *
+ * Отказ печатаем В КАРТОЧКЕ: список длинный, общая плашка ошибки
+ * наверху страницы при прокрутке не видна и нажатие выглядит как
+ * «ничего не произошло».
+ */
+function EmployeeAccessCard({
+  row,
+  onSaved,
+}: {
+  row: MasterEmployeeAccessDto;
+  onSaved: (next: MasterEmployeeAccessDto) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [roles, setRoles] = useState<string[]>(row.roles);
+  const [primary, setPrimary] = useState(row.primaryRole);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function startEdit() {
+    setRoles(row.roles);
+    setPrimary(row.primaryRole);
+    setError(null);
+    setEditing(true);
+  }
+
+  function toggle(code: string) {
+    setError(null);
+    setRoles((prev) => {
+      if (prev.includes(code)) {
+        // Последний участок снять нельзя — сотрудник остался бы без
+        // рабочего экрана (это же правило проверяет схема на бэке).
+        if (prev.length === 1) return prev;
+        const next = prev.filter((r) => r !== code);
+        // Сняли основную — основной становится первая оставшаяся.
+        if (code === primary) setPrimary(next[0]!);
+        return next;
+      }
+      return [...prev, code];
+    });
+  }
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    const res = await saveEmployeeAccessAction(row.employeeId, {
+      roles,
+      primaryRole: primary,
+    });
+    setSaving(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setEditing(false);
+    onSaved(res.data);
+  }
+
+  const shown = editing ? roles : row.roles;
+  const shownPrimary = editing ? primary : row.primaryRole;
+
+  return (
+    <div className="maccess__row">
+      <div className="maccess__head">
+        <div>
+          <div className="maccess__name">{row.employeeName}</div>
+          <div className="maccess__meta">
+            {row.activeShift
+              ? `Смена: ${
+                  row.activeShift.equipmentDisplayNumber ??
+                  row.activeShift.equipmentName
+                } · ${row.activeShift.operationName}`
+              : 'Смена не открыта'}
+          </div>
+        </div>
+        {!editing && row.editable && (
+          <button type="button" className="maccess__edit" onClick={startEdit}>
+            ✎ Изменить
+          </button>
+        )}
+      </div>
+
+      <div className="maccess__chips">
+        {(editing ? MASTER_ASSIGNABLE_ROLES : shown).map((code) => {
+          const on = shown.includes(code);
+          const isPrimary = code === shownPrimary;
+          return (
+            <span
+              key={code}
+              className={
+                'maccess__chip' +
+                (on ? ' is-on' : '') +
+                (isPrimary ? ' is-primary' : '')
+              }
+            >
+              {editing ? (
+                <button
+                  type="button"
+                  className="maccess__chip-toggle"
+                  aria-pressed={on}
+                  disabled={saving}
+                  onClick={() => toggle(code)}
+                >
+                  {formatRole(code)}
+                </button>
+              ) : (
+                <span className="maccess__chip-toggle">{formatRole(code)}</span>
+              )}
+              {on && editing && (
+                <button
+                  type="button"
+                  className="maccess__chip-star"
+                  title="Сделать основным участком"
+                  aria-label={`Сделать «${formatRole(code)}» основным участком`}
+                  disabled={saving}
+                  onClick={() => setPrimary(code)}
+                >
+                  {isPrimary ? '★' : '☆'}
+                </button>
+              )}
+              {on && !editing && isPrimary && (
+                <span className="maccess__chip-star" aria-label="Основной участок">
+                  ★
+                </span>
+              )}
+            </span>
+          );
+        })}
+      </div>
+
+      {error && (
+        <p className="maccess__error" role="alert">
+          {error}
+        </p>
+      )}
+
+      {!row.editable && !editing && (
+        <p className="maccess__hint">
+          Есть доступы вне цеха — их меняет начальник цеха.
+        </p>
+      )}
+
+      {editing && (
+        <>
+          <div className="maccess__actions">
+            <button
+              type="button"
+              className="maccess__save"
+              disabled={saving}
+              onClick={() => void save()}
+            >
+              {saving ? 'Сохраняем…' : 'Сохранить'}
+            </button>
+            <button
+              type="button"
+              className="maccess__cancel"
+              disabled={saving}
+              onClick={() => setEditing(false)}
+            >
+              Отмена
+            </button>
+          </div>
+          <p className="maccess__hint">
+            Клик по участку — доступ вкл/выкл. ★ — основной участок (экран
+            по умолчанию). Переключается сотрудник сам — кнопкой «Сменить
+            место» или сканом рабочего места.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function EmployeeStatsView() {
-  const [mode, setMode] = useState<'stats' | 'active'>('stats');
+  const [mode, setMode] = useState<'stats' | 'active' | 'access'>('stats');
   const [from, setFrom] = useState<string>('');
   const [to, setTo] = useState<string>('');
   const [activeDays, setActiveDays] = useState<number | null>(DEFAULT_DAYS);
@@ -267,6 +449,12 @@ export function EmployeeStatsView() {
   >({});
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Режим «Доступы»: участки сотрудников цеха.
+  const [accessRows, setAccessRows] = useState<MasterEmployeeAccessDto[] | null>(
+    null,
+  );
+  const [accessLoading, setAccessLoading] = useState(false);
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -311,6 +499,15 @@ export function EmployeeStatsView() {
     setActiveLoading(false);
   }, []);
 
+  const loadAccess = useCallback(async () => {
+    setAccessLoading(true);
+    setError(null);
+    const r = await loadEmployeeAccessAction();
+    if (r.ok) setAccessRows(r.data.rows);
+    else setError(r.error);
+    setAccessLoading(false);
+  }, []);
+
   // Инициализация дефолтного периода (сегодня) после монтирования —
   // Date.now недоступен на server-render без риска рассинхрона гидрации.
   // Активные смены грузим сразу же — счётчик в сегменте «Активные N».
@@ -323,11 +520,12 @@ export function EmployeeStatsView() {
   }, [load, loadActive]);
 
   const switchMode = useCallback(
-    (m: 'stats' | 'active') => {
+    (m: 'stats' | 'active' | 'access') => {
       setMode(m);
       if (m === 'active') void loadActive();
+      if (m === 'access') void loadAccess();
     },
-    [loadActive],
+    [loadActive, loadAccess],
   );
 
   const cancelConfirm = useCallback((shiftId: string) => {
@@ -437,6 +635,17 @@ export function EmployeeStatsView() {
               </span>
             )}
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'access'}
+            className={
+              'mstat__seg-btn' + (mode === 'access' ? ' is-active' : '')
+            }
+            onClick={() => switchMode('access')}
+          >
+            Доступы
+          </button>
         </div>
         {mode === 'stats' && (
           <div className="mstat__presets">
@@ -457,14 +666,26 @@ export function EmployeeStatsView() {
         <button
           type="button"
           className="pboard__refresh"
-          onClick={() =>
-            mode === 'stats' ? void load(from, to) : void loadActive()
-          }
+          onClick={() => {
+            if (mode === 'stats') void load(from, to);
+            else if (mode === 'active') void loadActive();
+            else void loadAccess();
+          }}
           disabled={
-            mode === 'stats' ? loading || !from || !to : activeLoading
+            mode === 'stats'
+              ? loading || !from || !to
+              : mode === 'active'
+                ? activeLoading
+                : accessLoading
           }
         >
-          {(mode === 'stats' ? loading : activeLoading)
+          {(
+            mode === 'stats'
+              ? loading
+              : mode === 'active'
+                ? activeLoading
+                : accessLoading
+          )
             ? 'Загрузка…'
             : '⟳ Обновить'}
         </button>
@@ -525,6 +746,43 @@ export function EmployeeStatsView() {
                   closing={closingId === s.shiftId}
                   onClose={(force) => void closeShift(s, force)}
                   onCancel={() => cancelConfirm(s.shiftId)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {mode === 'access' && (
+        <>
+          {accessLoading && !accessRows && (
+            <div className="pboard__muted">Загрузка…</div>
+          )}
+          {accessRows && accessRows.length === 0 && !error && (
+            <div className="master-page__empty">
+              <p>Активных сотрудников нет</p>
+            </div>
+          )}
+          {accessRows && accessRows.length > 0 && (
+            <div className="maccess">
+              {accessRows.map((r) => (
+                <EmployeeAccessCard
+                  key={r.employeeId}
+                  row={r}
+                  onSaved={(next) => {
+                    setAccessRows((prev) =>
+                      prev
+                        ? prev.map((x) =>
+                            x.employeeId === next.employeeId
+                              ? // Смена в ответе не приходит (её мастер
+                                // видит в списке) — оставляем прежнюю.
+                                { ...next, activeShift: x.activeShift }
+                              : x,
+                          )
+                        : prev,
+                    );
+                    showToast(`Участки сохранены: ${next.employeeName}`);
+                  }}
                 />
               ))}
             </div>

@@ -153,11 +153,15 @@ Side effects: `login` обновляет `Employee.lastSeenAt`-style-поля
 | Метод | Путь                  | RBAC     | Описание |
 | ----- | --------------------- | -------- | -------- |
 | GET   | `/api/me/employee-qr` | Any auth | Возвращает `EmployeeQrResponseDto` — подписанный QR-код текущего сотрудника для показа мастеру / сканирования на рабочем терминале. Payload: `{ employee: { id, name, role }, qrPayload: "SEWING_EMPLOYEE:<signedToken>", expiresAt }`. Токен HMAC-SHA256 (тот же `JWT_SECRET`, что у session-cookie), TTL = 12 часов, `type = "EMPLOYEE_QR"`, не содержит `pinHash` / `login` / `phone` / паспортных / salary-данных. 401 `UNAUTHENTICATED` без сессии; 404 `EMPLOYEE_PROFILE_NOT_FOUND`, если у авторизованного пользователя нет карточки сотрудника; 403 `EMPLOYEE_INACTIVE`, если карточка `active=false`. |
+| GET   | `/api/me/workplaces` | Any auth | `MyWorkplacesDto` — участки, между которыми сотрудник может переключаться (источник списка в шторке «Сменить участок»). Строится по НАЗНАЧЕННЫМ ролям (`Employee.roles`), а не по эффективным: наследование даёт права донора, но не отдельное рабочее место. Каждая строка — `{ role, label, workspace, current, primary }`; `label`/`workspace` из справочника `AppRole` (для системных ролей — fallback `SYSTEM_ROLE_DEFAULTS`), `current` = `activeRole ?? role`. |
+| POST  | `/api/me/switch-workplace` | Any auth | Смена активного участка. Body `SwitchWorkplaceDto` — ровно одно из `{ code }` (сырая строка QR рабочего места: `equipment:{id}`, голый id или `Equipment.code`) и `{ role }` (код участка из списка), плюс `force?`. Закрывает открытую смену и ставит `Employee.activeRole`; новую смену НЕ открывает (её стартует терминал обычным сканом). Ответ `SwitchWorkplaceResultDto` — `equipment*` заполнены только при скане. 400 `WORKPLACE_NO_ROLE` (у рабочего места не задана роль участка), 403 `WORKPLACE_ROLE_FORBIDDEN` (участок не назначен сотруднику), 409 `EQUIPMENT_INACTIVE`, 409 `WORKPLACE_SWITCH_CONFIRM_REQUIRED` (есть паспорт в работе — UI подтверждает и повторяет с `force: true`). |
 
 UI-потребители: `apps/web/components/employees/employee-qr-button.tsx`
 (клиентская кнопка + модалка с `qrcode.react`), server-обёртка
 `apps/web/lib/employee-qr-api.ts`, action
-`apps/web/app/employee-qr/actions.ts`.
+`apps/web/app/employee-qr/actions.ts`; шторка «Сменить участок» —
+`apps/web/components/workplace/switch-workplace-button.tsx` (одна на всё
+приложение, рендерится в корневом layout при 2+ назначенных участках).
 
 ---
 
@@ -1077,6 +1081,26 @@ DTO (себестоимость, склад, freshness плана) и закры
 
 DTO: `@sewing/shared/master-orders` (`MasterOrdersQuerySchema`,
 `MasterOrdersDto`, `MasterOrderListItemDto`, `MasterOrderRouteStepDto`).
+
+---
+
+## 23c. Master employee stats (вкладка «Сотрудники»)
+
+Источник: `master-employee-stats/master-employee-stats.controller.ts`.
+Класс-уровень `@Roles('SHOPFLOOR_MASTER', 'SHOP_MANAGER', 'ADMIN')` —
+тот же доступ, что у экрана `/master`. Три режима вкладки:
+статистика, активные смены и доступы.
+
+| Метод | Путь | RBAC | Описание |
+| ----- | ---- | ---- | -------- |
+| GET   | `/api/master/employee-stats`                              | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Query `MasterEmployeeStatsQuerySchema` (`?from&to`, UTC-дни включительно). `MasterEmployeeStatsDto` — «кто сколько сделал» по `PassportEvent.OPERATION_FINISHED`. |
+| GET   | `/api/master/employee-stats/drill`                        | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Query `?from&to&employeeId`. `MasterEmployeeDrillDto` — разбивка по операциям и дням. |
+| GET   | `/api/master/employee-stats/active-shifts`                | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | `MasterActiveShiftsDto` — открытые смены прямо сейчас, `startedAt` ASC. |
+| POST  | `/api/master/employee-stats/active-shifts/:shiftId/close` | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `ForceCloseShiftSchema` (`{ force? }`). Принудительное завершение смены. Уже закрытая — успех-noop (`closed: false`); паспорта на руках без `force` — 409 `SHIFT_HAS_ACTIVE_PASSPORTS`. Аудит `MASTER_SHIFT_FORCE_CLOSED`. |
+| GET   | `/api/master/employee-stats/access`                       | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | `MasterEmployeeAccessListDto` — активные сотрудники с назначенными участками. `editable = false`, если в наборе есть роль вне белого списка мастера (правит админка). |
+| PUT   | `/api/master/employee-stats/access/:employeeId`           | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `MasterUpdateEmployeeAccessSchema` (`{ roles[], primaryRole }` — полная замена набора). Узкая ручка вместо `PATCH /api/employees/:id`: там же зарплата, PIN и архив, и открывать её мастеру ради ролей нельзя. Белый список — `MASTER_ASSIGNABLE_ROLES` (швея, ОТК, ВТО, упаковка, раскройщик, помощник раскройщика), проверяется на сервере с обеих сторон. Побочный эффект: `activeRole` сбрасывается, если участок выпал из набора. Ошибки: 403 `MASTER_ROLE_NOT_ASSIGNABLE`, 403 `MASTER_EMPLOYEE_NOT_EDITABLE`, 409 `MASTER_ROLE_PAIR_REDUNDANT` (CUTTER + CUTTER_ASSISTANT одному человеку: выпуск и стеллаж у раскройщика уже во вкладках кабинета). Аудит `MASTER_EMPLOYEE_ROLES_UPDATED`. |
+
+DTO: `@sewing/shared` (`master-employee-stats.ts`).
 
 ---
 

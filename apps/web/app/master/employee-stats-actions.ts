@@ -14,17 +14,22 @@
 import type {
   MasterActiveShiftsDto,
   MasterCloseShiftResultDto,
-  MasterEmployeeDrillDto,
+  MasterEmployeeAccessDto,
+  MasterEmployeeAccessListDto,
   MasterEmployeeStatsDrillQuery,
+  MasterEmployeeDrillDto,
   MasterEmployeeStatsDto,
   MasterEmployeeStatsQuery,
+  MasterUpdateEmployeeAccessDto,
 } from '@sewing/shared';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   closeMasterActiveShift,
   getMasterActiveShifts,
+  getMasterEmployeeAccess,
   getMasterEmployeeStats,
   getMasterEmployeeStatsDrill,
+  updateMasterEmployeeAccess,
 } from '@/lib/master-employee-stats-api';
 
 function explain(e: unknown): string {
@@ -111,6 +116,46 @@ export async function closeActiveShiftAction(
     return {
       ok: false,
       error: errorText(e, 'Не удалось завершить смену. Попробуйте ещё раз.'),
+    };
+  }
+}
+
+export type LoadEmployeeAccessResult =
+  | { ok: true; data: MasterEmployeeAccessListDto }
+  | { ok: false; error: string };
+
+/** Режим «Доступы»: сотрудники цеха и их участки. */
+export async function loadEmployeeAccessAction(): Promise<LoadEmployeeAccessResult> {
+  try {
+    return { ok: true, data: await getMasterEmployeeAccess() };
+  } catch (e) {
+    return {
+      ok: false,
+      error: errorText(e, 'Не удалось загрузить список сотрудников'),
+    };
+  }
+}
+
+export type SaveEmployeeAccessResult =
+  | { ok: true; data: MasterEmployeeAccessDto }
+  | { ok: false; error: string };
+
+/**
+ * Сохранение участков сотрудника. Отказы белого списка
+ * (`MASTER_ROLE_NOT_ASSIGNABLE`, `MASTER_EMPLOYEE_NOT_EDITABLE`,
+ * `MASTER_ROLE_PAIR_REDUNDANT`) приходят человекочитаемым текстом с
+ * бэка — показываем его как есть, прямо в карточке.
+ */
+export async function saveEmployeeAccessAction(
+  employeeId: string,
+  body: MasterUpdateEmployeeAccessDto,
+): Promise<SaveEmployeeAccessResult> {
+  try {
+    return { ok: true, data: await updateMasterEmployeeAccess(employeeId, body) };
+  } catch (e) {
+    return {
+      ok: false,
+      error: errorText(e, 'Не удалось сохранить участки'),
     };
   }
 }

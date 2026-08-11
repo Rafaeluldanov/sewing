@@ -5,14 +5,23 @@ import type {
   MasterActiveShiftDto,
   MasterActiveShiftsDto,
   MasterCloseShiftResultDto,
+  MasterEmployeeAccessDto,
+  MasterEmployeeAccessListDto,
   MasterEmployeeDrillDto,
   MasterEmployeeOpStatDto,
   MasterEmployeeStatsDto,
   MasterEmployeeStatsDrillQuery,
   MasterEmployeeStatsQuery,
   MasterEmployeeStatRowDto,
+  MasterUpdateEmployeeAccessDto,
 } from '@sewing/shared';
+import { isMasterAssignableRole } from '@sewing/shared';
+import { normalizeAssignedRoles } from '@sewing/shared/employees';
 import {
+  EmployeeNotFoundException,
+  MasterEmployeeNotEditableException,
+  MasterRoleNotAssignableException,
+  MasterRolePairRedundantException,
   MasterShiftHasActivePassportsException,
   ShiftNotActiveException,
 } from '../../common/errors.js';
@@ -601,6 +610,177 @@ export class MasterEmployeeStatsService {
     });
 
     return { closed: true };
+  }
+
+  // ===========================================================================
+  // ACCESS: режим «Доступы» (участки сотрудников)
+  // ===========================================================================
+
+  /**
+   * Все активные сотрудники с их назначенными участками — источник
+   * списка режима «Доступы».
+   *
+   * Почему не переиспользуем `transfer-candidates`: тот список
+   * отсортирован под передачу паспорта (сверху те, чья смена стоит на
+   * нужной операции) и привязан к паспорту. Здесь нужен просто цех
+   * по алфавиту.
+   *
+   * `editable = false` у тех, у кого есть роль вне белого списка
+   * мастера: такую карточку мастер видит (полезно понимать, кто есть
+   * кто), но не редактирует — иначе сохранение набора без «чужой» роли
+   * тихо отобрало бы человеку доступ.
+   */
+  async listAccess(): Promise<MasterEmployeeAccessListDto> {
+    const employees = await this.prisma.employee.findMany({
+      where: { active: true },
+      select: {
+        id: true,
+        fullName: true,
+        login: true,
+        role: true,
+        roles: true,
+        activeRole: true,
+        shiftSessions: {
+          where: { endedAt: null },
+          take: 1,
+          select: {
+            equipment: { select: { name: true, displayNumber: true } },
+            operation: { select: { name: true } },
+          },
+        },
+      },
+      orderBy: { fullName: 'asc' },
+    });
+
+    return {
+      rows: employees.map((e) => {
+        const roles = normalizeAssignedRoles(e.role, e.roles);
+        const shift = e.shiftSessions[0];
+        return {
+          employeeId: e.id,
+          employeeName: e.fullName,
+          login: e.login,
+          primaryRole: e.role,
+          roles,
+          activeRole: e.activeRole ?? e.role,
+          editable: roles.every((r) => isMasterAssignableRole(r)),
+          activeShift: shift
+            ? {
+                equipmentName: shift.equipment.name,
+                equipmentDisplayNumber: shift.equipment.displayNumber,
+                operationName: shift.operation.name,
+              }
+            : null,
+        };
+      }),
+    };
+  }
+
+  /**
+   * Мастер меняет набор участков сотрудника.
+   *
+   * Намеренно НЕ переиспользуем `PATCH /api/employees/:id`: тот же
+   * контроллер правит зарплату, PIN и архив, и открывать его мастеру
+   * ради ролей — расширять доступ на всё сразу. Здесь узкий контракт:
+   * только `roles` + `primaryRole`, только из белого списка
+   * (`MASTER_ASSIGNABLE_ROLES`), с обеих сторон — и в новом наборе, и
+   * в текущем (нельзя «уронить» админа до швеи).
+   *
+   * Побочный эффект, повторяющий `EmployeesService.update`: если
+   * активный участок выпал из набора, `activeRole` сбрасывается —
+   * иначе сотрудник остался бы залипшим на терминале, куда его больше
+   * не пускают.
+   */
+  async updateAccess(
+    actor: AuthPrincipal,
+    employeeId: string,
+    dto: MasterUpdateEmployeeAccessDto,
+  ): Promise<MasterEmployeeAccessDto> {
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        fullName: true,
+        login: true,
+        role: true,
+        roles: true,
+        activeRole: true,
+      },
+    });
+    if (!employee) throw new EmployeeNotFoundException();
+
+    const current = normalizeAssignedRoles(employee.role, employee.roles);
+    if (!current.every((r) => isMasterAssignableRole(r))) {
+      throw new MasterEmployeeNotEditableException();
+    }
+
+    const next = normalizeAssignedRoles(dto.primaryRole, dto.roles);
+    const forbidden = next.find((r) => !isMasterAssignableRole(r));
+    if (forbidden) throw new MasterRoleNotAssignableException(forbidden);
+    if (next.includes('CUTTER') && next.includes('CUTTER_ASSISTANT')) {
+      throw new MasterRolePairRedundantException();
+    }
+
+    const sameSet =
+      next.length === current.length && next.every((r) => current.includes(r));
+    if (sameSet && dto.primaryRole === employee.role) {
+      return this.buildAccessRow(employee, next);
+    }
+
+    const activeRole =
+      employee.activeRole && next.includes(employee.activeRole)
+        ? employee.activeRole
+        : null;
+
+    const updated = await this.prisma.employee.update({
+      where: { id: employeeId },
+      data: { role: dto.primaryRole, roles: next, activeRole },
+      select: {
+        id: true,
+        fullName: true,
+        login: true,
+        role: true,
+        roles: true,
+        activeRole: true,
+      },
+    });
+
+    await this.audit.log({
+      event: 'MASTER_EMPLOYEE_ROLES_UPDATED',
+      entityType: 'EMPLOYEE',
+      entityId: employeeId,
+      employeeId: actor.employeeId,
+      payload: {
+        targetEmployeeName: employee.fullName,
+        before: { role: employee.role, roles: current },
+        after: { role: updated.role, roles: next },
+      },
+    });
+
+    return this.buildAccessRow(updated, next);
+  }
+
+  /** Строка ответа `updateAccess` — без смены (её мастер видит в списке). */
+  private buildAccessRow(
+    employee: {
+      id: string;
+      fullName: string;
+      login: string;
+      role: string;
+      activeRole: string | null;
+    },
+    roles: string[],
+  ): MasterEmployeeAccessDto {
+    return {
+      employeeId: employee.id,
+      employeeName: employee.fullName,
+      login: employee.login,
+      primaryRole: employee.role,
+      roles,
+      activeRole: employee.activeRole ?? employee.role,
+      editable: roles.every((r) => isMasterAssignableRole(r)),
+      activeShift: null,
+    };
   }
 
   // ===========================================================================

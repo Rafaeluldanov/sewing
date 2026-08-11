@@ -212,3 +212,89 @@ export interface MasterCloseShiftResultDto {
   /** `true` — смена закрыта этим запросом; `false` — уже была закрыта. */
   closed: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Доступы (режим «Доступы» вкладки «Сотрудники»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Роли, которые мастер цеха может выдавать и снимать сам, — участки его
+ * цеха. Белый список закрытый и проверяется НА СЕРВЕРЕ: мастер не может
+ * ни выдать привилегированную роль (`ADMIN`, `SHOP_MANAGER`, свою
+ * `SHOPFLOOR_MASTER`), ни отобрать её у того, кому она уже выдана.
+ *
+ * `CUTTER_ASSISTANT` в списке есть: помощника ставят из швей. А вот
+ * связка `CUTTER + CUTTER_ASSISTANT` одному человеку бессмысленна —
+ * выпуск и стеллаж у раскройщика уже во вкладках его кабинета, — и
+ * бэкенд отклоняет её отдельной ошибкой (`MASTER_ROLE_PAIR_REDUNDANT`).
+ */
+export const MASTER_ASSIGNABLE_ROLES = [
+  'SEAMSTRESS',
+  'QC',
+  'IRONING',
+  'PACKING',
+  'CUTTER',
+  'CUTTER_ASSISTANT',
+] as const;
+export type MasterAssignableRole = (typeof MASTER_ASSIGNABLE_ROLES)[number];
+
+const MASTER_ASSIGNABLE_SET: ReadonlySet<string> = new Set(
+  MASTER_ASSIGNABLE_ROLES,
+);
+
+export function isMasterAssignableRole(code: string): boolean {
+  return MASTER_ASSIGNABLE_SET.has(code);
+}
+
+/** Строка списка «Доступы»: сотрудник и его назначенные участки. */
+export interface MasterEmployeeAccessDto {
+  employeeId: string;
+  employeeName: string;
+  login: string;
+  /** Основная роль (`Employee.role`) — экран по умолчанию, «★». */
+  primaryRole: string;
+  /** Назначенный набор (`Employee.roles`), включая `primaryRole`. */
+  roles: string[];
+  /** Активный участок (`activeRole ?? role`) — где сотрудник сейчас. */
+  activeRole: string;
+  /**
+   * `false` — в наборе есть роль вне белого списка мастера (например,
+   * начальник цеха). Такую карточку мастер видит, но не редактирует:
+   * доступы правит админка.
+   */
+  editable: boolean;
+  /** Открытая смена сотрудника (`null` — смены нет). */
+  activeShift: {
+    equipmentName: string;
+    equipmentDisplayNumber: string | null;
+    operationName: string;
+  } | null;
+}
+
+export interface MasterEmployeeAccessListDto {
+  rows: MasterEmployeeAccessDto[];
+}
+
+/**
+ * Тело `PUT /api/master/employee-stats/access/:employeeId`.
+ *
+ * Шлём ВЕСЬ набор, а не дельту: редактор чипов работает набором, и
+ * «полная замена» исключает гонку двух мастеров (иначе одновременные
+ * «сними ОТК» и «добавь ВТО» дали бы неожиданный результат).
+ */
+export const MasterUpdateEmployeeAccessSchema = z
+  .object({
+    roles: z
+      .array(z.string().trim().min(1))
+      .min(1, 'У сотрудника должен остаться хотя бы один участок')
+      .max(20),
+    primaryRole: z.string().trim().min(1, 'Укажите основной участок'),
+  })
+  .strict()
+  .refine(
+    (v) => v.roles.includes(v.primaryRole),
+    'Основной участок должен входить в набор',
+  );
+export type MasterUpdateEmployeeAccessDto = z.infer<
+  typeof MasterUpdateEmployeeAccessSchema
+>;

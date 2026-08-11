@@ -19971,6 +19971,154 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 
 /* -----------------------------------------------------------------------
+ * Режим «Доступы» вкладки «Сотрудники» (кабинет мастера): участки
+ * сотрудника чипами + инлайн-редактор. Геометрия чипа повторяет
+ * админские «Роли сотрудников» (`.admin-role-chip`), но на токенах
+ * `--color-*`: кабинет мастера живёт вне `/admin` и admin-классы не
+ * использует.
+ * ----------------------------------------------------------------------- */
+
+.maccess {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.maccess__row {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+}
+.maccess__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.maccess__name {
+  font-size: var(--title-item);
+  font-weight: 700;
+}
+.maccess__meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+.maccess__edit {
+  appearance: none;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  color: var(--color-fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.maccess__edit:hover { background: var(--color-bg-muted); }
+.maccess__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.maccess__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-fg-muted);
+  font-size: 13px;
+}
+.maccess__chip.is-on {
+  padding-right: 4px;
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-soft);
+  color: var(--color-fg);
+}
+.maccess__chip.is-primary { border-color: var(--color-accent); }
+.maccess__chip-toggle {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.maccess__chip-toggle:disabled { cursor: not-allowed; opacity: 0.55; }
+.maccess__chip-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 13px;
+  cursor: pointer;
+}
+.maccess__chip-star:disabled { cursor: not-allowed; opacity: 0.55; }
+.maccess__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.maccess__save {
+  appearance: none;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--btn-primary-edge);
+  border-radius: var(--radius-md);
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.maccess__save:hover:not(:disabled) { background: var(--btn-primary-bg-hover); }
+.maccess__save:disabled { opacity: 0.6; cursor: default; }
+.maccess__cancel {
+  appearance: none;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  color: var(--color-fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.maccess__cancel:hover:not(:disabled) { background: var(--color-bg-muted); }
+.maccess__cancel:disabled { opacity: 0.6; cursor: default; }
+.maccess__hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+.maccess__error {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* -----------------------------------------------------------------------
  * /admin/employees: row actions + danger zone + hard-delete modal
  * (см. `apps/web/app/admin/employees/row-actions.tsx`,
  * `apps/web/app/admin/employees/[id]/danger-zone.tsx`,

@@ -1254,6 +1254,51 @@ export class MasterShiftHasActivePassportsException extends BusinessException {
   }
 }
 
+/**
+ * Мастер попытался выдать/снять роль вне своего белого списка
+ * (`MASTER_ASSIGNABLE_ROLES`) — например, начальника цеха. Такие
+ * доступы правит только админка.
+ */
+export class MasterRoleNotAssignableException extends BusinessException {
+  constructor(role: string) {
+    super(
+      'MASTER_ROLE_NOT_ASSIGNABLE',
+      `Участок «${role}» мастер не назначает — обратитесь к начальнику цеха.`,
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
+/**
+ * Мастер редактирует сотрудника, у которого уже есть роль вне белого
+ * списка (администратор, начальник цеха, другой мастер). Снять её
+ * мастер не может, а молча сохранить набор без неё — потерять доступ.
+ */
+export class MasterEmployeeNotEditableException extends BusinessException {
+  constructor() {
+    super(
+      'MASTER_EMPLOYEE_NOT_EDITABLE',
+      'У сотрудника есть доступы вне цеха — их меняет начальник цеха.',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
+/**
+ * «Раскройщик + помощник раскройщика» одному человеку: выпуск и
+ * стеллаж у раскройщика уже есть вкладками в его кабинете, а вторая
+ * роль ломает ему запирание на `/cutter` и ветвление экрана `/work`.
+ */
+export class MasterRolePairRedundantException extends BusinessException {
+  constructor() {
+    super(
+      'MASTER_ROLE_PAIR_REDUNDANT',
+      'Раскройщику не нужен участок «Помощник раскройщика»: выпуск и стеллаж у него уже во вкладках кабинета.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class PassportNotInCellException extends BusinessException {
   constructor() {
     super(

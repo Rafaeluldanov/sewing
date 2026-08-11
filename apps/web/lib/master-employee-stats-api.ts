@@ -8,10 +8,13 @@
 import type {
   MasterActiveShiftsDto,
   MasterCloseShiftResultDto,
+  MasterEmployeeAccessDto,
+  MasterEmployeeAccessListDto,
   MasterEmployeeDrillDto,
   MasterEmployeeStatsDrillQuery,
   MasterEmployeeStatsDto,
   MasterEmployeeStatsQuery,
+  MasterUpdateEmployeeAccessDto,
 } from '@sewing/shared';
 import { apiFetch } from './api';
 
@@ -57,5 +60,26 @@ export function closeMasterActiveShift(
   return apiFetch<MasterCloseShiftResultDto>(
     `/master/employee-stats/active-shifts/${encodeURIComponent(shiftId)}/close`,
     { method: 'POST', body },
+  );
+}
+
+/** Режим «Доступы»: активные сотрудники и их участки. */
+export function getMasterEmployeeAccess(): Promise<MasterEmployeeAccessListDto> {
+  return apiFetch<MasterEmployeeAccessListDto>('/master/employee-stats/access', {
+    cache: 'no-store',
+  });
+}
+
+/**
+ * Мастер меняет набор участков сотрудника. Белый список цеховых ролей
+ * проверяет сервер — UI лишь не показывает лишние чипы.
+ */
+export function updateMasterEmployeeAccess(
+  employeeId: string,
+  body: MasterUpdateEmployeeAccessDto,
+): Promise<MasterEmployeeAccessDto> {
+  return apiFetch<MasterEmployeeAccessDto>(
+    `/master/employee-stats/access/${encodeURIComponent(employeeId)}`,
+    { method: 'PUT', body },
   );
 }
