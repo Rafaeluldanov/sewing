@@ -2226,7 +2226,7 @@ export class MasterTargetEmployeeNotFoundException extends BusinessException {
   constructor() {
     super(
       'TARGET_EMPLOYEE_NOT_FOUND',
-      'Сотрудник по этому QR не найден.',
+      'Сотрудник не найден — обновите список и выберите его заново.',
       HttpStatus.NOT_FOUND,
     );
   }
@@ -2434,7 +2434,7 @@ export class MasterBackwardRouteRequiresPlacementException extends BusinessExcep
   constructor() {
     super(
       'MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT',
-      'Откат паспорта назад по маршруту разрешён только с одновременным placement-ом. Укажите либо ячейку (cellQr/cellId), либо сотрудника (employeeQr/employeeId).',
+      'При возврате назад по маршруту паспорт обязан куда-то лечь: выберите сотрудника «из рук в руки» или ячейку.',
       HttpStatus.BAD_REQUEST,
     );
   }

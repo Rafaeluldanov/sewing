@@ -309,6 +309,29 @@ describe('master-actions smoke — выбор получателя из спис
     expect(parseAnyEmployeeQr('')).toBeNull();
   });
 
+  test('UI: отказ действия виден внутри шторки, а не под ней', () => {
+    const src = readSrc('apps/web/app/master/passport-actions-sheet.tsx');
+    // Локальный баннер + проброс наверх (шторку могут закрыть).
+    expect(src).toMatch(/master-actions-sheet__banner-error/);
+    expect(src).toMatch(/handleError/);
+    expect(src).toMatch(/role="alert"/);
+
+    const css = readSrc('apps/web/app/globals.css');
+    expect(css).toMatch(/\.master-actions-sheet__banner-error/);
+    // Родительская полоса ошибок лежит в потоке страницы, поэтому
+    // баннер обязан быть sticky внутри скроллящейся карточки.
+    const banner = css.slice(
+      css.indexOf('.master-actions-sheet__banner-error'),
+    );
+    expect(banner.slice(0, 400)).toMatch(/position: sticky/);
+  });
+
+  test('UI: чужой QR в поле ячейки отсекается до запроса', () => {
+    const src = readSrc('apps/web/app/master/passport-actions-sheet.tsx');
+    expect(src).toMatch(/Это QR паспорта, а не ячейки/);
+    expect(src).toMatch(/Это QR сотрудника, а не ячейки/);
+  });
+
   test('backend резолвит подписанный токен через MeService', () => {
     const serviceSrc = readSrc(
       'apps/api/src/modules/master-actions/master-actions.service.ts',

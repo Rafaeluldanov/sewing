@@ -138,6 +138,32 @@ export function PassportActionsSheet({
   onError,
 }: Props) {
   const [mode, setMode] = useState<Mode | null>(null);
+  /**
+   * Ошибка действия показывается ВНУТРИ шторки.
+   *
+   * Родительская `.master-page__error` живёт в обычном потоке страницы
+   * `/master`, а шторка — `position: fixed; z-index: 100` поверх неё:
+   * отказ уезжал под затемнение и мастер его попросту не видел.
+   * 11.08.2026 это дало 17 нажатий «Подтвердить» подряд за 15 секунд —
+   * человек жал вслепую, потому что экран на нажатие не отвечал.
+   * Наверх ошибку по-прежнему отдаём: шторку могут и закрыть.
+   */
+  const [error, setError] = useState<string | null>(null);
+  const handleError = useCallback(
+    (msg: string) => {
+      setError(msg);
+      onError(msg);
+    },
+    [onError],
+  );
+  const openMode = useCallback((next: Mode) => {
+    setError(null);
+    setMode(next);
+  }, []);
+  const backToMenu = useCallback(() => {
+    setError(null);
+    setMode(null);
+  }, []);
 
   return (
     <ModalPortal>
@@ -181,6 +207,12 @@ export function PassportActionsSheet({
           </button>
         </header>
 
+        {error && (
+          <p className="master-actions-sheet__banner-error" role="alert">
+            {error}
+          </p>
+        )}
+
         {mode === null && (
           <div className="master-actions-sheet__menu">
             {/* «Выполнить операцию самой» — единственное действие, где
@@ -189,7 +221,7 @@ export function PassportActionsSheet({
             <button
               type="button"
               className="master-actions-sheet__menu-item master-actions-sheet__menu-item--work"
-              onClick={() => setMode('selfOperation')}
+              onClick={() => openMode('selfOperation')}
             >
               <span className="master-actions-sheet__menu-label">
                 Выполнить операцию самой
@@ -205,7 +237,7 @@ export function PassportActionsSheet({
             <button
               type="button"
               className="master-actions-sheet__menu-item master-actions-sheet__menu-item--history"
-              onClick={() => setMode('history')}
+              onClick={() => openMode('history')}
             >
               <span className="master-actions-sheet__menu-label">
                 Посмотреть историю паспорта
@@ -230,7 +262,7 @@ export function PassportActionsSheet({
                 key={id}
                 type="button"
                 className="master-actions-sheet__menu-item master-actions-sheet__menu-item--qc"
-                onClick={() => setMode(id)}
+                onClick={() => openMode(id)}
               >
                 <span className="master-actions-sheet__menu-label">
                   {QC_ACTION_LABELS[id]}
@@ -246,7 +278,7 @@ export function PassportActionsSheet({
                   key={id}
                   type="button"
                   className="master-actions-sheet__menu-item"
-                  onClick={() => setMode(id)}
+                  onClick={() => openMode(id)}
                 >
                   <span className="master-actions-sheet__menu-label">
                     {ACTION_LABELS[id]}
@@ -264,17 +296,17 @@ export function PassportActionsSheet({
           <PassportHistoryView
             passportId={passport.id}
             passportNumber={passport.number}
-            onBack={() => setMode(null)}
+            onBack={backToMenu}
           />
         )}
 
         {mode === 'selfOperation' && (
           <SelfOperationBody
             passport={passport}
-            onBack={() => setMode(null)}
+            onBack={backToMenu}
             onClose={onClose}
             onSuccess={onSuccess}
-            onError={onError}
+            onError={handleError}
           />
         )}
 
@@ -285,10 +317,10 @@ export function PassportActionsSheet({
             action={mode}
             passport={passport}
             defectTypes={defectTypes}
-            onBack={() => setMode(null)}
+            onBack={backToMenu}
             onClose={onClose}
             onSuccess={onSuccess}
-            onError={onError}
+            onError={handleError}
           />
         )}
 
@@ -301,10 +333,10 @@ export function PassportActionsSheet({
             <ActionBody
               action={mode}
               passport={passport}
-              onBack={() => setMode(null)}
+              onBack={backToMenu}
               onClose={onClose}
               onSuccess={onSuccess}
-              onError={onError}
+              onError={handleError}
             />
           )}
       </div>
@@ -415,6 +447,18 @@ function ActionBody({
         return;
       }
       if (scanner === 'cell') {
+        // Промах сканером ловим здесь, а не 404-ой с сервера: бейдж
+        // сотрудника и паспорт — соседние наклейки на том же столе.
+        const looksLikePassport = decoded.trim().startsWith('passport:');
+        if (parseAnyEmployeeQr(decoded) || looksLikePassport) {
+          onError(
+            looksLikePassport
+              ? 'Это QR паспорта, а не ячейки. Поднесите наклейку ячейки.'
+              : 'Это QR сотрудника, а не ячейки. Поднесите наклейку ячейки.',
+          );
+          setScanner(null);
+          return;
+        }
         setCellQr(decoded);
       }
       setScanner(null);

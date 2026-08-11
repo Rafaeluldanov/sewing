@@ -6249,6 +6249,24 @@ body:has(.master-page) .app-main {
   color: #991b1b;
   font-size: 0.85rem;
 }
+/* Отказ действия — ВНУТРИ шторки, сразу под шапкой. Родительская
+   `.master-page__error` лежит в потоке страницы и уезжает под
+   затемнение (`.master-actions-sheet` — fixed, z-index 100): мастер
+   жал «Подтвердить» и не видел ответа. `sticky` держит сообщение на
+   виду, пока форма скроллится. */
+.master-actions-sheet__banner-error {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid #f3c9c6;
+  border-radius: 0.5rem;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
 /* Выбор получателя паспорта («Передать сотруднику», откат назад «из рук
    в руки»). Строка = человек: ФИО, роль и его открытая смена — по ней
    мастер и выбирает, а не по должности. */
