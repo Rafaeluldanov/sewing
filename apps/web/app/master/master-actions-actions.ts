@@ -30,6 +30,7 @@ import {
   type FindMasterPassportByCodeResultDto,
   type MasterActionResultDto,
   type MasterSelfOperationStepsDto,
+  type MasterTransferCandidatesDto,
   type PassportHistoryDto,
 } from '@sewing/shared';
 import {
@@ -48,6 +49,7 @@ import {
   findMasterPassportByCode,
   getMasterPassportQcDetail,
   getMasterSelfOperationSteps,
+  listMasterTransferCandidates,
   performMasterSelfOperation,
   recordMasterPassportDefect,
   returnMasterPassportToCell,
@@ -213,6 +215,31 @@ export async function fetchPassportHistoryAction(
 export type FindMasterPassportResult =
   | { ok: true; result: FindMasterPassportByCodeResultDto }
   | { ok: false; error: string; errorRequestId?: string };
+
+export type MasterTransferCandidatesResult =
+  | { ok: true; result: MasterTransferCandidatesDto }
+  | { ok: false; error: string; errorRequestId?: string };
+
+/**
+ * Список сотрудников для «Передать сотруднику». Read-only —
+ * `revalidatePath` не нужен. `passportId` передаём всегда, когда он
+ * известен: от него зависит порядок строк (сначала те, чья смена стоит
+ * на текущем шаге паспорта).
+ */
+export async function fetchMasterTransferCandidatesAction(
+  passportId?: string,
+): Promise<MasterTransferCandidatesResult> {
+  try {
+    const result = await listMasterTransferCandidates(passportId);
+    return { ok: true, result };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
 
 export async function findMasterPassportByCodeAction(
   raw: unknown,

@@ -6249,6 +6249,65 @@ body:has(.master-page) .app-main {
   color: #991b1b;
   font-size: 0.85rem;
 }
+/* Выбор получателя паспорта («Передать сотруднику», откат назад «из рук
+   в руки»). Строка = человек: ФИО, роль и его открытая смена — по ней
+   мастер и выбирает, а не по должности. */
+.master-actions-sheet__hint {
+  margin: 0;
+  color: #5f5f5c;
+  font-size: 0.85rem;
+}
+.master-actions-sheet__people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  /* Два десятка сотрудников на телефоне: список скроллится сам, чтобы
+     не выталкивать «Подтвердить» за пределы экрана. */
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.master-actions-sheet__person {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #e4e4e1;
+  border-radius: 0.5rem;
+  background: #f7f7f6;
+  cursor: pointer;
+  min-height: 52px;
+}
+.master-actions-sheet__person--active {
+  border-color: #4f46e5;
+  background: #eef2ff;
+}
+.master-actions-sheet__person-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #2f2f2c;
+}
+.master-actions-sheet__person-meta {
+  font-size: 0.78rem;
+  color: #5f5f5c;
+}
+.master-actions-sheet__person-badge {
+  align-self: flex-start;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.35rem;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.master-actions-sheet__person-badge--muted {
+  background: #e0e7ff;
+  color: #3730a3;
+}
 /* «Посмотреть историю паспорта» — read-only обзор в том же sheet'е.
    Высоту history-листа ограничиваем и даём вертикальный скролл, чтобы
    на мобильном экране история не выталкивала кнопку «Назад» за viewport

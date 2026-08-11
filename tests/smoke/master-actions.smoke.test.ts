@@ -252,6 +252,46 @@ describe('master-actions smoke — «выполнить операцию сам�
   });
 });
 
+/**
+ * «Передать сотруднику»: получателя выбирают из списка, а не набирают
+ * `EMPLOYEE:<cuid>` руками. 11.08.2026 свободное поле QR дало 17 подряд
+ * 400 `INVALID_EMPLOYEE_QR` — вводить в него было физически нечего.
+ */
+describe('master-actions smoke — выбор получателя из списка', () => {
+  test('backend: ручка transfer-candidates существует и read-only', () => {
+    const controllerSrc = readSrc(
+      'apps/api/src/modules/master-actions/master-actions.controller.ts',
+    );
+    expect(controllerSrc).toMatch(/@Get\(['"]transfer-candidates['"]\)/);
+    expect(controllerSrc).toMatch(/MasterTransferCandidatesQuerySchema/);
+
+    const serviceSrc = readSrc(
+      'apps/api/src/modules/master-actions/master-actions.service.ts',
+    );
+    expect(serviceSrc).toMatch(/listTransferCandidates/);
+    // Сортировка «кому по руке»: смена на текущем шаге паспорта — сверху.
+    expect(serviceSrc).toMatch(/operationIsCurrentStep/);
+    expect(serviceSrc).toMatch(/operationInRoute/);
+    // Неактивных не отдаём.
+    expect(serviceSrc).toMatch(/where: \{ active: true \}/);
+  });
+
+  test('UI: список сотрудников вместо свободного ввода EMPLOYEE:<id>', () => {
+    const src = readSrc('apps/web/app/master/passport-actions-sheet.tsx');
+    expect(src).toMatch(/EmployeePicker/);
+    expect(src).toMatch(/fetchMasterTransferCandidatesAction/);
+    // Отправляем employeeId — сырой QR-строки в теле больше нет.
+    expect(src).toMatch(/employeeId/);
+    expect(src).not.toMatch(/placeholder="EMPLOYEE:/);
+    // Скан бейджа остаётся, но разбирается на клиенте.
+    expect(src).toMatch(/parseEmployeeQr/);
+
+    const css = readSrc('apps/web/app/globals.css');
+    expect(css).toMatch(/\.master-actions-sheet__people/);
+    expect(css).toMatch(/\.master-actions-sheet__person\b/);
+  });
+});
+
 describe('master-actions smoke — что сознательно не делаем', () => {
   test('actions сервер-сайд не закрывает MasterCall автоматически', () => {
     const actionsSrc = readSrc(

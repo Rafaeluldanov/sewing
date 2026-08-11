@@ -315,6 +315,73 @@ export interface FindMasterPassportByCodeResultDto {
 }
 
 // ---------------------------------------------------------------------------
+// Кандидаты на передачу паспорта (список сотрудников для мастера)
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /api/master-actions/transfer-candidates?passportId=<id>`.
+ *
+ * `passportId` необязателен: без него отдаём тот же список, но без
+ * привязки к маршруту (`operationInRoute` / `operationIsCurrentStep`
+ * всегда `false`). С ним список отсортирован «кому эта работа сейчас
+ * по руке».
+ */
+export const MasterTransferCandidatesQuerySchema = z.object({
+  passportId: z.string().trim().min(1).max(64).optional(),
+});
+export type MasterTransferCandidatesQuery = z.infer<
+  typeof MasterTransferCandidatesQuerySchema
+>;
+
+/**
+ * Открытая смена кандидата. Мастеру она важнее должности: паспорт
+ * поедет по маршруту дальше только если смена получателя стоит на
+ * операции из снимка маршрута заказа (см.
+ * `MasterActionsService.transferToEmployee` — soft-route MVP).
+ */
+export interface MasterTransferCandidateShiftDto {
+  operationId: string;
+  operationName: string;
+  /** `Equipment.displayNumber` или код станка — «стол 3» для цеха. */
+  equipmentLabel: string | null;
+  /** Операция смены есть в снимке маршрута заказа этого паспорта. */
+  operationInRoute: boolean;
+  /** Операция смены = текущий шаг паспорта (идеальный получатель). */
+  operationIsCurrentStep: boolean;
+}
+
+/**
+ * Сотрудник-кандидат на передачу паспорта.
+ *
+ * Ролью список НЕ фильтруем: передать паспорт можно и ОТК, и ВТО, и
+ * упаковке, а «кто из них уместен» решает мастер, глядя на смену.
+ * Прячем только неактивных — их backend всё равно отобьёт
+ * (`MASTER_TARGET_EMPLOYEE_INACTIVE`).
+ */
+export interface MasterTransferCandidateDto {
+  id: string;
+  fullName: string;
+  /** `Employee.role` (enum) — UI вешает свою подпись. */
+  role: string;
+  /** Открытая смена прямо сейчас; `null` — смены нет. */
+  activeShift: MasterTransferCandidateShiftDto | null;
+  /** Паспортов `IN_PROGRESS` на руках прямо сейчас. */
+  passportsInProgress: number;
+}
+
+/**
+ * Ответ `GET /api/master-actions/transfer-candidates`.
+ *
+ * Порядок строк — готовый для отрисовки: сначала смена на текущем шаге
+ * паспорта, затем смена на другой операции маршрута, затем прочие
+ * открытые смены, затем все остальные по алфавиту. UI не пересортирует.
+ */
+export interface MasterTransferCandidatesDto {
+  passportId: string | null;
+  rows: MasterTransferCandidateDto[];
+}
+
+// ---------------------------------------------------------------------------
 // «Выполнить операцию самой» (мастер работает руками)
 // ---------------------------------------------------------------------------
 

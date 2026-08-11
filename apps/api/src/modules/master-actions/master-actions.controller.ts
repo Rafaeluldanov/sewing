@@ -4,6 +4,7 @@ import {
   RevokeRouteWorkPermitSchema,
   FindMasterPassportByCodeSchema,
   MasterSelfOperationSchema,
+  MasterTransferCandidatesQuerySchema,
   ReturnPassportToCellSchema,
   SetRouteStepSchema,
   TransferPassportSchema,
@@ -13,6 +14,8 @@ import {
   type MasterActionResultDto,
   type MasterSelfOperationDto,
   type MasterSelfOperationStepsDto,
+  type MasterTransferCandidatesDto,
+  type MasterTransferCandidatesQuery,
   type ReturnPassportToCellDto,
   type SetRouteStepDto,
   type TransferPassportDto,
@@ -140,6 +143,25 @@ export class MasterActionsController {
     dto: FindMasterPassportByCodeDto,
   ): Promise<FindMasterPassportByCodeResultDto> {
     return this.service.findPassportByCode(dto.code);
+  }
+
+  /**
+   * `GET /api/master-actions/transfer-candidates?passportId=<id>` —
+   * активные сотрудники со своей открытой сменой, отсортированные «кому
+   * эта работа сейчас по руке» (см.
+   * `MasterActionsService.listTransferCandidates`).
+   *
+   * Ручка живёт здесь, а не в `/api/employees`: тот справочник закрыт
+   * ролями `SHOP_MANAGER`/`ADMIN`, и `SHOPFLOOR_MASTER` в него не
+   * ходит — ровно поэтому «Передать сотруднику» до этого умела только
+   * QR с бумажной этикетки.
+   */
+  @Get('transfer-candidates')
+  transferCandidates(
+    @Query(new ZodValidationPipe(MasterTransferCandidatesQuerySchema))
+    query: MasterTransferCandidatesQuery,
+  ): Promise<MasterTransferCandidatesDto> {
+    return this.service.listTransferCandidates(query.passportId);
   }
 
   // -------------------------------------------------------------------------

@@ -15,6 +15,7 @@ import type {
   MasterActionResultDto,
   MasterSelfOperationDto,
   MasterSelfOperationStepsDto,
+  MasterTransferCandidatesDto,
   ReturnPassportToCellDto,
   SetRouteStepDto,
   TransferPassportDto,
@@ -77,6 +78,23 @@ export function findMasterPassportByCode(
   return apiFetch<FindMasterPassportByCodeResultDto>(
     `/master-actions/find-passport-by-code`,
     { method: 'POST', body: { code } },
+  );
+}
+
+/**
+ * Кандидаты на передачу паспорта (активные сотрудники + их открытая
+ * смена). `cache: 'no-store'` обязателен: смены открываются и
+ * закрываются в цехе непрерывно, кэшированный список врал бы мастеру.
+ */
+export function listMasterTransferCandidates(
+  passportId?: string,
+): Promise<MasterTransferCandidatesDto> {
+  return apiFetch<MasterTransferCandidatesDto>(
+    '/master-actions/transfer-candidates',
+    {
+      cache: 'no-store',
+      ...(passportId ? { searchParams: { passportId } } : {}),
+    },
   );
 }
 

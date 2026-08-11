@@ -22,11 +22,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   MASTER_ACTION_REASON_LABELS,
   MASTER_ACTION_REASONS,
+  SYSTEM_ROLE_LABELS,
   parseEmployeeQr,
   type MasterActionReason,
   type MasterCallPassportDto,
   type MasterSelfOperationStepDto,
   type MasterSelfOperationStepsDto,
+  type MasterTransferCandidateDto,
 } from '@sewing/shared';
 import type {
   DefectTypeDto,
@@ -39,6 +41,7 @@ import {
   applyMasterQtyCorrectionAction,
   fetchMasterQcDetailAction,
   fetchMasterSelfOperationStepsAction,
+  fetchMasterTransferCandidatesAction,
   masterReturnToCellAction,
   masterSelfOperationAction,
   masterSetRouteStepAction,
@@ -330,8 +333,15 @@ function ActionBody({
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Action-specific state
-  const [employeeQr, setEmployeeQr] = useState<string>('');
+  // Action-specific state.
+  //
+  // Получателя держим как `employeeId`, а не как сырой QR: список
+  // кандидатов отдаёт id, а скан бумажной этикетки `EMPLOYEE:<id>`
+  // разбирается тут же (`parseEmployeeQr`). Свободного ввода QR-строки
+  // здесь больше нет — 11.08.2026 он дал 17 подряд 400
+  // `INVALID_EMPLOYEE_QR`: в поле физически нечего было ввести, кроме
+  // cuid с бумажки, которой у мастера на руках нет.
+  const [employeeId, setEmployeeId] = useState<string>('');
   const [cellQr, setCellQr] = useState<string>('');
   const [routeStepIndex, setRouteStepIndex] = useState<number | ''>(
     passport.currentRouteStepIndex ?? '',
@@ -355,20 +365,20 @@ function ActionBody({
 
   const canConfirm = useMemo(() => {
     if (!reason) return false;
-    if (action === 'transfer') return employeeQr.trim().length > 0;
+    if (action === 'transfer') return employeeId.length > 0;
     if (action === 'returnToCell') return cellQr.trim().length > 0;
     if (action === 'setRouteStep') {
       if (routeStepIndex === '') return false;
       if (!isBackward) return true;
       return backwardPlacement === 'employee'
-        ? employeeQr.trim().length > 0
+        ? employeeId.length > 0
         : cellQr.trim().length > 0;
     }
     return true;
   }, [
     action,
     reason,
-    employeeQr,
+    employeeId,
     cellQr,
     routeStepIndex,
     isBackward,
@@ -378,16 +388,20 @@ function ActionBody({
   const handleScan = useCallback(
     (decoded: string) => {
       if (scanner === 'employee') {
-        // Принимаем сырой QR — server action парсит сам.
-        // Подсказку даём только если префикс не совпал (мастер
-        // должен видеть, что отсканировал не того).
+        // Бумажная этикетка сотрудника (`/api/employees/:id/print`)
+        // несёт `EMPLOYEE:<id>` — разбираем на месте и подсвечиваем
+        // человека в списке. Чужой QR (паспорт, ячейка, «Мой QR-код»
+        // с терминала) до сервера не доходит: он бы вернулся
+        // невнятным `INVALID_EMPLOYEE_QR`.
         const parsed = parseEmployeeQr(decoded);
         if (!parsed) {
-          onError('QR не распознан как сотрудник (ожидается EMPLOYEE:<id>)');
+          onError(
+            'Это не QR сотрудника. Отсканируйте бейдж с этикетки или выберите человека в списке.',
+          );
           setScanner(null);
           return;
         }
-        setEmployeeQr(decoded);
+        setEmployeeId(parsed);
       } else if (scanner === 'cell') {
         setCellQr(decoded);
       }
@@ -410,7 +424,7 @@ function ActionBody({
         res = await masterTransferToEmployeeAction(passport.id, {
           reason,
           comment: comment.trim() ? comment.trim() : undefined,
-          employeeQr: employeeQr.trim(),
+          employeeId,
         });
       } else if (action === 'returnToCell') {
         res = await masterReturnToCellAction(passport.id, {
@@ -424,7 +438,7 @@ function ActionBody({
         // никого не «привязывает», паспорт уходит «в воздух».
         const placement =
           isBackward && backwardPlacement === 'employee'
-            ? { employeeQr: employeeQr.trim() }
+            ? { employeeId }
             : isBackward && backwardPlacement === 'cell'
               ? { cellQr: cellQr.trim() }
               : {};
@@ -452,7 +466,7 @@ function ActionBody({
     canConfirm,
     cellQr,
     comment,
-    employeeQr,
+    employeeId,
     isBackward,
     onClose,
     onError,
@@ -477,25 +491,12 @@ function ActionBody({
       <p className="master-actions-sheet__action-hint">{ACTION_HINTS[action]}</p>
 
       {action === 'transfer' && (
-        <div className="master-actions-sheet__field">
-          <label className="master-actions-sheet__label">Сотрудник</label>
-          <div className="master-actions-sheet__row">
-            <input
-              type="text"
-              className="master-actions-sheet__input"
-              placeholder="EMPLOYEE:<id>"
-              value={employeeQr}
-              onChange={(e) => setEmployeeQr(e.target.value)}
-            />
-            <button
-              type="button"
-              className="master-actions-sheet__scan"
-              onClick={() => setScanner('employee')}
-            >
-              Сканировать QR
-            </button>
-          </div>
-        </div>
+        <EmployeePicker
+          passportId={passport.id}
+          selectedId={employeeId}
+          onSelect={setEmployeeId}
+          onScanClick={() => setScanner('employee')}
+        />
       )}
 
       {action === 'returnToCell' && (
@@ -589,22 +590,13 @@ function ActionBody({
             </label>
           </div>
           {backwardPlacement === 'employee' ? (
-            <div className="master-actions-sheet__row">
-              <input
-                type="text"
-                className="master-actions-sheet__input"
-                placeholder="EMPLOYEE:<id>"
-                value={employeeQr}
-                onChange={(e) => setEmployeeQr(e.target.value)}
-              />
-              <button
-                type="button"
-                className="master-actions-sheet__scan"
-                onClick={() => setScanner('employee')}
-              >
-                Сканировать QR
-              </button>
-            </div>
+            <EmployeePicker
+              passportId={passport.id}
+              selectedId={employeeId}
+              onSelect={setEmployeeId}
+              onScanClick={() => setScanner('employee')}
+              hideLabel
+            />
           ) : (
             <div className="master-actions-sheet__row">
               <input
@@ -676,6 +668,163 @@ function ActionBody({
           onScan={handleScan}
           onClose={() => setScanner(null)}
         />
+      )}
+    </div>
+  );
+}
+
+interface EmployeePickerProps {
+  passportId: string;
+  selectedId: string;
+  onSelect: (employeeId: string) => void;
+  onScanClick: () => void;
+  /** Внутри блока «куда положить» подпись уже есть — не дублируем. */
+  hideLabel?: boolean;
+}
+
+/**
+ * Выбор получателя паспорта: список активных сотрудников с их открытой
+ * сменой (`GET /api/master-actions/transfer-candidates`).
+ *
+ * Порядок строк приходит с сервера и НЕ пересортировывается здесь:
+ * сверху те, чья смена стоит на текущем шаге паспорта — только для них
+ * передача сдвинет и шаг маршрута, а не одного лишь владельца.
+ *
+ * Поиск по ФИО показываем с 8 человек: в цехе их два десятка, и на
+ * телефоне листать длинный список неудобно.
+ */
+function EmployeePicker({
+  passportId,
+  selectedId,
+  onSelect,
+  onScanClick,
+  hideLabel = false,
+}: EmployeePickerProps) {
+  const [rows, setRows] = useState<MasterTransferCandidateDto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const res = await fetchMasterTransferCandidatesAction(passportId);
+    if (res.ok) {
+      setRows(res.result.rows);
+    } else {
+      setLoadError(res.error);
+    }
+    setLoading(false);
+  }, [passportId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const needle = query.trim().toLowerCase();
+  const visible = needle
+    ? rows.filter((r) => r.fullName.toLowerCase().includes(needle))
+    : rows;
+
+  // Отсканированный бейдж мог принадлежать сотруднику вне списка
+  // (уволен / деактивирован). Молча «ничего не выбрано» здесь хуже
+  // ошибки: мастер жмёт «Подтвердить» и не понимает отказа.
+  const selectedRow = rows.find((r) => r.id === selectedId) ?? null;
+  const selectedIsUnknown = selectedId !== '' && !selectedRow && !loading;
+
+  return (
+    <div className="master-actions-sheet__field">
+      {!hideLabel && (
+        <label className="master-actions-sheet__label">
+          Сотрудник <span className="master-actions-sheet__required">*</span>
+        </label>
+      )}
+      <div className="master-actions-sheet__row">
+        {rows.length >= 8 && (
+          <input
+            type="text"
+            className="master-actions-sheet__input"
+            placeholder="Поиск по фамилии"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        )}
+        <button
+          type="button"
+          className="master-actions-sheet__scan"
+          onClick={onScanClick}
+        >
+          Сканировать бейдж
+        </button>
+      </div>
+
+      {loading && (
+        <p className="master-actions-sheet__hint">Загружаем сотрудников…</p>
+      )}
+      {loadError && (
+        <p className="master-actions-sheet__error" role="alert">
+          {loadError}
+        </p>
+      )}
+      {selectedIsUnknown && (
+        <p className="master-actions-sheet__error" role="alert">
+          Отсканированного сотрудника нет среди активных — выберите
+          человека в списке.
+        </p>
+      )}
+      {!loading && !loadError && visible.length === 0 && (
+        <p className="master-actions-sheet__hint">
+          {rows.length === 0
+            ? 'Активных сотрудников нет.'
+            : 'Никто не найден — измените поиск.'}
+        </p>
+      )}
+
+      {visible.length > 0 && (
+        <ul className="master-actions-sheet__people">
+          {visible.map((r) => {
+            const active = r.id === selectedId;
+            return (
+              <li key={r.id}>
+                <button
+                  type="button"
+                  className={`master-actions-sheet__person${active ? ' master-actions-sheet__person--active' : ''}`}
+                  onClick={() => onSelect(r.id)}
+                  aria-pressed={active}
+                >
+                  <span className="master-actions-sheet__person-name">
+                    {r.fullName}
+                  </span>
+                  <span className="master-actions-sheet__person-meta">
+                    {SYSTEM_ROLE_LABELS[r.role] ?? r.role}
+                    {r.activeShift
+                      ? ` · смена: ${r.activeShift.operationName}${
+                          r.activeShift.equipmentLabel
+                            ? ` (${r.activeShift.equipmentLabel})`
+                            : ''
+                        }`
+                      : ' · смена не открыта'}
+                    {r.passportsInProgress > 0
+                      ? ` · на руках ${r.passportsInProgress}`
+                      : ''}
+                  </span>
+                  {r.activeShift?.operationIsCurrentStep && (
+                    <span className="master-actions-sheet__person-badge">
+                      на текущем шаге паспорта
+                    </span>
+                  )}
+                  {r.activeShift &&
+                    !r.activeShift.operationIsCurrentStep &&
+                    r.activeShift.operationInRoute && (
+                      <span className="master-actions-sheet__person-badge master-actions-sheet__person-badge--muted">
+                        операция есть в маршруте
+                      </span>
+                    )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

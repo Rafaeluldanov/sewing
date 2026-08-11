@@ -26,6 +26,8 @@ import {
   type MasterSelfOperationEquipmentDto,
   type MasterSelfOperationStepDto,
   type MasterSelfOperationStepsDto,
+  type MasterTransferCandidateDto,
+  type MasterTransferCandidatesDto,
 } from '@sewing/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -933,6 +935,124 @@ export class MasterActionsService {
       passport,
       ownerFullName: row.currentEmployee?.fullName ?? null,
     };
+  }
+
+  /**
+   * Кандидаты на передачу паспорта — активные сотрудники с их открытой
+   * сменой.
+   *
+   * Зачем ручка: до неё «Передать сотруднику» умело принимать ТОЛЬКО
+   * payload бумажной этикетки `EMPLOYEE:<cuid>`, а справочник
+   * `GET /api/employees` закрыт ролями `SHOP_MANAGER`/`ADMIN` — мастеру
+   * туда нельзя. В цехе 11.08.2026 это кончилось 17 подряд 400
+   * `INVALID_EMPLOYEE_QR`: передать паспорт было физически нечем, и
+   * мастер пошла кружным путём через `setRouteStep`.
+   *
+   * Ролью список не сужаем (см. `MasterTransferCandidateDto`) —
+   * сортируем. Наверху те, чья смена стоит на текущем шаге паспорта:
+   * только для них передача сдвинет и шаг маршрута, а не одного лишь
+   * владельца (`transferToEmployee`, soft-route MVP).
+   *
+   * Read-only, audit не пишем — это lookup перед действием.
+   */
+  async listTransferCandidates(
+    passportId?: string,
+  ): Promise<MasterTransferCandidatesDto> {
+    let routeOperationIds = new Set<string>();
+    let currentStepOperationId: string | null = null;
+    let resolvedPassportId: string | null = null;
+    if (passportId) {
+      // Терминальный паспорт отбиваем здесь же: иначе мастер выберет
+      // получателя, а действие упадёт `PASSPORT_TERMINAL_FOR_MASTER`.
+      const passport = await this.loadPassportOrThrow(passportId);
+      this.assertNotTerminal(passport);
+      resolvedPassportId = passport.id;
+      const steps = await this.prisma.orderRouteStep.findMany({
+        where: { orderId: passport.orderId },
+        select: { index: true, operationId: true },
+      });
+      routeOperationIds = new Set(steps.map((s) => s.operationId));
+      currentStepOperationId =
+        steps.find((s) => s.index === passport.currentRouteStepIndex)
+          ?.operationId ?? null;
+    }
+
+    const employees = await this.prisma.employee.findMany({
+      where: { active: true },
+      select: { id: true, fullName: true, role: true },
+      orderBy: { fullName: 'asc' },
+    });
+    if (employees.length === 0) {
+      return { passportId: resolvedPassportId, rows: [] };
+    }
+    const ids = employees.map((e) => e.id);
+
+    const [shifts, passportGroups] = await Promise.all([
+      this.prisma.shiftSession.findMany({
+        where: { employeeId: { in: ids }, endedAt: null },
+        orderBy: { startedAt: 'asc' },
+        select: {
+          employeeId: true,
+          operation: { select: { id: true, name: true } },
+          equipment: { select: { code: true, displayNumber: true } },
+        },
+      }),
+      this.prisma.passport.groupBy({
+        by: ['currentEmployeeId'],
+        where: {
+          currentEmployeeId: { in: ids },
+          status: PassportStatus.IN_PROGRESS,
+        },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const shiftByEmployee = new Map<string, (typeof shifts)[number]>();
+    for (const s of shifts) {
+      // Открытых смен у сотрудника штатно одна; если их всё же две,
+      // берём самую раннюю — ту же, что подхватит issue-flow.
+      if (!shiftByEmployee.has(s.employeeId)) shiftByEmployee.set(s.employeeId, s);
+    }
+    const passportsByEmployee = new Map<string, number>();
+    for (const g of passportGroups) {
+      if (g.currentEmployeeId) {
+        passportsByEmployee.set(g.currentEmployeeId, g._count._all);
+      }
+    }
+
+    const rows: MasterTransferCandidateDto[] = employees.map((e) => {
+      const shift = shiftByEmployee.get(e.id);
+      return {
+        id: e.id,
+        fullName: e.fullName,
+        role: e.role,
+        activeShift: shift
+          ? {
+              operationId: shift.operation.id,
+              operationName: shift.operation.name,
+              equipmentLabel:
+                shift.equipment.displayNumber ?? shift.equipment.code,
+              operationInRoute: routeOperationIds.has(shift.operation.id),
+              operationIsCurrentStep:
+                currentStepOperationId !== null &&
+                shift.operation.id === currentStepOperationId,
+            }
+          : null,
+        passportsInProgress: passportsByEmployee.get(e.id) ?? 0,
+      };
+    });
+
+    const rank = (r: MasterTransferCandidateDto): number => {
+      if (!r.activeShift) return 3;
+      if (r.activeShift.operationIsCurrentStep) return 0;
+      if (r.activeShift.operationInRoute) return 1;
+      return 2;
+    };
+    rows.sort(
+      (a, b) => rank(a) - rank(b) || a.fullName.localeCompare(b.fullName, 'ru'),
+    );
+
+    return { passportId: resolvedPassportId, rows };
   }
 
   // -------------------------------------------------------------------------

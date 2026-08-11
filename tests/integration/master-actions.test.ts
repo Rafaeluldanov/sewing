@@ -265,6 +265,109 @@ describeWithDb('integration — master actions (Stage 2)', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 2b. TRANSFER CANDIDATES — список сотрудников для передачи
+  // -------------------------------------------------------------------------
+
+  test('transfer-candidates: активные сотрудники, наверху смена на текущем шаге паспорта', async () => {
+    // Паспорт стоит на шаге 1 (`SEW_OVERLOCK_1`). Две швеи: одна на
+    // смене ровно на этой операции, вторая — на другой операции
+    // маршрута. Порядок строк проверяем именно по этому признаку:
+    // сдвинуть шаг маршрута передача сможет только для первой.
+    const onCurrentStep = await t.prisma.employee.create({
+      data: {
+        login: 'seamstress-on-step',
+        fullName: 'Аааа Насмене',
+        role: 'SEAMSTRESS',
+        active: true,
+        pinHash: '$2a$04$abcdefghijklmnopqrstuv',
+      },
+    });
+    const onOtherRouteStep = await t.prisma.employee.create({
+      data: {
+        login: 'seamstress-other-step',
+        fullName: 'Бббб Надругой',
+        role: 'SEAMSTRESS',
+        active: true,
+        pinHash: '$2a$04$abcdefghijklmnopqrstuv',
+      },
+    });
+    const inactive = await t.prisma.employee.create({
+      data: {
+        login: 'seamstress-fired',
+        fullName: 'Аааа Уволенная',
+        role: 'SEAMSTRESS',
+        active: false,
+        pinHash: '$2a$04$abcdefghijklmnopqrstuv',
+      },
+    });
+    await t.prisma.shiftSession.createMany({
+      data: [
+        {
+          employeeId: onCurrentStep.id,
+          equipmentId: seed.equipment['overlock-01']!.id,
+          operationId: seed.operations.SEW_OVERLOCK_1.id,
+        },
+        {
+          employeeId: onOtherRouteStep.id,
+          equipmentId: seed.equipment['overlock-01']!.id,
+          operationId: seed.operations.SEW_OVERLOCK_2.id,
+        },
+      ],
+    });
+
+    const { passportId } = await setupPassport();
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/master-actions/transfer-candidates')
+      .query({ passportId })
+      .set('Cookie', cookies.master)
+      .expect(200);
+
+    const rows = res.body.rows as {
+      id: string;
+      fullName: string;
+      activeShift: {
+        operationIsCurrentStep: boolean;
+        operationInRoute: boolean;
+      } | null;
+    }[];
+    expect(res.body.passportId).toBe(passportId);
+    // Неактивных в списке нет — их всё равно отобьёт сам transfer.
+    expect(rows.some((r) => r.id === inactive.id)).toBe(false);
+
+    expect(rows[0]!.id).toBe(onCurrentStep.id);
+    expect(rows[0]!.activeShift?.operationIsCurrentStep).toBe(true);
+    expect(rows[1]!.id).toBe(onOtherRouteStep.id);
+    expect(rows[1]!.activeShift?.operationIsCurrentStep).toBe(false);
+    expect(rows[1]!.activeShift?.operationInRoute).toBe(true);
+    // Все прочие — без смены и ниже тех, кто на смене.
+    expect(rows.slice(2).every((r) => r.activeShift === null)).toBe(true);
+
+    // Владелец паспорта числится «на руках» — мастер видит это заранее.
+    const owner = rows.find((r) => r.id === seed.employees.seamstress.id) as
+      | { passportsInProgress: number }
+      | undefined;
+    expect(owner?.passportsInProgress).toBe(1);
+  });
+
+  test('transfer-candidates: без passportId отдаёт список без маршрутных пометок', async () => {
+    const res = await request(t.app.getHttpServer())
+      .get('/api/master-actions/transfer-candidates')
+      .set('Cookie', cookies.master)
+      .expect(200);
+    expect(res.body.passportId).toBeNull();
+    const rows = res.body.rows as { activeShift: unknown }[];
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  test('transfer-candidates: швее нельзя (403 FORBIDDEN_ROLE)', async () => {
+    await request(t.app.getHttpServer())
+      .get('/api/master-actions/transfer-candidates')
+      .set('Cookie', cookies.seamstress)
+      .expect(403);
+  });
+
+  // -------------------------------------------------------------------------
   // 3. RETURN TO CELL
   // -------------------------------------------------------------------------
 
