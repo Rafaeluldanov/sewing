@@ -2,7 +2,10 @@ import { Body, Controller, Get, HttpCode, Inject, Post, Query } from '@nestjs/co
 import type { EmployeeQrResponseDto } from '@sewing/shared/employee-qr';
 import type { MeDailyDto, MeHistoryDto } from '@sewing/shared/me-daily';
 import { MeHistoryQuerySchema } from '@sewing/shared/me-daily';
-import type { SwitchWorkplaceResultDto } from '@sewing/shared/workplace';
+import type {
+  MyWorkplacesDto,
+  SwitchWorkplaceResultDto,
+} from '@sewing/shared/workplace';
 import { SwitchWorkplaceSchema } from '@sewing/shared/workplace';
 import type { SwitchWorkplaceDto } from '@sewing/shared/workplace';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
@@ -59,11 +62,25 @@ export class MeController {
   }
 
   /**
-   * Смена активной роли сканом «рабочего места» (фича «несколько
-   * ролей»). Тело — `{ code, force? }`, где `code` — сырая строка из
-   * QR-сканера (`equipment:{id}`). При незавершённой работе и без
-   * `force` вернётся `409 WORKPLACE_SWITCH_CONFIRM_REQUIRED` — UI
-   * показывает подтверждение и повторяет с `force: true`. Скоупится по
+   * Участки, между которыми сотрудник может переключаться, — источник
+   * списка в шторке «Сменить участок». Строится по назначенным ролям
+   * (`Employee.roles`), названия берутся из справочника `AppRole`.
+   */
+  @Get('workplaces')
+  async listWorkplaces(
+    @CurrentUser() principal: AuthPrincipal | undefined,
+  ): Promise<MyWorkplacesDto> {
+    if (!principal) throw new UnauthenticatedException();
+    return this.me.listWorkplaces(principal);
+  }
+
+  /**
+   * Смена активного участка (фича «несколько ролей»). Тело —
+   * `{ code | role, force? }`: `code` — сырая строка из QR-сканера
+   * (`equipment:{id}`), `role` — код участка, выбранного в списке
+   * `GET /api/me/workplaces`. При незавершённой работе и без `force`
+   * вернётся `409 WORKPLACE_SWITCH_CONFIRM_REQUIRED` — UI показывает
+   * подтверждение и повторяет с `force: true`. Скоупится по
    * `principal` (нельзя переключить чужой кабинет).
    */
   @Post('switch-workplace')

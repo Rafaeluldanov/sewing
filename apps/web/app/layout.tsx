@@ -63,6 +63,10 @@ export default async function RootLayout({
   // набору ролей (`me.user.roles`), а не только по основной. Fallback
   // `[role]` — для старых сессий без поля в payload.
   const roles = me?.user.roles ?? (role ? [role] : []);
+  // Назначенный набор (без раскрытия наследования) — по нему считается
+  // «совместитель ли это» для кнопки смены участка.
+  const assignedRoles =
+    me?.user.assignedRoles ?? me?.user.roles ?? (role ? [role] : []);
   // Backend всё равно режет доступ через `@Roles(...)`, но для UX
   // прячем недоступные ссылки, чтобы роль не упиралась в forbidden
   // экран. Матрица — `apps/web/lib/rbac.ts`.
@@ -177,11 +181,14 @@ export default async function RootLayout({
           />
         ) : null}
         {/*
-          Фича «несколько ролей»: плавающая кнопка «Сменить рабочее
-          место» — только для совместителей (2+ роли). Сканом QR участка
-          сотрудник переключается между своими терминалами.
+          Фича «несколько ролей»: плавающая кнопка «Сменить участок» —
+          только для совместителей. Считаем по НАЗНАЧЕННЫМ ролям
+          (`assignedRoles`), а не по эффективным: у кастомной роли с
+          `inherits` эффективный набор длиннее одного элемента, и кнопка
+          показывалась человеку с единственным участком (та же ловушка,
+          что уже обошли для `singleWorkspace` выше).
         */}
-        {isStaff && roles.length > 1 ? <SwitchWorkplaceButton /> : null}
+        {isStaff && assignedRoles.length > 1 ? <SwitchWorkplaceButton /> : null}
       </body>
     </html>
   );

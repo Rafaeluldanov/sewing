@@ -14,15 +14,20 @@ import type {
   MeHistoryQuery,
 } from '@sewing/shared/me-daily';
 import type {
+  MyWorkplacesDto,
   SwitchWorkplaceDto,
   SwitchWorkplaceResultDto,
 } from '@sewing/shared/workplace';
+import { normalizeAssignedRoles } from '@sewing/shared/employees';
+import {
+  SYSTEM_ROLE_DEFAULTS,
+  isSystemRoleCode,
+} from '@sewing/shared/app-roles';
 import {
   CompensationType as PrismaCompensationType,
   EntryStatus,
   PassportStatus,
   Prisma,
-  type Role,
   SalaryEntrySource,
   SalaryRateMode,
 } from '@prisma/client';
@@ -168,13 +173,27 @@ export class MeService {
     principal: AuthPrincipal,
     dto: SwitchWorkplaceDto,
   ): Promise<SwitchWorkplaceResultDto> {
-    const equipment = await this.resolveEquipmentByCode(dto.code);
-    if (!equipment) throw new EquipmentNotFoundException();
-    if (!equipment.active) throw new EquipmentInactiveException();
-    if (!equipment.role) throw new WorkplaceNoRoleException();
+    // Два входа в один и тот же переход: скан QR рабочего места и выбор
+    // участка в списке. Скан дополнительно называет оборудование —
+    // поэтому только он заполняет `equipment*` в ответе.
+    const equipment = dto.code
+      ? await this.resolveEquipmentByCode(dto.code)
+      : null;
+    let role: string;
+    if (dto.code) {
+      if (!equipment) throw new EquipmentNotFoundException();
+      if (!equipment.active) throw new EquipmentInactiveException();
+      if (!equipment.role) throw new WorkplaceNoRoleException();
+      role = equipment.role;
+    } else {
+      role = dto.role!;
+    }
 
-    const role = equipment.role as Role;
-    if (!principal.roles.includes(role)) {
+    // Проверяем по НАЗНАЧЕННОМУ набору: наследование даёт права, но не
+    // отдельный участок — переключаться можно только на то, что реально
+    // выдано сотруднику (и что показывает `listWorkplaces`).
+    const assigned = await this.loadAssignedRoles(principal);
+    if (!assigned.includes(role)) {
       throw new WorkplaceRoleForbiddenException();
     }
 
@@ -208,16 +227,81 @@ export class MeService {
     });
 
     this.logger.log(
-      `event=me.switch-workplace employeeId=${principal.employeeId} equipmentId=${equipment.id} role=${role} closedShift=${closedShiftId ?? 'none'}`,
+      `event=me.switch-workplace employeeId=${principal.employeeId} equipmentId=${equipment?.id ?? 'none'} role=${role} via=${dto.code ? 'scan' : 'list'} closedShift=${closedShiftId ?? 'none'}`,
     );
 
     return {
       role,
-      equipmentId: equipment.id,
-      equipmentName: equipment.name,
-      equipmentDisplayNumber: equipment.displayNumber,
+      equipmentId: equipment?.id ?? null,
+      equipmentName: equipment?.name ?? null,
+      equipmentDisplayNumber: equipment?.displayNumber ?? null,
       closedShiftId,
     };
+  }
+
+  /**
+   * Участки сотрудника для шторки «Сменить участок»
+   * (`GET /api/me/workplaces`).
+   *
+   * Берём НАЗНАЧЕННЫЕ роли (`Employee.roles`), а не эффективные из
+   * `principal`: раскрытое наследование добавляет права донора, но не
+   * отдельное рабочее место, и роль-донор выглядела бы в списке
+   * фантомным участком, на который «переключились», а экран тот же.
+   *
+   * Названия и экраны — из справочника `AppRole` (там же живут
+   * кастомные роли); для системных ролей есть fallback в коде, поэтому
+   * пустой/недосеянный справочник список не ломает.
+   */
+  async listWorkplaces(principal: AuthPrincipal): Promise<MyWorkplacesDto> {
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: principal.employeeId },
+      select: { role: true, roles: true, activeRole: true },
+    });
+    if (!employee) throw new EmployeeProfileNotFoundException();
+
+    const assigned = normalizeAssignedRoles(employee.role, employee.roles);
+    const currentRole = employee.activeRole ?? employee.role;
+    const catalog = await this.prisma.appRole.findMany({
+      where: { code: { in: assigned } },
+      select: { code: true, name: true, workspace: true, sortOrder: true },
+    });
+    const byCode = new Map(catalog.map((r) => [r.code, r]));
+
+    const workplaces = assigned
+      .map((code) => {
+        const row = byCode.get(code);
+        const fallback = isSystemRoleCode(code)
+          ? SYSTEM_ROLE_DEFAULTS[code]
+          : null;
+        return {
+          role: code,
+          label: row?.name ?? fallback?.name ?? code,
+          workspace: row?.workspace ?? fallback?.workspace ?? '/',
+          current: code === currentRole,
+          primary: code === employee.role,
+          sortOrder: row?.sortOrder ?? fallback?.sortOrder ?? 999,
+        };
+      })
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map(({ sortOrder: _sortOrder, ...w }) => w);
+
+    return { workplaces };
+  }
+
+  /**
+   * Назначенный набор ролей сотрудника. `principal.roles` для проверки
+   * доступа к участку не годится — он эффективный (с раскрытым
+   * наследованием), а переключаться можно только на выданное.
+   */
+  private async loadAssignedRoles(
+    principal: AuthPrincipal,
+  ): Promise<string[]> {
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: principal.employeeId },
+      select: { role: true, roles: true },
+    });
+    if (!employee) throw new EmployeeProfileNotFoundException();
+    return normalizeAssignedRoles(employee.role, employee.roles);
   }
 
   /**

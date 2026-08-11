@@ -7,6 +7,12 @@ import { triggerScanHaptic } from './feedback';
 interface Props {
   onScan: (decodedText: string) => void;
   onClose: () => void;
+  /**
+   * Что именно сканируем. По умолчанию — паспорт (исторический и самый
+   * частый случай). Смена участка передаёт свою подсказку: там наводят
+   * камеру на QR рабочего места, и текст про паспорт сбивал с толку.
+   */
+  hint?: string;
 }
 
 const REGION_ID = 'qr-scanner-region';
@@ -90,7 +96,7 @@ function classifyError(e: unknown): CameraError {
  *
  * Подробнее об ограничениях см. README библиотеки `html5-qrcode`.
  */
-export function QrScannerModal({ onScan, onClose }: Props) {
+export function QrScannerModal({ onScan, onClose, hint }: Props) {
   const scannerRef = useRef<unknown>(null);
   const handledRef = useRef(false);
   const [error, setError] = useState<CameraError | null>(null);
@@ -255,7 +261,7 @@ export function QrScannerModal({ onScan, onClose }: Props) {
           <p className="qr-modal__hint">
             {starting
               ? 'Запускаем камеру…'
-              : 'Наведите камеру на QR-код паспорта.'}
+              : (hint ?? 'Наведите камеру на QR-код паспорта.')}
           </p>
         )}
 
