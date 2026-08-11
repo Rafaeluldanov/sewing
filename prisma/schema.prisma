@@ -4067,6 +4067,15 @@ model OrderMaterialRequirement {
   /// `sourceTechCardLineId` для этого не годится: у строки из шаблона он тоже
   /// станет NULL, если строку шаблона удалить (onDelete: SetNull).
   isManual                      Boolean       @default(false)
+  /// Этап 3 «техкарты → номенклатура»: строка материализована из
+  /// СПЕЦИФИКАЦИИ НОМЕНКЛАТУРЫ. `sourcePatternItemId` — карточка-источник
+  /// (по нему пересборка решает «перечитать или пересчитать», как
+  /// `sourceTechCardId` у техкарт), `sourcePatternLineId` —
+  /// `PatternItemMaterialLine.id` на момент материализации. Оба без FK —
+  /// источник могут править/удалять, снимок обязан пережить. NULL — строка
+  /// из техкарты (legacy) или ручная.
+  sourcePatternItemId           String?
+  sourcePatternLineId           String?
   /// ОТКУДА ВЗЯЛАСЬ НОРМА расхода этой строки:
   ///   - `NOMENCLATURE` — из карточки номенклатуры (`PatternItemParameterNorm`
   ///     / `PatternItemSizeParameterValue` / `PatternMaterialArea`), пересчёт
@@ -4131,6 +4140,10 @@ model OrderTechCardParameter {
   /// Из какого шаблона материализован. null → параметр заведён в заказе
   /// (ad-hoc): только такие можно удалять.
   sourceTechCardId  String?
+  /// Этап 3 «техкарты → номенклатура»: слот материализован из спецификации
+  /// НОМЕНКЛАТУРЫ (`PatternItemSpecParameter`). Ad-hoc = оба source-поля
+  /// null. Без FK — снимок переживает правки источника.
+  sourcePatternItemId String?
   /// `TechCardParameter.id` на момент материализации. Без FK: строки шаблона
   /// и параметры пересоздаются при сейве справочника, ссылка нужна только
   /// для аудита.

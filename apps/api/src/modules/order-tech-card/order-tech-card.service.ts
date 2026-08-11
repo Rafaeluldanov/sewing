@@ -579,12 +579,14 @@ export class OrderTechCardService {
   ): Promise<OrderTechCardParametersDto> {
     await this.assertEditableOrder(orderId);
     const param = await this.findParam(orderId, parameterId);
-    if (param.sourceTechCardId !== null) {
+    // Этап 3 «техкарты → номенклатура»: слот из спецификации карточки
+    // (`sourcePatternItemId`) — такой же шаблонный, как слот из техкарты.
+    if (param.sourceTechCardId !== null || param.sourcePatternItemId !== null) {
       throw new ConflictException({
         statusCode: 409,
         code: 'ORDER_TECH_CARD_PARAMETER_FROM_TEMPLATE',
         message:
-          'Этот параметр пришёл из шаблона техкарты — удалить его можно только в справочнике.',
+          'Этот параметр пришёл из справочника — удалить его можно только там.',
       });
     }
 
@@ -1371,6 +1373,7 @@ export class OrderTechCardService {
       sortOrder: number;
       owner: string;
       sourceTechCardId: string | null;
+      sourcePatternItemId: string | null;
       value: string | null;
       valueSource: string;
     },
@@ -1410,7 +1413,9 @@ export class OrderTechCardService {
       orderVariantId: p.orderVariantId,
       value: p.value,
       valueSource: p.valueSource as TechCardParameterValueSource,
-      isAdHoc: p.sourceTechCardId === null,
+      // Этап 3: ad-hoc = не материализован ни из техкарты, ни из
+      // спецификации номенклатуры.
+      isAdHoc: p.sourceTechCardId === null && p.sourcePatternItemId === null,
       targets,
     };
   }

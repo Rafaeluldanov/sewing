@@ -171,21 +171,32 @@ export class CutReadinessService {
       });
     }
 
-    if (!order.techCardId) {
+    // Этап 3 «техкарты → номенклатура»: источник материалов — спецификация
+    // карточки номенклатуры ИЛИ техкарта (legacy-фолбэк).
+    const specLinesCount = order.patternItem?._count?.materialSpecLines ?? 0;
+    if (!order.techCardId && specLinesCount === 0) {
       orderSetup.push({
         key: 'order.techCardId.required',
         status: 'BLOCKER',
-        title: 'Техкарта не выбрана',
+        title: 'Материалы не определены',
         message:
-          'Без техкарты не определены материалы и нормы расхода.',
+          'У номенклатуры нет спецификации материалов и техкарта не выбрана — материалы и нормы расхода не определены.',
       });
-    } else {
+    } else if (order.techCardId) {
       orderSetup.push({
         key: 'order.techCardId.ok',
         status: 'OK',
         title: 'Техкарта выбрана',
         entityType: 'TECH_CARD',
         entityId: order.techCardId,
+      });
+    } else {
+      orderSetup.push({
+        key: 'order.techCardId.ok',
+        status: 'OK',
+        title: 'Материалы — из спецификации номенклатуры',
+        entityType: 'PATTERN_ITEM',
+        entityId: order.patternItemId,
       });
     }
 
@@ -782,6 +793,9 @@ const CUT_READINESS_ORDER_INCLUDE = {
           materialRole: true,
         },
       },
+      // Этап 3 «техкарты → номенклатура»: спецификация карточки —
+      // полноценный источник материалов для чек-айтема «Техкарта».
+      _count: { select: { materialSpecLines: true } },
     },
   },
   // Этап «Нанесение на заказе покупателя»: грузим заказные нанесения,

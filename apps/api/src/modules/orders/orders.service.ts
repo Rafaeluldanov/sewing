@@ -54,6 +54,8 @@ import type { MaterialCharacteristics } from '@sewing/shared/material-characteri
 import { applyParametersToCells } from '@sewing/shared/tech-card-parameters';
 import type {
   TechCardParameterBindings,
+  TechCardParameterInputType,
+  TechCardParameterOwner,
   TechCardParameterValue,
 } from '@sewing/shared/tech-card-parameters';
 import { computeNormPurchase } from '@sewing/shared/norm-purchase';
@@ -145,6 +147,11 @@ type OrderWithItems = Prisma.OrderGetPayload<{
             _count: { select: { files: true; sizeRows: true } };
           };
         };
+        /**
+         * Этап 3 «техкарты → номенклатура»: счётчик строк спецификации —
+         * гейт `hasTechCard` считает её полноценным источником материалов.
+         */
+        _count: { select: { materialSpecLines: true } };
       };
     };
     applications: { include: { sizes: { include: { size: true } } } };
@@ -1760,6 +1767,9 @@ export class OrdersService {
                 _count: { select: { files: true, sizeRows: true } },
               },
             },
+            // Этап 3 «техкарты → номенклатура»: спецификация карточки —
+            // источник материалов для гейта `hasTechCard`.
+            _count: { select: { materialSpecLines: true } },
           },
         },
         // Этап «Нанесение на заказе покупателя»: подгружаем
@@ -3048,7 +3058,14 @@ export class OrdersService {
         clientId: true,
         techCardId: true,
         patternItemId: true,
-        patternItem: { select: { status: true } },
+        patternItem: {
+          select: {
+            status: true,
+            // Этап 3 «техкарты → номенклатура»: спецификация карточки —
+            // полноценный источник материалов для гейта `hasTechCard`.
+            _count: { select: { materialSpecLines: true } },
+          },
+        },
         items: { select: { qtyPlan: true } },
         variants: { select: { techCardId: true } },
       },
@@ -3069,7 +3086,8 @@ export class OrdersService {
         order.patternItemId == null || order.patternItem?.status === 'ACTIVE',
       hasTechCard:
         order.techCardId != null ||
-        order.variants.some((v) => v.techCardId != null),
+        order.variants.some((v) => v.techCardId != null) ||
+        (order.patternItem?._count.materialSpecLines ?? 0) > 0,
     });
   }
 
@@ -3536,8 +3554,18 @@ export class OrdersService {
     // order-level или у любой расцветки. Снимок/расчёт дальше идут
     // per-variant (см. `rebuildMaterialRequirementsSnapshot`,
     // `WorkshopNeedsService.calculateForOrder`).
+    // Этап 3 «техкарты → номенклатура»: источником состава материалов
+    // может быть СПЕЦИФИКАЦИЯ карточки номенклатуры — тогда техкарта не
+    // нужна вовсе. Гейт остаётся для заказов без единого источника.
     if (!order.techCardId && !order.variants.some((v) => v.techCardId)) {
-      throw new OrderTechCardRequiredException();
+      const specLines = order.patternItemId
+        ? await this.prisma.patternItemMaterialLine.count({
+            where: { patternItemId: order.patternItemId },
+          })
+        : 0;
+      if (specLines === 0) {
+        throw new OrderTechCardRequiredException();
+      }
     }
     const totalQty = order.items.reduce((s, it) => s + it.qtyPlan, 0);
     if (order.items.length === 0 || totalQty <= 0) {
@@ -5221,6 +5249,7 @@ export class OrdersService {
         // считается по номенклатуре (два числа про один материал).
         patternItem: {
           select: {
+            id: true,
             parameterNorms: {
               select: {
                 id: true,
@@ -5245,11 +5274,87 @@ export class OrdersService {
             materialAreas: {
               select: { materialRole: true, sizeId: true, areaM2: true },
             },
+            // Этап 3 «техкарты → номенклатура»: СОСТАВ материалов из
+            // спецификации карточки. Если он непуст — источник
+            // материализации снимка, техкарта остаётся фолбэком для
+            // legacy-заказов.
+            materialSpecLines: { orderBy: { sortOrder: 'asc' } },
+            specParameters: {
+              orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
+            },
           },
         },
       },
     });
     if (!order) return;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Этап 3 «техкарты → номенклатура»: источник СОСТАВА строк.
+    //
+    // Спецификация карточки номенклатуры непуста → она и есть источник для
+    // МАТЕРИАЛИЗАЦИИ (общая для всех расцветок — решение §1 анализа;
+    // различия цветов дают colorRule, значения слотов и ручные строки).
+    // Формат строк приводим к форме `getLinesForSnapshot` — весь
+    // материализационный конвейер ниже работает с обоими источниками
+    // одним кодом.
+    //
+    // ВАЖНО (гарантия выката): существующие снапшоты, материализованные из
+    // техкарты (`sourcePatternItemId = null`, `sourceTechCardId != null`),
+    // НЕ перечитываются из спецификации сами — только пересчёт количеств.
+    // Переключение источника происходит для новых групп, по явному
+    // «Обновить из шаблона» или когда техкарту группы сняли.
+    // ─────────────────────────────────────────────────────────────────────
+    const patternSpec =
+      order.patternItem && order.patternItem.materialSpecLines.length > 0
+        ? {
+            patternItemId: order.patternItem.id,
+            lines: {
+              materialLines: order.patternItem.materialSpecLines.map((l) => ({
+                id: l.id,
+                sortOrder: l.sortOrder,
+                name: l.name,
+                unit: l.unit,
+                normUnit: l.normUnit,
+                qtyPerUnit: l.qtyPerUnit,
+                note: l.note,
+                materialRole: l.materialRole,
+                fabricType: l.fabricType,
+                densityGsm: l.densityGsm,
+                plannedWidthCm: l.plannedWidthCm,
+                colorRule:
+                  (l.colorRule as TechCardMaterialColorRule | null) ?? null,
+                fixedColorText: l.fixedColorText,
+                hardwareSizeText: l.hardwareSizeText,
+                hardwareMaterialText: l.hardwareMaterialText,
+                materialImageUrl: l.materialImageUrl,
+                materialImageOriginalFileName:
+                  l.materialImageOriginalFileName,
+                subtypeKey: l.subtypeKey,
+                characteristics:
+                  (l.characteristics as MaterialCharacteristics | null) ??
+                  null,
+                parameterBindings:
+                  (l.parameterBindings as TechCardParameterBindings | null) ??
+                  null,
+              })),
+              parameters: order.patternItem.specParameters.map((p) => ({
+                id: p.id,
+                key: p.key,
+                label: p.label,
+                inputType: p.inputType as TechCardParameterInputType,
+                options: (p.options as string[] | null) ?? null,
+                unit: p.unit,
+                isRequired: p.isRequired,
+                defaultValue: p.defaultValue,
+                owner: p.owner as TechCardParameterOwner,
+                sortOrder: p.sortOrder,
+              })),
+              outsourceLines: [] as Awaited<
+                ReturnType<TechCardsService['getLinesForSnapshot']>
+              >['outsourceLines'],
+            },
+          }
+        : null;
 
     // Источники норм номенклатуры — общие для всех расцветок (лекало одно на
     // заказ), поэтому собираем один раз.
@@ -5272,6 +5377,11 @@ export class OrdersService {
         // ФАЗА 2: из какого шаблона материализована группа + поля, нужные для
         // пересчёта БЕЗ похода в шаблон.
         sourceTechCardId: true,
+        // Этап 3 «техкарты → номенклатура»: трассировка на спецификацию
+        // карточки — по ней решается источник группы и «перечитать или
+        // пересчитать».
+        sourcePatternItemId: true,
+        sourcePatternLineId: true,
         isManual: true,
         colorRule: true,
         fixedColorText: true,
@@ -5336,7 +5446,11 @@ export class OrdersService {
               qtyPlan: sz.qtyPlan,
             })),
           }));
-    const effectiveGroups = groups.filter((g) => g.techCardId && g.qty > 0);
+    // Этап 3: группа эффективна, если у неё есть ИСТОЧНИК состава —
+    // спецификация номенклатуры (общая на заказ) или техкарта (legacy).
+    const effectiveGroups = groups.filter(
+      (g) => (patternSpec != null || g.techCardId) && g.qty > 0,
+    );
 
     // Ключ группы: order-level (`null`) и расцветка сводятся к одной строке.
     // Объявлен ЗДЕСЬ, а не ниже у карт preserve-а: им пользуются ветки
@@ -5393,7 +5507,8 @@ export class OrdersService {
       }
     }
 
-    // Ни одной группы с техкартой → шаблонных строк в снимке быть не может.
+    // Ни одной группы с источником состава → шаблонных строк в снимке быть
+    // не может.
     // Ручные строки существующих групп при этом остаются: их шаблон не сеял,
     // значит и снести их пересборка не вправе.
     if (effectiveGroups.length === 0) {
@@ -5444,10 +5559,25 @@ export class OrdersService {
           );
         }
       }
+      // Этап 3: строка из спецификации ведёт preserve по
+      // `sourcePatternLineId` — id-пространства cuid не пересекаются,
+      // карты общие для обоих источников.
+      if (bindings && Object.keys(bindings).length > 0 && r.sourcePatternLineId) {
+        prevBindingsBySourceId.set(
+          `${vk(r.orderVariantId)}|${r.sourcePatternLineId}`,
+          bindings,
+        );
+      }
       if (!r.selectedColorText) continue;
       if (r.sourceTechCardLineId) {
         prevBySourceId.set(
           `${vk(r.orderVariantId)}|${r.sourceTechCardLineId}`,
+          r.selectedColorText,
+        );
+      }
+      if (r.sourcePatternLineId) {
+        prevBySourceId.set(
+          `${vk(r.orderVariantId)}|${r.sourcePatternLineId}`,
           r.selectedColorText,
         );
       }
@@ -5472,26 +5602,17 @@ export class OrdersService {
       return loaded;
     };
 
-    // Фича «Параметры техкарт»: слоты шаблона материализуются в заказ (по
-    // расцветке), значения переживают пересборку — они в своей таблице.
-    // Делаем ДО построения строк: подстановка читает уже готовые значения.
-    const valuesByGroup = await this.materializeTechCardParameters(
-      orderId,
-      effectiveGroups,
-      getLines,
-      tx,
-    );
-
     // ─────────────────────────────────────────────────────────────────────
-    // ФАЗА 2. Группа перечитывает ШАБЛОН только если:
-    //   - строк ещё нет (заказ только создан / техкарту только выбрали), либо
-    //   - техкарту группы СМЕНИЛИ (`sourceTechCardId` разошёлся), либо
+    // ФАЗА 2. Группа перечитывает ИСТОЧНИК только если:
+    //   - строк ещё нет (заказ только создан / источник только выбрали), либо
+    //   - источник группы СМЕНИЛИ (`sourceTechCardId`/`sourcePatternItemId`
+    //     разошёлся), либо
     //   - явно попросили «Обновить из шаблона».
     // Иначе — только ПЕРЕСЧЁТ количеств и подстановка параметров: структура и
     // правки, сделанные в заказе, остаются на месте.
     //
     // Это и есть принцип «что меняем внутри заказа, внутри заказа и остаётся»:
-    // правка шаблона в справочнике больше не протекает в черновики.
+    // правка справочника больше не протекает в черновики.
     // ─────────────────────────────────────────────────────────────────────
     const existingByGroup = new Map<string, typeof existing>();
     for (const r of existing) {
@@ -5501,27 +5622,55 @@ export class OrdersService {
       existingByGroup.set(gk, list);
     }
 
+    // Этап 3 «техкарты → номенклатура»: ИСТОЧНИК группы.
+    //   SPEC      — спецификация номенклатуры: новые группы, явное
+    //               «Обновить из шаблона», группы уже на спецификации и
+    //               группы, у которых техкарту сняли;
+    //   TECH_CARD — фолбэк для legacy-групп, чей снимок собран из техкарты:
+    //               живой заказ не меняет состав сам от выката фичи.
+    const groupSource = new Map<string, 'SPEC' | 'TECH_CARD'>();
     const groupsToMaterialize: typeof effectiveGroups = [];
     const groupsToRecompute: typeof effectiveGroups = [];
     for (const g of effectiveGroups) {
-      // Решаем ТОЛЬКО по строкам из шаблона: ручные строки шаблон не описывает,
-      // и их наличие/отсутствие ничего не говорит о том, надо ли его перечитать.
+      // Решаем ТОЛЬКО по строкам из источника: ручные строки он не описывает,
+      // и их наличие/отсутствие ничего не говорит о том, надо ли перечитать.
       const rows = (existingByGroup.get(vk(g.variantId)) ?? []).filter(
         (r) => !r.isManual,
       );
-      const cameFromAnotherTemplate = rows.some(
-        (r) => r.sourceTechCardId !== g.techCardId,
-      );
+      const specSourced = rows.some((r) => r.sourcePatternItemId != null);
+      const useSpec =
+        patternSpec != null &&
+        (rows.length === 0 ||
+          opts?.reloadFromTemplate === true ||
+          specSourced ||
+          !g.techCardId);
+      groupSource.set(vk(g.variantId), useSpec ? 'SPEC' : 'TECH_CARD');
+      const cameFromAnotherSource = useSpec
+        ? rows.some(
+            (r) => r.sourcePatternItemId !== patternSpec!.patternItemId,
+          )
+        : rows.some((r) => r.sourceTechCardId !== g.techCardId);
       if (
         opts?.reloadFromTemplate ||
         rows.length === 0 ||
-        cameFromAnotherTemplate
+        cameFromAnotherSource
       ) {
         groupsToMaterialize.push(g);
       } else {
         groupsToRecompute.push(g);
       }
     }
+
+    // Фича «Параметры техкарт»: слоты источника материализуются в заказ (по
+    // расцветке), значения переживают пересборку — они в своей таблице.
+    // Делаем ДО построения строк: подстановка читает уже готовые значения.
+    const valuesByGroup = await this.materializeTechCardParameters(
+      orderId,
+      effectiveGroups,
+      getLines,
+      tx,
+      { patternSpec, groupSource },
+    );
 
     // Пересчёт: количества + подстановка параметров, БЕЗ похода в шаблон.
     //
@@ -5656,7 +5805,12 @@ export class OrdersService {
 
     const data: Prisma.OrderMaterialRequirementCreateManyInput[] = [];
     for (const g of groupsToMaterialize) {
-      const lines = await getLines(g.techCardId as string);
+      // Этап 3: источник строк группы — спецификация номенклатуры или
+      // техкарта (см. `groupSource` выше).
+      const isSpecGroup = groupSource.get(vk(g.variantId)) === 'SPEC';
+      const lines = isSpecGroup
+        ? patternSpec!.lines
+        : await getLines(g.techCardId as string);
       const baseDecimal = new Prisma.Decimal(g.qty);
       const paramValues =
         valuesByGroup.get(vk(g.variantId)) ??
@@ -5753,7 +5907,8 @@ export class OrdersService {
           orderId,
           orderVariantId: g.variantId,
           variantColor: g.variantColor,
-          sourceTechCardLineId: l.id,
+          sourceTechCardLineId: isSpecGroup ? null : l.id,
+          sourcePatternLineId: isSpecGroup ? l.id : null,
           sortOrder: l.sortOrder,
           name: cells.name,
           unit: cells.unit,
@@ -5787,7 +5942,10 @@ export class OrdersService {
           parameterBindings: bindings
             ? (bindings as Prisma.InputJsonValue)
             : Prisma.DbNull,
-          sourceTechCardId: g.techCardId,
+          sourceTechCardId: isSpecGroup ? null : g.techCardId,
+          sourcePatternItemId: isSpecGroup
+            ? patternSpec!.patternItemId
+            : null,
           qtySource: derivedNorm ? 'NOMENCLATURE' : 'TEMPLATE',
           qtySourceRef: derivedNorm ? (normSource?.sourceId ?? null) : null,
         });
@@ -5880,7 +6038,10 @@ export class OrdersService {
           subtypeKey: null,
           characteristics: Prisma.DbNull,
           parameterBindings: Prisma.DbNull,
-          sourceTechCardId: g.techCardId,
+          sourceTechCardId: isSpecGroup ? null : g.techCardId,
+          sourcePatternItemId: isSpecGroup
+            ? patternSpec!.patternItemId
+            : null,
           qtySource: 'NOMENCLATURE',
           qtySourceRef: source.sourceId,
         });
@@ -5978,6 +6139,18 @@ export class OrdersService {
       techCardId: string,
     ) => Promise<Awaited<ReturnType<TechCardsService['getLinesForSnapshot']>>>,
     tx: Prisma.TransactionClient,
+    /**
+     * Этап 3 «техкарты → номенклатура»: источник слотов по группам.
+     * `SPEC` — слоты берутся из спецификации карточки
+     * (`PatternItemSpecParameter`), `TECH_CARD` — из техкарты (legacy).
+     */
+    sourceOpts?: {
+      patternSpec: {
+        patternItemId: string;
+        lines: Awaited<ReturnType<TechCardsService['getLinesForSnapshot']>>;
+      } | null;
+      groupSource: Map<string, 'SPEC' | 'TECH_CARD'>;
+    },
   ): Promise<Map<string, Map<string, TechCardParameterValue>>> {
     const vk = (variantId: string | null) => variantId ?? '';
 
@@ -6000,9 +6173,17 @@ export class OrdersService {
 
     for (const g of groups) {
       const gk = vk(g.variantId);
-      const tplParams = g.techCardId
-        ? (await getLines(g.techCardId)).parameters
-        : [];
+      const isSpecGroup =
+        sourceOpts?.groupSource.get(gk) === 'SPEC' &&
+        sourceOpts.patternSpec != null;
+      const tplParams = isSpecGroup
+        ? sourceOpts!.patternSpec!.lines.parameters
+        : g.techCardId
+          ? (await getLines(g.techCardId)).parameters
+          : [];
+      const specPatternItemId = isSpecGroup
+        ? sourceOpts!.patternSpec!.patternItemId
+        : null;
       const inGroup = existing.filter((p) => vk(p.orderVariantId) === gk);
       const byKey = new Map(inGroup.map((p) => [p.key, p] as const));
       const tplKeys = new Set(tplParams.map((p) => p.key));
@@ -6023,7 +6204,8 @@ export class OrdersService {
               isRequired: tp.isRequired,
               sortOrder: tp.sortOrder,
               owner: tp.owner,
-              sourceTechCardId: g.techCardId,
+              sourceTechCardId: isSpecGroup ? null : g.techCardId,
+              sourcePatternItemId: specPatternItemId,
               sourceParameterId: tp.id,
             },
           });
@@ -6044,7 +6226,8 @@ export class OrdersService {
             isRequired: tp.isRequired,
             sortOrder: tp.sortOrder,
             owner: tp.owner,
-            sourceTechCardId: g.techCardId,
+            sourceTechCardId: isSpecGroup ? null : g.techCardId,
+            sourcePatternItemId: specPatternItemId,
             sourceParameterId: tp.id,
             value: seeded?.value ?? tp.defaultValue ?? null,
             valueSource: seeded ? seeded.valueSource : 'TEMPLATE',
@@ -6053,10 +6236,12 @@ export class OrdersService {
         byKey.set(tp.key, created);
       }
 
-      // Слот пропал из шаблона → убираем. Ad-hoc (sourceTechCardId = null)
+      // Слот пропал из источника → убираем. Ad-hoc (оба source-поля null)
       // не трогаем.
       const stale = inGroup.filter(
-        (p) => p.sourceTechCardId !== null && !tplKeys.has(p.key),
+        (p) =>
+          (p.sourceTechCardId !== null || p.sourcePatternItemId !== null) &&
+          !tplKeys.has(p.key),
       );
       if (stale.length > 0) {
         await tx.orderTechCardParameter.deleteMany({
@@ -6128,7 +6313,13 @@ function buildTransitionContext(order: OrderWithItems): OrderTransitionContext {
     hasPattern: order.patternItemId != null,
     patternActive:
       order.patternItemId == null || order.patternItem?.status === 'ACTIVE',
-    hasTechCard: order.techCardId != null || hasVariantTechCard,
+    // Этап 3 «техкарты → номенклатура»: спецификация карточки — такой же
+    // источник материалов, как техкарта (гейт и лейбл переименуются на
+    // этапе 5 вместе со сносом техкарт).
+    hasTechCard:
+      order.techCardId != null ||
+      hasVariantTechCard ||
+      (order.patternItem?._count?.materialSpecLines ?? 0) > 0,
   };
 }
 

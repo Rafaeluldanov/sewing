@@ -325,6 +325,7 @@ export class OrderCalculationsService {
           sortOrder: p.sortOrder,
           owner: p.owner,
           sourceTechCardId: p.sourceTechCardId,
+          sourcePatternItemId: p.sourcePatternItemId ?? null,
           sourceParameterId: p.sourceParameterId,
           value: p.value,
           valueSource: p.valueSource,
@@ -379,6 +380,10 @@ export class OrderCalculationsService {
         characteristics: this.toJsonColumn(r.characteristics),
         parameterBindings: this.toJsonColumn(r.parameterBindings),
         sourceTechCardId: r.sourceTechCardId,
+        // Этап 3: трассировка на спецификацию восстанавливается verbatim —
+        // FK нет, валидность источника не проверяем (снимок независим).
+        sourcePatternItemId: r.sourcePatternItemId ?? null,
+        sourcePatternLineId: r.sourcePatternLineId ?? null,
         isManual: r.isManual,
         // Источник нормы переживает переключение варианта: иначе правленая
         // в заказе норма переставала быть главнее номенклатуры.
@@ -600,6 +605,7 @@ export class OrderCalculationsService {
             sortOrder: true,
             owner: true,
             sourceTechCardId: true,
+            sourcePatternItemId: true,
             sourceParameterId: true,
             value: true,
             valueSource: true,
@@ -637,6 +643,8 @@ export class OrderCalculationsService {
             characteristics: true,
             parameterBindings: true,
             sourceTechCardId: true,
+            sourcePatternItemId: true,
+            sourcePatternLineId: true,
             isManual: true,
             qtySource: true,
             qtySourceRef: true,
@@ -740,6 +748,7 @@ export class OrderCalculationsService {
           sortOrder: p.sortOrder,
           owner: p.owner,
           sourceTechCardId: p.sourceTechCardId,
+          sourcePatternItemId: p.sourcePatternItemId,
           sourceParameterId: p.sourceParameterId,
           value: p.value,
           valueSource: p.valueSource,
@@ -775,6 +784,11 @@ export class OrderCalculationsService {
         characteristics: r.characteristics,
         parameterBindings: r.parameterBindings,
         sourceTechCardId: r.sourceTechCardId,
+        // Этап 3 «техкарты → номенклатура»: трассировка на спецификацию —
+        // без неё активация варианта потеряла бы источник, и ФАЗА-2
+        // перематериализовала бы снимок.
+        sourcePatternItemId: r.sourcePatternItemId,
+        sourcePatternLineId: r.sourcePatternLineId,
         isManual: r.isManual,
         // Источник нормы едет в снимок: `qtySource='ORDER'` = «норму ввели
         // руками, она главнее номенклатуры». Потеряв его, активация другого

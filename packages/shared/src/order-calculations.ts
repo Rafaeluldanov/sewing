@@ -80,6 +80,14 @@ const SnapshotTechCardParameterSchema = z.object({
   sortOrder: z.number().int(),
   owner: z.string(),
   sourceTechCardId: z.string().nullable(),
+  /**
+   * Этап 3 «техкарты → номенклатура»: слот из спецификации карточки.
+   * `nullish` — старые снимки лежат без поля.
+   */
+  sourcePatternItemId: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
   sourceParameterId: z.string().nullable(),
   value: z.string().nullable(),
   valueSource: z.string(),
@@ -136,6 +144,19 @@ const SnapshotMaterialRequirementSchema = z.object({
   characteristics: z.unknown().nullable(),
   parameterBindings: z.unknown().nullable(),
   sourceTechCardId: z.string().nullable(),
+  /**
+   * Этап 3 «техкарты → номенклатура»: трассировка строки на спецификацию
+   * карточки. `nullish` — старые снимки лежат без полей; потерять их при
+   * restore нельзя, иначе ФАЗА-2 перематериализовала бы снимок.
+   */
+  sourcePatternItemId: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
+  sourcePatternLineId: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
   isManual: z.boolean(),
   /**
    * Откуда взята норма и к какой норме номенклатуры привязана строка.
