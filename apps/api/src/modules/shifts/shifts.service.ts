@@ -20,6 +20,7 @@ import {
   ShiftOperationNotAllowedForEquipmentException,
 } from '../../common/errors.js';
 import { SalaryService } from '../salary/salary.service.js';
+import { closeShiftSegments, openShiftSegment } from './shift-segments.js';
 
 type ShiftRow = Prisma.ShiftSessionGetPayload<{
   include: { employee: true; equipment: true; operation: true };
@@ -84,6 +85,16 @@ export class ShiftsService {
           operationId: dto.operationId,
         },
         include: { employee: true, equipment: true, operation: true },
+      });
+      // Первый отрезок смены (табель дня, см. `shift-segments.ts`).
+      // Границу берём из самой смены, чтобы «присутствие» сходилось с
+      // суммой сегментов до миллисекунды.
+      await openShiftSegment(this.prisma, {
+        shiftSessionId: created.id,
+        employeeId: created.employeeId,
+        equipmentId: created.equipmentId,
+        operationId: created.operationId,
+        at: created.startedAt,
       });
       // Окладные начисления (ADR-0021): SALARY/MIXED-сотруднику
       // создаётся/обновляется запись `SalaryEntry` за день старта
@@ -198,6 +209,20 @@ export class ShiftsService {
       data: { operationId: dto.operationId },
       include: { employee: true, equipment: true, operation: true },
     });
+
+    // Табель дня: режем смену на отрезки — иначе всё её время досталось
+    // бы последней операции (см. `shift-segments.ts`). Обе границы —
+    // один и тот же момент, чтобы отрезки шли встык без «дыры».
+    const switchedAt = new Date();
+    await closeShiftSegments(this.prisma, current.id, switchedAt);
+    await openShiftSegment(this.prisma, {
+      shiftSessionId: updated.id,
+      employeeId: updated.employeeId,
+      equipmentId: updated.equipmentId,
+      operationId: updated.operationId,
+      at: switchedAt,
+    });
+
     this.logger.log(
       `event=shift.switch-operation employeeId=${dto.employeeId} from=${current.operationId} to=${dto.operationId}`,
     );
@@ -211,11 +236,17 @@ export class ShiftsService {
   async stop(dto: { employeeId: string }): Promise<ShiftSessionDto> {
     const current = await this.findActiveByEmployee(dto.employeeId);
     if (!current) throw new ShiftNotActiveException();
+    const endedAt = new Date();
     const updated = await this.prisma.shiftSession.update({
       where: { id: current.id },
-      data: { endedAt: new Date() },
+      data: { endedAt },
       include: { employee: true, equipment: true, operation: true },
     });
+    // Табель дня: последний отрезок закрывается ровно концом смены.
+    // Через `stop` идёт и принудительное завершение мастером
+    // (`MasterEmployeeStatsService.closeActiveShift`), так что отдельной
+    // врезки там не нужно.
+    await closeShiftSegments(this.prisma, updated.id, endedAt);
     // Окладные начисления (ADR-0021): подстраховка на стороне stop —
     // если start был до внедрения sync (legacy-данные) или прошёл
     // мимо по любой причине, на stop запись будет создана. Берём

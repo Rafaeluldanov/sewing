@@ -84,6 +84,21 @@ export interface MasterEmployeeOpStatDto {
   defects: number;
 }
 
+/**
+ * Кусок мини-ленты дня в строке списка: та же раскраска участков, что в
+ * табеле, только без подписей. Заполняется ТОЛЬКО когда период = одни
+ * сутки (`from === to`) — на неделе лента превратилась бы в кашу.
+ *
+ * `startMinute` — минут от начала московских суток (0–1440), чтобы UI
+ * не парсил даты ради процента ширины.
+ */
+export interface MasterEmployeeRibbonPartDto {
+  startMinute: number;
+  minutes: number;
+  /** `OperationCategory` — цвет участка. */
+  category: string;
+}
+
 export interface MasterEmployeeStatRowDto {
   employeeId: string;
   employeeName: string;
@@ -103,14 +118,38 @@ export interface MasterEmployeeStatRowDto {
    * сотрудника» и полный список при провале.
    */
   operations: MasterEmployeeOpStatDto[];
+  /**
+   * Время в смене за период, минут (сумма `ShiftSegment`). Ответ на
+   * вопрос, которого в списке не было вовсе: «289 штук» без «за сколько
+   * часов» не оценивается.
+   */
+  workedMinutes: number;
+  /** Смена открыта прямо сейчас (зелёная точка в списке). */
+  hasOpenSegment: boolean;
+  /**
+   * Открытый отрезок тянется с прошлых суток — сотрудник забыл
+   * закрыться (жёлтая плашка). Считается только для `from === to`.
+   */
+  staleShift: boolean;
+  /** Мини-лента дня; пустая, если период больше суток. */
+  ribbon: MasterEmployeeRibbonPartDto[];
 }
 
 export interface MasterEmployeeStatsDto {
-  /** UTC-`YYYY-MM-DD`, эхо запроса. */
+  /** Московские `YYYY-MM-DD`, эхо запроса. */
   from: string;
   to: string;
-  /** Сотрудники с ≥1 закрытой операцией в периоде, по `totalQty` убыв. */
+  /**
+   * Сотрудники периода, по `totalQty` убыв.
+   *
+   * Строка появляется у любого, кто ЛИБО закрыл операцию, ЛИБО был на
+   * смене: «отработал 8 часов и не закрыл ничего» — ровно тот случай,
+   * ради которого мастер и открывает вкладку, а раньше такой сотрудник
+   * в список не попадал вообще.
+   */
   rows: MasterEmployeeStatRowDto[];
+  /** Серверное «сейчас» (ISO) — от него считаются открытые отрезки. */
+  now: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,3 +337,148 @@ export const MasterUpdateEmployeeAccessSchema = z
 export type MasterUpdateEmployeeAccessDto = z.infer<
   typeof MasterUpdateEmployeeAccessSchema
 >;
+
+// ---------------------------------------------------------------------------
+// Табель дня (`GET /api/master/employee-stats/day`)
+// ---------------------------------------------------------------------------
+
+/**
+ * «Табель дня» — провал в одного сотрудника за одни сутки: где был,
+ * сколько времени и сколько сделал.
+ *
+ * Чем отличается от `MasterEmployeeDrillDto` (соседний drill): тот
+ * считает ТОЛЬКО выработку за произвольный период и ничего не знает про
+ * время. Табель добавляет ось времени — присутствие, отрезки работы,
+ * паузы, распределение по участкам, — поэтому и живёт отдельной ручкой,
+ * а не флагом в drill.
+ *
+ * ВРЕМЯ. Источник — `ShiftSegment` (отрезок смены с неизменной парой
+ * «рабочее место + операция», см. `prisma/schema.prisma`). Сегменты
+ * появились вместе с этой фичей: до них переключение операции внутри
+ * смены не сохранялось нигде, и всё время смены доставалось последней
+ * операции. Историю до внедрения бэкфилл восстановил с точностью до
+ * УЧАСТКА (один сегмент на смену), поэтому у старых дней разбивка по
+ * операциям внутри смены будет грубее — данных для точной не
+ * существует.
+ *
+ * СУТКИ — московские (`moscowDayWindow`), а не UTC: цех живёт по Москве,
+ * и вечерняя смена, доработавшая до 01:00, должна остаться в своём дне.
+ * Отрезок, пересекающий полночь, обрезается по границе суток — иначе
+ * «присутствие» одного дня захватывало бы часы другого.
+ *
+ * ШТУКИ. По `OPERATION_FINISHED` сотрудника: в отрезке — все события,
+ * попавшие в его границы (без сверки операции: при substitute-переходе
+ * событие может нести другую операцию, но работа сделана в этом
+ * отрезке); в разбивке «по операциям» — группировка по операции самого
+ * события. Из-за этого суммы штук по отрезкам и по операциям совпадают,
+ * а вот время «по операциям» может слегка разойтись с фактической
+ * операцией события — это редкий substitute-случай, осознанный размен.
+ *
+ * БРАК. Как и везде на вкладке, `defects` — брак, найденный на
+ * операциях, которые ЗАКРЫЛ сотрудник (атрибуция исполнителю).
+ * Отдельно считаем `defectsFound` — брак, который сотрудник
+ * ЗАФИКСИРОВАЛ сам (работа ОТК): это разные числа и путать их нельзя.
+ */
+export const MasterEmployeeDayQuerySchema = z.object({
+  employeeId: z.string().min(1),
+  /** Московские сутки `YYYY-MM-DD`. */
+  date: z.string().regex(DAY_RE),
+});
+export type MasterEmployeeDayQuery = z.infer<
+  typeof MasterEmployeeDayQuerySchema
+>;
+
+/** Отрезок работы: одно рабочее место + одна операция. */
+export interface MasterEmployeeDaySegmentDto {
+  segmentId: string;
+  /** ISO; уже обрезан границами московских суток. */
+  startedAt: string;
+  /** ISO; `null` — отрезок идёт прямо сейчас (считаем до `now`). */
+  endedAt: string | null;
+  /** Длительность в минутах (для открытого — до серверного `now`). */
+  minutes: number;
+  equipmentId: string;
+  equipmentName: string;
+  equipmentDisplayNumber: string | null;
+  operationId: string;
+  operationName: string;
+  /** `OperationCategory` — по ней UI красит участок. */
+  category: string;
+  /** Штук, закрытых внутри отрезка. */
+  qty: number;
+  /** Отрезок не закрыт (смена идёт). */
+  isOpen: boolean;
+}
+
+/** Строка «Где был»: участок (категория + рабочее место). */
+export interface MasterEmployeeDayPlaceDto {
+  /** `category:equipmentId` — ключ для React. */
+  key: string;
+  category: string;
+  equipmentName: string;
+  equipmentDisplayNumber: string | null;
+  minutes: number;
+  /** Доля от времени в смене, 0–100 (округлена). */
+  share: number;
+  /** Сколько разных операций сотрудник делал на этом месте. */
+  operations: number;
+}
+
+/** Строка «По операциям» за день. */
+export interface MasterEmployeeDayOperationDto {
+  operationId: string;
+  operationCode: string;
+  operationName: string;
+  category: string;
+  /** Время по сегментам этой операции. */
+  minutes: number;
+  qty: number;
+  defects: number;
+  /** Брак, зафиксированный сотрудником на этой операции (ОТК). */
+  defectsFound: number;
+  /**
+   * Норма времени на единицу, сек (`Operation.timeNormSec`). `null` —
+   * норма не задана либо задана поразмерно (`timeNormMode = BY_SIZE`):
+   * поразмерную без разбивки по размерам к дню не свести.
+   */
+  normSec: number | null;
+  /**
+   * Выполнение нормы, %: план (`normSec × qty`) к факту (время
+   * сегментов). >100 — быстрее нормы. `null`, если нормы нет или
+   * время нулевое.
+   */
+  normPercent: number | null;
+}
+
+export interface MasterEmployeeDayDto {
+  employeeId: string;
+  employeeName: string;
+  role: string;
+  /** Эхо запроса, московские сутки. */
+  date: string;
+  /** Серверное «сейчас» (ISO) — от него считаются открытые отрезки. */
+  now: string;
+  /**
+   * Присутствие: от начала первого отрезка до конца последнего, минут.
+   * Не сумма отрезков — включает паузы между ними.
+   */
+  presenceMinutes: number;
+  /** Сумма отрезков, минут («в смене»). */
+  workedMinutes: number;
+  /** `presenceMinutes − workedMinutes` («вне смены»). */
+  idleMinutes: number;
+  /** Число пауз между отрезками. */
+  breaks: number;
+  /** Загрузка, %: `workedMinutes / presenceMinutes`. `null` при нулевом присутствии. */
+  utilization: number | null;
+  totalQty: number;
+  totalDefects: number;
+  totalDefectsFound: number;
+  /** Переходов = отрезков минус первый (0, если отрезок один). */
+  transitions: number;
+  /** Есть открытый отрезок — сотрудник на смене прямо сейчас. */
+  hasOpenSegment: boolean;
+  segments: MasterEmployeeDaySegmentDto[];
+  places: MasterEmployeeDayPlaceDto[];
+  operations: MasterEmployeeDayOperationDto[];
+}

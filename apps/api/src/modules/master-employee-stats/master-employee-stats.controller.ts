@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
 import {
   ForceCloseShiftSchema,
+  MasterEmployeeDayQuerySchema,
   MasterEmployeeStatsDrillQuerySchema,
   MasterEmployeeStatsQuerySchema,
   MasterUpdateEmployeeAccessSchema,
@@ -9,6 +10,8 @@ import {
   type MasterCloseShiftResultDto,
   type MasterEmployeeAccessDto,
   type MasterEmployeeAccessListDto,
+  type MasterEmployeeDayDto,
+  type MasterEmployeeDayQuery,
   type MasterEmployeeDrillDto,
   type MasterEmployeeStatsDrillQuery,
   type MasterEmployeeStatsDto,
@@ -57,6 +60,20 @@ export class MasterEmployeeStatsController {
     query: MasterEmployeeStatsDrillQuery,
   ): Promise<MasterEmployeeDrillDto> {
     return this.service.getDrill(query);
+  }
+
+  /**
+   * «Табель дня»: где сотрудник был, сколько времени и сколько сделал за
+   * одни МОСКОВСКИЕ сутки (см. `MasterEmployeeStatsService.getDay`).
+   * Отдельно от `drill`, потому что считает другую ось — время
+   * (`ShiftSegment`), а не только выработку.
+   */
+  @Get('day')
+  day(
+    @Query(new ZodValidationPipe(MasterEmployeeDayQuerySchema))
+    query: MasterEmployeeDayQuery,
+  ): Promise<MasterEmployeeDayDto> {
+    return this.service.getDay(query);
   }
 
   /**

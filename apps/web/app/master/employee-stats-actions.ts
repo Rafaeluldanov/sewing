@@ -16,6 +16,8 @@ import type {
   MasterCloseShiftResultDto,
   MasterEmployeeAccessDto,
   MasterEmployeeAccessListDto,
+  MasterEmployeeDayDto,
+  MasterEmployeeDayQuery,
   MasterEmployeeStatsDrillQuery,
   MasterEmployeeDrillDto,
   MasterEmployeeStatsDto,
@@ -27,6 +29,7 @@ import {
   closeMasterActiveShift,
   getMasterActiveShifts,
   getMasterEmployeeAccess,
+  getMasterEmployeeDay,
   getMasterEmployeeStats,
   getMasterEmployeeStatsDrill,
   updateMasterEmployeeAccess,
@@ -64,6 +67,21 @@ export async function loadEmployeeStatsDrillAction(
     return { ok: true, data: await getMasterEmployeeStatsDrill(query) };
   } catch (e) {
     return { ok: false, error: explain(e) };
+  }
+}
+
+export type LoadEmployeeDayResult =
+  | { ok: true; data: MasterEmployeeDayDto }
+  | { ok: false; error: string };
+
+/** «Табель дня» одного сотрудника (шторка поверх списка). */
+export async function loadEmployeeDayAction(
+  query: MasterEmployeeDayQuery,
+): Promise<LoadEmployeeDayResult> {
+  try {
+    return { ok: true, data: await getMasterEmployeeDay(query) };
+  } catch (e) {
+    return { ok: false, error: errorText(e, 'Не удалось загрузить табель') };
   }
 }
 

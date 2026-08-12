@@ -7,9 +7,14 @@
  *
  * По умолчанию показываем статистику за СЕГОДНЯ; сверху мастер может
  * расширить период — кнопка «Сегодня» (сброс на текущий день) или
- * вручную поля `с`/`по`. Таблица — строка = сотрудник, превью его операций + итоги
- * (паспортов / штук / брак). Клик по строке → провал в overlay с полной
- * разбивкой по операциям и по дням (зеркало drill «Движения тиража»).
+ * вручную поля `с`/`по`. Список — карточка = сотрудник: часы в смене,
+ * штуки, брак и мини-лента дня (раскраска участков, та же что в
+ * табеле). Тап по карточке → шторка «Табель дня»
+ * (`employee-day-sheet.tsx`): где был, сколько времени, сколько сделал.
+ *
+ * Сотрудник, который был на смене, но не закрыл ни одной операции,
+ * ТОЖЕ в списке — нулевой строкой (бэк собирает строки и из отрезков
+ * смен, не только из событий).
  *
  * Брак атрибутируется исполнителю операции («брак, найденный на
  * операциях, которые закрыл сотрудник») — не тому, кто его зафиксировал.
@@ -25,7 +30,7 @@
  * гидрации server/client.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   MasterActiveShiftDto,
   MasterActiveShiftsDto,
@@ -36,6 +41,11 @@ import type {
 } from '@sewing/shared';
 import { MASTER_ASSIGNABLE_ROLES } from '@sewing/shared';
 import { formatRole } from '@/lib/admin-labels';
+import {
+  categoryClass,
+  EmployeeDaySheet,
+  formatHM,
+} from './employee-day-sheet';
 import {
   closeActiveShiftAction,
   loadActiveShiftsAction,
@@ -127,25 +137,87 @@ function passportsWord(n: number): string {
   return 'паспортов';
 }
 
-function OpsPreview({ row }: { row: MasterEmployeeStatRowDto }) {
-  const top = row.operations.slice(0, 3);
-  const more = row.operations.length - top.length;
-  if (top.length === 0) return <span className="pboard__muted">—</span>;
+/**
+ * Строка списка = карточка: имя, часы, штуки и мини-лента дня.
+ *
+ * Раньше это была таблица из пяти колонок, но кабинет мастера —
+ * терминал шириной до 720px (`.master-page`), и на телефоне колонки
+ * съезжали в нечитаемую кашу. Мини-лента — та же раскраска участков,
+ * что в табеле: листая список, мастер сразу видит, кто весь день на
+ * одном месте, а кого кидало по цеху.
+ *
+ * `scale` — общие для всего списка границы суток (минуты от полуночи),
+ * чтобы ленты разных сотрудников были сопоставимы по времени: у каждого
+ * своя шкала означала бы, что одинаковая полоска у двух людей — это
+ * разные часы.
+ */
+function EmployeeRow({
+  row,
+  scale,
+  roleLabel,
+  onOpen,
+}: {
+  row: MasterEmployeeStatRowDto;
+  scale: { from: number; span: number } | null;
+  roleLabel: (role: string) => string;
+  onOpen: () => void;
+}) {
   return (
-    <div className="mstat__ops">
-      {top.map((o) => (
-        <span
-          key={o.operationId}
-          className="mstat__op-chip"
-          title={o.operationName}
-        >
-          {o.operationName} · <b>{o.qty}</b>
-          {o.defects > 0 && (
-            <span className="mstat__op-def"> ✗{o.defects}</span>
-          )}
+    <div
+      className={'mstat__card' + (row.hasOpenSegment ? ' is-live' : '')}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <div className="mstat__card-in">
+        <div className="mstat__card-top">
+          <span className="mstat__name">
+            {row.hasOpenSegment && <i className="mstat__live-dot" />}
+            {row.employeeName}
+          </span>
+          <span className="mstat__role">{roleLabel(row.role)}</span>
+        </div>
+
+        {scale && row.ribbon.length > 0 && (
+          <span className="mstat__mini" aria-hidden="true">
+            {row.ribbon.map((part, i) => (
+              <i
+                key={`${part.startMinute}:${i}`}
+                className={categoryClass(part.category)}
+                style={{
+                  left: `${((part.startMinute - scale.from) / scale.span) * 100}%`,
+                  width: `${Math.max(1, (part.minutes / scale.span) * 100)}%`,
+                }}
+              />
+            ))}
+          </span>
+        )}
+
+        <span className="mstat__card-nums">
+          {row.workedMinutes > 0 && <>{formatHM(row.workedMinutes)} в смене · </>}
+          <b>{row.totalQty} шт</b>
+          {row.totalDefects > 0 ? (
+            <span className="mstat__def"> · брак {row.totalDefects}</span>
+          ) : null}
+          {row.totalPassports > 0 && <> · {row.totalPassports} пасп.</>}
         </span>
-      ))}
-      {more > 0 && <span className="mstat__op-more">ещё {more}</span>}
+
+        {row.staleShift && (
+          <span className="mstat__card-warn">
+            ⚠ Смена открыта с прошлого дня
+          </span>
+        )}
+        {row.workedMinutes === 0 && row.totalQty === 0 && (
+          <span className="mstat__card-warn">Смены не было</span>
+        )}
+      </div>
+      <span className="mstat__card-chev">›</span>
     </div>
   );
 }
@@ -162,6 +234,7 @@ function ActiveShiftCard({
   closing,
   onClose,
   onCancel,
+  onOpenDay,
 }: {
   shift: MasterActiveShiftDto;
   now: string;
@@ -169,6 +242,7 @@ function ActiveShiftCard({
   closing: boolean;
   onClose: (force: boolean) => void;
   onCancel: () => void;
+  onOpenDay: () => void;
 }) {
   const nowMs = new Date(now).getTime();
   const startedDay = moscowDayKey(new Date(shift.startedAt));
@@ -195,6 +269,11 @@ function ActiveShiftCard({
           Начало {moscowTimeHM(shift.startedAt)} · длится{' '}
           {shiftDuration(shift.startedAt, now)}
         </div>
+        {/* Второй вход в табель: увидел зависшую смену — сразу смотришь,
+            что человек делал, не возвращаясь в «Статистику». */}
+        <button type="button" className="mstat__shift-day" onClick={onOpenDay}>
+          Табель дня ›
+        </button>
         {stale && (
           <div className="mstat__shift-warn">
             ⚠ Смена открыта{' '}
@@ -437,6 +516,11 @@ export function EmployeeStatsView() {
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<MasterEmployeeDrillDto | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+  // Табель дня: id сотрудника + сутки, которые он показывает. Дата
+  // живёт отдельно от периода списка — внутри шторки мастер листает дни
+  // стрелками, а список за собой не тянет.
+  const [dayEmployeeId, setDayEmployeeId] = useState<string | null>(null);
+  const [dayDate, setDayDate] = useState<string>('');
 
   // Режим «Активные»: открытые смены + состояние закрытия.
   const [activeShifts, setActiveShifts] =
@@ -588,6 +672,41 @@ export function EmployeeStatsView() {
     },
     [from, to, load],
   );
+
+  /**
+   * Открытие табеля. Дата — конец периода списка: при «Сегодня» это
+   * сегодня, при выбранном диапазоне — его последний день (логичнее
+   * первого: мастер смотрит «чем всё кончилось»).
+   */
+  const openDay = useCallback(
+    (employeeId: string) => {
+      setDayDate(to || moscowDayKey(new Date()));
+      setDayEmployeeId(employeeId);
+    },
+    [to],
+  );
+
+  /**
+   * Общая шкала мини-лент: от начала самого раннего отрезка до конца
+   * самого позднего по ВСЕМУ списку, с получасовым полем по краям.
+   * Минимум — 4 часа, иначе один короткий заход растянулся бы на всю
+   * ширину и выглядел как полный рабочий день.
+   */
+  const ribbonScale = useMemo(() => {
+    if (!stats) return null;
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const row of stats.rows) {
+      for (const part of row.ribbon) {
+        min = Math.min(min, part.startMinute);
+        max = Math.max(max, part.startMinute + part.minutes);
+      }
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    const from = Math.max(0, min - 30);
+    const span = Math.max(240, max + 30 - from);
+    return { from, span };
+  }, [stats]);
 
   const openDrill = useCallback(
     async (employeeId: string) => {
@@ -746,6 +865,7 @@ export function EmployeeStatsView() {
                   closing={closingId === s.shiftId}
                   onClose={(force) => void closeShift(s, force)}
                   onCancel={() => cancelConfirm(s.shiftId)}
+                  onOpenDay={() => openDay(s.employeeId)}
                 />
               ))}
             </div>
@@ -797,53 +917,26 @@ export function EmployeeStatsView() {
       )}
 
       {mode === 'stats' && stats && stats.rows.length > 0 && (
-        <table className="mstat__table">
-          <thead>
-            <tr>
-              <th>Сотрудник</th>
-              <th className="mstat__th-ops">Операции</th>
-              <th className="mstat__num">Пасп.</th>
-              <th className="mstat__num">Штук</th>
-              <th className="mstat__num">Брак</th>
-            </tr>
-          </thead>
-          <tbody>
-            {stats.rows.map((row) => (
-              <tr
-                key={row.employeeId}
-                className="mstat__row"
-                onClick={() => void openDrill(row.employeeId)}
-                tabIndex={0}
-                role="button"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    void openDrill(row.employeeId);
-                  }
-                }}
-              >
-                <td>
-                  <div className="mstat__name">{row.employeeName}</div>
-                  <div className="mstat__role">{roleLabel(row.role)}</div>
-                </td>
-                <td className="mstat__td-ops">
-                  <OpsPreview row={row} />
-                </td>
-                <td className="mstat__num">{row.totalPassports}</td>
-                <td className="mstat__num">
-                  <b>{row.totalQty}</b>
-                </td>
-                <td className="mstat__num">
-                  {row.totalDefects > 0 ? (
-                    <span className="mstat__def">{row.totalDefects}</span>
-                  ) : (
-                    <span className="pboard__muted">0</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="mstat__list">
+          {stats.rows.map((row) => (
+            <EmployeeRow
+              key={row.employeeId}
+              row={row}
+              scale={ribbonScale}
+              roleLabel={roleLabel}
+              onOpen={() => openDay(row.employeeId)}
+            />
+          ))}
+        </div>
+      )}
+
+      {dayEmployeeId && dayDate && (
+        <EmployeeDaySheet
+          employeeId={dayEmployeeId}
+          date={dayDate}
+          onDateChange={setDayDate}
+          onClose={() => setDayEmployeeId(null)}
+        />
       )}
 
       {(drill || drillLoading) && (

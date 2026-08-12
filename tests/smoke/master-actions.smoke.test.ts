@@ -219,7 +219,12 @@ describe('master-actions smoke — «выполнить операцию сам�
     );
     expect(serviceSrc).toMatch(/shiftSession\.create/);
     expect(serviceSrc).toMatch(/finally\s*\{/);
-    expect(serviceSrc).toMatch(/endedAt: new Date\(\)/);
+    // Закрытие технической смены. Момент вынесен в переменную, потому
+    // что тем же значением закрывается отрезок табеля дня
+    // (`ShiftSegment`) — границы обязаны совпадать.
+    expect(serviceSrc).toMatch(/const endedAt = new Date\(\)/);
+    expect(serviceSrc).toMatch(/data: \{ endedAt \}/);
+    expect(serviceSrc).toMatch(/closeShiftSegments\(/);
     // Штатный старт смены НЕ используем: он синхронизирует оклад и
     // начислил бы мастеру повременные часы за минуту работы.
     expect(serviceSrc).not.toMatch(/shifts\.start\(/);

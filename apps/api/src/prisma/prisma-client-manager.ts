@@ -157,6 +157,12 @@ export class PrismaClientManager implements OnModuleInit, OnModuleDestroy {
       `CREATE UNIQUE INDEX IF NOT EXISTS "passport_qty_correction_pending_uniq"
          ON "PassportQtyCorrection" ("passportId")
          WHERE "status" = 'PENDING'`,
+      // «Один открытый сегмент на смену» (табель дня, `ShiftSegment`):
+      // тот же приём, что у смены выше. Сегмент режется при смене
+      // операции внутри смены, поэтому гонка «два открытых» ломала бы
+      // подсчёт времени, а не только отчёт.
+      `CREATE UNIQUE INDEX IF NOT EXISTS "shift_segment_open_session_uniq"
+         ON "ShiftSegment" ("shiftSessionId") WHERE "endedAt" IS NULL`,
     ];
     for (const sql of statements) {
       try {

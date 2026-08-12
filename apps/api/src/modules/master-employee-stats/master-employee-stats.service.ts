@@ -7,8 +7,14 @@ import type {
   MasterCloseShiftResultDto,
   MasterEmployeeAccessDto,
   MasterEmployeeAccessListDto,
+  MasterEmployeeDayDto,
+  MasterEmployeeDayOperationDto,
+  MasterEmployeeDayPlaceDto,
+  MasterEmployeeDayQuery,
+  MasterEmployeeDaySegmentDto,
   MasterEmployeeDrillDto,
   MasterEmployeeOpStatDto,
+  MasterEmployeeRibbonPartDto,
   MasterEmployeeStatsDto,
   MasterEmployeeStatsDrillQuery,
   MasterEmployeeStatsQuery,
@@ -25,6 +31,7 @@ import {
   MasterShiftHasActivePassportsException,
   ShiftNotActiveException,
 } from '../../common/errors.js';
+import { moscowDayKey, moscowDayWindow } from '../../common/moscow-date.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
@@ -66,16 +73,24 @@ export class MasterEmployeeStatsService {
     private readonly audit: AuditService,
   ) {}
 
-  /** UTC-`YYYY-MM-DD` из Date. */
+  /** `YYYY-MM-DD` по Москве из Date. */
   private dayKey(d: Date): string {
-    return d.toISOString().slice(0, 10);
+    return moscowDayKey(d);
   }
 
-  /** [from, to] окно по UTC-дням, `to` — конец дня (включительно). */
+  /**
+   * Окно `[from; to)` по МОСКОВСКИМ суткам (`to` — начало следующих за
+   * `to` суток).
+   *
+   * Раньше окно строилось по UTC, и вся вкладка ехала на 3 часа: работа
+   * с 00:00 до 03:00 МСК попадала в предыдущий день, а «Сегодня» её не
+   * показывало. Цех живёт по Москве — и нумерация паспортов
+   * (`moscowDateParts`), и табель дня считаются одинаково.
+   */
   private window(from: string, to: string): { from: Date; to: Date } {
     return {
-      from: new Date(`${from}T00:00:00.000Z`),
-      to: new Date(`${to}T23:59:59.999Z`),
+      from: moscowDayWindow(from).from,
+      to: moscowDayWindow(to).to,
     };
   }
 
@@ -90,7 +105,7 @@ export class MasterEmployeeStatsService {
         type: PassportEventType.OPERATION_FINISHED,
         employeeId: { not: null },
         operationId: { not: null },
-        createdAt: { gte: window.from, lte: window.to },
+        createdAt: { gte: window.from, lt: window.to },
       },
       select: {
         passportId: true,
@@ -133,7 +148,7 @@ export class MasterEmployeeStatsService {
         type: PassportEventType.DEFECT_RECORDED,
         operationId: { not: null },
         qty: { gt: 0 },
-        createdAt: { gte: window.from, lte: window.to },
+        createdAt: { gte: window.from, lt: window.to },
       },
       select: {
         passportId: true,
@@ -191,6 +206,58 @@ export class MasterEmployeeStatsService {
     return out;
   }
 
+  /**
+   * Отрезки смен (`ShiftSegment`), пересекающие окно, с их рабочим
+   * местом и операцией.
+   *
+   * Условие пересечения, а не «начались внутри»: вечерняя смена,
+   * доработавшая до утра, обязана попасть в оба дня своей частью —
+   * иначе у одного дня пропадут часы, а у другого появятся чужие.
+   * Обрезка по границам окна — на вызывающей стороне (`clampSegment`).
+   */
+  private async loadSegments(window: { from: Date; to: Date }) {
+    return this.prisma.shiftSegment.findMany({
+      where: {
+        startedAt: { lt: window.to },
+        OR: [{ endedAt: null }, { endedAt: { gt: window.from } }],
+      },
+      select: {
+        id: true,
+        employeeId: true,
+        startedAt: true,
+        endedAt: true,
+        equipment: {
+          select: { id: true, name: true, displayNumber: true },
+        },
+        operation: {
+          select: { id: true, code: true, name: true, category: true },
+        },
+        employee: { select: { id: true, fullName: true, role: true } },
+      },
+      orderBy: { startedAt: 'asc' },
+    });
+  }
+
+  /**
+   * Обрезка отрезка границами окна. Открытый отрезок тянется до
+   * серверного `now` (но не дальше конца окна — вчерашний день не
+   * должен «расти» вместе с текущей смной).
+   */
+  private clampSegment(
+    seg: { startedAt: Date; endedAt: Date | null },
+    window: { from: Date; to: Date },
+    now: Date,
+  ): { start: Date; end: Date; minutes: number } {
+    const rawEnd = seg.endedAt ?? now;
+    const start = seg.startedAt < window.from ? window.from : seg.startedAt;
+    const end = rawEnd > window.to ? window.to : rawEnd;
+    const minutes = Math.max(
+      0,
+      Math.round((end.getTime() - start.getTime()) / 60_000),
+    );
+    return { start, end, minutes };
+  }
+
   // ===========================================================================
   // LIST: таблица сотрудников
   // ===========================================================================
@@ -199,9 +266,11 @@ export class MasterEmployeeStatsService {
     query: MasterEmployeeStatsQuery,
   ): Promise<MasterEmployeeStatsDto> {
     const window = this.window(query.from, query.to);
-    const [events, defects] = await Promise.all([
+    const now = new Date();
+    const [events, defects, segments] = await Promise.all([
       this.loadFinishedEvents(window),
       this.loadAttributedDefects(window),
+      this.loadSegments(window),
     ]);
 
     interface Acc {
@@ -295,25 +364,94 @@ export class MasterEmployeeStatsService {
       }
     }
 
+    // Время в смене + мини-лента дня. Сотрудник, который был на смене,
+    // но не закрыл ни одной операции, ПОЯВЛЯЕТСЯ в списке нулевой
+    // строкой: «отработал 8 часов и ничего не сдал» — как раз то, что
+    // мастеру важно увидеть, а раньше такой человек просто отсутствовал.
+    const singleDay = query.from === query.to;
+    const dayStart = window.from.getTime();
+    interface TimeAcc {
+      workedMinutes: number;
+      hasOpenSegment: boolean;
+      staleShift: boolean;
+      ribbon: MasterEmployeeRibbonPartDto[];
+    }
+    const timeByEmployee = new Map<string, TimeAcc>();
+    for (const seg of segments) {
+      const { start, minutes } = this.clampSegment(seg, window, now);
+      let t = timeByEmployee.get(seg.employeeId);
+      if (!t) {
+        t = {
+          workedMinutes: 0,
+          hasOpenSegment: false,
+          staleShift: false,
+          ribbon: [],
+        };
+        timeByEmployee.set(seg.employeeId, t);
+      }
+      t.workedMinutes += minutes;
+      if (seg.endedAt === null) {
+        t.hasOpenSegment = true;
+        // Открытый отрезок, начавшийся ДО этого окна, — смена висит с
+        // прошлых суток (сотрудник забыл закрыться).
+        if (seg.startedAt < window.from) t.staleShift = true;
+      }
+      // Отрезок нулевой длины (смену открыли только что) тоже кладём в
+      // ленту: UI рисует ему минимальную ширину — засечку «здесь
+      // началось». Иначе только что вышедший сотрудник выглядел бы как
+      // не выходивший вовсе.
+      if (singleDay) {
+        t.ribbon.push({
+          startMinute: Math.round((start.getTime() - dayStart) / 60_000),
+          minutes,
+          category: seg.operation.category,
+        });
+      }
+      // Строка для тех, у кого есть время, но нет ни выработки, ни брака.
+      ensureEmployee(
+        seg.employeeId,
+        seg.employee.fullName,
+        seg.employee.role,
+      );
+    }
+
     const rows: MasterEmployeeStatRowDto[] = Array.from(byEmployee.values()).map(
-      (acc) => ({
-        employeeId: acc.employeeId,
-        employeeName: acc.employeeName,
-        role: acc.role,
-        totalPassports: acc.passportIds.size,
-        totalQty: acc.totalQty,
-        totalDefects: acc.totalDefects,
-        totalOperations: acc.totalOperations,
-        operations: this.sortOps(acc.ops),
-      }),
+      (acc) => {
+        const t = timeByEmployee.get(acc.employeeId);
+        return {
+          employeeId: acc.employeeId,
+          employeeName: acc.employeeName,
+          role: acc.role,
+          totalPassports: acc.passportIds.size,
+          totalQty: acc.totalQty,
+          totalDefects: acc.totalDefects,
+          totalOperations: acc.totalOperations,
+          operations: this.sortOps(acc.ops),
+          workedMinutes: t?.workedMinutes ?? 0,
+          hasOpenSegment: t?.hasOpenSegment ?? false,
+          staleShift: t?.staleShift ?? false,
+          ribbon: t?.ribbon ?? [],
+        };
+      },
     );
 
-    // Сортировка таблицы: больше всего штук — сверху.
+    // Сортировка таблицы: больше всего штук — сверху. Нулевые строки
+    // (был на смене, ничего не закрыл) падают вниз, но сортируются
+    // между собой по отработанному времени — «просидел 8 часов» должно
+    // стоять выше, чем «зашёл на 10 минут».
     rows.sort(
-      (a, b) => b.totalQty - a.totalQty || b.totalPassports - a.totalPassports,
+      (a, b) =>
+        b.totalQty - a.totalQty ||
+        b.totalPassports - a.totalPassports ||
+        b.workedMinutes - a.workedMinutes,
     );
 
-    return { from: query.from, to: query.to, rows };
+    return {
+      from: query.from,
+      to: query.to,
+      rows,
+      now: now.toISOString(),
+    };
   }
 
   // ===========================================================================
@@ -454,6 +592,294 @@ export class MasterEmployeeStatsService {
       totalOperations,
       operations: this.sortOps(ops),
       byDay: days,
+    };
+  }
+
+  // ===========================================================================
+  // DAY: табель дня (где был, сколько работал, сколько сделал)
+  // ===========================================================================
+
+  /**
+   * Табель одного сотрудника за одни МОСКОВСКИЕ сутки — см. семантику в
+   * `packages/shared/src/master-employee-stats.ts`
+   * (`MasterEmployeeDayQuerySchema` и ниже).
+   *
+   * Схема расчёта:
+   *   1. отрезки смен (`ShiftSegment`), пересекающие сутки, обрезаются
+   *      по границам дня → «где был» и время;
+   *   2. `OPERATION_FINISHED` сотрудника за сутки раскладываются по
+   *      отрезкам (по времени) и по операциям (по операции события);
+   *   3. брак приходит с двух сторон: атрибутированный сотруднику как
+   *      исполнителю (`loadAttributedDefects`) и зафиксированный им
+   *      самим (`DEFECT_RECORDED.employeeId` — работа ОТК).
+   *
+   * Сотрудник без единого отрезка и события отдаётся нулевым табелем, а
+   * не 404: мастер открывает карточку из списка, и «пусто» — валидный
+   * ответ («сегодня не выходил»).
+   */
+  async getDay(query: MasterEmployeeDayQuery): Promise<MasterEmployeeDayDto> {
+    const window = moscowDayWindow(query.date);
+    const now = new Date();
+
+    const [allSegments, events, allDefects, defectsFound, employee] =
+      await Promise.all([
+        this.loadSegments(window),
+        this.loadFinishedEvents(window),
+        this.loadAttributedDefects(window),
+        this.prisma.passportEvent.findMany({
+          where: {
+            type: PassportEventType.DEFECT_RECORDED,
+            employeeId: query.employeeId,
+            operationId: { not: null },
+            qty: { gt: 0 },
+            createdAt: { gte: window.from, lt: window.to },
+          },
+          select: { operationId: true, qty: true },
+        }),
+        this.prisma.employee.findUnique({
+          where: { id: query.employeeId },
+          select: { fullName: true, role: true },
+        }),
+      ]);
+
+    const segments = allSegments.filter(
+      (s) => s.employeeId === query.employeeId,
+    );
+    const myEvents = events.filter((e) => e.employeeId === query.employeeId);
+    const myDefects = allDefects.filter(
+      (d) => d.employeeId === query.employeeId,
+    );
+
+    // ---- отрезки + штуки внутри них ------------------------------------
+    const segmentDtos: MasterEmployeeDaySegmentDto[] = [];
+    /** operationId → минуты (время «по операциям» = время их отрезков). */
+    const minutesByOp = new Map<string, number>();
+    /** `category:equipmentId` → накопитель «где был». */
+    const places = new Map<
+      string,
+      {
+        category: string;
+        equipmentName: string;
+        equipmentDisplayNumber: string | null;
+        minutes: number;
+        operations: Set<string>;
+      }
+    >();
+
+    for (const seg of segments) {
+      const { start, end, minutes } = this.clampSegment(seg, window, now);
+      const qty = myEvents.reduce(
+        (sum, e) =>
+          e.createdAt >= start && e.createdAt <= end ? sum + (e.qty ?? 0) : sum,
+        0,
+      );
+      segmentDtos.push({
+        segmentId: seg.id,
+        startedAt: start.toISOString(),
+        endedAt: seg.endedAt ? seg.endedAt.toISOString() : null,
+        minutes,
+        equipmentId: seg.equipment.id,
+        equipmentName: seg.equipment.name,
+        equipmentDisplayNumber: seg.equipment.displayNumber,
+        operationId: seg.operation.id,
+        operationName: seg.operation.name,
+        category: seg.operation.category,
+        qty,
+        isOpen: seg.endedAt === null,
+      });
+
+      minutesByOp.set(
+        seg.operation.id,
+        (minutesByOp.get(seg.operation.id) ?? 0) + minutes,
+      );
+
+      const placeKey = `${seg.operation.category}:${seg.equipment.id}`;
+      let place = places.get(placeKey);
+      if (!place) {
+        place = {
+          category: seg.operation.category,
+          equipmentName: seg.equipment.name,
+          equipmentDisplayNumber: seg.equipment.displayNumber,
+          minutes: 0,
+          operations: new Set(),
+        };
+        places.set(placeKey, place);
+      }
+      place.minutes += minutes;
+      place.operations.add(seg.operation.id);
+    }
+
+    // ---- итоги времени --------------------------------------------------
+    const workedMinutes = segmentDtos.reduce((s, x) => s + x.minutes, 0);
+    let presenceMinutes = 0;
+    let breaks = 0;
+    if (segmentDtos.length > 0) {
+      const first = new Date(segmentDtos[0]!.startedAt).getTime();
+      const lastSeg = segments[segments.length - 1]!;
+      const last = this.clampSegment(lastSeg, window, now).end.getTime();
+      presenceMinutes = Math.max(0, Math.round((last - first) / 60_000));
+      // Пауза = зазор между соседними отрезками от минуты и больше.
+      // Меньше минуты — это переключение операции, а не перерыв.
+      for (let i = 1; i < segments.length; i += 1) {
+        const prevEnd = this.clampSegment(
+          segments[i - 1]!,
+          window,
+          now,
+        ).end.getTime();
+        const currStart = this.clampSegment(
+          segments[i]!,
+          window,
+          now,
+        ).start.getTime();
+        if (currStart - prevEnd >= 60_000) breaks += 1;
+      }
+    }
+    const idleMinutes = Math.max(0, presenceMinutes - workedMinutes);
+
+    // ---- разбивка по операциям ------------------------------------------
+    interface DayOpAcc {
+      operationId: string;
+      operationCode: string;
+      operationName: string;
+      category: string;
+      qty: number;
+      defects: number;
+      defectsFound: number;
+    }
+    const opAcc = new Map<string, DayOpAcc>();
+    const ensureDayOp = (op: {
+      id: string;
+      code: string;
+      name: string;
+      category: string;
+    }): DayOpAcc => {
+      let o = opAcc.get(op.id);
+      if (!o) {
+        o = {
+          operationId: op.id,
+          operationCode: op.code,
+          operationName: op.name,
+          category: op.category,
+          qty: 0,
+          defects: 0,
+          defectsFound: 0,
+        };
+        opAcc.set(op.id, o);
+      }
+      return o;
+    };
+
+    // Операции отрезков — даже без выработки: «стояла на ВТО два часа и
+    // ничего не закрыла» должно быть видно строкой, а не пропасть.
+    for (const seg of segments) {
+      ensureDayOp({
+        id: seg.operation.id,
+        code: seg.operation.code,
+        name: seg.operation.name,
+        category: seg.operation.category,
+      });
+    }
+
+    const opIdsFromEvents = myEvents
+      .map((e) => e.operationId)
+      .filter((id): id is string => !!id);
+    const opIdsFromDefects = [
+      ...myDefects.map((d) => d.operationId),
+      ...defectsFound
+        .map((d) => d.operationId)
+        .filter((id): id is string => !!id),
+    ];
+    const opMeta = await this.loadOperationMetaFull([
+      ...opIdsFromEvents,
+      ...opIdsFromDefects,
+    ]);
+
+    for (const e of myEvents) {
+      if (!e.operation) continue;
+      const meta = opMeta.get(e.operation.id);
+      ensureDayOp({
+        id: e.operation.id,
+        code: e.operation.code,
+        name: e.operation.name,
+        category: meta?.category ?? '',
+      }).qty += e.qty ?? 0;
+    }
+    for (const d of myDefects) {
+      const meta = opMeta.get(d.operationId);
+      if (!meta) continue;
+      ensureDayOp(meta).defects += d.qty;
+    }
+    for (const d of defectsFound) {
+      if (!d.operationId) continue;
+      const meta = opMeta.get(d.operationId);
+      if (!meta) continue;
+      ensureDayOp(meta).defectsFound += d.qty ?? 0;
+    }
+
+    const norms = await this.loadTimeNorms(Array.from(opAcc.keys()));
+    const operations: MasterEmployeeDayOperationDto[] = Array.from(
+      opAcc.values(),
+    )
+      .map((o) => {
+        const minutes = minutesByOp.get(o.operationId) ?? 0;
+        const normSec = norms.get(o.operationId) ?? null;
+        // План (норма × штуки) к факту (время отрезков). >100% — быстрее
+        // нормы. Без нормы, без штук или без времени — «—», а не 0%.
+        const normPercent =
+          normSec !== null && minutes > 0 && o.qty > 0
+            ? Math.round(((normSec * o.qty) / 60 / minutes) * 100)
+            : null;
+        return {
+          operationId: o.operationId,
+          operationCode: o.operationCode,
+          operationName: o.operationName,
+          category: o.category,
+          minutes,
+          qty: o.qty,
+          defects: o.defects,
+          defectsFound: o.defectsFound,
+          normSec,
+          normPercent,
+        };
+      })
+      .sort((a, b) => b.minutes - a.minutes || b.qty - a.qty);
+
+    const placeRows: MasterEmployeeDayPlaceDto[] = Array.from(places.entries())
+      .map(([key, p]) => ({
+        key,
+        category: p.category,
+        equipmentName: p.equipmentName,
+        equipmentDisplayNumber: p.equipmentDisplayNumber,
+        minutes: p.minutes,
+        share:
+          workedMinutes > 0 ? Math.round((p.minutes / workedMinutes) * 100) : 0,
+        operations: p.operations.size,
+      }))
+      .sort((a, b) => b.minutes - a.minutes);
+
+    const first = myEvents[0]?.employee;
+    return {
+      employeeId: query.employeeId,
+      employeeName: employee?.fullName ?? first?.fullName ?? '—',
+      role: employee?.role ?? first?.role ?? '',
+      date: query.date,
+      now: now.toISOString(),
+      presenceMinutes,
+      workedMinutes,
+      idleMinutes,
+      breaks,
+      utilization:
+        presenceMinutes > 0
+          ? Math.round((workedMinutes / presenceMinutes) * 100)
+          : null,
+      totalQty: myEvents.reduce((s, e) => s + (e.qty ?? 0), 0),
+      totalDefects: myDefects.reduce((s, d) => s + d.qty, 0),
+      totalDefectsFound: defectsFound.reduce((s, d) => s + (d.qty ?? 0), 0),
+      transitions: Math.max(0, segmentDtos.length - 1),
+      hasOpenSegment: segmentDtos.some((s) => s.isOpen),
+      segments: segmentDtos,
+      places: placeRows,
+      operations,
     };
   }
 
@@ -809,6 +1235,46 @@ export class MasterEmployeeStatsService {
       select: { id: true, code: true, name: true },
     });
     return new Map(rows.map((r) => [r.id, { id: r.id, code: r.code, name: r.name }]));
+  }
+
+  /** То же, что `loadOperationMeta`, но с категорией (цвет участка). */
+  private async loadOperationMetaFull(
+    ids: string[],
+  ): Promise<
+    Map<string, { id: string; code: string; name: string; category: string }>
+  > {
+    const unique = Array.from(new Set(ids));
+    if (unique.length === 0) return new Map();
+    const rows = await this.prisma.operation.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, code: true, name: true, category: true },
+    });
+    return new Map(rows.map((r) => [r.id, { ...r, category: r.category }]));
+  }
+
+  /**
+   * Нормы времени операций (сек/шт) для «% выполнения нормы».
+   *
+   * Только `timeNormMode = "FIXED"`: поразмерная норма
+   * (`OperationTimeNormBySize`) к дню не сводится — в дне перемешаны
+   * размеры, а событие `OPERATION_FINISHED` размер не несёт. Для таких
+   * операций отдаём `null`, и UI честно рисует «—» вместо
+   * правдоподобного, но выдуманного процента.
+   */
+  private async loadTimeNorms(ids: string[]): Promise<Map<string, number>> {
+    const unique = Array.from(new Set(ids));
+    if (unique.length === 0) return new Map();
+    const rows = await this.prisma.operation.findMany({
+      where: { id: { in: unique }, timeNormMode: 'FIXED' },
+      select: { id: true, timeNormSec: true },
+    });
+    const out = new Map<string, number>();
+    for (const r of rows) {
+      if (r.timeNormSec !== null && r.timeNormSec > 0) {
+        out.set(r.id, r.timeNormSec);
+      }
+    }
+    return out;
   }
 
   /** Map операций → отсортированный по `qty` убыв. массив DTO. */

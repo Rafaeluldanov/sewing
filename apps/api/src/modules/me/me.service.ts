@@ -47,6 +47,7 @@ import {
   verifyEmployeeQrToken,
 } from '../auth/employee-qr-token.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
+import { closeShiftSegments } from '../shifts/shift-segments.js';
 import { startOfMonthUtc } from '@sewing/shared/payroll-calendar';
 import { resolveEffectiveHourlyRate } from '../salary/salary-rate.js';
 
@@ -214,10 +215,16 @@ export class MeService {
           throw new WorkplaceSwitchConfirmRequiredException();
         }
       }
+      const endedAt = new Date();
       await this.prisma.shiftSession.update({
         where: { id: activeShift.id },
-        data: { endedAt: new Date() },
+        data: { endedAt },
       });
+      // Табель дня (`ShiftSegment`): переход на другой участок закрывает
+      // смену НЕ через `ShiftsService.stop`, поэтому отрезок закрываем
+      // здесь же — иначе он остался бы открытым навсегда и «где был»
+      // показывало бы ВТО до конца времён.
+      await closeShiftSegments(this.prisma, activeShift.id, endedAt);
       closedShiftId = activeShift.id;
     }
 

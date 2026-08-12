@@ -147,6 +147,17 @@
   оборудовании. `employeeId`, `equipmentId`, `operationId`, `startedAt`,
   `endedAt: DateTime?`. Активная смена = `endedAt IS NULL`. Уникальность
   активной смены — partial unique index из миграций.
+- **`ShiftSegment`** — отрезок смены с НЕИЗМЕННОЙ парой «рабочее место
+  + операция»; источник «табеля дня» в кабинете мастера
+  (`GET /api/master/employee-stats/day`). `shiftSessionId` (cascade),
+  `employeeId`, `equipmentId`, `operationId`, `startedAt`,
+  `endedAt: DateTime?`. Нужен потому, что смена меняет операцию на лету
+  (`ShiftsService.switchOperation` перезаписывает `operationId`, не
+  закрывая сессию) — без отрезков всё время смены доставалось бы
+  последней операции. Открытый отрезок = `endedAt IS NULL`, не более
+  одного на смену (partial unique index
+  `shift_segment_open_session_uniq`, заводится в
+  `apps/api/src/prisma/prisma-client-manager.ts`).
 - **`Equipment`** — `code` (uniq), `qrCode` (uniq), `name`,
   `displayNumber: String?` (ручной №). Связи: `EquipmentOperation`,
   `Printer`, `MasterCall`.

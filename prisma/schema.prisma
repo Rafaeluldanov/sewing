@@ -852,6 +852,7 @@ model Operation {
   timeNormsBySize     OperationTimeNormBySize[]
   currentPassports    Passport[]                @relation("PassportCurrentOperation")
   shiftSessions       ShiftSession[]
+  shiftSegments       ShiftSegment[]
   equipmentOperations EquipmentOperation[]
   routeTemplateSteps  RouteTemplateStep[]
   orderRouteSteps     OrderRouteStep[]
@@ -1199,6 +1200,7 @@ model Employee {
   createdAt              DateTime         @default(now())
 
   shiftSessions    ShiftSession[]
+  shiftSegments    ShiftSegment[]
   recutSessions    RecutSession[]
   eventsAsActor    PassportEvent[]  @relation("EventEmployee")
   operationEntries OperationEntry[]
@@ -1403,6 +1405,7 @@ model Equipment {
   createdAt     DateTime @default(now())
 
   shiftSessions     ShiftSession[]
+  shiftSegments     ShiftSegment[]
   recutSessions     RecutSession[]
   allowedOperations EquipmentOperation[]
   passportEvents    PassportEvent[]
@@ -1459,8 +1462,59 @@ model ShiftSession {
   operation Operation @relation(fields: [operationId], references: [id])
 
   recutSessions RecutSession[]
+  segments      ShiftSegment[]
 
   @@index([employeeId, endedAt])
+}
+
+/// Отрезок смены с НЕИЗМЕННОЙ парой «рабочее место + операция» —
+/// источник «табеля дня» в кабинете мастера (`/master`, вкладка
+/// «Сотрудники»: где был, сколько времени, сколько сделал).
+///
+/// Зачем отдельная таблица, а не сама `ShiftSession`: смена умеет
+/// менять операцию на лету (`ShiftsService.switchOperation` —
+/// на одном станке разрешено несколько операций, швея переключается
+/// одним движением, не закрывая смену). `operationId` там
+/// ПЕРЕЗАПИСЫВАЕТСЯ, и от предыдущей операции не остаётся следа: смена
+/// 8 часов с тремя переключениями выглядит как 8 часов последней
+/// операции. Сегмент фиксирует каждый такой отрезок отдельно.
+///
+/// Смена участка (ВТО → ОТК → оверлок) закрывает саму смену
+/// (`MeService.switchWorkplace`), поэтому по участкам время
+/// восстанавливалось и раньше; сегменты дают ту же точность внутри
+/// смены — по операциям.
+///
+/// Инвариант: у смены не более одного открытого сегмента
+/// (`endedAt = null`) — держится partial unique index
+/// `shift_segment_open_session_uniq` (см. `PrismaService`), тем же
+/// приёмом, что «одна активная смена на сотрудника».
+///
+/// `employeeId`/`equipmentId` дублируют поля смены сознательно: табель
+/// и «где был» читают сегменты напрямую, без join'а на сессию, а
+/// оборудование внутри смены не меняется (смена станка = новая смена).
+///
+/// Закрытие пишут ВСЕ точки, где заканчивается смена: `ShiftsService.stop`
+/// (в т.ч. принудительное завершение мастером), `MeService.switchWorkplace`
+/// и техническая смена мастера в `MasterActionsService`.
+model ShiftSegment {
+  id             String    @id @default(cuid())
+  shiftSessionId String
+  employeeId     String
+  equipmentId    String
+  operationId    String
+  startedAt      DateTime  @default(now())
+  /// `null` — сегмент идёт прямо сейчас (длительность считается до
+  /// серверного `now`, как у открытой смены).
+  endedAt        DateTime?
+
+  shiftSession ShiftSession @relation(fields: [shiftSessionId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id])
+  equipment    Equipment    @relation(fields: [equipmentId], references: [id])
+  operation    Operation    @relation(fields: [operationId], references: [id])
+
+  /// Табель за день: сотрудник + окно по `startedAt`.
+  @@index([employeeId, startedAt])
+  @@index([shiftSessionId])
 }
 
 /// «Подкрой» — отдельная хронометрируемая активность раскройщика

@@ -38,6 +38,10 @@ import { PassportsService } from '../passports/passports.service.js';
 import { MeService } from '../me/me.service.js';
 import { isPieceworkEligible } from '../employees/compensation.js';
 import {
+  closeShiftSegments,
+  openShiftSegment,
+} from '../shifts/shift-segments.js';
+import {
   CellInactiveException,
   CellNotFoundException,
   EmployeeQrTokenInvalidException,
@@ -1224,9 +1228,19 @@ export class MasterActionsService {
           equipmentId,
           operationId: target.operationId,
         },
-        select: { id: true },
+        select: { id: true, startedAt: true },
       });
       technicalShiftId = created.id;
+      // Табель дня: техническая смена — такое же время работы мастера,
+      // как обычная смена, и в «где был» должна попадать (см.
+      // `shifts/shift-segments.ts`).
+      await openShiftSegment(this.prisma, {
+        shiftSessionId: created.id,
+        employeeId: actor.employeeId,
+        equipmentId,
+        operationId: target.operationId,
+        at: created.startedAt,
+      });
     }
 
     try {
@@ -1237,10 +1251,12 @@ export class MasterActionsService {
       );
     } finally {
       if (technicalShiftId) {
+        const endedAt = new Date();
         await this.prisma.shiftSession.update({
           where: { id: technicalShiftId },
-          data: { endedAt: new Date() },
+          data: { endedAt },
         });
+        await closeShiftSegments(this.prisma, technicalShiftId, endedAt);
       }
     }
 

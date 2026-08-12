@@ -10,6 +10,8 @@ import type {
   MasterCloseShiftResultDto,
   MasterEmployeeAccessDto,
   MasterEmployeeAccessListDto,
+  MasterEmployeeDayDto,
+  MasterEmployeeDayQuery,
   MasterEmployeeDrillDto,
   MasterEmployeeStatsDrillQuery,
   MasterEmployeeStatsDto,
@@ -37,6 +39,19 @@ export function getMasterEmployeeStatsDrill(
       to: query.to,
       employeeId: query.employeeId,
     },
+  });
+}
+
+/**
+ * «Табель дня»: отрезки смен, участки и выработка сотрудника за одни
+ * московские сутки (`MasterEmployeeStatsService.getDay`).
+ */
+export function getMasterEmployeeDay(
+  query: MasterEmployeeDayQuery,
+): Promise<MasterEmployeeDayDto> {
+  return apiFetch<MasterEmployeeDayDto>('/master/employee-stats/day', {
+    cache: 'no-store',
+    searchParams: { employeeId: query.employeeId, date: query.date },
   });
 }
 

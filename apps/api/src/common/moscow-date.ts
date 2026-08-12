@@ -25,3 +25,27 @@ export function moscowDateParts(now: Date = new Date()): {
   const [y, m, d] = iso.split('-');
   return { yyyy: Number(y), mm: m, dd: d };
 }
+
+/** `YYYY-MM-DD` по Москве (тот же формат, что шлёт UI). */
+export function moscowDayKey(now: Date = new Date()): string {
+  const { yyyy, mm, dd } = moscowDateParts(now);
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Границы московских суток для `YYYY-MM-DD`: `[from; to)`.
+ *
+ * Смещение зашито как `+03:00`: Москва живёт без перехода на летнее
+ * время с 2014 года, поэтому вычислять его через `Intl` не нужно
+ * (и нечем — обратного преобразования «локальное время зоны → UTC» в
+ * стандартном `Intl` нет).
+ *
+ * Полуоткрытый интервал, а не «конец дня 23:59:59.999»: смена,
+ * начавшаяся ровно в полночь, должна попасть в новый день ровно один
+ * раз. Сравнения на бэке — `gte: from, lt: to`.
+ */
+export function moscowDayWindow(day: string): { from: Date; to: Date } {
+  const from = new Date(`${day}T00:00:00.000+03:00`);
+  const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
+  return { from, to };
+}

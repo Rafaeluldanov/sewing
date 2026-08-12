@@ -19692,72 +19692,12 @@ body:has(.admin-layout) .app-header { display: none !important; }
   color: inherit;
 }
 
-.mstat__table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.mstat__table th {
-  text-align: left;
-  padding: 6px 8px;
-  border-bottom: 2px solid var(--color-border);
-  color: var(--color-text-muted, #5f5f5c);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.mstat__table td {
-  padding: 8px;
-  border-bottom: 1px solid var(--color-border);
-  vertical-align: middle;
-}
-.mstat__table th.mstat__num,
-.mstat__table td.mstat__num {
-  text-align: right;
-  white-space: nowrap;
-  width: 1%;
-}
-.mstat__row {
-  cursor: pointer;
-}
-.mstat__row:hover,
-.mstat__row:focus-visible {
-  background: var(--color-bg-muted);
-  outline: none;
-}
 .mstat__name {
   font-weight: 600;
 }
 .mstat__role {
   font-size: 11px;
   color: var(--color-text-muted, #5f5f5c);
-}
-.mstat__td-ops {
-  max-width: 360px;
-}
-.mstat__ops {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.mstat__op-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
-  border-radius: 6px;
-  background: var(--color-accent-soft);
-  color: var(--color-accent-fg);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.mstat__op-def {
-  color: var(--color-danger-fg);
-  font-weight: 700;
-  margin-left: 3px;
-}
-.mstat__op-more {
-  font-size: 11px;
-  color: var(--color-text-muted, #5f5f5c);
-  align-self: center;
 }
 .mstat__def {
   color: var(--color-danger-fg);
@@ -19968,6 +19908,535 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 .mstat__shift-cancel:hover:not(:disabled) {
   background: var(--color-bg-muted);
+}
+/* Вход в табель дня из карточки открытой смены (второй вход, помимо
+   тапа по карточке в «Статистике»). */
+.mstat__shift-day {
+  appearance: none;
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-fg);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* -----------------------------------------------------------------------
+ * Палитра участков (`OperationCategory`) — общая для мини-ленты в
+ * списке и для табеля дня. Проверена на различимость при дальтонизме
+ * (deutan/tritan ΔE ≥ 8): подряд идущие отрезки разных участков
+ * читаются как разные, а не как «одна длинная полоса».
+ *
+ * `--u-*` объявлены на `.mstat` и `.mday` (а не в `:root`), чтобы
+ * палитра оставалась локальной для кабинета мастера.
+ * ----------------------------------------------------------------------- */
+
+.mstat,
+.mday {
+  --u-sewing: #2f7fd1;
+  --u-ironing: #d59a17;
+  --u-qc: #1f7a3d;
+  --u-packing: #b5479b;
+  --u-cutting: #7a6250;
+  --u-other: #8a8a86;
+  --u-gap: repeating-linear-gradient(
+    135deg,
+    #e6e6e3 0 5px,
+    #d4d4d0 5px 10px
+  );
+}
+.is-sewing {
+  background: var(--u-sewing);
+}
+.is-ironing {
+  background: var(--u-ironing);
+}
+.is-qc {
+  background: var(--u-qc);
+}
+.is-packing {
+  background: var(--u-packing);
+}
+.is-cutting {
+  background: var(--u-cutting);
+}
+.is-other {
+  background: var(--u-other);
+}
+
+/* -----------------------------------------------------------------------
+ * Список сотрудников карточками (режим «Статистика»).
+ *
+ * Не таблица: кабинет мастера — терминал шириной до 720px
+ * (`.master-page`), и пять колонок на телефоне не читались.
+ * ----------------------------------------------------------------------- */
+
+.mstat__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mstat__card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--tap-min, 48px);
+  padding: 10px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.mstat__card:hover {
+  background: var(--color-bg-muted);
+}
+.mstat__card:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.mstat__card.is-live {
+  border-color: var(--color-accent);
+}
+.mstat__card-in {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.mstat__card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mstat__live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--color-ok);
+}
+/* Мини-лента дня: абсолютные отрезки на общей для списка шкале. */
+.mstat__mini {
+  position: relative;
+  display: block;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--color-bg-muted);
+  overflow: hidden;
+}
+.mstat__mini i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+}
+.mstat__card-nums {
+  font-size: 13px;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.mstat__card-nums b {
+  color: var(--color-fg-strong);
+}
+.mstat__card-warn {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-warn-fg);
+}
+.mstat__card-chev {
+  color: var(--color-fg-subtle);
+  font-size: 18px;
+}
+
+/* -----------------------------------------------------------------------
+ * Шторка «Табель дня» (`employee-day-sheet.tsx`): где был, сколько
+ * времени, сколько сделал. Геометрия — как у `.master-actions-sheet`
+ * (полноэкранная карточка снизу), чтобы у мастера был один и тот же
+ * жест для всех шторок кабинета.
+ * ----------------------------------------------------------------------- */
+
+.mday {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+  background: rgba(15, 15, 15, 0.45);
+}
+.mday__card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 720px;
+  max-height: 92vh;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--color-bg-soft);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.mday__head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--color-bg-card);
+  border-bottom: 1px solid var(--color-border);
+}
+.mday__back {
+  appearance: none;
+  align-self: flex-start;
+  min-height: 36px;
+  padding: 0 8px 0 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-fg);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.mday__head-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.mday__id {
+  flex: 1;
+  min-width: 0;
+}
+.mday__name {
+  font-size: var(--title-item);
+  font-weight: 700;
+  color: var(--color-fg-strong);
+}
+.mday__live {
+  font-size: 12px;
+  color: var(--color-ok-fg);
+  font-weight: 700;
+}
+.mday__live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-ok);
+}
+.mday__x {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-fg-muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.mday__datebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mday__nav {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-fg);
+  font-size: 17px;
+  cursor: pointer;
+}
+.mday__date {
+  flex: 1;
+  text-align: center;
+  font-weight: 700;
+}
+.mday__kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.mday__kpi {
+  background: var(--color-bg-card);
+  padding: 8px 10px;
+}
+.mday__kpi-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+}
+.mday__kpi-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-fg-strong);
+  font-variant-numeric: tabular-nums;
+}
+.mday__kpi.is-bad .mday__kpi-value {
+  color: var(--color-danger-fg);
+}
+.mday__unit {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-fg-muted);
+}
+.mday__kpi-hint {
+  font-size: 11px;
+  color: var(--color-fg-muted);
+}
+.mday__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px calc(env(safe-area-inset-bottom, 0px) + 20px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mday__section {
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+}
+.mday__h {
+  margin: 0 0 10px;
+  font-size: var(--title-section);
+  font-weight: 700;
+}
+.mday__note {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-fg-subtle);
+}
+
+/* «Где был» */
+.mday__places {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.mday__place {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  align-items: baseline;
+}
+.mday__place-name {
+  font-size: 13px;
+}
+.mday__place-time {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.mday__place-bar {
+  grid-column: 1 / -1;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  overflow: hidden;
+}
+.mday__place-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+}
+.mday__place-share {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--color-fg-subtle);
+}
+
+/* Вертикальная лента дня: высота строки = длительность отрезка. */
+.mday__lane {
+  display: flex;
+  flex-direction: column;
+}
+.mday__row {
+  display: grid;
+  grid-template-columns: 46px 14px minmax(0, 1fr);
+  gap: 9px;
+}
+.mday__row-time {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.mday__row-bar {
+  position: relative;
+}
+.mday__row-bar i {
+  position: absolute;
+  inset: 3px 1px;
+  border-radius: 4px;
+  display: block;
+}
+.mday__row.is-sewing .mday__row-bar i {
+  background: var(--u-sewing);
+}
+.mday__row.is-ironing .mday__row-bar i {
+  background: var(--u-ironing);
+}
+.mday__row.is-qc .mday__row-bar i {
+  background: var(--u-qc);
+}
+.mday__row.is-packing .mday__row-bar i {
+  background: var(--u-packing);
+}
+.mday__row.is-cutting .mday__row-bar i {
+  background: var(--u-cutting);
+}
+.mday__row.is-other .mday__row-bar i {
+  background: var(--u-other);
+}
+.mday__row.is-gap .mday__row-bar i {
+  inset: 3px 4px;
+  background: var(--u-gap);
+}
+.mday__row-body {
+  padding-bottom: 4px;
+  min-width: 0;
+}
+.mday__row-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-fg-strong);
+}
+.mday__row-meta {
+  display: block;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+.mday__row.is-gap .mday__row-title {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--color-fg-muted);
+}
+.mday__tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--color-ok-soft);
+  color: var(--color-ok-fg);
+}
+
+/* «По операциям» — карточками, не таблицей (см. ширину терминала). */
+.mday__ops {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.mday__op {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.mday__op-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mday__dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 3px;
+}
+.mday__op-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-fg-strong);
+}
+.mday__op-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 7px;
+}
+.mday__metric-k {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+}
+.mday__metric-v {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.mday__norm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+.mday__norm-k {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-warn-fg);
+}
+.mday__norm-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  overflow: hidden;
+}
+.mday__norm-bar i {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+}
+.mday__norm-bar i.is-ok {
+  background: var(--color-ok);
+}
+.mday__norm-bar i.is-low {
+  background: var(--color-warn);
+}
+.mday__norm-ok {
+  color: var(--color-ok-fg);
+  font-weight: 700;
+}
+.mday__norm-low {
+  color: var(--color-warn-fg);
+  font-weight: 700;
+}
+.mday__total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 2px solid var(--color-border-strong);
+  font-weight: 700;
 }
 
 /* -----------------------------------------------------------------------
