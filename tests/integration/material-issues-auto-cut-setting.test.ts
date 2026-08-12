@@ -36,6 +36,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — material issues auto cut gate (CompanySettings.autoIssueMaterialsOnCutRelease)', () => {
   let t: TestApp;
@@ -76,24 +77,18 @@ describeWithDb('integration — material issues auto cut gate (CompanySettings.a
     quotedPrice?: string;
     quotedCurrency?: string;
   }): Promise<{ orderId: string; passportId: string; workshopNeedId: string }> {
-    const tcSuffix = Math.random().toString(36).slice(2, 7).toUpperCase();
-    const tc = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', cookies.manager)
-      .send({
-        code: `TC-AUTO-GATE-${tcSuffix}`,
-        name: 'Auto cut gate demo',
-        materialLines: [
-          {
-            name: 'Кулирка чёрная',
-            unit: 'кг',
-            qtyPerUnit: '0.5',
-            materialRole: 'MAIN_FABRIC',
-            colorRule: 'ORDER_COLOR',
-          },
-        ],
-      })
-      .expect(201);
+    const rollSuffix = Math.random().toString(36).slice(2, 7).toUpperCase();
+    const spec = await createSpecPattern(t, cookies.manager, {
+      materialLines: [
+        {
+          name: 'Кулирка чёрная',
+          unit: 'кг',
+          qtyPerUnit: '0.5',
+          materialRole: 'MAIN_FABRIC',
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
 
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
@@ -103,7 +98,7 @@ describeWithDb('integration — material issues auto cut gate (CompanySettings.a
         productId: seed.product.id,
         color: 'Чёрный',
         items: [{ sizeId: seed.sizes.M, qtyPlan: opts.qtyPlan }],
-        techCardId: tc.body.id,
+        patternItemId: spec.id,
       })
       .expect(201);
     const orderId: string = order.body.id;
@@ -139,7 +134,7 @@ describeWithDb('integration — material issues auto cut gate (CompanySettings.a
       .send({
         orderId,
         sizeId: seed.sizes.M,
-        rollNumber: `R-AUTO-GATE-${tcSuffix}`,
+        rollNumber: `R-AUTO-GATE-${rollSuffix}`,
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: opts.qtyCut,
         cutterId: seed.employees.cutter.id,

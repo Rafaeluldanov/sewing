@@ -33,15 +33,12 @@ interface Props {
   categoryName: string;
   /** Сколько номенклатуры уедет в архив вместе с группой. */
   patternsCount: number;
-  /** Сколько техкарт останется без группы. */
-  techCardsCount: number;
 }
 
 export function DeleteCategoryChipButton({
   categoryId,
   categoryName,
   patternsCount,
-  techCardsCount,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -49,11 +46,7 @@ export function DeleteCategoryChipButton({
   const handleClick = () => {
     if (
       !window.confirm(
-        buildCategoryDeleteConfirmText(
-          categoryName,
-          patternsCount,
-          techCardsCount,
-        ),
+        buildCategoryDeleteConfirmText(categoryName, patternsCount),
       )
     ) {
       return;

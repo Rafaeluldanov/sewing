@@ -5,11 +5,11 @@
  *
  * Acceptance criteria:
  *   1. category-driven заказ НЕ создаёт лишних строк WorkshopNeed
- *      из техкарты;
+ *      из спецификации;
  *   2. потребность создаётся только по заполненным параметрам
  *      номенклатуры (PARAMETER_NORM / SIZE_PARAMETER_VALUE /
  *      MATERIAL_AREA);
- *   3. техкарта обогащает description строки потребности (фабрик,
+ *   3. спецификация обогащает description строки потребности (фабрик,
  *      ширина, плотность, размер фурнитуры, материал, цвет, картинка),
  *      но НЕ является источником количества;
  *   4. фурнитура (PACKAGING) получает в потребность размер /
@@ -17,10 +17,10 @@
  *   5. для `colorRule = ORDER_SELECTED_COLOR` без selectedColorText
  *      есть warning «Цвет нужно указать в заказе»;
  *   6. legacy-заказ без категории / без параметров продолжает считать
- *      по техкарте, как раньше.
+ *      по спецификации заказа, как раньше.
  *
  * Базовый seed: `seedMinimal` (admin + один продукт + размеры
- * S/M/L). Категории / лекала / техкарты создаём в каждом тесте
+ * S/M/L). Категории / лекала / спецификации создаём в каждом тесте
  * через REST API — это даёт sanity-проверку, что валидация / RBAC
  * на этих эндпоинтах отрабатывает по тому же контракту.
  */
@@ -34,6 +34,11 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import {
+  copySpecLinesTo,
+  createSpecPattern,
+  type SpecLineInput,
+} from '../utils/spec';
 
 interface CategoryWithParams {
   id: string;
@@ -182,30 +187,35 @@ describeWithDb('integration — workshop needs category-driven', () => {
     return r.body.id as string;
   }
 
-  let tcCounter = 0;
-  async function createTechCard(body: {
+  let specCounter = 0;
+  /**
+   * Этап 5 «техкарты → номенклатура»: состав материалов заводится
+   * спецификацией на отдельной карточке-«доноре», а `createOrder`
+   * копирует её строки на лекало заказа (карточка у заказа одна).
+   */
+  async function createSpec(body: {
     name: string;
-    materialLines: Array<Record<string, unknown>>;
+    materialLines: SpecLineInput[];
   }): Promise<string> {
-    tcCounter += 1;
-    const r = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', t.adminCookie)
-      .send({
-        code: `TC-CAT-DRV-${tcCounter}`,
-        name: body.name,
-        materialLines: body.materialLines,
-      })
-      .expect(201);
-    return r.body.id as string;
+    specCounter += 1;
+    const spec = await createSpecPattern(t, t.adminCookie, {
+      article: `SPEC-CAT-DRV-${specCounter}`,
+      name: body.name,
+      materialLines: body.materialLines,
+    });
+    return spec.id;
   }
 
   async function createOrder(opts: {
-    techCardId: string;
+    specPatternId: string;
     patternItemId: string | null;
     items: Array<{ sizeId: string; qtyPlan: number }>;
     color?: string | null;
   }): Promise<string> {
+    const patternItemId = opts.patternItemId ?? opts.specPatternId;
+    if (patternItemId !== opts.specPatternId) {
+      await copySpecLinesTo(t, opts.specPatternId, patternItemId);
+    }
     const r = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', t.adminCookie)
@@ -213,8 +223,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
         orderDate: '2026-04-15T00:00:00.000Z',
         productId: seed.product.id,
         items: opts.items,
-        techCardId: opts.techCardId,
-        patternItemId: opts.patternItemId ?? undefined,
+        patternItemId,
         color: opts.color ?? undefined,
       })
       .expect(201);
@@ -222,7 +231,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
   }
 
   // -------------------------------------------------------------------------
-  // Scenario A: no extra techcard-only lines
+  // Scenario A: no extra spec-only lines
   // -------------------------------------------------------------------------
 
   test('category-driven: строки спецификации без нормы всё равно попадают в потребность', async () => {
@@ -256,12 +265,12 @@ describeWithDb('integration — workshop needs category-driven', () => {
       .expect(200);
     // LINING (Подкладка) — пусто, никаких значений не сохраняем.
 
-    // 3. Техкарта: четыре строки — MAIN_FABRIC (Дюспа), LINING (Тафта),
+    // 3. Спецификация: четыре строки — MAIN_FABRIC (Дюспа), LINING (Тафта),
     //    FILLER (Синтепон), PACKAGING (Молния). По нашей бизнес-логике
     //    в потребность должны попасть ТОЛЬКО MAIN_FABRIC и PACKAGING —
     //    то есть строки, под которые есть заполненный параметр в
     //    номенклатуре. Тафта и Синтепон НЕ должны попасть.
-    const tcId = await createTechCard({
+    const specId = await createSpec({
       name: 'TC scenario A',
       materialLines: [
         {
@@ -303,7 +312,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
     });
 
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
       color: 'бордо',
@@ -351,7 +360,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
     expect(needs.filter((n) => n.materialRole === 'MAIN_FABRIC')).toHaveLength(1);
     expect(needs.filter((n) => n.materialRole === 'PACKAGING')).toHaveLength(1);
 
-    // 4b. Описание основного полотна обогащено из техкарты (Дюспа,
+    // 4b. Описание основного полотна обогащено из спецификации (Дюспа,
     //     90 г/м², бордо, ширина 140 см).
     const main2 = needs.find((n) => n.materialRole === 'MAIN_FABRIC');
     expect(main2).toBeDefined();
@@ -392,7 +401,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
       .send({ norms: [{ categoryParameterId: molnija.id, qtyPerItem: '1' }] })
       .expect(200);
 
-    const tcId = await createTechCard({
+    const specId = await createSpec({
       name: 'TC multi-role',
       materialLines: [
         {
@@ -408,7 +417,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
     });
 
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 500 }],
       color: 'чёрный',
@@ -455,14 +464,14 @@ describeWithDb('integration — workshop needs category-driven', () => {
 
     // Единственная строка роли PACKAGING в спецификации — ШНУР в метрах.
     // Норма номенклатуры при этом штучная.
-    const tcId = await createTechCard({
+    const specId = await createSpec({
       name: 'TC unit mismatch',
       materialLines: [
         { name: 'Шнур', unit: 'м', qtyPerUnit: '1.2', materialRole: 'PACKAGING' },
       ],
     });
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 500 }],
       color: 'чёрный',
@@ -503,7 +512,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
   // -------------------------------------------------------------------------
 
   test('фурнитура с ORDER_SELECTED_COLOR без selectedColorText → calculationNote-warning', async () => {
-    // Заводим только PACKAGING-параметр + техкарта-строку с ORDER_SELECTED_COLOR.
+    // Заводим только PACKAGING-параметр + строку спецификации с ORDER_SELECTED_COLOR.
     catCounter += 1;
     const cat = await request(t.app.getHttpServer())
       .post('/api/pattern-categories')
@@ -537,7 +546,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
       })
       .expect(200);
 
-    const tcId = await createTechCard({
+    const specId = await createSpec({
       name: 'TC scenario C',
       materialLines: [
         {
@@ -552,7 +561,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
       ],
     });
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
       color: null,
@@ -609,12 +618,12 @@ describeWithDb('integration — workshop needs category-driven', () => {
       })
       .expect(200);
 
-    const tcId = await createTechCard({
+    const specId = await createSpec({
       name: 'TC scenario D',
       materialLines: [{ name: 'placeholder', unit: 'шт', qtyPerUnit: '1' }],
     });
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
     });
@@ -668,19 +677,19 @@ describeWithDb('integration — workshop needs category-driven', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario E: legacy techcard still works
+  // Scenario E: legacy spec still works
   // -------------------------------------------------------------------------
 
-  test('legacy: заказ без категории и без параметров продолжает считать по техкарте', async () => {
+  test('legacy: заказ без категории и без параметров продолжает считать по спецификации', async () => {
     // Лекало без категории.
     const patternId = await createPattern({
       categoryId: null,
       article: 'P-LEGACY-E',
     });
 
-    // Старая техкарта в стиле «материал + материал», БЕЗ привязок
+    // Спецификация в старом стиле «материал + материал», БЕЗ привязок
     // к новым полям (только базовые qtyPerUnit + название).
-    const tcId = await createTechCard({
+    const specId = await createSpec({
       name: 'TC legacy',
       materialLines: [
         { name: 'Нитки', unit: 'м', qtyPerUnit: '120' },
@@ -689,7 +698,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
     });
 
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 50 }],
     });
@@ -705,13 +714,13 @@ describeWithDb('integration — workshop needs category-driven', () => {
       sourceName: string;
       calculatedQty: string;
     }>;
-    // Обе строки техкарты создают потребность (legacy mode).
+    // Обе строки спецификации создают потребность (legacy mode).
     expect(needs).toHaveLength(2);
     const byName = new Map(needs.map((n) => [n.sourceName, n]));
-    // Этап «Указать в заказе» (см. ТЗ §2): snapshot
-    // `OrderMaterialRequirement[]` теперь создаётся уже в
+    // Снимок `OrderMaterialRequirement[]` создаётся уже в
     // `OrdersService.create()`, поэтому при расчёте источник
-    // строк — `ORDER_MATERIAL_REQUIREMENT` (а не live-техкарта).
+    // строк — `ORDER_MATERIAL_REQUIREMENT` (live-фолбэк по
+    // спецификации удалён этапом 5 «техкарты → номенклатура»).
     // Семантика расчёта не меняется: snapshot содержит те же
     // qtyPerUnit / unit / role.
     expect(byName.get('Нитки')?.sourceType).toBe(
@@ -729,7 +738,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
   // тоже legacy (см. ТЗ §«Для legacy заказов / legacy номенклатур»).
   // -------------------------------------------------------------------------
 
-  test('legacy fallback: pattern с categoryId, но БЕЗ заполненных параметров — техкарта по-прежнему создаёт строки', async () => {
+  test('legacy fallback: pattern с categoryId, но БЕЗ заполненных параметров — спецификация по-прежнему создаёт строки', async () => {
     const cat = await createCategoryFull();
     const patternId = await createPattern({
       categoryId: cat.id,
@@ -737,12 +746,12 @@ describeWithDb('integration — workshop needs category-driven', () => {
     });
     // Никаких parameter-norms / size-parameter-values / materialAreas
     // не заполняем.
-    const tcId = await createTechCard({
+    const specId = await createSpec({
       name: 'TC legacy with cat',
       materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '5' }],
     });
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
     });
@@ -822,7 +831,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
 
     // Строка ведётся в закупочной «кг»: ширина и плотность на ней и есть
     // мост из погонных метров в вес.
-    const tcId = await createTechCard({
+    const specId = await createSpec({
       name: 'TC norm edit',
       materialLines: [
         {
@@ -837,7 +846,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
       ],
     });
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
     });
@@ -892,14 +901,14 @@ describeWithDb('integration — workshop needs category-driven', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario: параметр лекала, под который строки в техкарте НЕТ
+  // Scenario: параметр лекала, под который строки в спецификации НЕТ
   // -------------------------------------------------------------------------
 
   /**
    * Засада, ради которой тест написан (заказ 02-00015, 10.08.2026).
    *
    * «Рибана» и «Кашкорсе» ведутся поразмерными метрами в карточке
-   * номенклатуры, а техкарта их не описывает — строк под них там нет. До
+   * номенклатуры, а спецификация их не описывает — строк под них там нет. До
    * правки такой материал в спецификацию заказа не попадал: в расцветке его
    * не видно, убрать из заказа нечем — а в потребность он шёл. Менеджер
    * оставил в составе 9 строк, в закупку уезжало 11, и вернуть их к согласию
@@ -909,7 +918,7 @@ describeWithDb('integration — workshop needs category-driven', () => {
    * узнать по роли; как только их два, поиск по роли отдаёт соседнюю строку,
    * и удаление одного параметра перестало бы что-либо значить.
    */
-  test('параметр лекала без строки в техкарте: виден в составе заказа и гасится его удалением', async () => {
+  test('параметр лекала без строки в спецификации: виден в составе заказа и гасится его удалением', async () => {
     catCounter += 1;
     const catRes = await request(t.app.getHttpServer())
       .post('/api/pattern-categories')
@@ -967,8 +976,8 @@ describeWithDb('integration — workshop needs category-driven', () => {
       })
       .expect(200);
 
-    // Техкарта описывает ТОЛЬКО полотно — рибаны и кашкорсе в ней нет.
-    const tcId = await createTechCard({
+    // Спецификация описывает ТОЛЬКО полотно — рибаны и кашкорсе в ней нет.
+    const specId = await createSpec({
       name: 'TC rib-less',
       materialLines: [
         {
@@ -984,13 +993,13 @@ describeWithDb('integration — workshop needs category-driven', () => {
       ],
     });
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
       color: 'серый',
     });
 
-    // 1. Состав заказа: параметры без строки техкарты посеяны наравне с ней.
+    // 1. Состав заказа: параметры без строки спецификации посеяны наравне с ней.
     const specRes = await request(t.app.getHttpServer())
       .get(`/api/orders/${orderId}/tech-card-parameters`)
       .set('Cookie', t.adminCookie)

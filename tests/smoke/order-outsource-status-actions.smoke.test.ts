@@ -109,12 +109,6 @@ describe('backend — orders.service composes display + transitions', () => {
     expect(src).toMatch(/receivedAt:\s*new Date\(\)/);
   });
 
-  test('start() кладёт executionStatus=PLANNED в snapshot', () => {
-    const src = readSrc('apps/api/src/modules/orders/orders.service.ts');
-    expect(src).toMatch(
-      /executionStatus:\s*OrderOutsourceExecutionStatus\.PLANNED/,
-    );
-  });
 });
 
 describe('backend — controller exposes status action endpoint', () => {

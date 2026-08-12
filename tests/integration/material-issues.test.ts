@@ -43,6 +43,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — material issues (фактический расход)', () => {
   let t: TestApp;
@@ -70,32 +71,26 @@ describeWithDb('integration — material issues (фактический расх
 
   /**
    * Создаёт минимальный заказ с одной потребностью цеха
-   * (через QTY_PER_UNIT-fallback из техкарты). Возвращает
-   * `{ orderId, workshopNeedId }`. Без запуска заказа в производство
-   * — для тестов расхода материалов производственный статус не
-   * нужен.
+   * (через QTY_PER_UNIT-fallback из спецификации номенклатуры).
+   * Возвращает `{ orderId, workshopNeedId }`. Без запуска заказа
+   * в производство — для тестов расхода материалов
+   * производственный статус не нужен.
    */
   async function prepareOrderWithNeed(): Promise<{
     orderId: string;
     workshopNeedId: string;
   }> {
-    const tc = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', cookies.manager)
-      .send({
-        code: `TC-MI-${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
-        name: 'Material issue demo',
-        materialLines: [
-          {
-            name: 'Кулирка чёрная',
-            unit: 'кг',
-            qtyPerUnit: '0.5',
-            materialRole: 'MAIN_FABRIC',
-            colorRule: 'ORDER_COLOR',
-          },
-        ],
-      })
-      .expect(201);
+    const spec = await createSpecPattern(t, cookies.manager, {
+      materialLines: [
+        {
+          name: 'Кулирка чёрная',
+          unit: 'кг',
+          qtyPerUnit: '0.5',
+          materialRole: 'MAIN_FABRIC',
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
 
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
@@ -105,7 +100,7 @@ describeWithDb('integration — material issues (фактический расх
         productId: seed.product.id,
         color: 'Чёрный',
         items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
-        techCardId: tc.body.id,
+        patternItemId: spec.id,
       })
       .expect(201);
 

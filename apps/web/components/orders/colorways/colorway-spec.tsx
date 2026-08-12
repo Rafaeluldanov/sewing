@@ -547,7 +547,7 @@ export function ColorwaySpec({
       <SpecStyles />
       {group.techCardName && (
         <p className="cws-muted cws-tpl">
-          Из шаблона: <strong>{group.techCardName}</strong> — дальше список
+          Из номенклатуры: <strong>{group.techCardName}</strong> — дальше список
           живёт в заказе, правки шаблона сюда не протекают.
         </p>
       )}

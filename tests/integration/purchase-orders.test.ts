@@ -38,6 +38,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — purchase orders (Этап 6А)', () => {
   let t: TestApp;
@@ -482,8 +483,8 @@ async function prepareSingleNeedFixture(
     currency: 'RUB',
   });
 
-  const tcId = await createSimpleTechCard(t, cookie, 'TC-PO-1');
-  const orderId = await createOrderWithTc(t, seed, cookie, tcId);
+  const specId = await createSimpleSpecPattern(t, cookie, 'TC-PO-1');
+  const orderId = await createOrderWithSpec(t, seed, cookie, specId);
 
   const calc = await request(t.app.getHttpServer())
     .post(`/api/orders/${orderId}/workshop-needs/calculate`)
@@ -535,8 +536,8 @@ async function prepareTwoNeedsFixture(
     lastPrice: '2.00',
   });
 
-  const tcId = await createTwoLineTechCard(t, cookie, 'TC-PO-2');
-  const orderId = await createOrderWithTc(t, seed, cookie, tcId);
+  const specId = await createTwoLineSpecPattern(t, cookie, 'TC-PO-2');
+  const orderId = await createOrderWithSpec(t, seed, cookie, specId);
 
   const calc = await request(t.app.getHttpServer())
     .post(`/api/orders/${orderId}/workshop-needs/calculate`)
@@ -590,8 +591,8 @@ async function prepareTwoNeedsDifferentSuppliersFixture(
     name: 'B-1',
     unit: 'шт',
   });
-  const tcId = await createTwoLineTechCard(t, cookie, 'TC-PO-3');
-  const orderId = await createOrderWithTc(t, seed, cookie, tcId);
+  const specId = await createTwoLineSpecPattern(t, cookie, 'TC-PO-3');
+  const orderId = await createOrderWithSpec(t, seed, cookie, specId);
   const calc = await request(t.app.getHttpServer())
     .post(`/api/orders/${orderId}/workshop-needs/calculate`)
     .set('Cookie', cookie)
@@ -630,10 +631,10 @@ async function prepareTwoNeedsDifferentOrdersFixture(
     unit: 'м',
   });
 
-  const tc1 = await createSimpleTechCard(t, cookie, 'TC-PO-4-A');
-  const tc2 = await createSimpleTechCard(t, cookie, 'TC-PO-4-B');
-  const order1 = await createOrderWithTc(t, seed, cookie, tc1);
-  const order2 = await createOrderWithTc(t, seed, cookie, tc2);
+  const spec1 = await createSimpleSpecPattern(t, cookie, 'TC-PO-4-A');
+  const spec2 = await createSimpleSpecPattern(t, cookie, 'TC-PO-4-B');
+  const order1 = await createOrderWithSpec(t, seed, cookie, spec1);
+  const order2 = await createOrderWithSpec(t, seed, cookie, spec2);
   const calc1 = await request(t.app.getHttpServer())
     .post(`/api/orders/${order1}/workshop-needs/calculate`)
     .set('Cookie', cookie)
@@ -693,48 +694,42 @@ async function createCatalogItem(
   return r.body.id as string;
 }
 
-async function createSimpleTechCard(
+// Справочника техкарт больше нет: состав материалов даёт спецификация
+// карточки номенклатуры, заказ создаётся с patternItemId.
+async function createSimpleSpecPattern(
   t: TestApp,
   cookie: string,
   code: string,
 ): Promise<string> {
-  const r = await request(t.app.getHttpServer())
-    .post('/api/tech-cards')
-    .set('Cookie', cookie)
-    .send({
-      code,
-      name: code,
-      materialLines: [{ name: 'Кулирка', unit: 'м', qtyPerUnit: '0.5' }],
-    })
-    .expect(201);
-  return r.body.id as string;
+  const { id } = await createSpecPattern(t, cookie, {
+    name: code,
+    article: code,
+    materialLines: [{ name: 'Кулирка', unit: 'м', qtyPerUnit: '0.5' }],
+  });
+  return id;
 }
 
-async function createTwoLineTechCard(
+async function createTwoLineSpecPattern(
   t: TestApp,
   cookie: string,
   code: string,
 ): Promise<string> {
-  const r = await request(t.app.getHttpServer())
-    .post('/api/tech-cards')
-    .set('Cookie', cookie)
-    .send({
-      code,
-      name: code,
-      materialLines: [
-        { name: 'Нитки', unit: 'м', qtyPerUnit: '120' },
-        { name: 'Пуговицы', unit: 'шт', qtyPerUnit: '4' },
-      ],
-    })
-    .expect(201);
-  return r.body.id as string;
+  const { id } = await createSpecPattern(t, cookie, {
+    name: code,
+    article: code,
+    materialLines: [
+      { name: 'Нитки', unit: 'м', qtyPerUnit: '120' },
+      { name: 'Пуговицы', unit: 'шт', qtyPerUnit: '4' },
+    ],
+  });
+  return id;
 }
 
-async function createOrderWithTc(
+async function createOrderWithSpec(
   t: TestApp,
   seed: SeedResult,
   cookie: string,
-  techCardId: string,
+  patternItemId: string,
 ): Promise<string> {
   const r = await request(t.app.getHttpServer())
     .post('/api/orders')
@@ -743,7 +738,7 @@ async function createOrderWithTc(
       orderDate: '2026-04-15T00:00:00.000Z',
       productId: seed.product.id,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 50 }],
-      techCardId,
+      patternItemId,
     })
     .expect(201);
   return r.body.id as string;

@@ -42,9 +42,9 @@ describe('потребности: убранный из заказа матер�
     const src = read(SERVICE);
     // Привязка доезжает из снимка в SourceLine…
     expect(src).toContain('qtySourceRef: r.qtySourceRef');
-    // …и live-техкарта её не имеет (там правок заказа нет по определению).
-    expect(src).toContain('qtySourceRef: null');
-    // …и по ней принимается решение.
+    // …и по ней принимается решение. (Этап 5 «техкарты → номенклатура»:
+    // live-техкарты с её `qtySourceRef: null` больше нет — источник один,
+    // снимок заказа.)
     expect(src).toMatch(/qtySourceRef === norm\.id/);
   });
 

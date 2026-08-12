@@ -191,10 +191,6 @@ function parseVariantsJson(form: FormData): CreateOrderDto['variants'] {
     const rec = v as Record<string, unknown>;
     const color = typeof rec.color === 'string' ? rec.color.trim() : '';
     if (color === '') continue;
-    const techCardId =
-      typeof rec.techCardId === 'string' && rec.techCardId.length > 0
-        ? rec.techCardId
-        : null;
     const sizesRaw = Array.isArray(rec.sizes) ? rec.sizes : [];
     const sizes: { sizeId: string; qtyPlan: number }[] = [];
     for (const s of sizesRaw) {
@@ -205,7 +201,7 @@ function parseVariantsJson(form: FormData): CreateOrderDto['variants'] {
         typeof sr.qtyPlan === 'number' ? Math.trunc(sr.qtyPlan) : 0;
       if (sizeId !== '' && qtyPlan > 0) sizes.push({ sizeId, qtyPlan });
     }
-    if (sizes.length > 0) out.push({ color, techCardId, sizes });
+    if (sizes.length > 0) out.push({ color, sizes });
   }
   return out.length > 0 ? out : undefined;
 }
@@ -270,10 +266,8 @@ function buildCreateDto(form: FormData): CreateOrderDto {
   const routeTemplateId =
     String(form.get('routeTemplateId') ?? '').trim() || undefined;
   // Tech card MVP (ADR-0022): пустой select = «без техкарты».
-  const techCardId =
-    String(form.get('techCardId') ?? '').trim() || undefined;
   // Soft-pattern MVP (этап 2 «Лекала»): пустой select = «без лекала».
-  // Семантика идентична techCardId/routeTemplateId.
+  // Семантика идентична routeTemplateId.
   const patternItemId =
     String(form.get('patternItemId') ?? '').trim() || undefined;
   // Client ref MVP: select клиента может отсутствовать в форме (прямой
@@ -323,7 +317,6 @@ function buildCreateDto(form: FormData): CreateOrderDto {
     comment,
     items,
     routeTemplateId,
-    techCardId,
     patternItemId,
     clientId,
     dueDate,
@@ -391,7 +384,6 @@ function parseSendToConstructorMode(form: FormData): boolean {
  */
 function parseNewProductCalculationJson(form: FormData): {
   categoryId?: string | null;
-  techCardId?: string | null;
   patternDevelopmentCostRub?: string | null;
   patternDevelopmentCostInCostPrice: boolean;
   sizes: {
@@ -444,10 +436,6 @@ function parseNewProductCalculationJson(form: FormData): {
     categoryId:
       typeof p.categoryId === 'string' && p.categoryId.length > 0
         ? p.categoryId
-        : null,
-    techCardId:
-      typeof p.techCardId === 'string' && p.techCardId.length > 0
-        ? p.techCardId
         : null,
     patternDevelopmentCostRub:
       typeof p.patternDevelopmentCostRub === 'string' &&
@@ -524,16 +512,8 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
   // Tech card MVP (ADR-0022): семантика идентична routeTemplateId —
   // отсутствие поля = не трогать, пустая строка = очистить, иначе =
   // переустановить.
-  const techCardRaw = form.get('techCardId');
-  let techCardId: string | null | undefined;
-  if (techCardRaw === null) {
-    techCardId = undefined;
-  } else {
-    const v = String(techCardRaw).trim();
-    techCardId = v === '' ? null : v;
-  }
   // Soft-pattern MVP (этап 2 «Лекала»): семантика идентична
-  // routeTemplateId / techCardId.
+  // routeTemplateId.
   const patternRaw = form.get('patternItemId');
   let patternItemId: string | null | undefined;
   if (patternRaw === null) {
@@ -542,7 +522,7 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     const v = String(patternRaw).trim();
     patternItemId = v === '' ? null : v;
   }
-  // Client ref MVP: семантика идентична routeTemplateId/techCardId —
+  // Client ref MVP: семантика идентична routeTemplateId —
   // поля нет = не трогать, пустая строка = очистить, иначе =
   // переустановить.
   const clientRaw = form.get('clientId');
@@ -572,12 +552,11 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     comment: optionalString(form.get('comment')),
     items: items.length > 0 ? items : undefined,
     routeTemplateId,
-    techCardId,
     patternItemId,
     clientId,
     dueDate,
-    // Подразделение заказа. Семантика та же, что у `routeTemplateId`
-    // / `techCardId`: поля нет = не трогать, пустая строка = снять,
+    // Подразделение заказа. Семантика та же, что у `routeTemplateId`:
+    // поля нет = не трогать, пустая строка = снять,
     // иначе = переустановить.
     companyDivisionId: parseCompanyDivisionId(form),
     // Этап «Склад выпуска готовой продукции»: семантика та же —

@@ -481,13 +481,11 @@ describe('Этап 2 — НЕ трогаем payroll / Passport / WorkshopNeed /
     expect(pr).not.toMatch(/operationTimePlan/);
   });
 
-  test('Order-applications / TechCards / Patterns не упоминают operationPlan', () => {
+  test('Order-applications / Patterns не упоминают operationPlan', () => {
     const oa = readSrc(
       'apps/api/src/modules/order-applications/order-applications.service.ts',
     );
     expect(oa).not.toMatch(/operationCostPlan/);
-    const tc = readSrc('apps/api/src/modules/tech-cards/tech-cards.service.ts');
-    expect(tc).not.toMatch(/operationCostPlan/);
     const p = readSrc('apps/api/src/modules/patterns/patterns.service.ts');
     expect(p).not.toMatch(/operationCostPlan/);
   });

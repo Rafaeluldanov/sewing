@@ -171,24 +171,17 @@ export class CutReadinessService {
       });
     }
 
-    // Этап 3 «техкарты → номенклатура»: источник материалов — спецификация
-    // карточки номенклатуры ИЛИ техкарта (legacy-фолбэк).
+    // Этап 5 «техкарты → номенклатура»: источник материалов — спецификация
+    // карточки номенклатуры; для запущенных заказов достаточно снапшота
+    // (`OrderMaterialRequirement`) — он и есть зафиксированные материалы.
     const specLinesCount = order.patternItem?._count?.materialSpecLines ?? 0;
-    if (!order.techCardId && specLinesCount === 0) {
+    if (specLinesCount === 0 && order.materialRequirements.length === 0) {
       orderSetup.push({
         key: 'order.techCardId.required',
         status: 'BLOCKER',
         title: 'Материалы не определены',
         message:
-          'У номенклатуры нет спецификации материалов и техкарта не выбрана — материалы и нормы расхода не определены.',
-      });
-    } else if (order.techCardId) {
-      orderSetup.push({
-        key: 'order.techCardId.ok',
-        status: 'OK',
-        title: 'Техкарта выбрана',
-        entityType: 'TECH_CARD',
-        entityId: order.techCardId,
+          'У номенклатуры нет спецификации материалов и в заказе нет снимка материалов — нормы расхода не определены.',
       });
     } else {
       orderSetup.push({
@@ -282,11 +275,8 @@ export class CutReadinessService {
       }
 
       // 2. PatternMaterialArea для критичных ролей, реально
-      //    встречающихся в техкарте/snapshot заказа.
+      //    встречающихся в snapshot заказа.
       const techCardLineRoles = new Set<string>();
-      for (const l of order.techCard?.materialLines ?? []) {
-        if (l.materialRole) techCardLineRoles.add(l.materialRole);
-      }
       for (const r of order.materialRequirements) {
         if (r.materialRole) techCardLineRoles.add(r.materialRole);
       }
@@ -360,12 +350,9 @@ export class CutReadinessService {
     const materials: CutMaterialReadinessDto[] = [];
     const receiptChecks: CutReadinessCheckDto[] = [];
 
-    // C.1. Сначала отметим строки техкарты/snapshot БЕЗ роли —
+    // C.1. Сначала отметим строки snapshot БЕЗ роли —
     // они не участвуют в расчёте готовности, но выводим warning.
     let unrolledTechCardLines = 0;
-    for (const l of order.techCard?.materialLines ?? []) {
-      if (!l.materialRole) unrolledTechCardLines++;
-    }
     for (const r of order.materialRequirements) {
       if (!r.materialRole) unrolledTechCardLines++;
     }
@@ -773,13 +760,6 @@ const CUT_READINESS_ORDER_INCLUDE = {
   routeSteps: { select: { id: true } },
   materialRequirements: {
     select: { id: true, materialRole: true },
-  },
-  techCard: {
-    include: {
-      materialLines: {
-        select: { id: true, materialRole: true },
-      },
-    },
   },
   patternItem: {
     include: {

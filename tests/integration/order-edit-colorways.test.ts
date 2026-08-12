@@ -23,6 +23,7 @@ import request from 'supertest';
 import { loginAs, startTestApp, stopTestApp, type TestApp } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { copySpecLinesTo, createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — редактирование расцветок заказа (PATCH variants)', () => {
   let t: TestApp;
@@ -50,48 +51,43 @@ describeWithDb('integration — редактирование расцветок 
     patternItemId = pattern.id;
   });
 
-  /** Простая техкарта с одной строкой полотна, без обязательных параметров. */
-  async function createTechCard(): Promise<string> {
-    const res = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', manager)
-      .send({
-        code: 'TC-EDIT-CW',
-        name: 'Кулирка простая',
-        materialLines: [
-          {
-            name: 'Полотно',
-            unit: 'м2',
-            qtyPerUnit: '0.42',
-            materialRole: 'MAIN_FABRIC',
-            fabricType: 'кулирка',
-            colorRule: 'ORDER_COLOR',
-          },
-        ],
-      })
-      .expect(201);
-    return res.body.id as string;
+  /**
+   * Простая спецификация с одной строкой полотна на лекале заказа
+   * (справочника техкарт больше нет — состав даёт номенклатура).
+   */
+  async function seedMainFabricSpec(): Promise<void> {
+    const spec = await createSpecPattern(t, manager, {
+      name: 'Кулирка простая',
+      materialLines: [
+        {
+          name: 'Полотно',
+          unit: 'м2',
+          qtyPerUnit: '0.42',
+          materialRole: 'MAIN_FABRIC',
+          fabricType: 'кулирка',
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
+    await copySpecLinesTo(t, spec.id, patternItemId);
   }
 
   /** Заказ с двумя расцветками (Белый 60 / Чёрный 40 по размеру M). */
-  async function createOrderWithTwoColorways(techCardId: string): Promise<string> {
+  async function createOrderWithTwoColorways(): Promise<string> {
     const res = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', manager)
       .send({
         orderDate: '2026-07-15T00:00:00.000Z',
         patternItemId,
-        techCardId,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
         variants: [
           {
             color: 'Белый',
-            techCardId,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 60 }],
           },
           {
             color: 'Чёрный',
-            techCardId,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }],
           },
         ],
@@ -109,8 +105,8 @@ describeWithDb('integration — редактирование расцветок 
   }
 
   test('PATCH variants заменяет расцветки и пересобирает агрегат OrderItem', async () => {
-    const techCardId = await createTechCard();
-    const orderId = await createOrderWithTwoColorways(techCardId);
+    await seedMainFabricSpec();
+    const orderId = await createOrderWithTwoColorways();
 
     // Исходно: 2 расцветки, агрегат M = 100.
     expect(await t.prisma.orderVariant.count({ where: { orderId } })).toBe(2);
@@ -124,7 +120,6 @@ describeWithDb('integration — редактирование расцветок 
         variants: [
           {
             color: 'Белый',
-            techCardId,
             sizes: [
               { sizeId: seed.sizes.M, qtyPlan: 70 },
               { sizeId: seed.sizes.L, qtyPlan: 20 },
@@ -132,7 +127,6 @@ describeWithDb('integration — редактирование расцветок 
           },
           {
             color: 'Чёрный',
-            techCardId,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 30 }],
           },
         ],
@@ -165,8 +159,8 @@ describeWithDb('integration — редактирование расцветок 
   });
 
   test('PATCH одной расцветкой полностью заменяет прежние, агрегат следует', async () => {
-    const techCardId = await createTechCard();
-    const orderId = await createOrderWithTwoColorways(techCardId);
+    await seedMainFabricSpec();
+    const orderId = await createOrderWithTwoColorways();
 
     await request(t.app.getHttpServer())
       .patch(`/api/orders/${orderId}`)
@@ -175,7 +169,6 @@ describeWithDb('integration — редактирование расцветок 
         variants: [
           {
             color: 'Белый',
-            techCardId,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 50 }],
           },
         ],

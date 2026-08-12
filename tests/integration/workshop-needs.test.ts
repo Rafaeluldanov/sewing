@@ -5,14 +5,14 @@
  * `docs/recon-soft-integration.md §«Этап 4А»`).
  *
  * Покрытие (минимально достаточный contract-floor):
- *   1. AREA_DENSITY-формула: для строки техкарты с `materialRole +
+ *   1. AREA_DENSITY-формула: для строки спецификации с `materialRole +
  *      densityGsm`, при наличии `PatternMaterialArea` для роли,
  *      `calculatedQty = Σ(areaM2 × qtyPlan) × densityGsm / 1000`,
  *      `unit = "кг"`, `calculationMethod = AREA_DENSITY`.
  *   2. QTY_PER_UNIT-fallback: для строки без `materialRole`/`density`
  *      (нитки, фурнитура) — `qtyPerUnit × Σ qtyPlan`,
  *      `unit = line.unit`, `calculationMethod = QTY_PER_UNIT`.
- *   3. Заказ без `patternItemId` не падает: AREA_DENSITY невозможен,
+ *   3. Лекало без площадей: AREA_DENSITY невозможен,
  *      используется fallback + warning.
  *   4. Идемпотентность пересчёта: повторный POST без `force` оставляет
  *      `REVIEWED`/`PURCHASE_PLANNED` и возвращает `409
@@ -40,6 +40,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { copySpecLinesTo, createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — workshop needs (Этап 4А)', () => {
   let t: TestApp;
@@ -84,10 +85,10 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
       },
     });
 
-    // TechCard: одна материальная строка с materialRole = MAIN_FABRIC,
+    // Спецификация: одна материальная строка с materialRole = MAIN_FABRIC,
     // densityGsm = 180. qtyPerUnit ставим, чтобы он НЕ использовался
     // (AREA_DENSITY должен победить).
-    const tc = await createTechCard(t, cookies.manager, {
+    const tc = await createSpec(t, cookies.manager, {
       code: 'TC-AD-1',
       name: 'AREA_DENSITY demo',
       materialLines: [
@@ -105,13 +106,13 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
     });
 
     // Order: 100 шт размера M, цвет «чёрный».
-    const orderId = await createOrderWithPatternAndTechCard(
+    const orderId = await createOrderWithPatternAndSpec(
       t,
       seed,
       cookies.manager,
       {
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
-        techCardId: tc.id,
+        specPatternId: tc.id,
         patternItemId: pattern.id,
         color: 'чёрный',
       },
@@ -173,7 +174,7 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
         },
       },
     });
-    const tc = await createTechCard(t, cookies.manager, {
+    const tc = await createSpec(t, cookies.manager, {
       code: 'TC-AD-EDIT',
       name: 'AREA_DENSITY + правка нормы',
       materialLines: [
@@ -188,13 +189,13 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
         },
       ],
     });
-    const orderId = await createOrderWithPatternAndTechCard(
+    const orderId = await createOrderWithPatternAndSpec(
       t,
       seed,
       cookies.manager,
       {
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
-        techCardId: tc.id,
+        specPatternId: tc.id,
         patternItemId: pattern.id,
         color: 'чёрный',
       },
@@ -233,7 +234,7 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
   // ---------------------------------------------------------------------------
 
   test('QTY_PER_UNIT: fallback для ниток/фурнитуры без materialRole+density', async () => {
-    const tc = await createTechCard(t, cookies.manager, {
+    const tc = await createSpec(t, cookies.manager, {
       code: 'TC-QPU-1',
       name: 'QTY_PER_UNIT demo',
       materialLines: [
@@ -242,7 +243,7 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
       ],
     });
 
-    const orderId = await createOrderWithPatternAndTechCard(
+    const orderId = await createOrderWithPatternAndSpec(
       t,
       seed,
       cookies.manager,
@@ -251,8 +252,8 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
           { sizeId: seed.sizes.M, qtyPlan: 50 },
           { sizeId: seed.sizes.L, qtyPlan: 30 },
         ],
-        techCardId: tc.id,
-        patternItemId: null, // без лекала
+        specPatternId: tc.id,
+        patternItemId: null, // заказ живёт прямо на карточке спецификации
       },
     );
 
@@ -275,13 +276,13 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 3. Заказ без PatternItem: AREA_DENSITY невозможен, fallback + warning
+  // 3. Лекало без площадей: AREA_DENSITY невозможен, fallback + warning
   // ---------------------------------------------------------------------------
 
-  test('Заказ без лекала: AREA_DENSITY-строка падает в fallback с warning', async () => {
-    const tc = await createTechCard(t, cookies.manager, {
+  test('Лекало без площадей: AREA_DENSITY-строка падает в fallback с warning', async () => {
+    const tc = await createSpec(t, cookies.manager, {
       code: 'TC-NOPAT',
-      name: 'Без лекала',
+      name: 'Без площадей',
       materialLines: [
         {
           name: 'Кулирка',
@@ -296,13 +297,13 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
       ],
     });
 
-    const orderId = await createOrderWithPatternAndTechCard(
+    const orderId = await createOrderWithPatternAndSpec(
       t,
       seed,
       cookies.manager,
       {
         items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
-        techCardId: tc.id,
+        specPatternId: tc.id,
         patternItemId: null,
         color: 'чёрный',
       },
@@ -318,7 +319,7 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
     expect(r.body.methods.AREA_DENSITY).toBe(0);
     expect(r.body.methods.QTY_PER_UNIT).toBe(1);
     expect(r.body.warnings.length).toBeGreaterThanOrEqual(1);
-    // Должно быть сообщение про отсутствие лекала.
+    // Должно быть сообщение про отсутствие площадей в лекале.
     expect(r.body.warnings.some((w: string) => /лекал/iu.test(w))).toBe(true);
 
     const need = r.body.needs[0];
@@ -792,35 +793,45 @@ interface MaterialLineInput {
   fixedColorText?: string | null;
 }
 
-async function createTechCard(
+/**
+ * Этап 5 «техкарты → номенклатура»: справочника техкарт больше нет,
+ * состав материалов живёт в спецификации карточки номенклатуры.
+ * Хелпер сохраняет форму прежнего `createTechCard`: `code` уезжает в
+ * артикул карточки, а её id играет роль прежнего «id техкарты».
+ */
+async function createSpec(
   t: TestApp,
   cookie: string,
   body: {
     code: string;
     name: string;
-    isActive?: boolean;
     materialLines?: MaterialLineInput[];
   },
 ): Promise<{ id: string }> {
-  const r = await request(t.app.getHttpServer())
-    .post('/api/tech-cards')
-    .set('Cookie', cookie)
-    .send(body)
-    .expect(201);
-  return { id: r.body.id };
+  return createSpecPattern(t, cookie, {
+    name: body.name,
+    article: body.code,
+    materialLines: body.materialLines,
+  });
 }
 
-async function createOrderWithPatternAndTechCard(
+async function createOrderWithPatternAndSpec(
   t: TestApp,
   seed: SeedResult,
   cookie: string,
   options: {
     items: Array<{ sizeId: string; qtyPlan: number }>;
-    techCardId: string;
+    specPatternId: string;
     patternItemId: string | null;
     color?: string | null;
   },
 ): Promise<string> {
+  // Карточка у заказа одна: если у него СВОЁ лекало (нормы/площади) —
+  // строки спецификации копируются на него до создания заказа.
+  const patternItemId = options.patternItemId ?? options.specPatternId;
+  if (patternItemId !== options.specPatternId) {
+    await copySpecLinesTo(t, options.specPatternId, patternItemId);
+  }
   const r = await request(t.app.getHttpServer())
     .post('/api/orders')
     .set('Cookie', cookie)
@@ -829,8 +840,7 @@ async function createOrderWithPatternAndTechCard(
       clientId: seed.client.id,
       productId: seed.product.id,
       items: options.items,
-      techCardId: options.techCardId,
-      patternItemId: options.patternItemId ?? undefined,
+      patternItemId,
       color: options.color ?? undefined,
     })
     .expect(201);
@@ -838,7 +848,7 @@ async function createOrderWithPatternAndTechCard(
 }
 
 /**
- * Минимальный заказ без лекала с одной QTY_PER_UNIT-строкой —
+ * Минимальный заказ на карточке спецификации с одной QTY_PER_UNIT-строкой —
  * хватает для большинства update / cancel / RBAC-сценариев.
  */
 async function prepareSimpleQtyPerUnitOrder(
@@ -846,14 +856,14 @@ async function prepareSimpleQtyPerUnitOrder(
   seed: SeedResult,
   cookie: string,
 ): Promise<string> {
-  const tc = await createTechCard(t, cookie, {
+  const tc = await createSpec(t, cookie, {
     code: 'TC-SIMPLE',
     name: 'Simple',
     materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
   });
-  return createOrderWithPatternAndTechCard(t, seed, cookie, {
+  return createOrderWithPatternAndSpec(t, seed, cookie, {
     items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
-    techCardId: tc.id,
+    specPatternId: tc.id,
     patternItemId: null,
   });
 }
@@ -882,38 +892,38 @@ async function prepareCalculationStatusFixture(
   releasedOrderId: string;
 }> {
   // Не используем `prepareSimpleQtyPerUnitOrder` дважды — он завязан
-  // на фиксированный `code = 'TC-SIMPLE'`, и второй вызов упадёт в
-  // 409 на уникальности `TechCard.code`. Создаём заказы с
-  // отдельными tech-card-ами и сохраняем минимальный QTY_PER_UNIT
+  // на фиксированный `code = 'TC-SIMPLE'`, и второй вызов упёрся бы в
+  // уникальность артикула номенклатуры. Создаём заказы с отдельными
+  // карточками спецификации и сохраняем минимальный QTY_PER_UNIT
   // источник материала.
-  const tcA = await createTechCard(t, cookie, {
+  const tcA = await createSpec(t, cookie, {
     code: 'TC-OCS-A',
     name: 'Calc filter A',
     materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
   });
-  const activeOrderId = await createOrderWithPatternAndTechCard(
+  const activeOrderId = await createOrderWithPatternAndSpec(
     t,
     seed,
     cookie,
     {
       items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
-      techCardId: tcA.id,
+      specPatternId: tcA.id,
       patternItemId: null,
     },
   );
 
-  const tcB = await createTechCard(t, cookie, {
+  const tcB = await createSpec(t, cookie, {
     code: 'TC-OCS-B',
     name: 'Calc filter B',
     materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
   });
-  const doneOrderId = await createOrderWithPatternAndTechCard(
+  const doneOrderId = await createOrderWithPatternAndSpec(
     t,
     seed,
     cookie,
     {
       items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
-      techCardId: tcB.id,
+      specPatternId: tcB.id,
       patternItemId: null,
     },
   );
@@ -921,36 +931,36 @@ async function prepareCalculationStatusFixture(
   // Заказ C — уже запущен в производство: под ним проверяем фильтр
   // `orderCalculationStatus=IN_PRODUCTION` (закупка запущенного заказа
   // не должна пропадать из рабочего списка закупщика).
-  const tcC = await createTechCard(t, cookie, {
+  const tcC = await createSpec(t, cookie, {
     code: 'TC-OCS-C',
     name: 'Calc filter C',
     materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
   });
-  const productionOrderId = await createOrderWithPatternAndTechCard(
+  const productionOrderId = await createOrderWithPatternAndSpec(
     t,
     seed,
     cookie,
     {
       items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
-      techCardId: tcC.id,
+      specPatternId: tcC.id,
       patternItemId: null,
     },
   );
 
   // Заказ D — уже выпущен: под ним проверяем `ORDER_DONE` (фильтр
   // называется не `DONE`, потому что `DONE` = завершённый РАСЧЁТ).
-  const tcD = await createTechCard(t, cookie, {
+  const tcD = await createSpec(t, cookie, {
     code: 'TC-OCS-D',
     name: 'Calc filter D',
     materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
   });
-  const releasedOrderId = await createOrderWithPatternAndTechCard(
+  const releasedOrderId = await createOrderWithPatternAndSpec(
     t,
     seed,
     cookie,
     {
       items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
-      techCardId: tcD.id,
+      specPatternId: tcD.id,
       patternItemId: null,
     },
   );

@@ -1070,10 +1070,14 @@ async function seedPatternItems(
 }
 
 // ---------------------------------------------------------------------------
-// TECH CARDS (Шаблоны техкарт)
+// PATTERN MATERIAL SPECS (спецификации материалов номенклатуры)
+//
+// Этап 5 плана «техкарты → номенклатура»: состав материалов живёт на
+// карточке номенклатуры (`PatternItemMaterialLine`), техкарт больше нет.
+// Сид кладёт спецификацию каждому demo-лекалу — бывшие строки demo-техкарт.
 // ---------------------------------------------------------------------------
 
-type TechCardMaterialSeed = {
+type PatternSpecLineSeed = {
   name: string;
   unit: string;
   qtyPerUnit: number;
@@ -1088,100 +1092,65 @@ type TechCardMaterialSeed = {
   note?: string;
 };
 
-type TechCardOutsourceSeed = {
-  name: string;
-  unit?: string;
-  qtyPerUnit?: number;
-  vendorName?: string;
-  note?: string;
-  triggerType?: 'MANUAL' | 'CUT_READY';
-};
-
-type TechCardSeed = {
-  code: string;
-  name: string;
-  materialLines: TechCardMaterialSeed[];
-  outsourceLines: TechCardOutsourceSeed[];
-};
-
-const TECH_CARDS: readonly TechCardSeed[] = [
+const PATTERN_SPECS: readonly { article: string; lines: PatternSpecLineSeed[] }[] = [
   {
-    code: 'HOODIE-MAT',
-    name: 'Худи — материалы и подряд',
-    materialLines: [
+    article: 'HOODIE-CLASSIC-001',
+    lines: [
       { name: 'Футер 3-нитка с начёсом', unit: 'м', qtyPerUnit: 1.4, materialRole: 'MAIN_FABRIC', fabricType: 'футер 3-нитка', densityGsm: 320, plannedWidthCm: 180, colorRule: 'ORDER_COLOR' },
       { name: 'Кашкорсе (манжеты/пояс)', unit: 'м', qtyPerUnit: 0.25, materialRole: 'RIB', fabricType: 'кашкорсе', densityGsm: 280, plannedWidthCm: 100, colorRule: 'ORDER_COLOR' },
       { name: 'Нитки 50/2', unit: 'кат.', qtyPerUnit: 0.05, materialRole: 'THREAD', colorRule: 'ORDER_COLOR' },
-      { name: 'Молния разъёмная 60 см', unit: 'шт', qtyPerUnit: 1, materialRole: 'PACKAGING', hardwareSizeText: '60 см', hardwareMaterialText: 'металл', colorRule: 'FIXED_COLOR', fixedColorText: 'чёрный' },
-      { name: 'Шнур плоский 8 мм', unit: 'м', qtyPerUnit: 1.4, materialRole: 'PACKAGING', hardwareSizeText: '8 мм', hardwareMaterialText: 'полиэстер', colorRule: 'ORDER_COLOR' },
-      { name: 'Наконечники для шнура', unit: 'шт', qtyPerUnit: 2, materialRole: 'PACKAGING', hardwareMaterialText: 'металл', colorRule: 'FIXED_COLOR', fixedColorText: 'серебро' },
-    ],
-    outsourceLines: [
-      { name: 'Шелкография на спинке', unit: 'шт', qtyPerUnit: 1, vendorName: 'Принт-Студия', triggerType: 'CUT_READY', note: 'Принт A4, 1 цвет' },
+      { name: 'Молния разъёмная 60 см', unit: 'шт', qtyPerUnit: 1, materialRole: 'PACKAGING', fabricType: 'Молния', hardwareSizeText: '60 см', hardwareMaterialText: 'металл', colorRule: 'FIXED_COLOR', fixedColorText: 'чёрный' },
     ],
   },
   {
-    code: 'TSHIRT-MAT',
-    name: 'Футболка — материалы',
-    materialLines: [
-      { name: 'Кулирка', unit: 'м', qtyPerUnit: 0.8, materialRole: 'MAIN_FABRIC', fabricType: 'кулирка', densityGsm: 160, plannedWidthCm: 180, colorRule: 'ORDER_COLOR' },
-      { name: 'Воротник рибана', unit: 'м', qtyPerUnit: 0.05, materialRole: 'RIB', fabricType: 'рибана', densityGsm: 200, plannedWidthCm: 60, colorRule: 'ORDER_COLOR' },
+    article: 'TSHIRT-WHITE-001',
+    lines: [
+      { name: 'Кулирка гладкокрашеная', unit: 'м', qtyPerUnit: 1.1, materialRole: 'MAIN_FABRIC', fabricType: 'кулирка', densityGsm: 160, plannedWidthCm: 180, colorRule: 'ORDER_COLOR' },
+      { name: 'Рибана (горловина)', unit: 'м', qtyPerUnit: 0.05, materialRole: 'RIB', fabricType: 'рибана', densityGsm: 220, plannedWidthCm: 100, colorRule: 'ORDER_COLOR' },
       { name: 'Нитки 50/2', unit: 'кат.', qtyPerUnit: 0.03, materialRole: 'THREAD', colorRule: 'ORDER_COLOR' },
-      { name: 'Бирка размерная', unit: 'шт', qtyPerUnit: 1, materialRole: 'PACKAGING', hardwareMaterialText: 'тканевая', colorRule: 'NO_COLOR' },
     ],
-    outsourceLines: [],
   },
   {
-    code: 'PANTS-MAT',
-    name: 'Брюки спортивные — материалы',
-    materialLines: [
-      { name: 'Футер 2-нитка', unit: 'м', qtyPerUnit: 1.2, materialRole: 'MAIN_FABRIC', fabricType: 'футер 2-нитка', densityGsm: 280, plannedWidthCm: 180, colorRule: 'ORDER_COLOR' },
-      { name: 'Подклад тонкий', unit: 'м', qtyPerUnit: 0.6, materialRole: 'LINING', fabricType: 'подклад', densityGsm: 80, plannedWidthCm: 150, colorRule: 'FIXED_COLOR', fixedColorText: 'серый' },
-      { name: 'Нитки 50/2', unit: 'кат.', qtyPerUnit: 0.04, materialRole: 'THREAD', colorRule: 'ORDER_COLOR' },
-      { name: 'Шнур плоский 8 мм', unit: 'м', qtyPerUnit: 1.0, materialRole: 'PACKAGING', hardwareSizeText: '8 мм', hardwareMaterialText: 'полиэстер', colorRule: 'ORDER_COLOR' },
-      { name: 'Пуговица декоративная', unit: 'шт', qtyPerUnit: 1, materialRole: 'PACKAGING', hardwareSizeText: '15 мм', hardwareMaterialText: 'пластик', colorRule: 'FIXED_COLOR', fixedColorText: 'чёрный' },
+    article: 'TSHIRT-BLACK-001',
+    lines: [
+      { name: 'Кулирка гладкокрашеная', unit: 'м', qtyPerUnit: 1.1, materialRole: 'MAIN_FABRIC', fabricType: 'кулирка', densityGsm: 160, plannedWidthCm: 180, colorRule: 'FIXED_COLOR', fixedColorText: 'чёрный' },
+      { name: 'Рибана (горловина)', unit: 'м', qtyPerUnit: 0.05, materialRole: 'RIB', fabricType: 'рибана', densityGsm: 220, plannedWidthCm: 100, colorRule: 'FIXED_COLOR', fixedColorText: 'чёрный' },
+      { name: 'Нитки 50/2', unit: 'кат.', qtyPerUnit: 0.03, materialRole: 'THREAD', colorRule: 'ORDER_COLOR' },
     ],
-    outsourceLines: [
-      { name: 'Вышивка логотипа', unit: 'шт', qtyPerUnit: 1, vendorName: 'Вышивка-Сервис', triggerType: 'MANUAL', note: 'Лого 5x5 см на левом кармане' },
+  },
+  {
+    article: 'PANTS-SPORT-001',
+    lines: [
+      { name: 'Футер 2-нитка', unit: 'м', qtyPerUnit: 1.6, materialRole: 'MAIN_FABRIC', fabricType: 'футер 2-нитка', densityGsm: 280, plannedWidthCm: 180, colorRule: 'ORDER_COLOR' },
+      { name: 'Кашкорсе (пояс/манжеты)', unit: 'м', qtyPerUnit: 0.3, materialRole: 'RIB', fabricType: 'кашкорсе', densityGsm: 280, plannedWidthCm: 100, colorRule: 'ORDER_COLOR' },
+      { name: 'Шнур для пояса', unit: 'м', qtyPerUnit: 1.2, materialRole: 'PACKAGING', fabricType: 'Шнур', colorRule: 'ORDER_COLOR' },
+      { name: 'Нитки 50/2', unit: 'кат.', qtyPerUnit: 0.04, materialRole: 'THREAD', colorRule: 'ORDER_COLOR' },
     ],
   },
 ];
 
-async function seedTechCards(): Promise<{
-  created: number;
-  updated: number;
-  total: number;
-  matLinesCreated: number;
-  outLinesCreated: number;
+async function seedPatternSpecs(): Promise<{
+  patterns: number;
+  lines: number;
 }> {
-  let created = 0;
-  let updated = 0;
-  let matLinesCreated = 0;
-  let outLinesCreated = 0;
-
-  for (const tc of TECH_CARDS) {
-    const existing = await prisma.techCardTemplate.findUnique({
-      where: { code: tc.code },
+  let patterns = 0;
+  let lines = 0;
+  for (const spec of PATTERN_SPECS) {
+    const pattern = await prisma.patternItem.findUnique({
+      where: { article: spec.article },
+      select: { id: true },
     });
-    const upserted = await prisma.techCardTemplate.upsert({
-      where: { code: tc.code },
-      create: { code: tc.code, name: tc.name, isActive: true },
-      update: { name: tc.name, isActive: true },
+    if (!pattern) continue;
+    patterns += 1;
+    // Bulk-replace, как `PatternsService.replaceMaterialSpec`.
+    await prisma.patternItemMaterialLine.deleteMany({
+      where: { patternItemId: pattern.id },
     });
-    if (existing) updated += 1;
-    else created += 1;
-
-    // Bulk-replace строк (как делает `TechCardsService.replaceMaterialLines`):
-    // на seed мы держим канонический набор, поэтому полностью пересоздаём
-    // строки — иначе при изменении состава остались бы «фантомы».
-    await prisma.techCardMaterialLine.deleteMany({
-      where: { techCardId: upserted.id },
-    });
-    for (let i = 0; i < tc.materialLines.length; i += 1) {
-      const m = tc.materialLines[i];
-      await prisma.techCardMaterialLine.create({
+    for (let i = 0; i < spec.lines.length; i += 1) {
+      const m = spec.lines[i];
+      await prisma.patternItemMaterialLine.create({
         data: {
-          techCardId: upserted.id,
+          patternItemId: pattern.id,
           sortOrder: (i + 1) * 10,
           name: m.name,
           unit: m.unit,
@@ -1197,37 +1166,10 @@ async function seedTechCards(): Promise<{
           note: m.note ?? null,
         },
       });
-      matLinesCreated += 1;
-    }
-
-    await prisma.techCardOutsourceLine.deleteMany({
-      where: { techCardId: upserted.id },
-    });
-    for (let i = 0; i < tc.outsourceLines.length; i += 1) {
-      const o = tc.outsourceLines[i];
-      await prisma.techCardOutsourceLine.create({
-        data: {
-          techCardId: upserted.id,
-          sortOrder: (i + 1) * 10,
-          name: o.name,
-          unit: o.unit ?? null,
-          qtyPerUnit: o.qtyPerUnit !== undefined ? new Prisma.Decimal(o.qtyPerUnit) : null,
-          vendorName: o.vendorName ?? null,
-          note: o.note ?? null,
-          triggerType: o.triggerType ?? 'MANUAL',
-        },
-      });
-      outLinesCreated += 1;
+      lines += 1;
     }
   }
-
-  return {
-    created,
-    updated,
-    total: TECH_CARDS.length,
-    matLinesCreated,
-    outLinesCreated,
-  };
+  return { patterns, lines };
 }
 
 // ---------------------------------------------------------------------------
@@ -1257,8 +1199,8 @@ async function main() {
   const categories = await seedPatternCategories();
   console.log('→ Seeding pattern items + areas + norms…');
   const patterns = await seedPatternItems(categories.byCode, products.byslug);
-  console.log('→ Seeding tech-card templates…');
-  const techCards = await seedTechCards();
+  console.log('→ Seeding pattern material specs…');
+  const patternSpecs = await seedPatternSpecs();
 
   console.log('\n================ SEED SUMMARY ================');
   console.log(`Sizes:       total=${sizes.total}      created=${sizes.created}  updated=${sizes.updated}`);
@@ -1272,7 +1214,7 @@ async function main() {
   console.log(`CompanyDivisions: total=${divisions.total} created=${divisions.created} updated=${divisions.updated}`);
   console.log(`PatternCategories: total=${categories.total} created=${categories.created} updated=${categories.updated} params+${categories.paramsCreated}/upd${categories.paramsUpdated}`);
   console.log(`PatternItems: total=${patterns.total} created=${patterns.created} updated=${patterns.updated} areas+${patterns.areasCreated}/upd${patterns.areasUpdated} norms+${patterns.normsCreated}/upd${patterns.normsUpdated}`);
-  console.log(`TechCards:   total=${techCards.total}  created=${techCards.created} updated=${techCards.updated} matLines+${techCards.matLinesCreated} outLines+${techCards.outLinesCreated}`);
+  console.log(`PatternSpecs: patterns=${patternSpecs.patterns} lines=${patternSpecs.lines}`);
   console.log('==============================================\n');
   console.log('Demo password for all demo logins:', DEMO_PASSWORD);
   console.log('Demo logins:', EMPLOYEES.map((e) => e.login).join(', '));

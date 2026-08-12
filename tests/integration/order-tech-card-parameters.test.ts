@@ -1,9 +1,11 @@
 /**
- * Integration-тесты фичи «Параметры техкарт».
+ * Integration-тесты параметров спецификации в заказе (этап 5
+ * «техкарты → номенклатура»: источник слотов и строк — спецификация
+ * карточки номенклатуры, `PatternItemSpecParameter` /
+ * `PatternItemMaterialLine`).
  *
  * Параметр — именованный слот в ЯЧЕЙКЕ строки материала («Полотно → плотность»),
- * значение вводится в ЗАКАЗЕ, по каждой расцветке отдельно. Один шаблон
- * заменяет несколько близнецов ТК-*-160/190/220.
+ * значение вводится в ЗАКАЗЕ, по каждой расцветке отдельно.
  *
  * Покрытие:
  *   1. Слот материализуется в заказ по расцветкам; значение подставляется в
@@ -13,9 +15,10 @@
  *   2. Разные значения по расцветкам → разные плотности в снимке.
  *   3. Гейт полноты СНЯТ (16.07): пустой обязательный слот больше не держит
  *      заказ — ячейка остаётся пустой, расчёт стартует.
- *   4. ФАЗА 2 «техкарта живёт в заказе»: правка шаблона НЕ протекает в заказ,
- *      но количества пересчитываются, а «Обновить из шаблона» подтягивает.
- *   5. Строка, добавленная прямо в заказ, переживает смену техкарты.
+ *   4. ФАЗА 2 «спецификация живёт в заказе»: правка карточки НЕ протекает в
+ *      заказ, но количества пересчитываются, а «Обновить из номенклатуры»
+ *      подтягивает.
+ *   5. Строка, добавленная прямо в заказ, переживает обновление из карточки.
  *   6. Решение 16.07: ЛЮБАЯ строка снимка правится (PATCH, включая шаблонные;
  *      правки переживают ресинк; ячейка под параметром — 409) и удаляется
  *      (кроме последней шаблонной — её воскресила бы перематериализация).
@@ -54,18 +57,19 @@ describeWithDb('integration — параметры техкарт', () => {
     patternItemId = pattern.id;
   });
 
-  /** Шаблон с параметром «плотность», привязанным к ячейке строки полотна. */
-  async function createParametricTechCard(opts?: {
-    code?: string;
+  /**
+   * Спецификация лекала с параметром «плотность», привязанным к ячейке
+   * строки полотна (этап 5: слоты живут в карточке номенклатуры).
+   */
+  async function fillParametricSpec(opts?: {
     defaultValue?: string | null;
     qtyPerUnit?: string;
-  }): Promise<string> {
-    const res = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
+    lines?: Array<Record<string, unknown>>;
+  }): Promise<void> {
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternItemId}/material-spec`)
       .set('Cookie', manager)
       .send({
-        code: opts?.code ?? 'TC-PARAM',
-        name: 'Кулирка параметрическая',
         parameters: [
           {
             key: 'main_density',
@@ -79,7 +83,7 @@ describeWithDb('integration — параметры техкарт', () => {
               : { defaultValue: opts?.defaultValue ?? '190' }),
           },
         ],
-        materialLines: [
+        materialLines: opts?.lines ?? [
           {
             name: 'Полотно',
             unit: 'м2',
@@ -91,8 +95,7 @@ describeWithDb('integration — параметры техкарт', () => {
           },
         ],
       })
-      .expect(201);
-    return res.body.id as string;
+      .expect(200);
   }
 
   /**
@@ -100,7 +103,7 @@ describeWithDb('integration — параметры техкарт', () => {
    * order-level группой (`orderVariantId = null`), хотя у расцветки есть
    * реальный id — на этом расхождении и ловился баг «нет техкарты».
    */
-  async function createOrderWithOneColorway(techCardId: string): Promise<string> {
+  async function createOrderWithOneColorway(): Promise<string> {
     const res = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', manager)
@@ -108,12 +111,10 @@ describeWithDb('integration — параметры техкарт', () => {
         orderDate: '2026-07-14T00:00:00.000Z',
         clientId: seed.client.id,
         patternItemId,
-        techCardId,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
         variants: [
           {
             color: 'Белый',
-            techCardId,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
           },
         ],
@@ -122,8 +123,8 @@ describeWithDb('integration — параметры техкарт', () => {
     return res.body.id as string;
   }
 
-  /** Заказ с двумя расцветками на одной техкарте. */
-  async function createOrderWithTwoColorways(techCardId: string): Promise<string> {
+  /** Заказ с двумя расцветками на одной спецификации. */
+  async function createOrderWithTwoColorways(): Promise<string> {
     const res = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', manager)
@@ -131,17 +132,14 @@ describeWithDb('integration — параметры техкарт', () => {
         orderDate: '2026-07-14T00:00:00.000Z',
         clientId: seed.client.id,
         patternItemId,
-        techCardId,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
         variants: [
           {
             color: 'Белый',
-            techCardId,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 60 }],
           },
           {
             color: 'Чёрный',
-            techCardId,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }],
           },
         ],
@@ -157,8 +155,8 @@ describeWithDb('integration — параметры техкарт', () => {
     });
 
   test('слот материализуется по расцветкам и подставляется в legacy-колонку', async () => {
-    const techCardId = await createParametricTechCard();
-    const orderId = await createOrderWithTwoColorways(techCardId);
+    await fillParametricSpec();
+    const orderId = await createOrderWithTwoColorways();
 
     const params = await request(t.app.getHttpServer())
       .get(`/api/orders/${orderId}/tech-card-parameters`)
@@ -189,8 +187,8 @@ describeWithDb('integration — параметры техкарт', () => {
   });
 
   test('разные значения по расцветкам дают разные плотности в снимке', async () => {
-    const techCardId = await createParametricTechCard();
-    const orderId = await createOrderWithTwoColorways(techCardId);
+    await fillParametricSpec();
+    const orderId = await createOrderWithTwoColorways();
 
     const params = await request(t.app.getHttpServer())
       .get(`/api/orders/${orderId}/tech-card-parameters`)
@@ -224,8 +222,8 @@ describeWithDb('integration — параметры техкарт', () => {
     // точечно для позиций из ЕРП по `owner=ERP`, когда появится импорт).
     // Пустой слот просто оставляет ячейку пустой: плотности в снимке нет,
     // но заказ уходит в расчёт.
-    const techCardId = await createParametricTechCard({ defaultValue: null });
-    const orderId = await createOrderWithTwoColorways(techCardId);
+    await fillParametricSpec({ defaultValue: null });
+    const orderId = await createOrderWithTwoColorways();
 
     await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/start-calculation`)
@@ -242,8 +240,8 @@ describeWithDb('integration — параметры техкарт', () => {
   });
 
   test('фаза 2: правка шаблона не протекает в заказ, но количества пересчитываются', async () => {
-    const techCardId = await createParametricTechCard();
-    const orderId = await createOrderWithTwoColorways(techCardId);
+    await fillParametricSpec();
+    const orderId = await createOrderWithTwoColorways();
 
     const variants = await t.prisma.orderVariant.findMany({
       where: { orderId },
@@ -251,24 +249,20 @@ describeWithDb('integration — параметры техкарт', () => {
     });
     const white = variants.find((v) => v.color === 'Белый')!;
 
-    // Шаблон в справочнике изменился.
-    await request(t.app.getHttpServer())
-      .patch(`/api/tech-cards/${techCardId}`)
-      .set('Cookie', manager)
-      .send({
-        materialLines: [
-          {
-            name: 'Полотно ПЕРЕИМЕНОВАНО',
-            unit: 'м2',
-            qtyPerUnit: '0.99',
-            materialRole: 'MAIN_FABRIC',
-            fabricType: 'двунитка',
-            colorRule: 'ORDER_COLOR',
-            parameterBindings: { 'char:density': 'main_density' },
-          },
-        ],
-      })
-      .expect(200);
+    // Спецификация в карточке номенклатуры изменилась.
+    await fillParametricSpec({
+      lines: [
+        {
+          name: 'Полотно ПЕРЕИМЕНОВАНО',
+          unit: 'м2',
+          qtyPerUnit: '0.99',
+          materialRole: 'MAIN_FABRIC',
+          fabricType: 'двунитка',
+          colorRule: 'ORDER_COLOR',
+          parameterBindings: { 'char:density': 'main_density' },
+        },
+      ],
+    });
 
     // Пересборка заказа (самый частый путь — правка расцветки).
     await request(t.app.getHttpServer())
@@ -276,7 +270,6 @@ describeWithDb('integration — параметры техкарт', () => {
       .set('Cookie', manager)
       .send({
         color: 'Белый',
-        techCardId,
         sizes: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
       })
       .expect(200);
@@ -303,8 +296,8 @@ describeWithDb('integration — параметры техкарт', () => {
   });
 
   test('ручные строки переживают добавление второй расцветки и возврат к одной', async () => {
-    const techCardId = await createParametricTechCard();
-    const orderId = await createOrderWithOneColorway(techCardId);
+    await fillParametricSpec();
+    const orderId = await createOrderWithOneColorway();
 
     // Пачка ручных строк при ОДНОЙ расцветке: снимок хранит их
     // order-level (`orderVariantId = null`).
@@ -330,7 +323,6 @@ describeWithDb('integration — параметры техкарт', () => {
       .set('Cookie', manager)
       .send({
         color: 'Чёрный',
-        techCardId,
         sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }],
       })
       .expect(201);
@@ -372,26 +364,9 @@ describeWithDb('integration — параметры техкарт', () => {
     expect(afterRemove.every((r) => r.orderVariantId === null)).toBe(true);
   });
 
-  test('строка, добавленная в заказе, переживает смену техкарты', async () => {
-    const techCardId = await createParametricTechCard();
-    const other = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', manager)
-      .send({
-        code: 'TC-OTHER',
-        name: 'Другая',
-        materialLines: [
-          {
-            name: 'Футер',
-            unit: 'м2',
-            qtyPerUnit: '0.77',
-            materialRole: 'MAIN_FABRIC',
-            colorRule: 'ORDER_COLOR',
-          },
-        ],
-      })
-      .expect(201);
-    const orderId = await createOrderWithTwoColorways(techCardId);
+  test('строка, добавленная в заказе, переживает обновление из номенклатуры', async () => {
+    await fillParametricSpec();
+    const orderId = await createOrderWithTwoColorways();
 
     const variants = await t.prisma.orderVariant.findMany({ where: { orderId } });
     const black = variants.find((v) => v.color === 'Чёрный')!;
@@ -413,16 +388,23 @@ describeWithDb('integration — параметры техкарт', () => {
     });
     expect(Number(manual?.totalQty)).toBeCloseTo(36, 4);
 
-    // Смена техкарты расцветки: шаблонная строка заменяется, ручная — нет.
+    // Спецификация карточки поменялась + явное «Обновить из номенклатуры»:
+    // шаблонная строка заменяется, ручная — нет.
+    await fillParametricSpec({
+      lines: [
+        {
+          name: 'Футер',
+          unit: 'м2',
+          qtyPerUnit: '0.77',
+          materialRole: 'MAIN_FABRIC',
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
     await request(t.app.getHttpServer())
-      .patch(`/api/orders/${orderId}/colorways/${black.id}`)
+      .post(`/api/orders/${orderId}/tech-card/reload-from-template`)
       .set('Cookie', manager)
-      .send({
-        color: 'Чёрный',
-        techCardId: other.body.id,
-        sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }],
-      })
-      .expect(200);
+      .expect(201);
 
     const rows = await snapshot(orderId);
     const blackRows = rows.filter((r) => r.variantColor === 'Чёрный');
@@ -435,7 +417,7 @@ describeWithDb('integration — параметры техкарт', () => {
 
     // Решение 16.07: шаблонные строки теперь удаляются, НО не последняя —
     // «строк из шаблона нет» = триггер перематериализации, ресинк тут же
-    // вернул бы её молча. У одно-строчной техкарты это ровно этот случай.
+    // вернул бы её молча. У одно-строчной спецификации это ровно этот случай.
     const fromTemplate = blackRows.find((r) => !r.isManual)!;
     const res = await request(t.app.getHttpServer())
       .delete(`/api/orders/${orderId}/tech-card/lines/${fromTemplate.id}`)
@@ -450,8 +432,8 @@ describeWithDb('integration — параметры техкарт', () => {
   // слал его в записи. Слот/строка улетали в группу, которую чтение не
   // читает → тихо пропадали. Бэкенд нормализует ключ (`resolveSnapshotVariantId`).
   test('одна расцветка: снимок под order-level ключом (null)', async () => {
-    const techCardId = await createParametricTechCard();
-    const orderId = await createOrderWithOneColorway(techCardId);
+    await fillParametricSpec();
+    const orderId = await createOrderWithOneColorway();
 
     const params = await request(t.app.getHttpServer())
       .get(`/api/orders/${orderId}/tech-card-parameters`)
@@ -467,8 +449,8 @@ describeWithDb('integration — параметры техкарт', () => {
   });
 
   test('одна расцветка: запись с реальным id расцветки нормализуется в снимок', async () => {
-    const techCardId = await createParametricTechCard();
-    const orderId = await createOrderWithOneColorway(techCardId);
+    await fillParametricSpec();
+    const orderId = await createOrderWithOneColorway();
 
     // Реальный id единственной расцветки — как раз его слал старый UI.
     const variant = await t.prisma.orderVariant.findFirstOrThrow({
@@ -525,26 +507,6 @@ describeWithDb('integration — параметры техкарт', () => {
     expect(stored.orderVariantId).toBeNull();
   });
 
-  test('одна расцветка: «сохранить как шаблон» с id расцветки не падает пустотой', async () => {
-    const techCardId = await createParametricTechCard();
-    const orderId = await createOrderWithOneColorway(techCardId);
-    const variant = await t.prisma.orderVariant.findFirstOrThrow({
-      where: { orderId },
-    });
-
-    // Снимок лежит под null; запрос с реальным id раньше находил 0 строк и
-    // отбивался ORDER_TECH_CARD_EMPTY. Нормализация ключа это чинит.
-    const res = await request(t.app.getHttpServer())
-      .post(`/api/orders/${orderId}/tech-card/save-as-template`)
-      .set('Cookie', manager)
-      .send({
-        orderVariantId: variant.id,
-        code: 'TC-FROM-ONE',
-        name: 'Из одноцветного заказа',
-      })
-      .expect(201);
-    expect(res.body.materialLines.length).toBeGreaterThan(0);
-  });
 
   // ───────────────────────────────────────────────────────────────────────
   // Решение 16.07 «техкарта живёт в заказе»: ЛЮБАЯ строка снимка (и
@@ -552,8 +514,8 @@ describeWithDb('integration — параметры техкарт', () => {
   // ───────────────────────────────────────────────────────────────────────
 
   test('PATCH строки: правка нормы/цвета шаблонной строки переживает ресинк; ячейка под параметром — 409', async () => {
-    const techCardId = await createParametricTechCard();
-    const orderId = await createOrderWithTwoColorways(techCardId);
+    await fillParametricSpec();
+    const orderId = await createOrderWithTwoColorways();
     const white = await t.prisma.orderVariant.findFirstOrThrow({
       where: { orderId, color: 'Белый' },
     });
@@ -586,7 +548,6 @@ describeWithDb('integration — параметры техкарт', () => {
       .set('Cookie', manager)
       .send({
         color: 'Белый',
-        techCardId,
         sizes: [{ sizeId: seed.sizes.M, qtyPlan: 80 }],
       })
       .expect(200);
@@ -608,36 +569,29 @@ describeWithDb('integration — параметры техкарт', () => {
   });
 
   test('DELETE шаблонной строки: удаляется, ресинк не воскрешает; последняя — 409', async () => {
-    // Техкарта с ДВУМЯ строками — чтобы после удаления одной шаблонные
-    // строки в группе ещё оставались.
-    const tcRes = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', manager)
-      .send({
-        code: 'TC-TWO-LINES',
-        name: 'Две строки',
-        materialLines: [
-          {
-            name: 'Полотно',
-            unit: 'м2',
-            qtyPerUnit: '0.42',
-            materialRole: 'MAIN_FABRIC',
-            fabricType: 'кулирка',
-            colorRule: 'ORDER_COLOR',
-          },
-          {
-            name: 'Рибана',
-            unit: 'кг',
-            qtyPerUnit: '0.12',
-            materialRole: 'RIB',
-            fabricType: 'рибана',
-            colorRule: 'ORDER_COLOR',
-          },
-        ],
-      })
-      .expect(201);
-    const techCardId = tcRes.body.id as string;
-    const orderId = await createOrderWithTwoColorways(techCardId);
+    // Спецификация с ДВУМЯ строками — чтобы после удаления одной
+    // шаблонные строки в группе ещё оставались.
+    await fillParametricSpec({
+      lines: [
+        {
+          name: 'Полотно',
+          unit: 'м2',
+          qtyPerUnit: '0.42',
+          materialRole: 'MAIN_FABRIC',
+          fabricType: 'кулирка',
+          colorRule: 'ORDER_COLOR',
+        },
+        {
+          name: 'Рибана',
+          unit: 'кг',
+          qtyPerUnit: '0.12',
+          materialRole: 'RIB',
+          fabricType: 'рибана',
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
+    const orderId = await createOrderWithTwoColorways();
     const white = await t.prisma.orderVariant.findFirstOrThrow({
       where: { orderId, color: 'Белый' },
     });
@@ -661,7 +615,6 @@ describeWithDb('integration — параметры техкарт', () => {
       .set('Cookie', manager)
       .send({
         color: 'Белый',
-        techCardId,
         sizes: [{ sizeId: seed.sizes.M, qtyPlan: 70 }],
       })
       .expect(200);

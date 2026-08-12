@@ -34,6 +34,11 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import {
+  copySpecLinesTo,
+  createSpecPattern,
+  type SpecLineInput,
+} from '../utils/spec';
 
 interface CategoryWithParams {
   id: string;
@@ -152,41 +157,38 @@ describeWithDb('integration — pattern item size parameter values', () => {
     });
   }
 
-  let tcCounter = 0;
-  async function createTechCardSimple(): Promise<string> {
-    tcCounter += 1;
-    const r = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', t.adminCookie)
-      .send({
-        code: `TC-LIN-${tcCounter}`,
-        name: 'Tech card simple',
-        materialLines: [
-          { name: 'Нитки', unit: 'м', qtyPerUnit: '0.5' },
-        ],
-      })
-      .expect(201);
-    return r.body.id as string;
+  // Этап 5 «техкарты → номенклатура»: состав материалов заводится
+  // спецификацией на отдельной карточке-«доноре», а `createOrder`
+  // копирует её строки на лекало заказа (карточка у заказа одна).
+  let specCounter = 0;
+  async function createSpecSimple(): Promise<string> {
+    specCounter += 1;
+    const spec = await createSpecPattern(t, t.adminCookie, {
+      article: `SPEC-LIN-${specCounter}`,
+      name: 'Спецификация simple',
+      materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '0.5' }],
+    });
+    return spec.id;
   }
 
   /**
-   * Техкарта с MAIN_FABRIC-строкой (Кулирка, ширина 180 см, плотность
+   * Спецификация с MAIN_FABRIC-строкой (Кулирка, ширина 180 см, плотность
    * 180 г/м²). Используется в тестах конверсии «м пог. → кг / м²» для
    * параметра категории `MAIN_FABRIC LINEAR_M_BY_SIZE`.
    *
    * Параметры `widthCm` / `densityGsm` опциональны: если не передать,
-   * получим техкарту без этих полей — для проверки warning-flow при
+   * получим строку без этих полей — для проверки warning-flow при
    * нехватке данных пересчёта.
    */
-  async function createTechCardWithMainFabric(opts: {
+  async function createSpecWithMainFabric(opts: {
     widthCm?: number | null;
     densityGsm?: number | null;
   } = {}): Promise<string> {
-    tcCounter += 1;
+    specCounter += 1;
     const widthCm = opts.widthCm === undefined ? 180 : opts.widthCm;
     const densityGsm =
       opts.densityGsm === undefined ? 180 : opts.densityGsm;
-    const mainLine: Record<string, unknown> = {
+    const mainLine: SpecLineInput = {
       name: 'Кулирка',
       unit: 'кг',
       qtyPerUnit: '0.001',
@@ -195,16 +197,12 @@ describeWithDb('integration — pattern item size parameter values', () => {
     };
     if (widthCm != null) mainLine.plannedWidthCm = widthCm;
     if (densityGsm != null) mainLine.densityGsm = densityGsm;
-    const r = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', t.adminCookie)
-      .send({
-        code: `TC-LIN-MAIN-${tcCounter}`,
-        name: 'Tech card MAIN_FABRIC',
-        materialLines: [mainLine],
-      })
-      .expect(201);
-    return r.body.id as string;
+    const spec = await createSpecPattern(t, t.adminCookie, {
+      article: `SPEC-LIN-MAIN-${specCounter}`,
+      name: 'Спецификация MAIN_FABRIC',
+      materialLines: [mainLine],
+    });
+    return spec.id;
   }
 
   /**
@@ -236,10 +234,13 @@ describeWithDb('integration — pattern item size parameter values', () => {
   }
 
   async function createOrder(opts: {
-    techCardId: string;
+    specPatternId: string;
     patternItemId: string;
     items: Array<{ sizeId: string; qtyPlan: number }>;
   }): Promise<string> {
+    // Карточка у заказа одна — строки спецификации-«донора» копируются
+    // на лекало заказа до его создания.
+    await copySpecLinesTo(t, opts.specPatternId, opts.patternItemId);
     const r = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', t.adminCookie)
@@ -248,7 +249,6 @@ describeWithDb('integration — pattern item size parameter values', () => {
         clientId: seed.client.id,
         productId: seed.product.id,
         items: opts.items,
-        techCardId: opts.techCardId,
         patternItemId: opts.patternItemId,
       })
       .expect(201);
@@ -460,9 +460,9 @@ describeWithDb('integration — pattern item size parameter values', () => {
     await attachActiveSizeFile(patternId, seed.sizes.M);
     await attachActiveSizeFile(patternId, seed.sizes.L);
 
-    const tcId = await createTechCardSimple();
+    const specId = await createSpecSimple();
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [
         { sizeId: seed.sizes.M, qtyPlan: 10 },
@@ -528,9 +528,9 @@ describeWithDb('integration — pattern item size parameter values', () => {
     const patternId = await createPatternWithCategory(cat.id, 'P-LIN-NONE');
     await attachActiveSizeFile(patternId, seed.sizes.M);
 
-    const tcId = await createTechCardSimple();
+    const specId = await createSpecSimple();
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 50 }],
     });
@@ -551,7 +551,7 @@ describeWithDb('integration — pattern item size parameter values', () => {
   // -------------------------------------------------------------------------
 
   // -------------------------------------------------------------------------
-  // 3a. WorkshopNeed конверсия м пог. → кг / м² через техкарту
+  // 3a. WorkshopNeed конверсия м пог. → кг / м² через спецификацию
   //     (этап «Исправить смысл и расчёт LINEAR_M_BY_SIZE»)
   // -------------------------------------------------------------------------
 
@@ -592,12 +592,12 @@ describeWithDb('integration — pattern item size parameter values', () => {
     await attachActiveSizeFile(patternId, seed.sizes.M);
     await attachActiveSizeFile(patternId, seed.sizes.L);
 
-    const tcId = await createTechCardWithMainFabric({
+    const specId = await createSpecWithMainFabric({
       widthCm: opts.widthCm,
       densityGsm: opts.densityGsm,
     });
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       items: [
         { sizeId: seed.sizes.M, qtyPlan: 10 },
@@ -607,7 +607,7 @@ describeWithDb('integration — pattern item size parameter values', () => {
     return { orderId, main };
   }
 
-  test('outputUnit = кг: считает через ширину и плотность техкарты', async () => {
+  test('outputUnit = кг: считает через ширину и плотность спецификации', async () => {
     // Σ погонных метров = 0.85 × 10 + 0.85 × 5 = 12.75 м пог.
     // areaM2 = 12.75 × 1.8 м = 22.95 м².
     // kg     = 22.95 × 180 г/м² / 1000 = 4.131 кг.
@@ -637,12 +637,12 @@ describeWithDb('integration — pattern item size parameter values', () => {
     expect(need.calculationMethod).toBe('LINEAR_M_BY_SIZE');
     expect(need.materialRole).toBe('MAIN_FABRIC');
     expect(Number(need.calculatedQty)).toBeCloseTo(4.131, 3);
-    // Описание собрано из техкартовой строки (Кулирка 180 г/м² ширина 180 см).
+    // Описание собрано из строки спецификации (Кулирка 180 г/м² ширина 180 см).
     expect(need.description).toMatch(/Кулирка/);
     expect(need.description).toMatch(/180/);
   });
 
-  test('outputUnit = м²: считает через ширину техкарты', async () => {
+  test('outputUnit = м²: считает через ширину спецификации', async () => {
     // areaM2 = 12.75 × 1.8 = 22.95 м².
     const { orderId } = await setupConversionScenario({
       unit: 'м²',

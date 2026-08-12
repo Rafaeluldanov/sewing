@@ -237,7 +237,7 @@ export class PatternsService {
               orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
             },
             _count: {
-              select: { parameters: true, patterns: true, techCards: true },
+              select: { parameters: true, patterns: true },
             },
           },
         },
@@ -1734,7 +1734,7 @@ export class PatternsService {
           include: {
             parameters: true;
             _count: {
-              select: { parameters: true; patterns: true; techCards: true };
+              select: { parameters: true; patterns: true };
             };
           };
         };
@@ -1795,7 +1795,6 @@ export class PatternsService {
           description: row.category.description,
           parametersCount: row.category._count.parameters,
           patternsCount: row.category._count.patterns,
-          techCardsCount: row.category._count.techCards,
           createdAt: row.category.createdAt.toISOString(),
           updatedAt: row.category.updatedAt.toISOString(),
           parameters: row.category.parameters.map((p) => ({

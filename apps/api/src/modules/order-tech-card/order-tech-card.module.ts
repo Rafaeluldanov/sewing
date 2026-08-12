@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 
 import { OrdersModule } from '../orders/orders.module.js';
-import { TechCardsModule } from '../tech-cards/tech-cards.module.js';
 import {
   OrderTechCardController,
   OrderTechCardLinesController,
@@ -19,9 +18,7 @@ import { OrderTechCardService } from './order-tech-card.service.js';
  * расчёт). Цикла нет: `OrdersModule` про этот модуль ничего не знает.
  */
 @Module({
-  // TechCardsModule — ради `createFromOrderSnapshot` («сохранить как шаблон»):
-  // знание о том, КАК писать шаблон, остаётся в модуле техкарт.
-  imports: [OrdersModule, TechCardsModule],
+  imports: [OrdersModule],
   controllers: [
     OrderTechCardController,
     OrderTechCardLinesController,

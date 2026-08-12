@@ -220,11 +220,12 @@ describe('WorkshopNeedsService — category-driven + enrichment', () => {
     expect(src).toMatch(/replace\(\/ё\/g,\s*'е'\)/);
   });
 
-  test('toDto обогащает потребность hardware-полями из materialRequirements / techCard.materialLines', () => {
+  test('toDto обогащает потребность hardware-полями из materialRequirements', () => {
     expect(src).toMatch(/resolveWorkshopNeedEnrichment/);
-    // include подтягивает snapshot + live техкарту с hardware-полями.
+    // include подтягивает snapshot заказа с hardware-полями (этап 5
+    // «техкарты → номенклатура»: live-техкарты больше нет).
     expect(src).toMatch(/materialRequirements:\s*\{\s*select:[\s\S]*?hardwareSizeText:\s*true/);
-    expect(src).toMatch(/techCard:\s*\{\s*select:\s*\{\s*materialLines/);
+    expect(src).not.toMatch(/techCard:\s*\{\s*select:\s*\{\s*materialLines/);
     // DTO включает enrichment.
     expect(src).toMatch(
       /hardwareSizeText:\s*enrichment\.hardwareSizeText/,

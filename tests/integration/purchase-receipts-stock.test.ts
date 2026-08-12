@@ -54,6 +54,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — purchase receipt → stock movements', () => {
   let t: TestApp;
@@ -81,8 +82,8 @@ describeWithDb('integration — purchase receipt → stock movements', () => {
   // ===========================================================================
 
   /**
-   * Готовит цепочку Supplier → CatalogItem → TechCard → Order →
-   * WorkshopNeed → PurchaseOrder (CONFIRMED) и возвращает id-шники
+   * Готовит цепочку Supplier → CatalogItem → спецификация
+   * номенклатуры → Order → WorkshopNeed → PurchaseOrder (CONFIRMED) и возвращает id-шники
    * для дальнейшего create-PR. По умолчанию — RUB-цена 500/м,
    * можно перекрыть через opts.
    */
@@ -116,23 +117,16 @@ describeWithDb('integration — purchase receipt → stock movements', () => {
       })
       .expect(201);
 
-    const tcCode = `TC-PR-STK-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
-    const tc = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', cookies.manager)
-      .send({
-        code: tcCode,
-        name: tcCode,
-        materialLines: [
-          {
-            name: 'Кулирка',
-            unit: 'м',
-            qtyPerUnit: '0.5',
-            materialRole: 'MAIN_FABRIC',
-          },
-        ],
-      })
-      .expect(201);
+    const spec = await createSpecPattern(t, cookies.manager, {
+      materialLines: [
+        {
+          name: 'Кулирка',
+          unit: 'м',
+          qtyPerUnit: '0.5',
+          materialRole: 'MAIN_FABRIC',
+        },
+      ],
+    });
 
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
@@ -141,7 +135,7 @@ describeWithDb('integration — purchase receipt → stock movements', () => {
         orderDate: '2026-04-15T00:00:00.000Z',
         productId: seed.product.id,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 50 }],
-        techCardId: tc.body.id,
+        patternItemId: spec.id,
       })
       .expect(201);
     const orderId = order.body.id as string;

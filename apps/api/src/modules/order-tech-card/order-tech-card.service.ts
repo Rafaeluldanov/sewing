@@ -103,8 +103,9 @@ export class OrderTechCardService {
         id: true,
         status: true,
         color: true,
-        techCardId: true,
-        techCard: { select: { name: true } },
+        // Этап 5 «техкарты → номенклатура»: подпись группы — имя карточки
+        // номенклатуры (источника спецификации).
+        patternItemId: true,
         // Поразмерный план нужен, чтобы показать, ИЗ ЧЕГО сложилась норма
         // из номенклатуры (погонные метры / площади задаются по размерам).
         items: {
@@ -119,8 +120,6 @@ export class OrderTechCardService {
           select: {
             id: true,
             color: true,
-            techCardId: true,
-            techCard: { select: { name: true } },
             sizes: {
               select: {
                 sizeId: true,
@@ -132,6 +131,7 @@ export class OrderTechCardService {
         },
         patternItem: {
           select: {
+            name: true,
             parameterNorms: {
               select: {
                 id: true,
@@ -203,6 +203,7 @@ export class OrderTechCardService {
 
     // Группы снимка: ≥2 расцветок → по расцветке; иначе одна order-level
     // (`orderVariantId = null`) — та же логика, что в снимке заказа.
+    const specSourceName = order.patternItem?.name ?? null;
     const groups: Array<{
       orderVariantId: string | null;
       color: string | null;
@@ -213,16 +214,15 @@ export class OrderTechCardService {
         ? order.variants.map((v) => ({
             orderVariantId: v.id,
             color: v.color,
-            techCardId: v.techCardId ?? order.techCardId,
-            techCardName: v.techCard?.name ?? order.techCard?.name ?? null,
+            techCardId: null,
+            techCardName: specSourceName,
           }))
         : [
             {
               orderVariantId: null,
               color: order.variants[0]?.color ?? order.color,
-              techCardId: order.variants[0]?.techCardId ?? order.techCardId,
-              techCardName:
-                order.variants[0]?.techCard?.name ?? order.techCard?.name ?? null,
+              techCardId: null,
+              techCardName: specSourceName,
             },
           ];
 

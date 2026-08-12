@@ -35,7 +35,6 @@ interface Props {
   /** Сколько номенклатуры уедет в архив вместе с группой. */
   patternsCount: number;
   /** Сколько техкарт останется без группы. */
-  techCardsCount: number;
 }
 
 export function DeletePatternCategoryButton({
@@ -43,7 +42,6 @@ export function DeletePatternCategoryButton({
   categoryName,
   status,
   patternsCount,
-  techCardsCount,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -52,16 +50,12 @@ export function DeletePatternCategoryButton({
   // Удалять навсегда можно только архивную категорию.
   if (status !== 'ARCHIVED') return null;
 
-  const contents = describeCategoryContents(patternsCount, techCardsCount);
+  const contents = describeCategoryContents(patternsCount);
 
   const handleClick = () => {
     if (
       !window.confirm(
-        buildCategoryDeleteConfirmText(
-          categoryName,
-          patternsCount,
-          techCardsCount,
-        ),
+        buildCategoryDeleteConfirmText(categoryName, patternsCount),
       )
     ) {
       return;

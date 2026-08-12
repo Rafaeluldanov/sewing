@@ -18,8 +18,7 @@
  *   8. Лекало без `categoryId` (legacy fallback) принимает любой
  *      `materialRole` из `MATERIAL_ROLES`.
  *   9. Hard-delete группы: без `?cascade` блокируется своим содержимым,
- *      с флагом — уводит номенклатуру в архив и отвязывает техкарты
- *      (сами техкарты остаются).
+ *      с флагом — уводит номенклатуру в архив.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -729,57 +728,8 @@ describeWithDb('integration — pattern-categories', () => {
     expect(detail.body.categoryId).toBeNull();
   });
 
-  test('hard-delete группы с ?cascade=1 отвязывает техкарты, но их не удаляет', async () => {
-    const cat = await createHoodieCategory();
-    const tc = await t.prisma.techCardTemplate.create({
-      data: {
-        code: 'TC-CAT-DEL',
-        name: 'Техкарта группы',
-        patternCategoryId: cat.id,
-      },
-    });
-    // Счётчик техкарт виден в DTO — на нём строится предупреждение UI.
-    const before = await request(t.app.getHttpServer())
-      .get(`/api/pattern-categories/${cat.id}`)
-      .set('Cookie', t.adminCookie)
-      .expect(200);
-    expect(before.body.techCardsCount).toBe(1);
-
-    await request(t.app.getHttpServer())
-      .delete(`/api/pattern-categories/${cat.id}`)
-      .set('Cookie', t.adminCookie)
-      .expect(200);
-    await request(t.app.getHttpServer())
-      .delete(`/api/pattern-categories/${cat.id}/permanent?cascade=1`)
-      .set('Cookie', t.adminCookie)
-      .expect(200);
-
-    const after = await t.prisma.techCardTemplate.findUnique({
-      where: { id: tc.id },
-    });
-    expect(after).not.toBeNull();
-    expect(after?.patternCategoryId).toBeNull();
-  });
-
-  test('hard-delete группы без ?cascade блокируется техкартой', async () => {
-    const cat = await createHoodieCategory();
-    await t.prisma.techCardTemplate.create({
-      data: {
-        code: 'TC-CAT-BLOCK',
-        name: 'Техкарта группы',
-        patternCategoryId: cat.id,
-      },
-    });
-    await request(t.app.getHttpServer())
-      .delete(`/api/pattern-categories/${cat.id}`)
-      .set('Cookie', t.adminCookie)
-      .expect(200);
-
-    const r = await request(t.app.getHttpServer())
-      .delete(`/api/pattern-categories/${cat.id}/permanent`)
-      .set('Cookie', t.adminCookie)
-      .expect(409);
-    expect(r.body.code).toBe('PATTERN_CATEGORY_DELETE_FORBIDDEN');
-    expect(r.body.error ?? r.body.message).toMatch(/техкарт/);
-  });
+  // Тесты «cascade отвязывает техкарты» / «удаление блокируется техкартой»
+  // и счётчик `techCardsCount` удалены этапом 5 «техкарты → номенклатура»:
+  // справочника техкарт больше нет, ошибка удаления группы упоминает
+  // только номенклатуры.
 });

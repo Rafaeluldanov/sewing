@@ -6,9 +6,9 @@
  * (`delete-category-chip-button.tsx`) и карточка группы
  * `/admin/pattern-categories/[id]` (`delete-pattern-category-button.tsx`).
  * Формулировка должна быть ОДНА: удаление группы каскадом уводит её
- * номенклатуру в архив и отвязывает техкарты
- * (`PatternCategoriesService.remove`), и менеджер обязан увидеть
- * одинаковое предупреждение независимо от того, откуда нажал.
+ * номенклатуру в архив (`PatternCategoriesService.remove`), и менеджер
+ * обязан увидеть одинаковое предупреждение независимо от того, откуда
+ * нажал.
  *
  * Модуль чистый (без React/DOM) — импортируется из client-компонентов.
  */
@@ -26,35 +26,18 @@ export function pluralPatterns(count: number): string {
   return 'номенклатур';
 }
 
-/** То же для «техкарты»: 1 техкарта, 2 техкарты, 5 техкарт. */
-export function pluralTechCards(count: number): string {
-  const n = Math.abs(count) % 100;
-  const n1 = n % 10;
-  if (n > 10 && n < 20) return 'техкарт';
-  if (n1 > 1 && n1 < 5) return 'техкарты';
-  if (n1 === 1) return 'техкарта';
-  return 'техкарт';
-}
-
 /**
  * Одна строка про содержимое группы — общая для `window.confirm` и для
  * inline-предупреждения на карточке группы. `null`, если группа пуста.
  */
 export function describeCategoryContents(
   patternsCount: number,
-  techCardsCount: number,
 ): string | null {
   const parts: string[] = [];
   if (patternsCount > 0) {
     parts.push(
       `${patternsCount} ${pluralPatterns(patternsCount)} уйдёт в архив ` +
         '«Номенклатуры» (оттуда можно вернуть)',
-    );
-  }
-  if (techCardsCount > 0) {
-    parts.push(
-      `${techCardsCount} ${pluralTechCards(techCardsCount)} останется, ` +
-        'но потеряет привязку к группе',
     );
   }
   if (parts.length === 0) return null;
@@ -64,16 +47,15 @@ export function describeCategoryContents(
 /**
  * Текст `window.confirm` для удаления группы.
  *
- * Счётчики берутся из серверной DTO группы
- * (`PatternCategoryDto.patternsCount` / `techCardsCount`) — считает их
- * backend, UI ничего не выдумывает.
+ * Счётчик берётся из серверной DTO группы
+ * (`PatternCategoryDto.patternsCount`) — считает его backend, UI ничего
+ * не выдумывает.
  */
 export function buildCategoryDeleteConfirmText(
   categoryName: string,
   patternsCount: number,
-  techCardsCount: number,
 ): string {
-  const contents = describeCategoryContents(patternsCount, techCardsCount);
+  const contents = describeCategoryContents(patternsCount);
   if (!contents) {
     return (
       `Удалить группу «${categoryName}» НАВСЕГДА?\n\n` +

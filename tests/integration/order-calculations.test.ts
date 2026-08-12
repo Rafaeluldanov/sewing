@@ -12,9 +12,11 @@
  *      одну активную калькуляцию #0.
  *   2. POST /calculations клонирует активный: старый получает валидный
  *      снимок, новый активен, живые таблицы не меняются.
- *   3. Основной сценарий A↔B: расцветки, техкарта, route-оверрайды
- *      (включая СБРОС утечки carry), ad-hoc параметр техкарты, ручная
- *      строка снимка материалов (восстанавливается с исходным id).
+ *   3. Основной сценарий A↔B: расцветки, route-оверрайды (включая
+ *      СБРОС утечки carry), ad-hoc параметр, ручная строка снимка
+ *      материалов (восстанавливается с исходным id). Смена техкарты
+ *      между вариантами ушла вместе со справочником техкарт: состав
+ *      материалов теперь живёт в спецификации номенклатуры.
  *   4. Цены закупщика в CALCULATION переживают переключение
  *      (восстановление по match-ключу; статус остаётся CALCULATED).
  *   5. Гейты: REVIEWED-строка → 409; ручная isManual REVIEWED не
@@ -54,14 +56,15 @@ describeWithDb('integration — варианты просчёта заказа (
     patternItemId = pattern.id;
   });
 
-  /** Простая техкарта с одной строкой полотна. */
-  async function createTechCard(code: string, name: string): Promise<string> {
-    const res = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
+  /**
+   * Простая спецификация с одной строкой полотна на общем лекале
+   * (справочника техкарт больше нет — состав даёт номенклатура).
+   */
+  async function seedFabricSpec(name: string): Promise<void> {
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternItemId}/material-spec`)
       .set('Cookie', manager)
       .send({
-        code,
-        name,
         materialLines: [
           {
             name: `Полотно ${name}`,
@@ -72,9 +75,9 @@ describeWithDb('integration — варианты просчёта заказа (
             colorRule: 'ORDER_COLOR',
           },
         ],
+        parameters: [],
       })
-      .expect(201);
-    return res.body.id as string;
+      .expect(200);
   }
 
   /** Маршрут из двух BY_SIZE-операций (ставки в seed). */
@@ -95,10 +98,7 @@ describeWithDb('integration — варианты просчёта заказа (
   }
 
   /** Заказ с двумя расцветками (Белый 60 / Чёрный 40 по размеру M). */
-  async function createOrder(
-    techCardId: string,
-    routeTemplateId?: string,
-  ): Promise<string> {
+  async function createOrder(routeTemplateId?: string): Promise<string> {
     const res = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', manager)
@@ -106,18 +106,15 @@ describeWithDb('integration — варианты просчёта заказа (
         orderDate: '2026-07-16T00:00:00.000Z',
         clientId: seed.client.id,
         patternItemId,
-        techCardId,
         routeTemplateId,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
         variants: [
           {
             color: 'Белый',
-            techCardId,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 60 }],
           },
           {
             color: 'Чёрный',
-            techCardId,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }],
           },
         ],
@@ -169,8 +166,8 @@ describeWithDb('integration — варианты просчёта заказа (
   // -------------------------------------------------------------------------
 
   test('создание заказа заводит ровно одну активную калькуляцию #0', async () => {
-    const tc = await createTechCard('TC-CALC-BASE', 'База');
-    const orderId = await createOrder(tc);
+    await seedFabricSpec('База');
+    const orderId = await createOrder();
 
     const calcs = await t.prisma.orderCalculation.findMany({
       where: { orderId },
@@ -207,8 +204,8 @@ describeWithDb('integration — варианты просчёта заказа (
   });
 
   test('клонирование: старый активный получает снимок, живые данные не меняются', async () => {
-    const tc = await createTechCard('TC-CALC-CLONE', 'Клон');
-    const orderId = await createOrder(tc);
+    await seedFabricSpec('Клон');
+    const orderId = await createOrder();
 
     const res = await api()
       .post(`/api/orders/${orderId}/calculations`)
@@ -242,11 +239,10 @@ describeWithDb('integration — варианты просчёта заказа (
     expect(items.map((i) => i.qtyPlan)).toEqual([100]);
   });
 
-  test('A↔B: расцветки, техкарта, route-оверрайды (со сбросом утечки), параметр, ручная строка материалов', async () => {
-    const tc1 = await createTechCard('TC-CALC-A', 'Кулирка 160');
-    const tc2 = await createTechCard('TC-CALC-B', 'Кулирка 190');
+  test('A↔B: расцветки, route-оверрайды (со сбросом утечки), параметр, ручная строка материалов', async () => {
+    await seedFabricSpec('Кулирка 160');
     const rt = await createRouteTemplate();
-    const orderId = await createOrder(tc1, rt);
+    const orderId = await createOrder(rt);
     const op1 = seed.operations['SEW_OVERLOCK_1'].id;
     const op2 = seed.operations['SEW_OVERLOCK_2'].id;
 
@@ -303,7 +299,6 @@ describeWithDb('integration — варианты просчёта заказа (
         variants: [
           {
             color: 'Красный',
-            techCardId: tc2,
             sizes: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
           },
         ],
@@ -351,11 +346,6 @@ describeWithDb('integration — варианты просчёта заказа (
     });
     expect(variantsA.map((v) => v.color)).toEqual(['Белый', 'Чёрный']);
     expect(variantsA.map((v) => v.sizes[0]?.qtyPlan)).toEqual([60, 40]);
-    const orderA = await t.prisma.order.findUniqueOrThrow({
-      where: { id: orderId },
-      select: { techCardId: true },
-    });
-    expect(orderA.techCardId).toBe(tc1);
     expect(
       (await t.prisma.orderItem.findMany({ where: { orderId } })).map(
         (i) => i.qtyPlan,
@@ -393,14 +383,6 @@ describeWithDb('integration — варианты просчёта заказа (
     });
     expect(variantsB.map((v) => v.color)).toEqual(['Красный']);
     expect(variantsB[0].sizes[0]?.qtyPlan).toBe(10);
-    expect(
-      (
-        await t.prisma.order.findUniqueOrThrow({
-          where: { id: orderId },
-          select: { techCardId: true },
-        })
-      ).techCardId,
-    ).toBe(tc2);
     expect(await rateOverrideOf(orderId, op1)).toBe(99);
     expect(await rateOverrideOf(orderId, op2)).toBe(77);
     expect(
@@ -420,8 +402,8 @@ describeWithDb('integration — варианты просчёта заказа (
   });
 
   test('CALCULATION: потребности вариантов сосуществуют; строки и цены живут, ре-линк расцветок', async () => {
-    const tc = await createTechCard('TC-CALC-PRICE', 'Цены');
-    const orderId = await createOrder(tc);
+    await seedFabricSpec('Цены');
+    const orderId = await createOrder();
 
     await api()
       .post(`/api/orders/${orderId}/start-calculation`)
@@ -561,8 +543,8 @@ describeWithDb('integration — варианты просчёта заказа (
   });
 
   test('смета считается только по активному варианту; PO под неактивный — 409', async () => {
-    const tc = await createTechCard('TC-CALC-EST', 'Смета');
-    const orderId = await createOrder(tc);
+    await seedFabricSpec('Смета');
+    const orderId = await createOrder();
     await api()
       .post(`/api/orders/${orderId}/start-calculation`)
       .set('Cookie', manager)
@@ -636,8 +618,8 @@ describeWithDb('integration — варианты просчёта заказа (
   });
 
   test('удаление варианта уносит его потребности — строки не утекают в активный', async () => {
-    const tc = await createTechCard('TC-CALC-DEL', 'Удаление варианта');
-    const orderId = await createOrder(tc);
+    await seedFabricSpec('Удаление варианта');
+    const orderId = await createOrder();
     await api()
       .post(`/api/orders/${orderId}/start-calculation`)
       .set('Cookie', manager)
@@ -707,8 +689,8 @@ describeWithDb('integration — варианты просчёта заказа (
   });
 
   test('гейты: REVIEWED других вариантов НЕ блокируют; первый расчёт при активации; accept-calculated скоуплен; статус/удаление/no-op', async () => {
-    const tc = await createTechCard('TC-CALC-GATES', 'Гейты');
-    const orderId = await createOrder(tc);
+    await seedFabricSpec('Гейты');
+    const orderId = await createOrder();
     const cloneRes = await api()
       .post(`/api/orders/${orderId}/calculations`)
       .set('Cookie', manager)

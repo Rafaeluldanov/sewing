@@ -33,6 +33,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { copySpecLinesTo, createSpecPattern } from '../utils/spec';
 
 interface CategoryWithParams {
   id: string;
@@ -133,30 +134,26 @@ describeWithDb('integration — pattern item parameter norms', () => {
     return p;
   }
 
-  let tcCounter = 0;
-  async function createTechCardSimple(): Promise<string> {
-    tcCounter += 1;
-    const r = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', t.adminCookie)
-      .send({
-        // Код техкарты должен матчить ^[A-Z0-9][A-Z0-9_-]{0,47}$ —
-        // см. `packages/shared/src/tech-cards.ts::TECH_CARD_CODE_PATTERN`.
-        code: `TC-PN-${tcCounter}`,
-        name: 'Tech card simple',
-        materialLines: [
-          { name: 'Нитки', unit: 'м', qtyPerUnit: '0.5' },
-        ],
-      })
-      .expect(201);
-    return r.body.id as string;
+  // Этап 5 «техкарты → номенклатура»: состав материалов заводится
+  // спецификацией на отдельной карточке-«доноре», а `createOrder`
+  // копирует её строки на лекало заказа (карточка у заказа одна).
+  let specCounter = 0;
+  async function createSpecSimple(): Promise<string> {
+    specCounter += 1;
+    const spec = await createSpecPattern(t, t.adminCookie, {
+      article: `SPEC-PN-${specCounter}`,
+      name: 'Спецификация simple',
+      materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '0.5' }],
+    });
+    return spec.id;
   }
 
   async function createOrder(opts: {
-    techCardId: string;
+    specPatternId: string;
     patternItemId: string;
     qtyPlan: number;
   }): Promise<string> {
+    await copySpecLinesTo(t, opts.specPatternId, opts.patternItemId);
     const r = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', t.adminCookie)
@@ -165,7 +162,6 @@ describeWithDb('integration — pattern item parameter norms', () => {
         clientId: seed.client.id,
         productId: seed.product.id,
         items: [{ sizeId: seed.sizes.M, qtyPlan: opts.qtyPlan }],
-        techCardId: opts.techCardId,
         patternItemId: opts.patternItemId,
       })
       .expect(201);
@@ -355,9 +351,9 @@ describeWithDb('integration — pattern item parameter norms', () => {
       })
       .expect(200);
 
-    const tcId = await createTechCardSimple();
+    const specId = await createSpecSimple();
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       qtyPlan: 100,
     });
@@ -380,7 +376,7 @@ describeWithDb('integration — pattern item parameter norms', () => {
       status: string;
     }>;
 
-    // Должны быть три строки: 1 от ТЗ-техкарты (нитки) + 2 от норм.
+    // Должны быть три строки: 1 от спецификации (нитки) + 2 от норм.
     const normNeeds = needs.filter(
       (n) => n.sourceType === 'PATTERN_PARAMETER_NORM',
     );
@@ -412,9 +408,9 @@ describeWithDb('integration — pattern item parameter norms', () => {
   test('лекало без норм фурнитуры — WorkshopNeed по нормам не создаются', async () => {
     const cat = await createCategoryWithHardware();
     const patternId = await createPatternWithCategory(cat.id, 'P-WN-NONORMS');
-    const tcId = await createTechCardSimple();
+    const specId = await createSpecSimple();
     const orderId = await createOrder({
-      techCardId: tcId,
+      specPatternId: specId,
       patternItemId: patternId,
       qtyPlan: 50,
     });

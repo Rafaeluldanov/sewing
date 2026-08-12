@@ -23,13 +23,10 @@ import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 /** Провалидированные ссылки снимка на справочники (см.
  *  `validateSnapshotRefs`): несуществующие FK при restore зануляются. */
 interface SnapshotRefs {
-  validTechCardIds: Set<string>;
-  validTechCardLineIds: Set<string>;
   validSizeIds: Set<string>;
   validSupplierIds: Set<string>;
   validCatalogItemIds: Set<string>;
   routeTemplateId: string | null;
-  orderTechCardId: string | null;
 }
 
 /**
@@ -264,7 +261,6 @@ export class OrderCalculationsService {
         where: { id: orderId },
         data: {
           routeTemplateId: refs.routeTemplateId,
-          techCardId: refs.orderTechCardId,
           color: snap.order.color,
           customerUnitPrice: snap.order.customerUnitPrice,
           customerCurrency: snap.order.customerCurrency,
@@ -287,10 +283,6 @@ export class OrderCalculationsService {
             orderId,
             ordinal: v.ordinal,
             color: v.color,
-            techCardId:
-              v.techCardId && refs.validTechCardIds.has(v.techCardId)
-                ? v.techCardId
-                : null,
             sizes: {
               create: this.normalizeSizes(v.sizes).filter((s) =>
                 refs.validSizeIds.has(s.sizeId),
@@ -351,11 +343,9 @@ export class OrderCalculationsService {
             ? null
             : (variantIdByOrdinal.get(r.variantOrdinal) ?? null),
         variantColor: r.variantColor,
-        sourceTechCardLineId:
-          r.sourceTechCardLineId &&
-          refs.validTechCardLineIds.has(r.sourceTechCardLineId)
-            ? r.sourceTechCardLineId
-            : null,
+        // Этап 5: FK на строки техкарт снят — историческая трассировка
+        // восстанавливается как есть.
+        sourceTechCardLineId: r.sourceTechCardLineId ?? null,
         sortOrder: r.sortOrder,
         name: r.name,
         unit: r.unit,
@@ -565,7 +555,6 @@ export class OrderCalculationsService {
       where: { id: orderId },
       select: {
         routeTemplateId: true,
-        techCardId: true,
         color: true,
         customerUnitPrice: true,
         customerCurrency: true,
@@ -578,7 +567,6 @@ export class OrderCalculationsService {
             id: true,
             ordinal: true,
             color: true,
-            techCardId: true,
             sizes: { select: { sizeId: true, qtyPlan: true } },
           },
         },
@@ -695,7 +683,9 @@ export class OrderCalculationsService {
       version: 1,
       order: {
         routeTemplateId: order.routeTemplateId,
-        techCardId: order.techCardId,
+        // Этап 5 «техкарты → номенклатура»: поле остаётся в снимке ради
+        // старых снапшотов, новые пишут null.
+        techCardId: null,
         color: order.color,
         customerUnitPrice: dec(order.customerUnitPrice),
         customerCurrency: order.customerCurrency,
@@ -707,7 +697,7 @@ export class OrderCalculationsService {
       variants: order.variants.map((v) => ({
         ordinal: v.ordinal,
         color: v.color,
-        techCardId: v.techCardId,
+        techCardId: null,
         sizes: v.sizes.map((s) => ({ sizeId: s.sizeId, qtyPlan: s.qtyPlan })),
       })),
       // Только шаги, где есть хоть один оверрайд — restore пишет
@@ -840,21 +830,6 @@ export class OrderCalculationsService {
   private async validateSnapshotRefs(
     snap: OrderCalculationSnapshotV1,
   ): Promise<SnapshotRefs> {
-    const techCardIds = [
-      ...new Set(
-        [
-          snap.order.techCardId,
-          ...snap.variants.map((v) => v.techCardId),
-        ].filter((id): id is string => id != null),
-      ),
-    ];
-    const lineIds = [
-      ...new Set(
-        snap.materialRequirements
-          .map((r) => r.sourceTechCardLineId)
-          .filter((id): id is string => id != null),
-      ),
-    ];
     const sizeIds = [
       ...new Set([
         ...snap.variants.flatMap((v) => v.sizes.map((s) => s.sizeId)),
@@ -878,20 +853,8 @@ export class OrderCalculationsService {
       ),
     ];
 
-    const [techCards, lines, sizes, suppliers, catalogItems, routeTemplate] =
+    const [sizes, suppliers, catalogItems, routeTemplate] =
       await Promise.all([
-        techCardIds.length
-          ? this.prisma.techCardTemplate.findMany({
-              where: { id: { in: techCardIds } },
-              select: { id: true },
-            })
-          : Promise.resolve([]),
-        lineIds.length
-          ? this.prisma.techCardMaterialLine.findMany({
-              where: { id: { in: lineIds } },
-              select: { id: true },
-            })
-          : Promise.resolve([]),
         sizeIds.length
           ? this.prisma.size.findMany({
               where: { id: { in: sizeIds } },
@@ -918,18 +881,11 @@ export class OrderCalculationsService {
           : Promise.resolve(null),
       ]);
 
-    const validTechCardIds = new Set(techCards.map((t) => t.id));
     return {
-      validTechCardIds,
-      validTechCardLineIds: new Set(lines.map((l) => l.id)),
       validSizeIds: new Set(sizes.map((s) => s.id)),
       validSupplierIds: new Set(suppliers.map((s) => s.id)),
       validCatalogItemIds: new Set(catalogItems.map((c) => c.id)),
       routeTemplateId: routeTemplate?.id ?? null,
-      orderTechCardId:
-        snap.order.techCardId && validTechCardIds.has(snap.order.techCardId)
-          ? snap.order.techCardId
-          : null,
     };
   }
 

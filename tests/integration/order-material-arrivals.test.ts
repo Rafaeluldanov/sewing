@@ -32,6 +32,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — order material arrivals (ручная отметка)', () => {
   let t: TestApp;
@@ -59,31 +60,26 @@ describeWithDb('integration — order material arrivals (ручная отмет
 
   /**
    * Готовит заказ с одной blocking-потребностью MAIN_FABRIC (через
-   * QTY_PER_UNIT-fallback — без `PatternItem`). Ничего не принимаем
-   * по приёмке, поэтому cut-readiness вернёт `ready=false` со
-   * статусом BLOCKER на материале.
+   * QTY_PER_UNIT-fallback из спецификации номенклатуры). Ничего не
+   * принимаем по приёмке, поэтому cut-readiness вернёт `ready=false`
+   * со статусом BLOCKER на материале.
    */
   async function prepareOrderWithBlockingNeed(): Promise<{
     orderId: string;
     workshopNeedId: string;
   }> {
-    const tc = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', cookies.manager)
-      .send({
-        code: `TC-MA-${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
-        name: 'Material arrival demo',
-        materialLines: [
-          {
-            name: 'Кулирка чёрная',
-            unit: 'кг',
-            qtyPerUnit: '0.5',
-            materialRole: 'MAIN_FABRIC',
-            colorRule: 'ORDER_COLOR',
-          },
-        ],
-      })
-      .expect(201);
+    const pattern = await createSpecPattern(t, cookies.manager, {
+      name: 'Material arrival demo',
+      materialLines: [
+        {
+          name: 'Кулирка чёрная',
+          unit: 'кг',
+          qtyPerUnit: '0.5',
+          materialRole: 'MAIN_FABRIC',
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
 
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
@@ -93,7 +89,7 @@ describeWithDb('integration — order material arrivals (ручная отмет
         productId: seed.product.id,
         color: 'Чёрный',
         items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
-        techCardId: tc.body.id,
+        patternItemId: pattern.id,
       })
       .expect(201);
 
@@ -410,30 +406,25 @@ describeWithDb('integration — order material arrivals (ручная отмет
 
   test('workshopNeedIds: применяет override только к указанным потребностям', async () => {
     // Создаём заказ с двумя потребностями: MAIN_FABRIC и RIB.
-    const tc = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', cookies.manager)
-      .send({
-        code: `TC-MA-FILTER-${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
-        name: 'Two materials',
-        materialLines: [
-          {
-            name: 'Кулирка',
-            unit: 'кг',
-            qtyPerUnit: '0.5',
-            materialRole: 'MAIN_FABRIC',
-            colorRule: 'ORDER_COLOR',
-          },
-          {
-            name: 'Рибана',
-            unit: 'кг',
-            qtyPerUnit: '0.1',
-            materialRole: 'RIB',
-            colorRule: 'ORDER_COLOR',
-          },
-        ],
-      })
-      .expect(201);
+    const pattern = await createSpecPattern(t, cookies.manager, {
+      name: 'Two materials',
+      materialLines: [
+        {
+          name: 'Кулирка',
+          unit: 'кг',
+          qtyPerUnit: '0.5',
+          materialRole: 'MAIN_FABRIC',
+          colorRule: 'ORDER_COLOR',
+        },
+        {
+          name: 'Рибана',
+          unit: 'кг',
+          qtyPerUnit: '0.1',
+          materialRole: 'RIB',
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
 
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
@@ -443,7 +434,7 @@ describeWithDb('integration — order material arrivals (ручная отмет
         productId: seed.product.id,
         color: 'Чёрный',
         items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
-        techCardId: tc.body.id,
+        patternItemId: pattern.id,
       })
       .expect(201);
 

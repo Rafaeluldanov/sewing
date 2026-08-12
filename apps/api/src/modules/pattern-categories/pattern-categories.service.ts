@@ -3,8 +3,6 @@ import { Prisma } from '@prisma/client';
 import {
   applyParameterDefaults,
   generatePatternCategorySlug,
-  type CompatibleTechCardDto,
-  type CompatibleTechCardsResponseDto,
   type CreatePatternCategoryDto,
   type ListPatternCategoriesQuery,
   type PatternCategoryDto,
@@ -12,7 +10,6 @@ import {
   type PatternCategoryParameterDto,
   type PatternCategoryParameterInputDto,
   type ReplacePatternCategoryParametersDto,
-  type TechCardCompatibilityLevel,
   type UpdatePatternCategoryDto,
 } from '@sewing/shared/pattern-categories';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -79,7 +76,7 @@ export class PatternCategoriesService {
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
       include: {
         _count: {
-          select: { parameters: true, patterns: true, techCards: true },
+          select: { parameters: true, patterns: true },
         },
       },
     });
@@ -95,7 +92,6 @@ export class PatternCategoriesService {
       description: row.description,
       parametersCount: row._count.parameters,
       patternsCount: row._count.patterns,
-      techCardsCount: row._count.techCards,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     }));
@@ -109,94 +105,12 @@ export class PatternCategoriesService {
           orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
         },
         _count: {
-          select: { parameters: true, patterns: true, techCards: true },
+          select: { parameters: true, patterns: true },
         },
       },
     });
     if (!row) throw new PatternCategoryNotFoundException();
     return toDetailDto(row);
-  }
-
-  /**
-   * Inline-создание изделия из формы заказа: активные техкарты с
-   * compatibility-оценкой по `AREA_M2_BY_SIZE`-параметрам категории.
-   * Сортируется `FULL → PARTIAL → NONE`, затем по `code`. Backend
-   * `OrdersService.create` валидирует совместимость строго при
-   * `CREATE_FOR_CALCULATION` (иначе 409
-   * `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY`).
-   */
-  async compatibleTechCards(
-    categoryId: string,
-  ): Promise<CompatibleTechCardsResponseDto> {
-    const category = await this.prisma.patternCategory.findUnique({
-      where: { id: categoryId },
-      include: {
-        parameters: { where: { status: 'ACTIVE' } },
-      },
-    });
-    if (!category) throw new PatternCategoryNotFoundException();
-    const requiredRoleKeys = category.parameters
-      .filter((p) => p.inputType === 'AREA_M2_BY_SIZE')
-      .map((p) => p.roleKey);
-    const requiredSet = new Set(requiredRoleKeys);
-
-    const techCards = await this.prisma.techCardTemplate.findMany({
-      where: { isActive: true },
-      include: {
-        materialLines: { select: { materialRole: true } },
-        _count: { select: { materialLines: true } },
-      },
-      orderBy: [{ code: 'asc' }],
-    });
-
-    const result: CompatibleTechCardDto[] = techCards.map((tc) => {
-      const present = new Set<string>();
-      for (const l of tc.materialLines) {
-        if (l.materialRole) present.add(l.materialRole);
-      }
-      const matched: string[] = [];
-      const missing: string[] = [];
-      for (const role of requiredSet) {
-        if (present.has(role)) matched.push(role);
-        else missing.push(role);
-      }
-      let compatibility: TechCardCompatibilityLevel;
-      if (requiredSet.size === 0 || missing.length === 0) {
-        compatibility = 'FULL';
-      } else if (matched.length === 0) {
-        compatibility = 'NONE';
-      } else {
-        compatibility = 'PARTIAL';
-      }
-      return {
-        id: tc.id,
-        code: tc.code,
-        name: tc.name,
-        isActive: tc.isActive,
-        patternCategoryId: tc.patternCategoryId,
-        compatibility,
-        matchedRoleKeys: matched,
-        missingRoleKeys: missing,
-        materialLinesCount: tc._count.materialLines,
-      };
-    });
-
-    const order: Record<TechCardCompatibilityLevel, number> = {
-      FULL: 0,
-      PARTIAL: 1,
-      NONE: 2,
-    };
-    result.sort((a, b) => {
-      const d = order[a.compatibility] - order[b.compatibility];
-      if (d !== 0) return d;
-      return a.code.localeCompare(b.code);
-    });
-
-    return {
-      categoryId,
-      requiredRoleKeys,
-      techCards: result,
-    };
   }
 
   // ===========================================================================
@@ -410,38 +324,20 @@ export class PatternCategoriesService {
       );
     }
 
-    const [patterns, techCards] = await Promise.all([
-      this.prisma.patternItem.findMany({
-        where: { categoryId: id },
-        select: { id: true, status: true },
-      }),
-      this.prisma.techCardTemplate.findMany({
-        where: { patternCategoryId: id },
-        select: { id: true },
-      }),
-    ]);
-    if ((patterns.length > 0 || techCards.length > 0) && !options?.cascade) {
-      const parts: string[] = [];
-      if (patterns.length > 0) parts.push(`номенклатур: ${patterns.length}`);
-      if (techCards.length > 0) parts.push(`техкарт: ${techCards.length}`);
+    const patterns = await this.prisma.patternItem.findMany({
+      where: { categoryId: id },
+      select: { id: true, status: true },
+    });
+    if (patterns.length > 0 && !options?.cascade) {
       throw new PatternCategoryDeleteForbiddenException(
-        `Эту категорию удалить навсегда нельзя: к ней привязаны ${parts.join(
-          ', ',
-        )}. Как удалить: подтвердите удаление вместе с содержимым (номенклатура уйдёт в архив, техкарты останутся без группы) или перевесьте их на другую группу вручную. Если группа нужна — оставьте её в архиве.`,
+        `Эту категорию удалить навсегда нельзя: к ней привязаны номенклатуры: ${patterns.length}. Как удалить: подтвердите удаление вместе с содержимым (номенклатура уйдёт в архив) или перевесьте её на другую группу вручную. Если группа нужна — оставьте её в архиве.`,
       );
     }
     const toArchive = patterns
       .filter((p) => p.status !== 'ARCHIVED')
       .map((p) => p.id);
-    const toDetach = techCards.map((t) => t.id);
 
     await this.prisma.$transaction(async (tx) => {
-      if (toDetach.length > 0) {
-        await tx.techCardTemplate.updateMany({
-          where: { id: { in: toDetach } },
-          data: { patternCategoryId: null },
-        });
-      }
       if (toArchive.length > 0) {
         await tx.patternItem.updateMany({
           where: { id: { in: toArchive } },
@@ -476,7 +372,6 @@ export class PatternCategoriesService {
             slug: current.slug,
             archivedPatternIds: toArchive,
             detachedPatternsCount: patterns.length,
-            detachedTechCardIds: toDetach,
           },
           employeeId: actorEmployeeId ?? null,
         },
@@ -486,7 +381,7 @@ export class PatternCategoriesService {
 
     this.logger.log(
       `event=pattern_category.delete id=${id} patterns=${patterns.length} ` +
-        `archived=${toArchive.length} techCardsDetached=${toDetach.length}`,
+        `archived=${toArchive.length}`,
     );
   }
 
@@ -638,7 +533,7 @@ export class PatternCategoriesService {
 type CategoryWithIncludes = Prisma.PatternCategoryGetPayload<{
   include: {
     parameters: true;
-    _count: { select: { parameters: true; patterns: true; techCards: true } };
+    _count: { select: { parameters: true; patterns: true } };
   };
 }>;
 
@@ -670,7 +565,6 @@ function toDetailDto(row: CategoryWithIncludes): PatternCategoryDto {
     description: row.description,
     parametersCount: row._count.parameters,
     patternsCount: row._count.patterns,
-    techCardsCount: row._count.techCards,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     parameters,

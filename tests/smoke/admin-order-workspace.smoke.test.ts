@@ -700,7 +700,7 @@ describe('OrderRecommendationsCard — rule-based, не AI', () => {
     expect(src).toMatch(/Не выбрана номенклатура/);
     expect(src).toMatch(/Пустая размерная матрица/);
     expect(src).toMatch(/Не выбран маршрут/);
-    expect(src).toMatch(/Не выбрана техкарта/);
+    expect(src).toMatch(/Нет материалов в спецификации/);
     expect(src).toMatch(/План операций устарел/);
   });
 

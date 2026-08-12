@@ -63,12 +63,11 @@ export class OrderColorwaysService {
       });
     }
 
-    const [variants, sizes, techCards] = await Promise.all([
+    const [variants, sizes] = await Promise.all([
       this.prisma.orderVariant.findMany({
         where: { orderId },
         orderBy: { ordinal: 'asc' },
         include: {
-          techCard: { select: { id: true, name: true } },
           sizes: { include: { size: { select: { id: true, code: true } } } },
         },
       }),
@@ -76,17 +75,11 @@ export class OrderColorwaysService {
         orderBy: { sortOrder: 'asc' },
         select: { id: true, code: true },
       }),
-      this.prisma.techCardTemplate.findMany({
-        where: { isActive: true },
-        orderBy: { name: 'asc' },
-        select: { id: true, name: true },
-      }),
     ]);
 
     return {
       orderId,
       sizes,
-      techCards,
       variants: variants.map((v) => this.toVariantDto(v, sizes)),
     };
   }
@@ -101,7 +94,6 @@ export class OrderColorwaysService {
     actorEmployeeId?: string | null,
   ): Promise<OrderColorwaysDto> {
     await this.assertEditableOrder(orderId);
-    await this.assertTechCard(dto.techCardId);
 
     const last = await this.prisma.orderVariant.findFirst({
       where: { orderId },
@@ -115,7 +107,6 @@ export class OrderColorwaysService {
         orderId,
         ordinal: nextOrdinal,
         color: dto.color,
-        techCardId: dto.techCardId ?? null,
         sizes: {
           create: this.normalizeSizes(dto.sizes),
         },
@@ -144,13 +135,11 @@ export class OrderColorwaysService {
         message: 'Расцветка не найдена',
       });
     }
-    await this.assertTechCard(dto.techCardId);
-
     // Поразмерный план = source of truth формы: заменяем целиком.
     await this.prisma.$transaction([
       this.prisma.orderVariant.update({
         where: { id: variantId },
-        data: { color: dto.color, techCardId: dto.techCardId ?? null },
+        data: { color: dto.color },
       }),
       this.prisma.orderVariantSize.deleteMany({ where: { variantId } }),
       this.prisma.orderVariantSize.createMany({
@@ -232,21 +221,6 @@ export class OrderColorwaysService {
     }
   }
 
-  private async assertTechCard(techCardId?: string | null): Promise<void> {
-    if (!techCardId) return;
-    const tc = await this.prisma.techCardTemplate.findUnique({
-      where: { id: techCardId },
-      select: { id: true },
-    });
-    if (!tc) {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: 'TECH_CARD_NOT_FOUND',
-        message: 'Выбранная техкарта не найдена',
-      });
-    }
-  }
-
   /** Схлопывает дубли размеров и выкидывает нулевые строки. */
   private normalizeSizes(
     rows: UpsertOrderColorwayDto['sizes'],
@@ -265,8 +239,6 @@ export class OrderColorwaysService {
       id: string;
       ordinal: number;
       color: string;
-      techCardId: string | null;
-      techCard: { id: string; name: string } | null;
       sizes: Array<{
         sizeId: string;
         qtyPlan: number;
@@ -280,8 +252,6 @@ export class OrderColorwaysService {
       id: v.id,
       ordinal: v.ordinal,
       color: v.color,
-      techCardId: v.techCardId,
-      techCardName: v.techCard?.name ?? null,
       sizes: v.sizes.map((s) => ({
         sizeId: s.sizeId,
         sizeCode: s.size?.code ?? codeById.get(s.sizeId) ?? '—',

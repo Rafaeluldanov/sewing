@@ -18,7 +18,6 @@ import {
   ListPatternCategoriesQuerySchema,
   ReplacePatternCategoryParametersSchema,
   UpdatePatternCategorySchema,
-  type CompatibleTechCardsResponseDto,
   type CreatePatternCategoryDto,
   type ListPatternCategoriesQuery,
   type PatternCategoryDto,
@@ -117,17 +116,7 @@ export class PatternCategoriesController {
     return this.service.uploadIcon(id, file, user.employeeId);
   }
 
-  /**
-   * Inline-создание изделия из формы заказа: активные техкарты с
-   * compatibility-оценкой по этой категории.
-   */
-  @Get(':id/compatible-tech-cards')
-  compatibleTechCards(
-    @Param('id') id: string,
-  ): Promise<CompatibleTechCardsResponseDto> {
-    return this.service.compatibleTechCards(id);
-  }
-
+  
   @Delete(':id')
   archive(
     @Param('id') id: string,

@@ -103,9 +103,9 @@ describe('order detail page — tech card snapshot blocks', () => {
 
 
 describe('shared DTO contracts', () => {
-  test('OrderDetailDto содержит techCardId, materialRequirements, outsourceRequirements', () => {
+  test('OrderDetailDto содержит materialRequirements, outsourceRequirements (techCardId удалён этапом 5)', () => {
     const dto = readSrc('packages/shared/src/orders.ts');
-    expect(dto).toMatch(/techCardId:\s*string \| null/);
+    expect(dto).not.toMatch(/techCardId:\s*string \| null/);
     expect(dto).toMatch(/materialRequirements:\s*OrderMaterialRequirementDto\[\]/);
     expect(dto).toMatch(
       /outsourceRequirements:\s*OrderOutsourceRequirementDto\[\]/,

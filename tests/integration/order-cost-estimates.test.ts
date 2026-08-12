@@ -24,6 +24,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { copySpecLinesTo, createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — order cost estimates', () => {
   let t: TestApp;
@@ -448,15 +449,12 @@ async function prepareDraftReady(
   seed: SeedResult,
   cookie: string,
 ): Promise<string> {
-  const tc = await request(t.app.getHttpServer())
-    .post('/api/tech-cards')
-    .set('Cookie', cookie)
-    .send({
-      code: `TC-CE-${Date.now()}`,
-      name: 'Cost estimate flow',
-      materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1' }],
-    })
-    .expect(201);
+  // Состав материалов теперь даёт спецификация номенклатуры: копируем
+  // строки на лекало заказа ДО его создания.
+  const spec = await createSpecPattern(t, cookie, {
+    name: 'Cost estimate flow',
+    materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1' }],
+  });
   const pattern = await t.prisma.patternItem.create({
     data: {
       name: 'Лекало стоимости',
@@ -464,6 +462,7 @@ async function prepareDraftReady(
       status: 'ACTIVE',
     },
   });
+  await copySpecLinesTo(t, spec.id, pattern.id);
   const order = await request(t.app.getHttpServer())
     .post('/api/orders')
     .set('Cookie', cookie)
@@ -472,7 +471,6 @@ async function prepareDraftReady(
       clientId: seed.client.id,
       productId: seed.product.id,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 4 }],
-      techCardId: tc.body.id,
       patternItemId: pattern.id,
     })
     .expect(201);

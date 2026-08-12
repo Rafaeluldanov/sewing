@@ -35,6 +35,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { copySpecLinesTo, createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — клиент обязателен в заказе', () => {
   let t: TestApp;
@@ -55,23 +56,18 @@ describeWithDb('integration — клиент обязателен в заказ�
 
   /**
    * Заказ, готовый к расчёту по всем ОСТАЛЬНЫМ гейтам (pattern +
-   * techCard + qtyPlan > 0). `clientId` передаём опционально — это и есть
-   * предмет теста.
+   * спецификация + qtyPlan > 0). `clientId` передаём опционально — это и
+   * есть предмет теста.
    */
   async function createOrderReadyForCalculation(opts?: {
     clientId?: string;
     suffix?: string;
   }): Promise<string> {
     const suffix = opts?.suffix ?? '1';
-    const tc = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', manager)
-      .send({
-        code: `TC-CLIENT-REQ-${suffix}`,
-        name: `Клиент обязателен ${suffix}`,
-        materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
-      })
-      .expect(201);
+    const spec = await createSpecPattern(t, manager, {
+      name: `Клиент обязателен ${suffix}`,
+      materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
+    });
     const pattern = await t.prisma.patternItem.create({
       data: {
         name: `Лекало ${suffix}`,
@@ -79,6 +75,7 @@ describeWithDb('integration — клиент обязателен в заказ�
         status: 'ACTIVE',
       },
     });
+    await copySpecLinesTo(t, spec.id, pattern.id);
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', manager)
@@ -86,7 +83,6 @@ describeWithDb('integration — клиент обязателен в заказ�
         orderDate: '2026-07-26T00:00:00.000Z',
         productId: seed.product.id,
         patternItemId: pattern.id,
-        techCardId: tc.body.id,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
         ...(opts?.clientId ? { clientId: opts.clientId } : {}),
       })
@@ -212,22 +208,13 @@ describeWithDb('integration — клиент обязателен в заказ�
   // ---------------------------------------------------------------------------
 
   test('без лекала И без клиента первым отдаётся ORDER_PATTERN_REQUIRED', async () => {
-    const tc = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', manager)
-      .send({
-        code: 'TC-CLIENT-REQ-ORDER',
-        name: 'Очерёдность гейтов',
-        materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1' }],
-      })
-      .expect(201);
+    // Заказ без лекала: гейт лекала должен сработать раньше клиента.
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', manager)
       .send({
         orderDate: '2026-07-26T00:00:00.000Z',
         productId: seed.product.id,
-        techCardId: tc.body.id,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 2 }],
       })
       .expect(201);

@@ -832,14 +832,6 @@ export async function OrderOperationsUnifiedTable({ order, passports }: Props) {
                 {rows.length}{' '}
                 {pluralRu(rows.length, ['операция', 'операции', 'операций'])}
               </span>
-              {order.techCardName && (
-                <>
-                  {' · '}
-                  <span title="Источник: snapshot техкарты заказа.">
-                    {order.techCardName}
-                  </span>
-                </>
-              )}
               {order.routeTemplateName && (
                 <>
                   {' · '}

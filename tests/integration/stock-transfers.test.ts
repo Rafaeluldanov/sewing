@@ -38,6 +38,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — stock transfers', () => {
   let t: TestApp;
@@ -116,24 +117,17 @@ describeWithDb('integration — stock transfers', () => {
       })
       .expect(201);
 
-    const tcCode = `TC-TR-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
-    const tc = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', cookies.manager)
-      .send({
-        code: tcCode,
-        name: tcCode,
-        materialLines: [
-          {
-            name: 'Кулирка',
-            unit: 'м',
-            qtyPerUnit: '0.5',
-            materialRole: 'MAIN_FABRIC',
-            colorRule: 'ORDER_COLOR',
-          },
-        ],
-      })
-      .expect(201);
+    const spec = await createSpecPattern(t, cookies.manager, {
+      materialLines: [
+        {
+          name: 'Кулирка',
+          unit: 'м',
+          qtyPerUnit: '0.5',
+          materialRole: 'MAIN_FABRIC',
+          colorRule: 'ORDER_COLOR',
+        },
+      ],
+    });
 
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
@@ -143,7 +137,7 @@ describeWithDb('integration — stock transfers', () => {
         productId: seed.product.id,
         color: 'Чёрный',
         items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
-        techCardId: tc.body.id,
+        patternItemId: spec.id,
       })
       .expect(201);
     const orderId = order.body.id as string;

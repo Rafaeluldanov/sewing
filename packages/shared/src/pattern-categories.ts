@@ -844,69 +844,12 @@ export interface PatternCategoryListItemDto {
   description: string | null;
   parametersCount: number;
   patternsCount: number;
-  /**
-   * Сколько техкарт привязано к группе (`TechCardTemplate.patternCategoryId`).
-   *
-   * Нужен кнопкам удаления группы: удаление каскадом уводит
-   * номенклатуру в архив, а техкарты ОТВЯЗЫВАЕТ (FK `SET NULL`, сами
-   * техкарты остаются) — предупреждение обязано назвать оба числа
-   * ДО клика, см. `apps/web/lib/pattern-category-delete-confirm.ts`.
-   */
-  techCardsCount: number;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface PatternCategoryDto extends PatternCategoryListItemDto {
   parameters: PatternCategoryParameterDto[];
-}
-
-// ---------------------------------------------------------------------------
-// Compatible tech-cards (этап «Inline-создание изделия из формы заказа»)
-//
-// Источник: `apps/api/src/modules/pattern-categories/pattern-categories.controller.ts`
-// `GET /api/pattern-categories/:id/compatible-tech-cards`.
-// Используется селектом «Техкарта» в модалке «Создать изделие» для
-// фильтрации/предупреждений по совместимости с категорией.
-// ---------------------------------------------------------------------------
-
-export const TECH_CARD_COMPATIBILITY_LEVELS = [
-  'FULL',
-  'PARTIAL',
-  'NONE',
-] as const;
-export type TechCardCompatibilityLevel =
-  (typeof TECH_CARD_COMPATIBILITY_LEVELS)[number];
-
-export interface CompatibleTechCardDto {
-  id: string;
-  code: string;
-  name: string;
-  isActive: boolean;
-  patternCategoryId: string | null;
-  /**
-   * Совместимость техкарты с группой номенклатуры:
-   *   - `FULL`    — все активные `AREA_M2_BY_SIZE` параметры категории
-   *     имеют соответствующую строку техкарты с тем же `materialRole`;
-   *   - `PARTIAL` — часть roleKey-ов совпала, часть отсутствует;
-   *   - `NONE`    — ни одной совпавшей пары.
-   *
-   * UI «Создать изделие» по умолчанию показывает все варианты,
-   * сортируя `FULL → PARTIAL → NONE`. Backend `OrdersService.create`
-   * дополнительно валидирует строго при `CREATE_FOR_CALCULATION`
-   * (иначе 409 `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY`).
-   */
-  compatibility: TechCardCompatibilityLevel;
-  matchedRoleKeys: string[];
-  missingRoleKeys: string[];
-  materialLinesCount: number;
-}
-
-export interface CompatibleTechCardsResponseDto {
-  categoryId: string;
-  /** Активные `AREA_M2_BY_SIZE` параметры категории — что мы матчим. */
-  requiredRoleKeys: string[];
-  techCards: CompatibleTechCardDto[];
 }
 
 // ---------------------------------------------------------------------------

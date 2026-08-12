@@ -4,10 +4,12 @@
  * status»). Описание API см. `docs/api.md §«outsource execution
  * status»`.
  *
+ * После перехода «техкарты → номенклатура» снапшот подряда при
+ * `start()` больше НЕ создаётся: таблица `OrderOutsourceRequirement`
+ * осталась для исторических данных, строки в тестах сеются напрямую
+ * (`seedOutsourceLines`).
+ *
  * Покрытие:
- *   A. `OrdersService.start()` создаёт snapshot с
- *      `executionStatus = PLANNED`, `orderedAt = receivedAt = null`,
- *      `displayStatus` собран корректно.
  *   B. CUT_READY + крой не размещён → переход PLANNED → ORDERED
  *      запрещён (`409 OUTSOURCE_NOT_READY_TO_ORDER`).
  *   C. CUT_READY + крой размещён → PLANNED → ORDERED → RECEIVED
@@ -20,8 +22,6 @@
  *      200 + `OrderDetailDto`, без побочных эффектов.
  *   G. `getOne()` корректно собирает композитный `displayStatus` /
  *      `displayStatusLabel`.
- *   H. Правка шаблона техкарты после `start()` НЕ перезаписывает
- *      `executionStatus` уже зафиксированных snapshot-строк.
  *
  * Сознательно НЕ покрываем:
  *   - rollback-переходы (их через action нет, см. ADR-0022);
@@ -38,6 +38,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 describeWithDb(
   'integration — outsource requirement execution status (MVP-3, ADR-0022)',
@@ -58,65 +59,23 @@ describeWithDb(
       cookie = loginAs(t, seed.employees['shop-chief']);
     });
 
-    // -------------------------------------------------------------------------
-    // A. start() ставит дефолтные значения; getOne() их корректно отдаёт.
-    // -------------------------------------------------------------------------
-    test('A. start(): executionStatus=PLANNED, orderedAt/receivedAt=null', async () => {
-      const tc = await createTechCard({
-        outsourceLines: [
-          { name: 'Шелкография', unit: 'шт', qtyPerUnit: '1' },
-          {
-            name: 'Шелкография по крою',
-            unit: 'шт',
-            qtyPerUnit: '1',
-            triggerType: 'CUT_READY',
-          },
-        ],
-      });
-      const orderId = await createAndStart(tc.id);
-
-      const res = await request(t.app.getHttpServer())
-        .get(`/api/orders/${orderId}`)
-        .set('Cookie', cookie)
-        .expect(200);
-
-      const rows = res.body.outsourceRequirements;
-      expect(rows).toHaveLength(2);
-      for (const r of rows) {
-        expect(r.executionStatus).toBe('PLANNED');
-        expect(r.orderedAt).toBeNull();
-        expect(r.receivedAt).toBeNull();
-      }
-
-      // displayStatus: MANUAL+PLANNED → PLANNED, label=null;
-      // CUT_READY+PLANNED+notReady → PLANNED, label="Ожидает размещения кроя".
-      const manualRow = rows.find(
-        (x: { triggerType: string }) => x.triggerType === 'MANUAL',
-      );
-      const cutReadyRow = rows.find(
-        (x: { triggerType: string }) => x.triggerType === 'CUT_READY',
-      );
-      expect(manualRow.displayStatus).toBe('PLANNED');
-      expect(manualRow.displayStatusLabel).toBeNull();
-      expect(cutReadyRow.displayStatus).toBe('PLANNED');
-      expect(cutReadyRow.displayStatusLabel).toBe('Ожидает размещения кроя');
-    });
+    // Тест «A. start() создаёт snapshot из строк техкарты» удалён:
+    // снапшот подряда при start() больше не пишется (переход «техкарты →
+    // номенклатура»), дефолты PLANNED/null покрыты тестом G.
 
     // -------------------------------------------------------------------------
     // B. CUT_READY guard: PLANNED → ORDERED запрещён, пока крой не размещён.
     // -------------------------------------------------------------------------
     test('B. CUT_READY + крой не готов → 409 OUTSOURCE_NOT_READY_TO_ORDER', async () => {
-      const tc = await createTechCard({
-        outsourceLines: [
-          {
-            name: 'Шелкография',
-            unit: 'шт',
-            qtyPerUnit: '1',
-            triggerType: 'CUT_READY',
-          },
-        ],
-      });
-      const orderId = await createAndStart(tc.id);
+      const orderId = await createAndStart();
+      await seedOutsourceLines(orderId, [
+        {
+          name: 'Шелкография',
+          unit: 'шт',
+          qtyPerUnit: '1',
+          triggerType: 'CUT_READY',
+        },
+      ]);
       const reqId = await firstOutsourceId(orderId);
 
       const r = await request(t.app.getHttpServer())
@@ -133,17 +92,15 @@ describeWithDb(
     // C. CUT_READY happy-path: разместили крой → PLANNED → ORDERED → RECEIVED.
     // -------------------------------------------------------------------------
     test('C. CUT_READY + крой готов → PLANNED → ORDERED → RECEIVED', async () => {
-      const tc = await createTechCard({
-        outsourceLines: [
-          {
-            name: 'Шелкография',
-            unit: 'шт',
-            qtyPerUnit: '1',
-            triggerType: 'CUT_READY',
-          },
-        ],
-      });
-      const orderId = await createAndStartWithSize(tc.id, 1);
+      const orderId = await createAndStartWithSize(1);
+      await seedOutsourceLines(orderId, [
+        {
+          name: 'Шелкография',
+          unit: 'шт',
+          qtyPerUnit: '1',
+          triggerType: 'CUT_READY',
+        },
+      ]);
       const reqId = await firstOutsourceId(orderId);
       await placeAllPassports(orderId, 1);
 
@@ -195,12 +152,10 @@ describeWithDb(
     // D. MANUAL → ORDERED доступен сразу, без размещения кроя.
     // -------------------------------------------------------------------------
     test('D. MANUAL + крой не размещён → PLANNED → ORDERED проходит', async () => {
-      const tc = await createTechCard({
-        outsourceLines: [
-          { name: 'Доставка', triggerType: 'MANUAL' },
-        ],
-      });
-      const orderId = await createAndStart(tc.id);
+      const orderId = await createAndStart();
+      await seedOutsourceLines(orderId, [
+        { name: 'Доставка', triggerType: 'MANUAL' },
+      ]);
       const reqId = await firstOutsourceId(orderId);
 
       const r = await request(t.app.getHttpServer())
@@ -220,10 +175,10 @@ describeWithDb(
     // E. Запрещённые переходы.
     // -------------------------------------------------------------------------
     test('E1. PLANNED → RECEIVED запрещено', async () => {
-      const tc = await createTechCard({
-        outsourceLines: [{ name: 'Доставка', triggerType: 'MANUAL' }],
-      });
-      const orderId = await createAndStart(tc.id);
+      const orderId = await createAndStart();
+      await seedOutsourceLines(orderId, [
+        { name: 'Доставка', triggerType: 'MANUAL' },
+      ]);
       const reqId = await firstOutsourceId(orderId);
 
       const r = await request(t.app.getHttpServer())
@@ -237,10 +192,10 @@ describeWithDb(
     });
 
     test('E2. RECEIVED → ORDERED запрещено (терминальный статус)', async () => {
-      const tc = await createTechCard({
-        outsourceLines: [{ name: 'Доставка', triggerType: 'MANUAL' }],
-      });
-      const orderId = await createAndStart(tc.id);
+      const orderId = await createAndStart();
+      await seedOutsourceLines(orderId, [
+        { name: 'Доставка', triggerType: 'MANUAL' },
+      ]);
       const reqId = await firstOutsourceId(orderId);
       // Дойти до RECEIVED
       await request(t.app.getHttpServer())
@@ -271,10 +226,10 @@ describeWithDb(
     test('E3. ORDERED → PLANNED через action невозможен (Zod-валидация)', async () => {
       // Через action разрешены только 'ORDERED' / 'RECEIVED' (Zod
       // enum), поэтому 'PLANNED' падает на валидации.
-      const tc = await createTechCard({
-        outsourceLines: [{ name: 'Доставка', triggerType: 'MANUAL' }],
-      });
-      const orderId = await createAndStart(tc.id);
+      const orderId = await createAndStart();
+      await seedOutsourceLines(orderId, [
+        { name: 'Доставка', triggerType: 'MANUAL' },
+      ]);
       const reqId = await firstOutsourceId(orderId);
 
       const r = await request(t.app.getHttpServer())
@@ -291,10 +246,10 @@ describeWithDb(
     // F. Идемпотентность.
     // -------------------------------------------------------------------------
     test('F. Идемпотентный повтор: тот же статус → возвращает текущий DTO без изменений', async () => {
-      const tc = await createTechCard({
-        outsourceLines: [{ name: 'Доставка', triggerType: 'MANUAL' }],
-      });
-      const orderId = await createAndStart(tc.id);
+      const orderId = await createAndStart();
+      await seedOutsourceLines(orderId, [
+        { name: 'Доставка', triggerType: 'MANUAL' },
+      ]);
       const reqId = await firstOutsourceId(orderId);
 
       const first = await request(t.app.getHttpServer())
@@ -325,18 +280,16 @@ describeWithDb(
     // G. Композитный displayStatus в getOne() во всех ветках.
     // -------------------------------------------------------------------------
     test('G. getOne(): displayStatus собирается по всем ветвям композиции', async () => {
-      const tc = await createTechCard({
-        outsourceLines: [
-          { name: 'Доставка', triggerType: 'MANUAL' },
-          {
-            name: 'Шелкография',
-            unit: 'шт',
-            qtyPerUnit: '1',
-            triggerType: 'CUT_READY',
-          },
-        ],
-      });
-      const orderId = await createAndStartWithSize(tc.id, 1);
+      const orderId = await createAndStartWithSize(1);
+      await seedOutsourceLines(orderId, [
+        { name: 'Доставка', triggerType: 'MANUAL' },
+        {
+          name: 'Шелкография',
+          unit: 'шт',
+          qtyPerUnit: '1',
+          triggerType: 'CUT_READY',
+        },
+      ]);
 
       // 1) Дефолт: MANUAL → PLANNED/null; CUT_READY → PLANNED/«Ожидает».
       let res = await request(t.app.getHttpServer())
@@ -395,77 +348,51 @@ describeWithDb(
       expect(manual.displayStatusLabel).toBe('Получено');
     });
 
-    // -------------------------------------------------------------------------
-    // H. Edit-after-start: правка шаблона не трогает executionStatus snapshot-а.
-    // -------------------------------------------------------------------------
-    test('H. PATCH tech-card после start() не сбрасывает executionStatus', async () => {
-      const tc = await createTechCard({
-        outsourceLines: [{ name: 'Доставка', triggerType: 'MANUAL' }],
-      });
-      const orderId = await createAndStart(tc.id);
-      const reqId = await firstOutsourceId(orderId);
-
-      await request(t.app.getHttpServer())
-        .post(
-          `/api/orders/${orderId}/outsource-requirements/${reqId}/status`,
-        )
-        .set('Cookie', cookie)
-        .send({ executionStatus: 'ORDERED' })
-        .expect(201);
-
-      // Полностью заменяем outsourceLines в шаблоне (full-replace).
-      await request(t.app.getHttpServer())
-        .patch(`/api/tech-cards/${tc.id}`)
-        .set('Cookie', cookie)
-        .send({
-          outsourceLines: [{ name: 'Совсем другая строка' }],
-        })
-        .expect(200);
-
-      const res = await request(t.app.getHttpServer())
-        .get(`/api/orders/${orderId}`)
-        .set('Cookie', cookie)
-        .expect(200);
-      // Snapshot заказа продолжает «знать» свою строку и её статус.
-      expect(res.body.outsourceRequirements[0].name).toBe('Доставка');
-      expect(res.body.outsourceRequirements[0].executionStatus).toBe('ORDERED');
-    });
+    // Тест «H. PATCH tech-card после start() не сбрасывает executionStatus»
+    // удалён: шаблона техкарты больше нет, правка спецификации номенклатуры
+    // на snapshot заказа и раньше не влияла (snapshot = истина).
 
     // -------------------------------------------------------------------------
     // helpers
     // -------------------------------------------------------------------------
 
-    async function createTechCard(body: {
-      outsourceLines: Array<{
+    /**
+     * Снапшот подряда при start() больше не создаётся — сеем строки
+     * `OrderOutsourceRequirement` напрямую (таблица живёт ради
+     * исторических данных и ручного статуса выполнения).
+     */
+    async function seedOutsourceLines(
+      orderId: string,
+      lines: Array<{
         name: string;
         unit?: string | null;
         qtyPerUnit?: string | null;
-        vendorName?: string | null;
-        note?: string | null;
         triggerType?: 'MANUAL' | 'CUT_READY';
-      }>;
-    }): Promise<{ id: string }> {
-      const code = `TC-EXEC-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-      const r = await request(t.app.getHttpServer())
-        .post('/api/tech-cards')
-        .set('Cookie', cookie)
-        .send({ code, name: code, outsourceLines: body.outsourceLines });
-      if (r.status !== 201) {
-        throw new Error(
-          `createTechCard failed: ${r.status} ${JSON.stringify(r.body)}`,
-        );
+      }>,
+    ): Promise<void> {
+      let sortOrder = 10;
+      for (const line of lines) {
+        await t.prisma.orderOutsourceRequirement.create({
+          data: {
+            orderId,
+            sortOrder,
+            name: line.name,
+            unit: line.unit ?? null,
+            qtyPerUnit: line.qtyPerUnit ?? null,
+            triggerType: line.triggerType ?? 'MANUAL',
+            executionStatus: 'PLANNED',
+          },
+        });
+        sortOrder += 10;
       }
-      return { id: r.body.id };
     }
 
-    async function createAndStart(techCardId: string): Promise<string> {
-      return createAndStartWithSize(techCardId, 1);
+    async function createAndStart(): Promise<string> {
+      return createAndStartWithSize(1);
     }
 
-    async function createAndStartWithSize(
-      techCardId: string,
-      qtyPlan: number,
-    ): Promise<string> {
+    async function createAndStartWithSize(qtyPlan: number): Promise<string> {
+      const pattern = await createSpecPattern(t, cookie, {});
       const r = await request(t.app.getHttpServer())
         .post('/api/orders')
         .set('Cookie', cookie)
@@ -473,7 +400,7 @@ describeWithDb(
           orderDate: '2026-04-15T00:00:00.000Z',
           productId: seed.product.id,
           items: [{ sizeId: seed.sizes.M, qtyPlan }],
-          techCardId,
+          patternItemId: pattern.id,
         })
         .expect(201);
       const orderId = r.body.id as string;

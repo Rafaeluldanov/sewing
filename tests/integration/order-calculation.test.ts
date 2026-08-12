@@ -2,9 +2,11 @@
  * Integration-тесты этапа «Расчёт» (`OrdersService.startCalculation`).
  *
  * Покрытие (минимально достаточный contract-floor):
- *   1. DRAFT с pattern+techCard+items → CALCULATION + WorkshopNeed создаются;
+ *   1. DRAFT с pattern+спецификацией+items → CALCULATION + WorkshopNeed
+ *      создаются;
  *   2. DRAFT без patternItemId → 400 ORDER_PATTERN_REQUIRED;
- *   3. DRAFT без techCardId → 400 ORDER_TECH_CARD_REQUIRED;
+ *   3. DRAFT с лекалом БЕЗ строк спецификации → 400
+ *      ORDER_TECH_CARD_REQUIRED;
  *   4. DRAFT без qtyPlan → 400 ORDER_ITEMS_REQUIRED;
  *   5. WorkshopNeed REVIEWED → 409 WORKSHOP_NEEDS_ALREADY_REVIEWED,
  *      статус остаётся DRAFT;
@@ -51,12 +53,7 @@ describeWithDb('integration — order calculation (этап «Расчёт»)', 
   // 1. Happy-path: DRAFT → CALCULATION + WorkshopNeed создаётся
   // ---------------------------------------------------------------------------
 
-  test('DRAFT с pattern + techCard + items → CALCULATION с WorkshopNeed', async () => {
-    const tc = await createTechCard(t, cookies.manager, {
-      code: 'TC-SC-1',
-      name: 'Start calculation demo',
-      materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
-    });
+  test('DRAFT с pattern + спецификацией + items → CALCULATION с WorkshopNeed', async () => {
     const pattern = await t.prisma.patternItem.create({
       data: {
         name: 'Лекало демо',
@@ -64,9 +61,9 @@ describeWithDb('integration — order calculation (этап «Расчёт»)', 
         status: 'ACTIVE',
       },
     });
+    await seedSpec(t, cookies.manager, pattern.id);
     const orderId = await createOrder(t, seed, cookies.manager, {
       items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
-      techCardId: tc.id,
       patternItemId: pattern.id,
     });
 
@@ -101,14 +98,8 @@ describeWithDb('integration — order calculation (этап «Расчёт»)', 
   // ---------------------------------------------------------------------------
 
   test('DRAFT без patternItemId → 400 ORDER_PATTERN_REQUIRED', async () => {
-    const tc = await createTechCard(t, cookies.manager, {
-      code: 'TC-NOPAT',
-      name: 'Без лекала',
-      materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
-    });
     const orderId = await createOrder(t, seed, cookies.manager, {
       items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
-      techCardId: tc.id,
       patternItemId: null,
     });
 
@@ -124,10 +115,12 @@ describeWithDb('integration — order calculation (этап «Расчёт»)', 
   });
 
   // ---------------------------------------------------------------------------
-  // 3. ORDER_TECH_CARD_REQUIRED: без techCardId
+  // 3. ORDER_TECH_CARD_REQUIRED: лекало без строк спецификации
   // ---------------------------------------------------------------------------
 
-  test('DRAFT без techCardId → 400 ORDER_TECH_CARD_REQUIRED', async () => {
+  test('DRAFT с лекалом без спецификации → 400 ORDER_TECH_CARD_REQUIRED', async () => {
+    // У лекала нет ни одной строки спецификации и у заказа нет снимка —
+    // расчёту неоткуда взять материалы.
     const pattern = await t.prisma.patternItem.create({
       data: {
         name: 'Лекало демо',
@@ -137,7 +130,6 @@ describeWithDb('integration — order calculation (этап «Расчёт»)', 
     });
     const orderId = await createOrder(t, seed, cookies.manager, {
       items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
-      techCardId: null,
       patternItemId: pattern.id,
     });
 
@@ -156,11 +148,6 @@ describeWithDb('integration — order calculation (этап «Расчёт»)', 
   // ---------------------------------------------------------------------------
 
   test('DRAFT без qtyPlan > 0 → 400 ORDER_ITEMS_REQUIRED', async () => {
-    const tc = await createTechCard(t, cookies.manager, {
-      code: 'TC-EMPTY',
-      name: 'Empty qty',
-      materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
-    });
     const pattern = await t.prisma.patternItem.create({
       data: {
         name: 'Лекало демо',
@@ -168,9 +155,9 @@ describeWithDb('integration — order calculation (этап «Расчёт»)', 
         status: 'ACTIVE',
       },
     });
+    await seedSpec(t, cookies.manager, pattern.id);
     const orderId = await createOrder(t, seed, cookies.manager, {
       items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
-      techCardId: tc.id,
       patternItemId: pattern.id,
     });
     // Эмулируем дегенеративный снимок «qtyPlan = 0» (Zod на create
@@ -296,27 +283,23 @@ describeWithDb('integration — order calculation (этап «Расчёт»)', 
 // helpers
 // ===========================================================================
 
-async function createTechCard(
+/**
+ * Строки спецификации материалов на лекале — источник расчёта после
+ * перехода «техкарты → номенклатура».
+ */
+async function seedSpec(
   t: TestApp,
   cookie: string,
-  body: {
-    code: string;
-    name: string;
-    materialLines?: Array<{
-      name: string;
-      unit: string;
-      qtyPerUnit: string;
-      materialRole?: string | null;
-      densityGsm?: number | null;
-    }>;
-  },
-): Promise<{ id: string }> {
-  const r = await request(t.app.getHttpServer())
-    .post('/api/tech-cards')
+  patternItemId: string,
+  materialLines: Array<{ name: string; unit: string; qtyPerUnit: string }> = [
+    { name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' },
+  ],
+): Promise<void> {
+  await request(t.app.getHttpServer())
+    .put(`/api/patterns/${patternItemId}/material-spec`)
     .set('Cookie', cookie)
-    .send(body)
-    .expect(201);
-  return { id: r.body.id };
+    .send({ materialLines, parameters: [] })
+    .expect(200);
 }
 
 async function createOrder(
@@ -325,7 +308,6 @@ async function createOrder(
   cookie: string,
   options: {
     items: Array<{ sizeId: string; qtyPlan: number }>;
-    techCardId: string | null;
     patternItemId: string | null;
   },
 ): Promise<string> {
@@ -337,7 +319,6 @@ async function createOrder(
       clientId: seed.client.id,
       productId: seed.product.id,
       items: options.items,
-      techCardId: options.techCardId ?? undefined,
       patternItemId: options.patternItemId ?? undefined,
     })
     .expect(201);
@@ -345,18 +326,13 @@ async function createOrder(
 }
 
 /**
- * Готовый к расчёту заказ: DRAFT, есть techCard + pattern + qtyPlan > 0.
+ * Готовый к расчёту заказ: DRAFT, лекало со спецификацией + qtyPlan > 0.
  */
 async function prepareReadyOrder(
   t: TestApp,
   seed: SeedResult,
   cookie: string,
 ): Promise<string> {
-  const tc = await createTechCard(t, cookie, {
-    code: 'TC-READY',
-    name: 'Ready order tech card',
-    materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
-  });
   const pattern = await t.prisma.patternItem.create({
     data: {
       name: 'Лекало готовое',
@@ -364,9 +340,9 @@ async function prepareReadyOrder(
       status: 'ACTIVE',
     },
   });
+  await seedSpec(t, cookie, pattern.id);
   return createOrder(t, seed, cookie, {
     items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
-    techCardId: tc.id,
     patternItemId: pattern.id,
   });
 }

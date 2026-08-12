@@ -68,24 +68,23 @@ describeWithDb('integration — order × pattern snapshot', () => {
     return { id: p.id, name: p.name, article: p.article };
   }
 
-  async function makeTechCard(code: string): Promise<{ id: string }> {
-    const r = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
+  /**
+   * Гейт ORDER_TECH_CARD_REQUIRED: чтобы заказ ушёл в расчёт, у лекала
+   * должна быть хотя бы одна строка спецификации материалов.
+   */
+  async function seedSpec(patternItemId: string): Promise<void> {
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternItemId}/material-spec`)
       .set('Cookie', cookie)
       .send({
-        code,
-        name: `TC ${code}`,
-        materialLines: [
-          { name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' },
-        ],
+        materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
+        parameters: [],
       })
-      .expect(201);
-    return { id: r.body.id };
+      .expect(200);
   }
 
   async function createDraftOrder(opts: {
     patternItemId?: string | null;
-    techCardId?: string | null;
     productId?: string;
   }): Promise<string> {
     const r = await request(t.app.getHttpServer())
@@ -96,7 +95,6 @@ describeWithDb('integration — order × pattern snapshot', () => {
         clientId: seed.client.id,
         patternItemId: opts.patternItemId ?? undefined,
         productId: opts.productId,
-        techCardId: opts.techCardId ?? undefined,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 4 }],
       })
       .expect(201);
@@ -140,11 +138,8 @@ describeWithDb('integration — order × pattern snapshot', () => {
       article: 'P-HOODIE-2',
       previewImageUrl: '/uploads/patterns/p2/preview.png',
     });
-    const tc = await makeTechCard('TC-SC-2');
-    const orderId = await createDraftOrder({
-      patternItemId: pattern.id,
-      techCardId: tc.id,
-    });
+    await seedSpec(pattern.id);
+    const orderId = await createDraftOrder({ patternItemId: pattern.id });
 
     // До start-calculation snapshot пуст.
     const before = await t.prisma.order.findUnique({
@@ -199,11 +194,8 @@ describeWithDb('integration — order × pattern snapshot', () => {
       name: 'Худи',
       article: 'P-HOODIE-3',
     });
-    const tc = await makeTechCard('TC-SC-3');
-    const orderId = await createDraftOrder({
-      patternItemId: pattern.id,
-      techCardId: tc.id,
-    });
+    await seedSpec(pattern.id);
+    const orderId = await createDraftOrder({ patternItemId: pattern.id });
 
     await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/start-calculation`)
@@ -250,11 +242,8 @@ describeWithDb('integration — order × pattern snapshot', () => {
       article: 'P-HOODIE-4',
       previewImageUrl: '/uploads/patterns/p4/preview.png',
     });
-    const tc = await makeTechCard('TC-SC-4');
-    const orderId = await createDraftOrder({
-      patternItemId: pattern.id,
-      techCardId: tc.id,
-    });
+    await seedSpec(pattern.id);
+    const orderId = await createDraftOrder({ patternItemId: pattern.id });
 
     await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/start-calculation`)
@@ -359,11 +348,8 @@ describeWithDb('integration — order × pattern snapshot', () => {
       name: 'Худи',
       article: 'P-LIST-A',
     });
-    const tcA = await makeTechCard('TC-LIST-A');
-    const orderA = await createDraftOrder({
-      patternItemId: patternA.id,
-      techCardId: tcA.id,
-    });
+    await seedSpec(patternA.id);
+    const orderA = await createDraftOrder({ patternItemId: patternA.id });
     await request(t.app.getHttpServer())
       .post(`/api/orders/${orderA}/start-calculation`)
       .set('Cookie', cookie)

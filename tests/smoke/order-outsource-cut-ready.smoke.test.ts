@@ -47,19 +47,16 @@ describe('shared DTO — OutsourceTriggerType / readiness', () => {
     expect(src).toMatch(/enum OutsourceTriggerType/);
     expect(src).toMatch(/MANUAL/);
     expect(src).toMatch(/CUT_READY/);
-    // Поле есть и в template-строке, и в snapshot заказа.
+    // Этап 5 «техкарты → номенклатура»: template-строк больше нет,
+    // поле живёт в snapshot заказа (исторические данные + статусы).
     const matches = src.match(
       /triggerType\s+OutsourceTriggerType\s+@default\(MANUAL\)/g,
     );
-    expect(matches?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(matches?.length ?? 0).toBeGreaterThanOrEqual(1);
   });
 });
 
 describe('backend — orders.service derives readiness', () => {
-  test('OrdersService.start() копирует triggerType в snapshot', () => {
-    const src = readSrc('apps/api/src/modules/orders/orders.service.ts');
-    expect(src).toMatch(/triggerType:\s*l\.triggerType/);
-  });
 
   test('OrdersService.toDetailDto() считает isCutReadyForOrder и маппит обе фразы', () => {
     const src = readSrc('apps/api/src/modules/orders/orders.service.ts');

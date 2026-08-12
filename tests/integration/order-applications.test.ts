@@ -34,6 +34,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { copySpecLinesTo, createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — order applications', () => {
   let t: TestApp;
@@ -382,7 +383,7 @@ describeWithDb('integration — order applications', () => {
     expect(r.body.status).toBe('CALCULATION');
 
     const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });
-    // Одна потребность от техкарты + одна от OrderApplication.
+    // Одна потребность от спецификации + одна от OrderApplication.
     expect(needs.length).toBeGreaterThanOrEqual(2);
     const appNeed = needs.find((n) => n.sourceType === 'ORDER_APPLICATION');
     expect(appNeed).toBeDefined();
@@ -577,34 +578,12 @@ describeWithDb('integration — order applications', () => {
 // helpers
 // ===========================================================================
 
-async function createTechCard(
-  t: TestApp,
-  cookie: string,
-  body: {
-    code: string;
-    name: string;
-    materialLines?: Array<{
-      name: string;
-      unit: string;
-      qtyPerUnit: string;
-    }>;
-  },
-): Promise<{ id: string }> {
-  const r = await request(t.app.getHttpServer())
-    .post('/api/tech-cards')
-    .set('Cookie', cookie)
-    .send(body)
-    .expect(201);
-  return { id: r.body.id };
-}
-
 async function createOrder(
   t: TestApp,
   seed: SeedResult,
   cookie: string,
   options: {
     items: Array<{ sizeId: string; qtyPlan: number }>;
-    techCardId?: string | null;
     patternItemId?: string | null;
   },
 ): Promise<string> {
@@ -616,7 +595,6 @@ async function createOrder(
       clientId: seed.client.id,
       productId: seed.product.id,
       items: options.items,
-      techCardId: options.techCardId ?? undefined,
       patternItemId: options.patternItemId ?? undefined,
     })
     .expect(201);
@@ -625,7 +603,7 @@ async function createOrder(
 
 /**
  * Минимально достаточный DRAFT-заказ: размер S с qtyPlan = 5.
- * Без техкарты / лекала — для проверок CRUD applications.
+ * Без лекала / спецификации — для проверок CRUD applications.
  */
 async function createDraftOrder(
   t: TestApp,
@@ -638,7 +616,7 @@ async function createDraftOrder(
 }
 
 /**
- * Готовый к расчёту заказ: DRAFT + techCard + pattern + qtyPlan > 0.
+ * Готовый к расчёту заказ: DRAFT + pattern со спецификацией + qtyPlan > 0.
  * Используется для start-calculation / cut-readiness тестов.
  */
 async function prepareReadyOrder(
@@ -646,9 +624,8 @@ async function prepareReadyOrder(
   seed: SeedResult,
   cookie: string,
 ): Promise<string> {
-  const tc = await createTechCard(t, cookie, {
-    code: 'TC-APP-1',
-    name: 'Application demo TC',
+  const spec = await createSpecPattern(t, cookie, {
+    name: 'Application demo spec',
     materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
   });
   const pattern = await t.prisma.patternItem.create({
@@ -658,9 +635,9 @@ async function prepareReadyOrder(
       status: 'ACTIVE',
     },
   });
+  await copySpecLinesTo(t, spec.id, pattern.id);
   return createOrder(t, seed, cookie, {
     items: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
-    techCardId: tc.id,
     patternItemId: pattern.id,
   });
 }

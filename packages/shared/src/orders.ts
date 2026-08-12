@@ -928,14 +928,6 @@ export const CreateOrderNewProductCalculationSchema = z
      * без `categoryId` (это допустимо — поле nullable в БД).
      */
     categoryId: z.string().min(1).nullable().optional(),
-    /**
-     * Техкарта — опциональна. Если выбрана, backend валидирует
-     * совместимость с категорией (когда категория тоже задана);
-     * иначе создаёт заказ без `techCardId`. Для запуска расчёта
-     * (`startCalculation`) техкарта понадобится, но на этап create
-     * это не блокирует.
-     */
-    techCardId: z.string().min(1).nullable().optional(),
     patternDevelopmentCostRub: PatternDevelopmentCostRubField,
     /**
      * Чекбокс «входит в текущий расчёт себестоимости» рядом с полем
@@ -1042,13 +1034,6 @@ export const CreateOrderSchema = z.object({
    * (полная backward compatibility со старым flow).
    */
   routeTemplateId: z.string().min(1).optional(),
-  /**
-   * Tech card MVP (ADR-0022): опциональная привязка к шаблону техкарты.
-   * Строки техкарты фиксируются snapshot-ами `materialRequirements[]` /
-   * `outsourceRequirements[]` при `OrdersService.start()`. Не задан —
-   * заказ запускается «без техкарты», snapshot-ы остаются пустыми.
-   */
-  techCardId: z.string().min(1).optional(),
   /**
    * Soft-pattern MVP (этап 2 «Лекала»): опциональная привязка к
    * карточке лекала (`PatternItem`). Не блокирует запуск заказа без
@@ -1183,7 +1168,6 @@ export const CreateOrderSchema = z.object({
     .array(
       z.object({
         color: z.string().trim().min(1, 'Укажите цвет расцветки').max(60),
-        techCardId: z.string().min(1).nullable().optional(),
         sizes: z.array(ColorwaySizeInputSchema).default([]),
       }),
     )
@@ -1348,13 +1332,6 @@ export const UpdateOrderSchema = z.object({
    */
   routeTemplateId: z.string().min(1).nullable().optional(),
   /**
-   * Tech card MVP (ADR-0022): смена/сброс шаблона техкарты до запуска
-   * заказа (status = DRAFT). После `start()` snapshot материалов и
-   * внешних потребностей зафиксирован, и поле здесь оставлять можно
-   * только без изменений.
-   */
-  techCardId: z.string().min(1).nullable().optional(),
-  /**
    * Soft-pattern MVP (этап 2 «Лекала»): смена/сброс выбранного лекала
    * до запуска заказа (status = DRAFT). После запуска поле read-only
    * (общий ORDER_LOCKED guard) — snapshot полей лекала уже
@@ -1430,7 +1407,6 @@ export const UpdateOrderSchema = z.object({
     .array(
       z.object({
         color: z.string().trim().min(1, 'Укажите цвет расцветки').max(60),
-        techCardId: z.string().min(1).nullable().optional(),
         sizes: z.array(ColorwaySizeInputSchema).default([]),
       }),
     )
@@ -1891,15 +1867,6 @@ export interface OrderDetailDto
    * фиксировался» (заказ либо ещё не запущен, либо запущен без шаблона).
    */
   routeSteps: OrderRouteStepDto[];
-  /**
-   * Tech card MVP (ADR-0022): привязка к шаблону техкарты. Хранится id
-   * + краткое имя для UI карточки заказа, чтобы не делать
-   * дополнительный запрос за деталями. `null` означает «техкарта не
-   * выбрана» — snapshot будет пуст и после `start()`.
-   */
-  techCardId: string | null;
-  techCardCode: string | null;
-  techCardName: string | null;
   /**
    * Спецификацию правили, а автопересчёт потребности не прошёл
    * (`OrdersService.recalcNeedsAndMarkStale`). Отметка ДУБЛИРУЕТСЯ в каждой

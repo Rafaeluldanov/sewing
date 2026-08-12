@@ -334,7 +334,6 @@ export default async function AdminPatternsListPage({
               deleteCategoryId={c.id}
               deleteCategoryName={c.name}
               deleteCategoryPatternsCount={c.patternsCount}
-              deleteCategoryTechCardsCount={c.techCardsCount}
             >
               <CategoryChipIcon
                 iconImageUrl={c.iconImageUrl}
@@ -390,7 +389,6 @@ export default async function AdminPatternsListPage({
                   deleteCategoryId={c.id}
                   deleteCategoryName={c.name}
                   deleteCategoryPatternsCount={c.patternsCount}
-                  deleteCategoryTechCardsCount={c.techCardsCount}
                 >
                   <CategoryChipIcon
                     iconImageUrl={c.iconImageUrl}
@@ -617,7 +615,6 @@ function CategoryFilterChip({
   deleteCategoryId,
   deleteCategoryName,
   deleteCategoryPatternsCount,
-  deleteCategoryTechCardsCount,
 }: {
   href: string;
   active: boolean;
@@ -634,7 +631,6 @@ function CategoryFilterChip({
    */
   deleteCategoryPatternsCount?: number;
   /** Сколько техкарт останется без группы после удаления. */
-  deleteCategoryTechCardsCount?: number;
 }) {
   const filterLink = (
     <Link
@@ -676,7 +672,6 @@ function CategoryFilterChip({
             categoryId={deleteCategoryId}
             categoryName={deleteCategoryName}
             patternsCount={deleteCategoryPatternsCount ?? 0}
-            techCardsCount={deleteCategoryTechCardsCount ?? 0}
           />
         )}
       </span>

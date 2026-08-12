@@ -344,7 +344,7 @@ export async function OrderProductionTab({
         <AdminSectionHeader
           icon={<Workflow size={18} strokeWidth={1.7} aria-hidden />}
           title="Маршрут операций"
-          hint={order.routeTemplateName ?? order.techCardName ?? undefined}
+          hint={order.routeTemplateName ?? undefined}
           actions={
             routeEditAction || isStarted ? (
               <div
@@ -381,14 +381,6 @@ export async function OrderProductionTab({
                   изменён в заказе
                 </AdminStatusBadge>
               </>
-            )}
-          </dd>
-          <dt>Шаблон техкарты</dt>
-          <dd>
-            {order.techCardName ? (
-              <strong>{order.techCardName}</strong>
-            ) : (
-              <span className="admin-muted">не выбран</span>
             )}
           </dd>
         </dl>

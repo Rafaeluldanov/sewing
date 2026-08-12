@@ -53,6 +53,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 const COMPANY_SETTINGS_ID = 'default';
 
@@ -142,24 +143,17 @@ describeWithDb(
         })
         .expect(201);
 
-      const tcCode = `TC-HRD-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
-      const tc = await request(t.app.getHttpServer())
-        .post('/api/tech-cards')
-        .set('Cookie', cookies.manager)
-        .send({
-          code: tcCode,
-          name: tcCode,
-          materialLines: [
-            {
-              name: 'Кулирка',
-              unit: 'м',
-              qtyPerUnit: '0.5',
-              materialRole: 'MAIN_FABRIC',
-              colorRule: 'ORDER_COLOR',
-            },
-          ],
-        })
-        .expect(201);
+      const spec = await createSpecPattern(t, cookies.manager, {
+        materialLines: [
+          {
+            name: 'Кулирка',
+            unit: 'м',
+            qtyPerUnit: '0.5',
+            materialRole: 'MAIN_FABRIC',
+            colorRule: 'ORDER_COLOR',
+          },
+        ],
+      });
 
       const order = await request(t.app.getHttpServer())
         .post('/api/orders')
@@ -169,7 +163,7 @@ describeWithDb(
           productId: seed.product.id,
           color: 'Чёрный',
           items: [{ sizeId: seed.sizes.M, qtyPlan }],
-          techCardId: tc.body.id,
+          patternItemId: spec.id,
         })
         .expect(201);
       const orderId = order.body.id as string;

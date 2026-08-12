@@ -110,12 +110,12 @@ function buildRecommendations(order: OrderDetailDto): Recommendation[] {
       hint: 'Без маршрута план операций не считается.',
     });
   }
-  if (!order.techCardId && order.materialRequirements.length === 0) {
+  if (order.materialRequirements.length === 0) {
     out.push({
       id: 'no-tech-card',
       severity: 'warning',
-      title: 'Не выбрана техкарта',
-      hint: 'Без техкарты потребность материалов не рассчитывается.',
+      title: 'Нет материалов в спецификации',
+      hint: 'Заполните спецификацию материалов в карточке номенклатуры — без неё потребность не рассчитывается.',
     });
   }
 

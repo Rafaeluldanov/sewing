@@ -27,7 +27,6 @@ import { CostsModule } from './modules/costs/costs.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { PrintersModule } from './modules/printers/printers.module.js';
 import { RoutesModule } from './modules/routes/routes.module.js';
-import { TechCardsModule } from './modules/tech-cards/tech-cards.module.js';
 import { MaterialCharacteristicOptionsModule } from './modules/material-characteristic-options/material-characteristic-options.module.js';
 import { ConstructorTasksModule } from './modules/constructor-tasks/constructor-tasks.module.js';
 import { CuttingTasksModule } from './modules/cutting-tasks/cutting-tasks.module.js';
@@ -107,7 +106,6 @@ import { IntegrationsModule } from './modules/integrations/integrations.module.j
     DashboardModule,
     PrintersModule,
     RoutesModule,
-    TechCardsModule,
     MaterialCharacteristicOptionsModule,
     ConstructorTasksModule,
     CuttingTasksModule,

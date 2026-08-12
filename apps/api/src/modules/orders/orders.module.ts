@@ -6,7 +6,6 @@ import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 import { OrderNumberService } from './order-number.service';
 import { RoutesModule } from '../routes/routes.module.js';
-import { TechCardsModule } from '../tech-cards/tech-cards.module.js';
 import { WorkshopNeedsModule } from '../workshop-needs/workshop-needs.module.js';
 
 @Module({
@@ -32,8 +31,7 @@ import { WorkshopNeedsModule } from '../workshop-needs/workshop-needs.module.js'
   // Модуль без `imports`, поэтому цикла не образуется.
   imports: [
     RoutesModule,
-    TechCardsModule,
-    WorkshopNeedsModule,
+        WorkshopNeedsModule,
     OrderCostEstimatesModule,
   ],
   controllers: [OrdersController],

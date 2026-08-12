@@ -112,7 +112,6 @@ import { OrderCostEstimatesService } from './order-cost-estimates.service.js';
 import { OrderNumberService } from './order-number.service.js';
 import { OrderOperationPlanService } from './order-operation-plan.service.js';
 import { RoutesService } from '../routes/routes.service.js';
-import { TechCardsService } from '../tech-cards/tech-cards.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { WorkshopNeedsService } from '../workshop-needs/workshop-needs.service.js';
 
@@ -133,7 +132,6 @@ type OrderWithItems = Prisma.OrderGetPayload<{
     passports: true;
     routeTemplate: true;
     routeSteps: { include: { operation: true; sizeOverrides: true } };
-    techCard: true;
     materialRequirements: true;
     outsourceRequirements: true;
     logisticsLines: true;
@@ -155,12 +153,8 @@ type OrderWithItems = Prisma.OrderGetPayload<{
       };
     };
     applications: { include: { sizes: { include: { size: true } } } };
-    /**
-     * Фича «Расцветки»: техкарта может быть задана не на заказ, а на
-     * каждую расцветку. Нужна одна колонка — гейт «есть ли техкарта»
-     * для `availableTransitions` (см. `buildTransitionContext`).
-     */
-    variants: { select: { techCardId: true } };
+    /** Фича «Расцветки»: наличие расцветок нужно нескольким гейтам. */
+    variants: { select: { id: true } };
     /**
      * PHASE 1 «CompanyDivision как master-справочник» (см.
      * `prisma/schema.prisma::Order.companyDivisionId`,
@@ -430,7 +424,6 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly numbers: OrderNumberService,
     private readonly routes: RoutesService,
-    private readonly techCards: TechCardsService,
     private readonly audit: AuditService,
     private readonly workshopNeeds: WorkshopNeedsService,
     private readonly costEstimates: OrderCostEstimatesService,
@@ -535,26 +528,6 @@ export class OrdersService {
     if (dto.routeTemplateId) {
       await this.assertRouteTemplateUsable(dto.routeTemplateId);
     }
-    // Tech card MVP (ADR-0022): аналогично route — soft-protection
-    // против UI, который раздаёт неактивные значения.
-    //
-    // Фича «Расцветки» (FEATURE_COLORWAYS): форма создания при
-    // включённых расцветках ПРЯЧЕТ общий выбор техкарты и раздаёт её
-    // на каждый цвет (`dto.variants[].techCardId`), поэтому order-level
-    // `dto.techCardId` приходит пустым. Но и гейт `startCalculation`, и
-    // расчёт `WorkshopNeedsService` (материалы считаются по
-    // `order.techCard.materialLines`) смотрят ИМЕННО на order-level
-    // `Order.techCardId` — без него любой расцветочный заказ упирался в
-    // `ORDER_TECH_CARD_REQUIRED` и не мог уйти в расчёт. Поэтому, если
-    // общий techCardId не задан, поднимаем его из первой расцветки с
-    // техкартой (обычно все расцветки несут одну и ту же техкарту).
-    const resolvedTechCardId =
-      dto.techCardId ??
-      dto.variants?.find((v) => v.techCardId)?.techCardId ??
-      null;
-    if (resolvedTechCardId) {
-      await this.techCards.assertTechCardUsable(resolvedTechCardId);
-    }
     // Client ref MVP: при наличии clientId проверяем существование и
     // активность клиента до открытия транзакции — по тем же причинам,
     // что и `routeTemplateId`/`techCardId` (UI-адресная ошибка вместо
@@ -648,12 +621,6 @@ export class OrdersService {
           status: OrderStatus.DRAFT,
           companyDivisionId: companyDivisionIdForCreate,
           routeTemplateId: dto.routeTemplateId ?? null,
-          // Фича «Расцветки»: если общий techCardId не задан (форма
-          // расцветок его прячет), берём техкарту первой расцветки как
-          // «первичную» order-level — это зеркало variant #0
-          // (`OrderVariant.techCardId=null` = наследует Order.techCardId)
-          // и дефолт для legacy-кода, читающего order.techCardId.
-          techCardId: resolvedTechCardId,
           patternItemId: dto.patternItemId ?? null,
           clientId: dto.clientId ?? null,
           customerUnitPrice:
@@ -761,7 +728,6 @@ export class OrdersService {
           passports: true,
           routeTemplate: true,
           routeSteps: { include: { operation: true, sizeOverrides: true } },
-          techCard: true,
           materialRequirements: true,
           outsourceRequirements: true,
           client: true,
@@ -791,7 +757,6 @@ export class OrdersService {
         dto.variants && dto.variants.length > 0
           ? dto.variants.map((v) => ({
               color: v.color,
-              techCardId: v.techCardId ?? null,
               sizes: v.sizes ?? [],
             }))
           : [
@@ -843,18 +808,12 @@ export class OrdersService {
       // выбран, helper становится no-op (см. JSDoc).
       await this.syncOrderRouteStepsSnapshot(created.id, tx);
 
-      // Этап «Указать в заказе» (см. ТЗ §2): если у заказа выбрана
-      // техкарта — сразу собираем snapshot `OrderMaterialRequirement[]`,
-      // чтобы поле «Цвет» по строкам с `colorRule = ORDER_SELECTED_COLOR`
-      // было видно менеджеру в DRAFT/CALCULATION/CALCULATION_DONE
-      // ещё до запуска заказа. Раньше snapshot строился только в
-      // `start()`, и менеджер не мог заполнить «Цвет нужно указать
-      // в заказе» до перевода в производство. На существующих
-      // заказах snapshot пересоберётся при следующем `update` /
-      // `startCalculation`.
-      if (resolvedTechCardId) {
-        await this.rebuildMaterialRequirementsSnapshot(created.id, tx);
-      }
+      // Этап «Указать в заказе» (см. ТЗ §2): сразу собираем snapshot
+      // `OrderMaterialRequirement[]` из спецификации номенклатуры, чтобы
+      // поле «Цвет» по строкам с `colorRule = ORDER_SELECTED_COLOR` было
+      // видно менеджеру ещё до запуска заказа. Пустая спецификация — не
+      // ошибка: rebuild отработает вхолостую.
+      await this.rebuildMaterialRequirementsSnapshot(created.id, tx);
 
       // Audit (см. `docs/domain.md §«Audit log»`): создание заказа.
       // payload — минимальный «паспорт заказа»: number/productId/
@@ -879,7 +838,6 @@ export class OrdersService {
             qtyPlanTotal: dto.items.reduce((s, i) => s + i.qtyPlan, 0),
             sizeIds: dto.items.map((i) => i.sizeId),
             routeTemplateId: created.routeTemplateId,
-            techCardId: created.techCardId,
             patternItemId: created.patternItemId,
             clientId: created.clientId,
             // Этап «Нанесение»: фиксируем счётчик, чтобы по журналу
@@ -1091,18 +1049,6 @@ export class OrdersService {
       }
     }
 
-    // Опционально: техкарта. Если выбрана — валидируем активность.
-    // Совместимость с категорией проверяем только когда заданы оба.
-    if (calc.techCardId) {
-      await this.techCards.assertTechCardUsable(calc.techCardId);
-      if (category && requiredRoleKeys.size > 0) {
-        await this.assertTechCardCompatibleWithCategory(
-          calc.techCardId,
-          requiredRoleKeys,
-        );
-      }
-    }
-
     if (dto.routeTemplateId) {
       await this.assertRouteTemplateUsable(dto.routeTemplateId);
     }
@@ -1217,7 +1163,6 @@ export class OrdersService {
           status: OrderStatus.DRAFT,
           companyDivisionId: companyDivisionIdForCreate,
           routeTemplateId: dto.routeTemplateId ?? null,
-          techCardId: calc.techCardId ?? null,
           patternItemId: newPattern.id,
           clientId: dto.clientId ?? null,
           customerUnitPrice:
@@ -1287,7 +1232,6 @@ export class OrdersService {
             ),
             sizeIds: calc.sizes.map((s) => s.sizeId),
             routeTemplateId: orderRow.routeTemplateId,
-            techCardId: orderRow.techCardId,
             patternItemId: orderRow.patternItemId,
             clientId: orderRow.clientId,
             productCreationMode: 'CREATE_FOR_CALCULATION',
@@ -1306,33 +1250,6 @@ export class OrdersService {
     return this.getOne(created.id);
   }
 
-  /**
-   * Inline-создание изделия: проверяет, что у выбранной техкарты есть
-   * `TechCardMaterialLine.materialRole` для каждого `AREA_M2_BY_SIZE`-
-   * параметра категории. Иначе кидает 409
-   * `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY` с `missingRoleKeys`.
-   */
-  private async assertTechCardCompatibleWithCategory(
-    techCardId: string,
-    requiredRoleKeys: Set<string>,
-  ): Promise<void> {
-    if (requiredRoleKeys.size === 0) return;
-    const lines = await this.prisma.techCardMaterialLine.findMany({
-      where: { techCardId },
-      select: { materialRole: true },
-    });
-    const present = new Set<string>();
-    for (const l of lines) {
-      if (l.materialRole) present.add(l.materialRole);
-    }
-    const missing: string[] = [];
-    for (const role of requiredRoleKeys) {
-      if (!present.has(role)) missing.push(role);
-    }
-    if (missing.length > 0) {
-      throw new TechCardNotCompatibleWithCategoryException(missing);
-    }
-  }
 
   // -------------------------------------------------------------------------
   // LIST
@@ -1783,7 +1700,6 @@ export class OrdersService {
           orderBy: { index: 'asc' },
           include: { operation: true, sizeOverrides: true },
         },
-        techCard: true,
         materialRequirements: { orderBy: { sortOrder: 'asc' } },
         outsourceRequirements: { orderBy: { sortOrder: 'asc' } },
         // Ручные строки логистики заказа — рендерятся в конце таблицы
@@ -1830,9 +1746,8 @@ export class OrdersService {
         // Этап «Склад выпуска готовой продукции»: краткие реквизиты
         // выбранного склада-получателя для `OrderDetailDto`.
         finishedGoodsWarehouse: true,
-        // Только `techCardId` — нужен гейту «есть ли техкарта» для
-        // `availableTransitions` (техкарта бывает per-расцветка).
-        variants: { select: { techCardId: true } },
+        // Наличие расцветок — для гейтов `availableTransitions`.
+        variants: { select: { id: true } },
       },
     });
     if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Заказ не найден' });
@@ -2439,7 +2354,6 @@ export class OrdersService {
     const wantsRouteTemplateSwap =
       wantsRouteChange &&
       (dto.routeTemplateId ?? null) !== (current.routeTemplateId ?? null);
-    const wantsTechCardChange = dto.techCardId !== undefined;
     // Soft-pattern MVP (этап 2 «Лекала»): смена/сброс лекала тоже
     // считается «потенциально опасной» — после `start()` snapshot
     // полей лекала уже зафиксирован, и менять `patternItemId` нельзя
@@ -2463,10 +2377,7 @@ export class OrdersService {
     // закупщика, а их пересчёт (delete+create) стёр бы данные — такие правки
     // идут через «Вернуть на пересчёт» (reopenCalculation → CALCULATION).
     const wantsDraftOnlyChange =
-      wantsItemsChange ||
-      wantsProductChange ||
-      wantsTechCardChange ||
-      wantsPatternChange;
+      wantsItemsChange || wantsProductChange || wantsPatternChange;
     // Безопасные плановые поля — маршрут и подразделение. Их можно менять до
     // запуска производства (DRAFT/CALCULATION/CALCULATION_DONE): подразделение
     // не имеет производных; маршрут задевает только план операций + снимок
@@ -2576,28 +2487,6 @@ export class OrdersService {
       await this.assertRouteTemplateUsable(dto.routeTemplateId);
     }
 
-    // Tech card MVP (ADR-0022): защита по уже зафиксированному
-    // snapshot-у внешних подрядных требований. После этапа «Указать
-    // в заказе» snapshot материалов (`OrderMaterialRequirement[]`)
-    // создаётся уже в `create()` / `startCalculation()`, поэтому
-    // его наличие — норма для DRAFT-заказа и тригером запрета НЕ
-    // считается. Outsource-snapshot всё ещё фиксируется только в
-    // `start()` (до этого его нет ни на DRAFT, ни на CALCULATION):
-    // если он есть — заказ уже стартовал и `wantsDraftOnlyChange &&
-    // !isDraft` выше отбил бы попытку изменить `techCardId` ещё до
-    // нас. Доп. guard здесь — пояс поверх подтяжек.
-    if (dto.techCardId !== undefined) {
-      const outsCount = await this.prisma.orderOutsourceRequirement.count({
-        where: { orderId: id },
-      });
-      if (outsCount > 0) {
-        throw new OrderTechCardAlreadyStartedException();
-      }
-      if (dto.techCardId !== null) {
-        await this.techCards.assertTechCardUsable(dto.techCardId);
-      }
-    }
-
     // Soft-pattern MVP (этап 2 «Лекала»): валидация выбранного лекала.
     // Защиту от смены после `start()` уже даёт общий ORDER_LOCKED guard
     // выше (и `wantsPatternChange`-проверка). Здесь только проверка
@@ -2681,7 +2570,6 @@ export class OrdersService {
     );
     trackScalar('productId', currentProductId ?? null, dto.productId);
     trackScalar('routeTemplateId', current.routeTemplateId, dto.routeTemplateId);
-    trackScalar('techCardId', current.techCardId, dto.techCardId);
     trackScalar('patternItemId', current.patternItemId, dto.patternItemId);
     if (dto.items) {
       const beforeItems = current.items
@@ -2734,7 +2622,6 @@ export class OrdersService {
         dto.color !== undefined ||
         dto.comment !== undefined ||
         dto.routeTemplateId !== undefined ||
-        dto.techCardId !== undefined ||
         dto.patternItemId !== undefined ||
         dto.clientId !== undefined ||
         dto.companyDivisionId !== undefined ||
@@ -2794,8 +2681,6 @@ export class OrdersService {
             // нового шаблона (per-order расценки/нормы при этом
             // сохраняются по `operationId`).
             routeCustomizedAt: wantsRouteTemplateSwap ? null : undefined,
-            techCardId:
-              dto.techCardId === undefined ? undefined : dto.techCardId,
             // Soft-pattern MVP (этап 2 «Лекала»): передаём undefined
             // если поля нет в DTO (Prisma не трогает колонку), либо
             // явное значение/null. Snapshot-поля при PATCH НЕ
@@ -2983,7 +2868,7 @@ export class OrdersService {
       const wantsColorChange =
         dto.color !== undefined && (dto.color ?? null) !== (current.color ?? null);
       const shouldRebuildMaterials =
-        (isDraft && (wantsItemsChange || wantsTechCardChange)) ||
+        (isDraft && (wantsItemsChange || wantsPatternChange)) ||
         ((isDraft ||
           current.status === OrderStatus.CALCULATION ||
           current.status === OrderStatus.CALCULATION_DONE) &&
@@ -3006,7 +2891,6 @@ export class OrdersService {
     if (wantsVariantsChange) {
       const variantInputs = dto.variants!.map((v) => ({
         color: v.color,
-        techCardId: v.techCardId ?? null,
         sizes: v.sizes ?? [],
       }));
       await this.prisma.$transaction(async (tx) => {
@@ -3094,7 +2978,6 @@ export class OrdersService {
       select: {
         status: true,
         clientId: true,
-        techCardId: true,
         patternItemId: true,
         patternItem: {
           select: {
@@ -3105,7 +2988,6 @@ export class OrdersService {
           },
         },
         items: { select: { qtyPlan: true } },
-        variants: { select: { techCardId: true } },
       },
     });
     if (!order) {
@@ -3122,10 +3004,9 @@ export class OrdersService {
       hasPattern: order.patternItemId != null,
       patternActive:
         order.patternItemId == null || order.patternItem?.status === 'ACTIVE',
-      hasTechCard:
-        order.techCardId != null ||
-        order.variants.some((v) => v.techCardId != null) ||
-        (order.patternItem?._count.materialSpecLines ?? 0) > 0,
+      // Этап 5 «техкарты → номенклатура»: источник материалов один —
+      // спецификация карточки номенклатуры.
+      hasTechCard: (order.patternItem?._count.materialSpecLines ?? 0) > 0,
     });
   }
 
@@ -3224,20 +3105,6 @@ export class OrdersService {
       );
       snapshotSteps = await this.routes.getActiveStepsForSnapshot(
         order.routeTemplateId,
-      );
-    }
-
-    // Tech card MVP (ADR-0022): фиксируем snapshot строк техкарты в
-    // той же транзакции, что смена статуса. baseQty = Σ qtyPlan по
-    // OrderItem. Никаких формул/коэффициентов: totalQty = qtyPerUnit *
-    // baseQty (см. `docs/domain.md §«Техкарты»`).
-    const baseQty = order.items.reduce((s, it) => s + it.qtyPlan, 0);
-    let techCardLines: Awaited<
-      ReturnType<TechCardsService['getLinesForSnapshot']>
-    > | null = null;
-    if (order.techCardId) {
-      techCardLines = await this.techCards.getLinesForSnapshot(
-        order.techCardId,
       );
     }
 
@@ -3360,50 +3227,18 @@ export class OrdersService {
         }
       }
 
-      if (techCardLines) {
-        const baseDecimal = new Prisma.Decimal(baseQty);
-        // Аналогичный idempotent-guard, как у route snapshot.
+      {
+        // Этап 5 «техкарты → номенклатура»: снимок материалов строится из
+        // спецификации карточки номенклатуры единым билдером. Снапшот
+        // внешнего подряда из шаблона больше не создаётся (решение §2
+        // анализа: подряд не переезжает в справочник; нанесения давно
+        // живут в `OrderApplication`). Существующие
+        // `OrderOutsourceRequirement` продолжают работать read-only.
         const existingMat = await tx.orderMaterialRequirement.count({
           where: { orderId: id },
         });
         if (existingMat === 0) {
-          // Фича «Расцветки»: снимок материалов — per-variant (единый
-          // билдер `rebuildMaterialRequirementsSnapshot`). Раньше здесь
-          // был inline order-level `createMany`; переиспользуем билдер,
-          // чтобы прямой старт DRAFT→производство давал те же per-color
-          // строки, что и расчёт. Гейт `existingMat === 0` сохраняет
-          // введённый менеджером цвет — существующий snapshot не трогаем.
           await this.rebuildMaterialRequirementsSnapshot(id, tx);
-        }
-        const existingOuts = await tx.orderOutsourceRequirement.count({
-          where: { orderId: id },
-        });
-        if (existingOuts === 0 && techCardLines.outsourceLines.length > 0) {
-          await tx.orderOutsourceRequirement.createMany({
-            data: techCardLines.outsourceLines.map((l) => ({
-              orderId: id,
-              sourceTechCardLineId: l.id,
-              sortOrder: l.sortOrder,
-              name: l.name,
-              unit: l.unit,
-              qtyPerUnit: l.qtyPerUnit,
-              totalQty:
-                l.qtyPerUnit == null ? null : l.qtyPerUnit.mul(baseDecimal),
-              vendorName: l.vendorName,
-              note: l.note,
-              // MVP-2 (ADR-0022 §«Cut-ready readiness»): копируем
-              // триггер активации в snapshot. Дальше read-only derive
-              // в `getOne()` по `Passport.currentCellId`.
-              triggerType: l.triggerType,
-              // MVP-3 (ADR-0022 §«Manual execution status»): дефолтный
-              // ручной статус — `PLANNED`. Колонка имеет default в
-              // схеме; передаём явно, чтобы snapshot был самодостаточен
-              // и не зависел от server-side default-логики.
-              executionStatus: OrderOutsourceExecutionStatus.PLANNED,
-              orderedAt: null,
-              receivedAt: null,
-            })),
-          });
         }
       }
       // Audit (см. `docs/domain.md §«Audit log»`): запуск заказа в
@@ -3427,12 +3262,6 @@ export class OrdersService {
             toStatus: OrderStatus.IN_PRODUCTION,
             routeTemplateId: order.routeTemplateId,
             routeStepCount: snapshotSteps.length,
-            techCardId: order.techCardId,
-            techCardMaterialLineCount:
-              techCardLines?.materialLines.length ?? 0,
-            techCardOutsourceLineCount:
-              techCardLines?.outsourceLines.length ?? 0,
-            baseQty,
             // Soft-pattern MVP (этап 2 «Лекала»): фиксируем factual
             // привязку к лекалу + флаг snapshot-фиксации, чтобы по
             // журналу было ясно, был ли pattern на момент запуска и
@@ -3535,7 +3364,6 @@ export class OrdersService {
       where: { id },
       include: {
         items: true,
-        variants: { select: { techCardId: true } },
         // Итерация 3 «стадия per вариант»: активная калькуляция — для
         // ветки «рассчитать вариант» на заказе, уже прошедшем DRAFT.
         calculations: {
@@ -3586,23 +3414,23 @@ export class OrdersService {
     // ОБЯЗАН быть ACTIVE. Если лекало изменится после accept от
     // конструктора, менеджер пересчитает расчёт через `recalculate-plan`.
     //
-    // Фича «Расцветки»: техкарта может быть задана НЕ на заказ, а на
-    // каждую расцветку (`OrderVariant.techCardId`) — форма расцветок
-    // прячет общий выбор. Пропускаем, если есть хотя бы одна техкарта:
-    // order-level или у любой расцветки. Снимок/расчёт дальше идут
-    // per-variant (см. `rebuildMaterialRequirementsSnapshot`,
-    // `WorkshopNeedsService.calculateForOrder`).
-    // Этап 3 «техкарты → номенклатура»: источником состава материалов
-    // может быть СПЕЦИФИКАЦИЯ карточки номенклатуры — тогда техкарта не
-    // нужна вовсе. Гейт остаётся для заказов без единого источника.
-    if (!order.techCardId && !order.variants.some((v) => v.techCardId)) {
+    // Этап 5 «техкарты → номенклатура»: источник состава материалов —
+    // СПЕЦИФИКАЦИЯ карточки номенклатуры. Гейт: без единой строки
+    // спецификации заказ в расчёт не уезжает (для legacy-заказов с уже
+    // зафиксированным снимком материалов гейт тоже пропускает).
+    {
       const specLines = order.patternItemId
         ? await this.prisma.patternItemMaterialLine.count({
             where: { patternItemId: order.patternItemId },
           })
         : 0;
       if (specLines === 0) {
-        throw new OrderTechCardRequiredException();
+        const snapshotLines = await this.prisma.orderMaterialRequirement.count(
+          { where: { orderId: id } },
+        );
+        if (snapshotLines === 0) {
+          throw new OrderTechCardRequiredException();
+        }
       }
     }
     const totalQty = order.items.reduce((s, it) => s + it.qtyPlan, 0);
@@ -3984,9 +3812,6 @@ export class OrdersService {
       routeTemplateName: order.routeTemplate?.name ?? null,
       routeCustomized: order.routeCustomizedAt != null,
       routeModeOverride: order.routeModeOverride,
-      techCardId: order.techCardId,
-      techCardCode: order.techCard?.code ?? null,
-      techCardName: order.techCard?.name ?? null,
       // Soft-pattern MVP (этап 2 «Лекала»): live-поля карточки
       // лекала + snapshot-поля заказа. UI выбирает, что показать
       // (см. `OrderListItemDto.patternItemId`-комментарий).
@@ -4672,7 +4497,6 @@ export class OrdersService {
     orderId: string,
     variantInputs: {
       color: string;
-      techCardId: string | null;
       sizes: { sizeId: string; qtyPlan: number }[];
     }[],
   ): Promise<void> {
@@ -4691,7 +4515,6 @@ export class OrdersService {
           orderId,
           ordinal,
           color: v.color,
-          techCardId: v.techCardId,
           sizes: { create: sizeRows },
         },
       });
@@ -4829,7 +4652,6 @@ export class OrdersService {
       select: {
         id: true,
         status: true,
-        techCardId: true,
         // productId для пересборки агрегата OrderItem (все строки
         // заказа делят один legacy Product заказа).
         items: { select: { productId: true }, take: 1 },
@@ -4841,7 +4663,6 @@ export class OrdersService {
         variants: {
           orderBy: { ordinal: 'asc' },
           select: {
-            techCardId: true,
             sizes: { select: { sizeId: true, qtyPlan: true } },
           },
         },
@@ -4860,11 +4681,6 @@ export class OrdersService {
       order.status === OrderStatus.DRAFT ||
       order.status === OrderStatus.CALCULATION;
     if (!canTouchSnapshot) return;
-
-    const bridgedTechCardId =
-      order.variants.find((v) => v.techCardId)?.techCardId ??
-      order.techCardId ??
-      null;
 
     // Агрегат OrderItem = Σ OrderVariantSize.qtyPlan по размеру (union
     // размеров всех расцветок; нулевые строки выкидываем). productId
@@ -4893,12 +4709,6 @@ export class OrdersService {
       null;
 
     await this.prisma.$transaction(async (tx) => {
-      if (bridgedTechCardId !== order.techCardId) {
-        await tx.order.update({
-          where: { id: orderId },
-          data: { techCardId: bridgedTechCardId },
-        });
-      }
       // OrderItem := Σ OrderVariantSize ДО снимка/плана — их
       // single-variant fast-path и операционный план читают OrderItem.
       // deleteMany+createMany безопасно: на OrderItem.id нет обратных FK
@@ -5255,10 +5065,10 @@ export class OrdersService {
     tx: Prisma.TransactionClient,
     opts?: {
       /**
-       * ФАЗА 2: перечитать шаблон принудительно, даже если техкарта группы не
-       * менялась. Осознанный клапан — кнопка «Обновить из шаблона»: сносит
-       * правки структуры, сделанные в заказе. Значения параметров переживают
-       * (они в своей таблице).
+       * ФАЗА 2: перечитать спецификацию номенклатуры принудительно.
+       * Осознанный клапан — кнопка «Обновить из номенклатуры»: сносит
+       * правки структуры, сделанные в заказе. Значения параметров и ручные
+       * строки переживают (они в своих таблицах/помечены isManual).
        */
       reloadFromTemplate?: boolean;
     },
@@ -5268,16 +5078,14 @@ export class OrdersService {
       select: {
         id: true,
         color: true,
-        techCardId: true,
         items: { select: { sizeId: true, qtyPlan: true } },
         // Фича «Расцветки» (FEATURE_COLORWAYS): снимок строится ПО
-        // КАЖДОЙ расцветке — своя техкарта × поразмерный план цвета.
+        // КАЖДОЙ расцветке — общая спецификация × поразмерный план цвета.
         variants: {
           orderBy: { ordinal: 'asc' },
           select: {
             id: true,
             color: true,
-            techCardId: true,
             sizes: { select: { sizeId: true, qtyPlan: true } },
           },
         },
@@ -5312,10 +5120,9 @@ export class OrdersService {
             materialAreas: {
               select: { materialRole: true, sizeId: true, areaM2: true },
             },
-            // Этап 3 «техкарты → номенклатура»: СОСТАВ материалов из
-            // спецификации карточки. Если он непуст — источник
-            // материализации снимка, техкарта остаётся фолбэком для
-            // legacy-заказов.
+            // Этап 5 «техкарты → номенклатура»: СОСТАВ материалов из
+            // спецификации карточки — единственный источник
+            // материализации снимка.
             materialSpecLines: { orderBy: { sortOrder: 'asc' } },
             specParameters: {
               orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
@@ -5336,11 +5143,11 @@ export class OrdersService {
     // материализационный конвейер ниже работает с обоими источниками
     // одним кодом.
     //
-    // ВАЖНО (гарантия выката): существующие снапшоты, материализованные из
-    // техкарты (`sourcePatternItemId = null`, `sourceTechCardId != null`),
-    // НЕ перечитываются из спецификации сами — только пересчёт количеств.
-    // Переключение источника происходит для новых групп, по явному
-    // «Обновить из шаблона» или когда техкарту группы сняли.
+    // ВАЖНО (гарантия выката этапов 3–5): существующие снапшоты,
+    // материализованные из техкарты (`sourcePatternItemId = null`,
+    // `sourceTechCardId != null` — исторические колонки), НЕ перечитываются
+    // из спецификации сами — только пересчёт количеств. Перематериализация —
+    // явным «Обновить из номенклатуры», для новых групп и при смене лекала.
     // ─────────────────────────────────────────────────────────────────────
     const patternSpec =
       order.patternItem && order.patternItem.materialSpecLines.length > 0
@@ -5387,9 +5194,6 @@ export class OrdersService {
                 owner: p.owner as TechCardParameterOwner,
                 sortOrder: p.sortOrder,
               })),
-              outsourceLines: [] as Awaited<
-                ReturnType<TechCardsService['getLinesForSnapshot']>
-              >['outsourceLines'],
             },
           }
         : null;
@@ -5442,18 +5246,16 @@ export class OrdersService {
     });
 
     // Группы снимка. ≤1 расцветки → одна order-level группа
-    // (`variantId = null`): числа и поведение байт-в-байт как раньше
-    // (техкарта заказа × Σ OrderItem.qtyPlan), плюс две новые null-колонки.
+    // (`variantId = null`): спецификация лекала × Σ OrderItem.qtyPlan.
     // Это же обходит дрейф `OrderItem`↔`OrderVariantSize` при обычном
     // `update()` (варианты ведёт отдельный модуль расцветок). ≥2 расцветок
-    // → группа на расцветку: своя техкарта (`variant.techCardId ??
-    // order.techCardId`), свой тираж (Σ `OrderVariantSize.qtyPlan`), свой
-    // цвет. Группа без эффективной техкарты или с нулевым тиражом строк не даёт.
+    // → группа на расцветку: общая спецификация, свой тираж
+    // (Σ `OrderVariantSize.qtyPlan`), свой цвет. Группа с нулевым тиражом
+    // строк не даёт.
     type SnapshotGroup = {
       variantId: string | null;
       variantColor: string | null;
       color: string | null;
-      techCardId: string | null;
       qty: number;
       /** План по размерам группы — по нему выводится норма из номенклатуры. */
       sizePlan: SizePlanEntry[];
@@ -5465,7 +5267,6 @@ export class OrdersService {
               variantId: null,
               variantColor: null,
               color: order.color,
-              techCardId: order.techCardId,
               qty: order.items.reduce((s, it) => s + it.qtyPlan, 0),
               sizePlan: order.items.map((it) => ({
                 sizeId: it.sizeId,
@@ -5477,17 +5278,17 @@ export class OrdersService {
             variantId: v.id,
             variantColor: v.color,
             color: v.color,
-            techCardId: v.techCardId ?? order.techCardId,
             qty: v.sizes.reduce((s, sz) => s + sz.qtyPlan, 0),
             sizePlan: v.sizes.map((sz) => ({
               sizeId: sz.sizeId,
               qtyPlan: sz.qtyPlan,
             })),
           }));
-    // Этап 3: группа эффективна, если у неё есть ИСТОЧНИК состава —
-    // спецификация номенклатуры (общая на заказ) или техкарта (legacy).
+    // Этап 5: единственный источник состава — спецификация номенклатуры.
+    // Без неё материализовывать нечего, но существующие legacy-снимки
+    // (из техкарт) НЕ трогаем: их группы уходят в recompute-ветку ниже.
     const effectiveGroups = groups.filter(
-      (g) => (patternSpec != null || g.techCardId) && g.qty > 0,
+      (g) => patternSpec != null && g.qty > 0,
     );
 
     // Ключ группы: order-level (`null`) и расцветка сводятся к одной строке.
@@ -5545,15 +5346,14 @@ export class OrdersService {
       }
     }
 
-    // Ни одной группы с источником состава → шаблонных строк в снимке быть
-    // не может.
-    // Ручные строки существующих групп при этом остаются: их шаблон не сеял,
-    // значит и снести их пересборка не вправе.
+    // Спецификации нет (или тиражи нулевые) → материализовывать нечего.
+    // Сносим ТОЛЬКО строки исчезнувших групп (расцветку удалили) — и ручные,
+    // и шаблонные строки живых групп остаются: legacy-снимок из техкарты
+    // обязан пережить снос справочника техкарт (этап 5), а ручные строки
+    // пересборка не сносит никогда.
     if (effectiveGroups.length === 0) {
       const orphanIds = existing
-        .filter(
-          (r) => !r.isManual || !existingGroupKeys.has(vk(r.orderVariantId)),
-        )
+        .filter((r) => !existingGroupKeys.has(vk(r.orderVariantId)))
         .map((r) => r.id);
       if (orphanIds.length > 0) {
         await tx.orderMaterialRequirement.deleteMany({
@@ -5627,19 +5427,6 @@ export class OrdersService {
       }
     }
 
-    // Кэш строк техкарты — расцветки часто делят одну техкарту.
-    const linesCache = new Map<
-      string,
-      Awaited<ReturnType<TechCardsService['getLinesForSnapshot']>>
-    >();
-    const getLines = async (techCardId: string) => {
-      const cached = linesCache.get(techCardId);
-      if (cached) return cached;
-      const loaded = await this.techCards.getLinesForSnapshot(techCardId);
-      linesCache.set(techCardId, loaded);
-      return loaded;
-    };
-
     // ─────────────────────────────────────────────────────────────────────
     // ФАЗА 2. Группа перечитывает ИСТОЧНИК только если:
     //   - строк ещё нет (заказ только создан / источник только выбрали), либо
@@ -5666,7 +5453,6 @@ export class OrdersService {
     //               группы, у которых техкарту сняли;
     //   TECH_CARD — фолбэк для legacy-групп, чей снимок собран из техкарты:
     //               живой заказ не меняет состав сам от выката фичи.
-    const groupSource = new Map<string, 'SPEC' | 'TECH_CARD'>();
     const groupsToMaterialize: typeof effectiveGroups = [];
     const groupsToRecompute: typeof effectiveGroups = [];
     for (const g of effectiveGroups) {
@@ -5675,23 +5461,19 @@ export class OrdersService {
       const rows = (existingByGroup.get(vk(g.variantId)) ?? []).filter(
         (r) => !r.isManual,
       );
-      const specSourced = rows.some((r) => r.sourcePatternItemId != null);
-      const useSpec =
-        patternSpec != null &&
-        (rows.length === 0 ||
-          opts?.reloadFromTemplate === true ||
-          specSourced ||
-          !g.techCardId);
-      groupSource.set(vk(g.variantId), useSpec ? 'SPEC' : 'TECH_CARD');
-      const cameFromAnotherSource = useSpec
-        ? rows.some(
-            (r) => r.sourcePatternItemId !== patternSpec!.patternItemId,
-          )
-        : rows.some((r) => r.sourceTechCardId !== g.techCardId);
+      // Гарантия выката этапов 3–5: legacy-строки из техкарт
+      // (`sourcePatternItemId = null`) сами не перечитываются — только
+      // пересчёт. Перематериализация: явное «Обновить из номенклатуры»,
+      // пустая группа или смена ЛЕКАЛА (спецификация другой карточки).
+      const cameFromAnotherPattern = rows.some(
+        (r) =>
+          r.sourcePatternItemId != null &&
+          r.sourcePatternItemId !== patternSpec!.patternItemId,
+      );
       if (
         opts?.reloadFromTemplate ||
         rows.length === 0 ||
-        cameFromAnotherSource
+        cameFromAnotherPattern
       ) {
         groupsToMaterialize.push(g);
       } else {
@@ -5699,15 +5481,14 @@ export class OrdersService {
       }
     }
 
-    // Фича «Параметры техкарт»: слоты источника материализуются в заказ (по
-    // расцветке), значения переживают пересборку — они в своей таблице.
+    // Слоты-параметры спецификации материализуются в заказ (по расцветке),
+    // значения переживают пересборку — они в своей таблице.
     // Делаем ДО построения строк: подстановка читает уже готовые значения.
     const valuesByGroup = await this.materializeTechCardParameters(
       orderId,
       effectiveGroups,
-      getLines,
+      patternSpec,
       tx,
-      { patternSpec, groupSource },
     );
 
     // Пересчёт: количества + подстановка параметров, БЕЗ похода в шаблон.
@@ -5843,12 +5624,8 @@ export class OrdersService {
 
     const data: Prisma.OrderMaterialRequirementCreateManyInput[] = [];
     for (const g of groupsToMaterialize) {
-      // Этап 3: источник строк группы — спецификация номенклатуры или
-      // техкарта (см. `groupSource` выше).
-      const isSpecGroup = groupSource.get(vk(g.variantId)) === 'SPEC';
-      const lines = isSpecGroup
-        ? patternSpec!.lines
-        : await getLines(g.techCardId as string);
+      // Этап 5: источник строк группы — спецификация номенклатуры.
+      const lines = patternSpec!.lines;
       const baseDecimal = new Prisma.Decimal(g.qty);
       const paramValues =
         valuesByGroup.get(vk(g.variantId)) ??
@@ -5945,8 +5722,8 @@ export class OrdersService {
           orderId,
           orderVariantId: g.variantId,
           variantColor: g.variantColor,
-          sourceTechCardLineId: isSpecGroup ? null : l.id,
-          sourcePatternLineId: isSpecGroup ? l.id : null,
+          sourceTechCardLineId: null,
+          sourcePatternLineId: l.id,
           sortOrder: l.sortOrder,
           name: cells.name,
           unit: cells.unit,
@@ -5980,10 +5757,8 @@ export class OrdersService {
           parameterBindings: bindings
             ? (bindings as Prisma.InputJsonValue)
             : Prisma.DbNull,
-          sourceTechCardId: isSpecGroup ? null : g.techCardId,
-          sourcePatternItemId: isSpecGroup
-            ? patternSpec!.patternItemId
-            : null,
+          sourceTechCardId: null,
+          sourcePatternItemId: patternSpec!.patternItemId,
           qtySource: derivedNorm ? 'NOMENCLATURE' : 'TEMPLATE',
           qtySourceRef: derivedNorm ? (normSource?.sourceId ?? null) : null,
         });
@@ -6076,10 +5851,8 @@ export class OrdersService {
           subtypeKey: null,
           characteristics: Prisma.DbNull,
           parameterBindings: Prisma.DbNull,
-          sourceTechCardId: isSpecGroup ? null : g.techCardId,
-          sourcePatternItemId: isSpecGroup
-            ? patternSpec!.patternItemId
-            : null,
+          sourceTechCardId: null,
+          sourcePatternItemId: patternSpec!.patternItemId,
           qtySource: 'NOMENCLATURE',
           qtySourceRef: source.sourceId,
         });
@@ -6172,23 +5945,30 @@ export class OrdersService {
    */
   private async materializeTechCardParameters(
     orderId: string,
-    groups: { variantId: string | null; techCardId: string | null }[],
-    getLines: (
-      techCardId: string,
-    ) => Promise<Awaited<ReturnType<TechCardsService['getLinesForSnapshot']>>>,
-    tx: Prisma.TransactionClient,
+    groups: { variantId: string | null }[],
     /**
-     * Этап 3 «техкарты → номенклатура»: источник слотов по группам.
-     * `SPEC` — слоты берутся из спецификации карточки
-     * (`PatternItemSpecParameter`), `TECH_CARD` — из техкарты (legacy).
+     * Этап 5 «техкарты → номенклатура»: источник слотов — спецификация
+     * карточки (`PatternItemSpecParameter`). `null` — спецификации нет,
+     * материализуются только удаления осиротевших групп.
      */
-    sourceOpts?: {
-      patternSpec: {
-        patternItemId: string;
-        lines: Awaited<ReturnType<TechCardsService['getLinesForSnapshot']>>;
-      } | null;
-      groupSource: Map<string, 'SPEC' | 'TECH_CARD'>;
-    },
+    patternSpec: {
+      patternItemId: string;
+      lines: {
+        parameters: Array<{
+          id: string;
+          key: string;
+          label: string;
+          inputType: TechCardParameterInputType;
+          options: string[] | null;
+          unit: string | null;
+          isRequired: boolean;
+          defaultValue: string | null;
+          owner: TechCardParameterOwner;
+          sortOrder: number;
+        }>;
+      };
+    } | null,
+    tx: Prisma.TransactionClient,
   ): Promise<Map<string, Map<string, TechCardParameterValue>>> {
     const vk = (variantId: string | null) => variantId ?? '';
 
@@ -6211,17 +5991,8 @@ export class OrdersService {
 
     for (const g of groups) {
       const gk = vk(g.variantId);
-      const isSpecGroup =
-        sourceOpts?.groupSource.get(gk) === 'SPEC' &&
-        sourceOpts.patternSpec != null;
-      const tplParams = isSpecGroup
-        ? sourceOpts!.patternSpec!.lines.parameters
-        : g.techCardId
-          ? (await getLines(g.techCardId)).parameters
-          : [];
-      const specPatternItemId = isSpecGroup
-        ? sourceOpts!.patternSpec!.patternItemId
-        : null;
+      const tplParams = patternSpec?.lines.parameters ?? [];
+      const specPatternItemId = patternSpec?.patternItemId ?? null;
       const inGroup = existing.filter((p) => vk(p.orderVariantId) === gk);
       const byKey = new Map(inGroup.map((p) => [p.key, p] as const));
       const tplKeys = new Set(tplParams.map((p) => p.key));
@@ -6242,7 +6013,7 @@ export class OrdersService {
               isRequired: tp.isRequired,
               sortOrder: tp.sortOrder,
               owner: tp.owner,
-              sourceTechCardId: isSpecGroup ? null : g.techCardId,
+              sourceTechCardId: null,
               sourcePatternItemId: specPatternItemId,
               sourceParameterId: tp.id,
             },
@@ -6264,7 +6035,7 @@ export class OrdersService {
             isRequired: tp.isRequired,
             sortOrder: tp.sortOrder,
             owner: tp.owner,
-            sourceTechCardId: isSpecGroup ? null : g.techCardId,
+            sourceTechCardId: null,
             sourcePatternItemId: specPatternItemId,
             sourceParameterId: tp.id,
             value: seeded?.value ?? tp.defaultValue ?? null,
@@ -6340,9 +6111,6 @@ export class OrdersService {
  * поэтому отдаём `true` — иначе список показал бы ложную блокировку.
  */
 function buildTransitionContext(order: OrderWithItems): OrderTransitionContext {
-  const hasVariantTechCard = (order.variants ?? []).some(
-    (v) => v.techCardId != null,
-  );
   return {
     status: order.status,
     hasClient: order.clientId != null,
@@ -6351,13 +6119,12 @@ function buildTransitionContext(order: OrderWithItems): OrderTransitionContext {
     hasPattern: order.patternItemId != null,
     patternActive:
       order.patternItemId == null || order.patternItem?.status === 'ACTIVE',
-    // Этап 3 «техкарты → номенклатура»: спецификация карточки — такой же
-    // источник материалов, как техкарта (гейт и лейбл переименуются на
-    // этапе 5 вместе со сносом техкарт).
+    // Этап 5 «техкарты → номенклатура»: источник материалов один —
+    // спецификация карточки номенклатуры. Для запущенных legacy-заказов
+    // гейт закрыт уже пройденным снимком (materialRequirements).
     hasTechCard:
-      order.techCardId != null ||
-      hasVariantTechCard ||
-      (order.patternItem?._count?.materialSpecLines ?? 0) > 0,
+      (order.patternItem?._count?.materialSpecLines ?? 0) > 0 ||
+      order.materialRequirements.length > 0,
   };
 }
 

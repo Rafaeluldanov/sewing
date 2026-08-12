@@ -384,20 +384,14 @@ DTO: `packages/shared/src/routes.ts`.
 ---
 
 <a id="8-tech-cards"></a>
-## 8. Tech-cards
+## 8. Tech-cards (удалены)
 
-Источник: `tech-cards/tech-cards.controller.ts`. Класс RBAC не задан;
-write-методы — `@Roles('ADMIN','SHOP_MANAGER')`.
-
-| Метод | Путь                                              | RBAC               | Описание |
-| ----- | ------------------------------------------------- | ------------------ | -------- |
-| GET   | `/api/tech-cards`                                 | Any auth           | List `ListTechCardsQuery`. |
-| GET   | `/api/tech-cards/:id`                             | Any auth           | `TechCardTemplateDetailDto`. |
-| POST  | `/api/tech-cards`                                 | ADMIN, SHOP_MANAGER | `CreateTechCardDto`. |
-| PATCH | `/api/tech-cards/:id`                             | ADMIN, SHOP_MANAGER | `UpdateTechCardDto`. Full-replace `TechCardMaterialLine[]` / `TechCardOutsourceLine[]` (delete-all + createMany в транзакции). |
-| POST  | `/api/tech-cards/:id/material-lines/:lineId/image`| ADMIN, SHOP_MANAGER | multipart `file` (JPG/JPEG/PNG). Лимит — `TECH_CARD_LINE_IMAGE_MAX_SIZE_BYTES`. |
-
-DTO: `packages/shared/src/tech-cards.ts`. ADR: 0022.
+Раздел техкарт удалён этапом 5 плана «техкарты → номенклатура»
+(12.08.2026): состав материалов ведёт спецификация карточки номенклатуры —
+`PUT /api/patterns/:id/material-spec` (см. §10 Patterns). Снапшотный слой
+заказа (`/api/orders/:id/tech-card*`) живёт дальше — исторические имена
+ручек сохранены. Контракты строк — `packages/shared/src/pattern-item-spec.ts`
+(наследуют `tech-cards.ts`). ADR: 0022 (superseded).
 
 ---
 
@@ -448,7 +442,6 @@ DTO: `packages/shared/src/patterns.ts` (`ClonePatternSchema`,
 | PATCH  | `/api/pattern-categories/:id`                     | ADMIN, SHOP_MANAGER | `UpdatePatternCategoryDto`. |
 | PUT    | `/api/pattern-categories/:id/parameters`          | ADMIN, SHOP_MANAGER | Bulk-replace параметров (`PatternCategoryParameter[]`). |
 | POST   | `/api/pattern-categories/:id/icon`                | ADMIN, SHOP_MANAGER | multipart `file` (JPG/JPEG/PNG). Лимит — `PatternCategoriesStorageService.ICON_MAX_SIZE_BYTES`. |
-| GET    | `/api/pattern-categories/:id/compatible-tech-cards` | ADMIN, SHOP_MANAGER | Inline-создание изделия из формы заказа: активные техкарты с compatibility-оценкой по этой категории. Возвращает `CompatibleTechCardsResponseDto`. |
 | DELETE | `/api/pattern-categories/:id`                     | ADMIN, SHOP_MANAGER | Soft-archive (`status = ARCHIVED`). |
 
 DTO: `packages/shared/src/pattern-categories.ts`.
@@ -2511,7 +2504,6 @@ backend — `apps/api/src/common/bulk-archive.ts`, UI — `AdminArchiveTabs`
 | Раздел | `{base}` | Признак архива | Гейт `purge` |
 | ------ | -------- | -------------- | ------------ |
 | Номенклатура | `/api/patterns` | `status = ARCHIVED` | ссылки заказов (`Order.patternItemId`) |
-| Техкарты | `/api/tech-cards` | `isActive = false` | заказы, расцветки заказов, снимки строк в потребностях |
 | Маршруты | `/api/routes` | `isActive = false` | заказы, пробники (`OrderSample`) |
 | Операции | `/api/operations` | `active = false` | `GET :id/blockers` (история/маршруты/substitute). `purge` — `ADMIN`-only |
 | Заявки конструктору | `/api/constructor-tasks` | `archivedAt != null` | — (строки размеров и вложения уходят каскадом; лекало остаётся) |
@@ -2528,9 +2520,6 @@ backend — `apps/api/src/common/bulk-archive.ts`, UI — `AdminArchiveTabs`
 | POST | `/api/patterns/archive` | ADMIN, SHOP_MANAGER | Номенклатура: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
 | POST | `/api/patterns/restore` | ADMIN, SHOP_MANAGER | Номенклатура: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
 | POST | `/api/patterns/purge` | ADMIN, SHOP_MANAGER | Номенклатура: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
-| POST | `/api/tech-cards/archive` | ADMIN, SHOP_MANAGER | Техкарты: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
-| POST | `/api/tech-cards/restore` | ADMIN, SHOP_MANAGER | Техкарты: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
-| POST | `/api/tech-cards/purge` | ADMIN, SHOP_MANAGER | Техкарты: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
 | POST | `/api/routes/archive` | ADMIN, SHOP_MANAGER | Маршруты: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
 | POST | `/api/routes/restore` | ADMIN, SHOP_MANAGER | Маршруты: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
 | POST | `/api/routes/purge` | ADMIN, SHOP_MANAGER | Маршруты: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
@@ -2563,7 +2552,7 @@ backend — `apps/api/src/common/bulk-archive.ts`, UI — `AdminArchiveTabs`
 
 Одиночные пути, где они уже были, сохранены и подчиняются той же
 политике: `DELETE /api/patterns/:id/permanent`,
-`DELETE /api/tech-cards/:id/permanent`, `DELETE /api/routes/:id`
+`DELETE /api/routes/:id`
 (теперь 409 `ROUTE_TEMPLATE_DELETE_FORBIDDEN` для активного шаблона или
 используемого заказами), `DELETE /api/printers/:id`
 (409 `PRINTER_DELETE_FORBIDDEN` для активного), `DELETE /api/operations/:id`

@@ -1,6 +1,8 @@
 /**
  * Контракты фичи «Расцветки» (colorways) — «разные цвета для разных
- * размеров, у каждого цвета своя техкарта материалов».
+ * размеров». Этап 5 «техкарты → номенклатура»: состав материалов общий
+ * для всех расцветок (спецификация карточки номенклатуры), различия
+ * цветов дают правило цвета, значения слотов и ручные строки заказа.
  *
  * Бэкенд: `apps/api/src/modules/order-colorways/*`
  * (`/api/orders/:id/colorways`). Веб: `apps/web/lib/colorways-api.ts`,
@@ -22,13 +24,11 @@ export interface OrderColorwaySizeDto {
   qtyPlan: number;
 }
 
-/** Расцветка заказа: цвет + своя техкарта + поразмерный план. */
+/** Расцветка заказа: цвет + поразмерный план. */
 export interface OrderColorwayDto {
   id: string;
   ordinal: number;
   color: string;
-  techCardId: string | null;
-  techCardName: string | null;
   sizes: OrderColorwaySizeDto[];
 }
 
@@ -37,8 +37,6 @@ export interface OrderColorwaysDto {
   orderId: string;
   /** Все размеры справочника — для редактора поразмерного плана. */
   sizes: Array<{ id: string; code: string }>;
-  /** Активные техкарты материалов — для селекта расцветки. */
-  techCards: Array<{ id: string; name: string }>;
   variants: OrderColorwayDto[];
 }
 
@@ -51,7 +49,6 @@ export type ColorwaySizeInput = z.infer<typeof ColorwaySizeInputSchema>;
 /** Тело создания / обновления расцветки. */
 export const UpsertOrderColorwaySchema = z.object({
   color: z.string().trim().min(1, 'Укажите цвет расцветки').max(60),
-  techCardId: z.string().min(1).nullable().optional(),
   sizes: z.array(ColorwaySizeInputSchema).default([]),
 });
 export type UpsertOrderColorwayDto = z.infer<typeof UpsertOrderColorwaySchema>;

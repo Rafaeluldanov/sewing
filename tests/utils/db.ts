@@ -148,9 +148,6 @@ export async function resetDatabase(prisma: {
     // (`ON DELETE CASCADE`), но truncate явный ради читаемости.
     'PatternCategoryParameter',
     'PatternCategory',
-    'TechCardMaterialLine',
-    'TechCardOutsourceLine',
-    'TechCardTemplate',
     'PrintJob',
     'Printer',
     'ShiftSession',

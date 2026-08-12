@@ -21,7 +21,6 @@
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
-import { Prisma } from '@prisma/client';
 import {
   loginAs,
   startTestApp,
@@ -30,6 +29,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 describeWithDb(
   'integration — orders.customerUnitPrice / customerCurrency',
@@ -53,6 +53,7 @@ describeWithDb(
     async function createDraft(body?: {
       customerUnitPrice?: string | number | null;
       customerCurrency?: string | null;
+      patternItemId?: string;
     }): Promise<{ id: string; res: request.Response }> {
       const res = await request(t.app.getHttpServer())
         .post('/api/orders')
@@ -231,44 +232,19 @@ describeWithDb(
     // ---------------------------------------------------------------------
 
     test('WorkshopNeed.calculate не зависит от customerUnitPrice заказа', async () => {
+      // Минимальная спецификация с одной QTY_PER_UNIT-строкой — нам
+      // нужен только один материал-fallback для расчёта.
+      const pattern = await createSpecPattern(t, cookie, {
+        name: 'CustomerPrice probe',
+        materialLines: [{ name: 'Этикетка', unit: 'шт', qtyPerUnit: '2' }],
+      });
       // Создаём заказ с любой customerUnitPrice — это управленческая
       // цена продажи и НЕ должна влиять на расчёт потребностей.
       const { id } = await createDraft({
         customerUnitPrice: '1000',
         customerCurrency: 'RUB',
+        patternItemId: pattern.id,
       });
-
-      // Создаём минимальную техкарту с QTY_PER_UNIT-строкой через
-      // прямой Prisma-write — отдельный POST /tech-cards в этом
-      // тесте overkill, нам нужен только один материал-fallback.
-      const tc = await t.prisma.techCardTemplate.create({
-        data: {
-          code: 'TC-CUSTPRICE',
-          name: 'CustomerPrice probe',
-          materialLines: {
-            create: [
-              {
-                sortOrder: 0,
-                name: 'Этикетка',
-                unit: 'шт',
-                qtyPerUnit: new Prisma.Decimal('2'),
-                materialRole: null,
-                fabricType: null,
-                densityGsm: null,
-                plannedWidthCm: null,
-                colorRule: null,
-                fixedColorText: null,
-              },
-            ],
-          },
-        },
-      });
-      // Привязываем технологическую карту к заказу.
-      await request(t.app.getHttpServer())
-        .patch(`/api/orders/${id}`)
-        .set('Cookie', cookie)
-        .send({ techCardId: tc.id })
-        .expect(200);
 
       const calc = await request(t.app.getHttpServer())
         .post(`/api/orders/${id}/workshop-needs/calculate`)
@@ -290,34 +266,11 @@ describeWithDb(
     // ---------------------------------------------------------------------
 
     test('PATCH WorkshopNeed quotedPrice сохраняется как цена за единицу', async () => {
-      const { id } = await createDraft();
-      const tc = await t.prisma.techCardTemplate.create({
-        data: {
-          code: 'TC-PER-UNIT',
-          name: 'Per-unit probe',
-          materialLines: {
-            create: [
-              {
-                sortOrder: 0,
-                name: 'Этикетка',
-                unit: 'шт',
-                qtyPerUnit: new Prisma.Decimal('2'),
-                materialRole: null,
-                fabricType: null,
-                densityGsm: null,
-                plannedWidthCm: null,
-                colorRule: null,
-                fixedColorText: null,
-              },
-            ],
-          },
-        },
+      const pattern = await createSpecPattern(t, cookie, {
+        name: 'Per-unit probe',
+        materialLines: [{ name: 'Этикетка', unit: 'шт', qtyPerUnit: '2' }],
       });
-      await request(t.app.getHttpServer())
-        .patch(`/api/orders/${id}`)
-        .set('Cookie', cookie)
-        .send({ techCardId: tc.id })
-        .expect(200);
+      const { id } = await createDraft({ patternItemId: pattern.id });
       const calc = await request(t.app.getHttpServer())
         .post(`/api/orders/${id}/workshop-needs/calculate`)
         .set('Cookie', cookie)

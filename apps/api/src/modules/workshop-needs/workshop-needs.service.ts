@@ -1043,11 +1043,6 @@ export class WorkshopNeedsService {
       include: {
         items: { include: { size: true } },
         materialRequirements: { orderBy: { sortOrder: 'asc' } },
-        techCard: {
-          include: {
-            materialLines: { orderBy: { sortOrder: 'asc' } },
-          },
-        },
         patternItem: {
           include: {
             materialAreas: true,
@@ -1093,17 +1088,14 @@ export class WorkshopNeedsService {
           },
         },
         // Фича «Расцветки» (FEATURE_COLORWAYS): при ≥2 расцветках
-        // потребность считается ПО КАЖДОЙ — своя техкарта (live-fallback,
-        // если у расцветки нет строк снимка) × поразмерный план цвета
-        // (`OrderVariantSize`). Снимок (`materialRequirements`) уже несёт
-        // `orderVariantId`, поэтому основной путь идёт через него; live-
-        // техкарта расцветки — страховка для частично-legacy снимка.
+        // потребность считается ПО КАЖДОЙ — строки снимка расцветки ×
+        // поразмерный план цвета (`OrderVariantSize`). Снимок
+        // (`materialRequirements`) несёт `orderVariantId` — основной и
+        // единственный путь (этап 5 «техкарты → номенклатура»: live-фолбэк
+        // по техкарте удалён, снапшот существует с момента создания заказа).
         variants: {
           orderBy: { ordinal: 'asc' },
           include: {
-            techCard: {
-              include: { materialLines: { orderBy: { sortOrder: 'asc' } } },
-            },
             sizes: { include: { size: true } },
           },
         },
@@ -1122,17 +1114,13 @@ export class WorkshopNeedsService {
       throw new WorkshopNeedOrderItemsRequiredException();
     }
 
-    // Источник материалов:
-    //   - есть snapshot → ORDER_MATERIAL_REQUIREMENT (запущенный заказ
-    //     или DRAFT с уже зафиксированным snapshot — соблюдаем
-    //     инвариант «snapshot живёт независимо от шаблона»);
-    //   - иначе live техкарта.
+    // Источник материалов — снимок заказа (`OrderMaterialRequirement`):
+    // он существует с момента создания заказа и живёт независимо от
+    // справочников (этап 5 «техкарты → номенклатура»).
     const hasSnapshot = order.materialRequirements.length > 0;
-    const useSnapshot = hasSnapshot;
 
-    // Маппинг «строки снимка / строки техкарты → SourceLine». Вынесен в
-    // хелперы, потому что при расцветках вызывается ОТДЕЛЬНО для каждой
-    // расцветки (свой поднабор строк снимка / своя live-техкарта).
+    // Маппинг «строки снимка → SourceLine». Вынесен в хелпер, потому что
+    // при расцветках вызывается ОТДЕЛЬНО для каждой расцветки.
     const mapSnapshotRows = (
       rows: typeof order.materialRequirements,
     ): SourceLine[] =>
@@ -1171,43 +1159,6 @@ export class WorkshopNeedsService {
         // Явная привязка к норме номенклатуры — по ней `isNormRemovedFromSpec`
         // отличает «материал есть в заказе» от «материал из заказа убрали».
         qtySourceRef: r.qtySourceRef,
-      }));
-    const mapTechCardLines = (
-      lines: NonNullable<typeof order.techCard>['materialLines'],
-    ): SourceLine[] =>
-      lines.map((l) => ({
-        source: 'TECH_CARD_MATERIAL_LINE',
-        id: l.id,
-        // Live-техкарта — это и есть шаблон; «заведено в заказе» тут неоткуда
-        // взяться.
-        isManual: false,
-        name: l.name,
-        unit: l.unit,
-        normUnit: l.normUnit,
-        qtyPerUnit: l.qtyPerUnit,
-        totalQty: null,
-        materialRole: l.materialRole,
-        fabricType: l.fabricType,
-        densityGsm: l.densityGsm,
-        plannedWidthCm: l.plannedWidthCm,
-        colorRule: l.colorRule,
-        fixedColorText: l.fixedColorText,
-        resolvedColorText: null,
-        hardwareSizeText: l.hardwareSizeText,
-        hardwareMaterialText: l.hardwareMaterialText,
-        characteristics:
-          (l.characteristics as MaterialCharacteristics | null) ?? null,
-        materialImageUrl: l.materialImageUrl,
-        // Live-техкарта не хранит per-order selectedColorText —
-        // менеджер заполняет его уже на snapshot заказа после
-        // `startCalculation` (см. `OrdersService.updateMaterialRequirementColor`).
-        // Для DRAFT-заказа без snapshot значение null + флаг
-        // выводим из `colorRule = ORDER_SELECTED_COLOR`.
-        selectedColorText: null,
-        requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
-        // Live-техкарта — не заказ: правки нормы в заказе тут быть не может.
-        qtySource: null,
-        qtySourceRef: null,
       }));
 
     // -----------------------------------------------------------------------
@@ -1250,7 +1201,7 @@ export class WorkshopNeedsService {
               totalQty: totalOrderQty,
               sourceLines: hasSnapshot
                 ? mapSnapshotRows(order.materialRequirements)
-                : mapTechCardLines(order.techCard?.materialLines ?? []),
+                : [],
             },
           ]
         : order.variants.map((v) => {
@@ -1260,9 +1211,7 @@ export class WorkshopNeedsService {
             const sourceLines =
               variantSnapshotRows.length > 0
                 ? mapSnapshotRows(variantSnapshotRows)
-                : mapTechCardLines(
-                    (v.techCard ?? order.techCard)?.materialLines ?? [],
-                  );
+                : [];
             const items: CalcItem[] = v.sizes.map((s) => ({
               sizeId: s.sizeId,
               qtyPlan: s.qtyPlan,
@@ -1312,9 +1261,6 @@ export class WorkshopNeedsService {
       //      площади, ни нормы фурнитуры, ни погонные метры
       //      (typical: в calc-tab оставили все ячейки м² пустыми);
       //   3) совсем ничего: ни техкарты, ни заполненного лекала.
-      const hasTechCard = Boolean(order.techCardId);
-      const techCardLinesEmpty =
-        hasTechCard && (order.techCard?.materialLines.length ?? 0) === 0;
       const hasPattern = Boolean(order.patternItem);
       const patternHasCategory = Boolean(order.patternItem?.categoryId);
       const patternEmptyParams =
@@ -1324,25 +1270,19 @@ export class WorkshopNeedsService {
         (order.patternItem?.sizeParameterValues?.length ?? 0) === 0;
 
       let message: string;
-      if (techCardLinesEmpty && patternEmptyParams) {
+      if (patternHasCategory && patternEmptyParams) {
         message =
-          'Расчёт не запустится: выбранная техкарта пустая (нет ни одной строки материала), и у лекала тоже не заполнены параметры. Откройте техкарту и добавьте материалы, либо откройте карточку лекала и заполните площади/нормы.';
-      } else if (techCardLinesEmpty) {
-        message =
-          'В выбранной техкарте нет строк материалов — нечего считать. Откройте «Техкарты», добавьте в техкарту хотя бы одну строку (название, единица, норма на изделие) и попробуйте ещё раз.';
-      } else if (patternHasCategory && patternEmptyParams) {
-        message =
-          'У лекала указана категория, но не заполнены площади материалов / нормы фурнитуры / погонные метры. Откройте карточку лекала (раздел «Номенклатура») и заполните параметры — либо привяжите к заказу техкарту со строками материалов.';
+          'У лекала указана категория, но не заполнены площади материалов / нормы фурнитуры / погонные метры. Откройте карточку лекала (раздел «Номенклатура») и заполните параметры и спецификацию материалов.';
       } else if (patternEmptyParams && !patternHasCategory) {
         message =
-          'У лекала не заполнены параметры (площади / нормы / погонные метры) и не задана категория. Откройте карточку лекала и добавьте параметры — либо привяжите к заказу техкарту со строками материалов.';
-      } else if (!hasTechCard && !hasPattern) {
+          'У лекала не заполнены параметры (площади / нормы / погонные метры) и не задана категория. Откройте карточку лекала, добавьте параметры и спецификацию материалов.';
+      } else if (!hasPattern) {
         message =
-          'У заказа не привязано ни лекало, ни техкарта. Откройте заказ, выберите лекало и (опционально) техкарту, затем повторите запуск расчёта.';
+          'У заказа не привязано лекало. Откройте заказ, выберите номенклатуру со спецификацией материалов и повторите запуск расчёта.';
       } else {
         // Fallback на исходный generic, если попали в неучтённую комбинацию.
         message =
-          'Для расчёта потребности нужна техкарта со строками материалов либо лекало с заполненными параметрами.';
+          'Для расчёта потребности нужно лекало со спецификацией материалов либо заполненными параметрами.';
       }
       throw new WorkshopNeedCalculationSourceException(message);
     }
@@ -1897,7 +1837,7 @@ export class WorkshopNeedsService {
             orderId,
             count: createdRows.length,
             force,
-            useSnapshot,
+            useSnapshot: hasSnapshot,
             // Этап «Исправить формирование Потребности цеха» (см.
             // ТЗ §1 source-recon): пишем в payload, был ли заказ
             // category-driven и сколько строк создано из каждого
@@ -2015,7 +1955,6 @@ export class WorkshopNeedsService {
       include: {
         items: { include: { size: true } },
         materialRequirements: { orderBy: { sortOrder: 'asc' } },
-        techCard: { include: { materialLines: { orderBy: { sortOrder: 'asc' } } } },
         patternItem: { include: { materialAreas: true } },
       },
     });
@@ -2048,11 +1987,9 @@ export class WorkshopNeedsService {
     ];
     const totalSampleQty = sample.qty;
 
-    // Источник материалов — тот же snapshot vs live tech card, что
-    // и в `calculateForOrder`. Для sample мы переиспользуем тот же
-    // выбор: если у заказа есть `OrderMaterialRequirement`-snapshot,
-    // считаем по нему (это согласовано с тиражом); иначе — live
-    // техкарта.
+    // Источник материалов — snapshot заказа (`OrderMaterialRequirement`),
+    // как и в `calculateForOrder` (этап 5 «техкарты → номенклатура»:
+    // live-фолбэк удалён — снапшот существует с момента создания заказа).
     //
     // ВАЖНО для sample: `OrderMaterialRequirement.totalQty` — это
     // snapshot тиражного итога (`qtyPerUnit × Σ qtyPlan`). Если
@@ -2093,30 +2030,7 @@ export class WorkshopNeedsService {
           selectedColorText: r.selectedColorText,
           requiresColorSelection: r.requiresColorSelection,
         }))
-      : (order.techCard?.materialLines ?? []).map((l) => ({
-          source: 'TECH_CARD_MATERIAL_LINE',
-          id: l.id,
-          isManual: false,
-          name: l.name,
-          unit: l.unit,
-          normUnit: l.normUnit,
-          qtyPerUnit: l.qtyPerUnit,
-          totalQty: null,
-          materialRole: l.materialRole,
-          fabricType: l.fabricType,
-          densityGsm: l.densityGsm,
-          plannedWidthCm: l.plannedWidthCm,
-          colorRule: l.colorRule,
-          fixedColorText: l.fixedColorText,
-          resolvedColorText: null,
-          hardwareSizeText: l.hardwareSizeText,
-          hardwareMaterialText: l.hardwareMaterialText,
-          characteristics:
-            (l.characteristics as MaterialCharacteristics | null) ?? null,
-          materialImageUrl: l.materialImageUrl,
-          selectedColorText: null,
-          requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
-        }));
+      : [];
 
     // Без техкарты / snapshot — sample-потребность не пишется
     // (fail-soft, см. JSDoc выше).
@@ -2134,7 +2048,7 @@ export class WorkshopNeedsService {
             sampleQty: sample.qty,
             sizeId: sample.sizeId,
             count: 0,
-            note: 'NO_TECH_CARD_OR_SNAPSHOT',
+            note: 'NO_MATERIAL_SNAPSHOT',
             timestamp: new Date().toISOString(),
           },
         },
@@ -2142,7 +2056,7 @@ export class WorkshopNeedsService {
       );
       return {
         count: 0,
-        warnings: ['У заказа нет техкарты или snapshot материала — потребность на образец не рассчитана.'],
+        warnings: ['У заказа нет снимка материалов — потребность на образец не рассчитана.'],
       };
     }
 
@@ -3645,22 +3559,6 @@ const WORKSHOP_NEED_INCLUDE = {
           selectedColorText: true,
         },
       },
-      techCard: {
-        select: {
-          materialLines: {
-            select: {
-              id: true,
-              materialRole: true,
-              name: true,
-              fabricType: true,
-              colorRule: true,
-              hardwareSizeText: true,
-              hardwareMaterialText: true,
-              materialImageUrl: true,
-            },
-          },
-        },
-      },
     },
   },
   selectedSupplier: { select: { id: true, name: true, status: true } },
@@ -3717,7 +3615,6 @@ type WorkshopNeedRowWithRelations = WorkshopNeed & {
      * фурнитуры / тканей данными из snapshot заказа (см. include).
      */
     materialRequirements: EnrichmentRequirementRow[];
-    techCard: { materialLines: EnrichmentTechCardLineRow[] } | null;
   } | null;
   selectedSupplier?: {
     id: string;
@@ -3748,17 +3645,6 @@ interface EnrichmentRequirementRow {
   materialImageUrl: string | null;
   requiresColorSelection: boolean;
   selectedColorText: string | null;
-}
-
-interface EnrichmentTechCardLineRow {
-  id: string;
-  materialRole: string | null;
-  name: string;
-  fabricType: string | null;
-  colorRule: string | null;
-  hardwareSizeText: string | null;
-  hardwareMaterialText: string | null;
-  materialImageUrl: string | null;
 }
 
 interface ResolvedEnrichment {
@@ -3881,16 +3767,14 @@ function resolveWorkshopNeedEnrichment(
   row: WorkshopNeedRowWithRelations,
 ): ResolvedEnrichment {
   const requirements = row.order?.materialRequirements ?? [];
-  const techLines = row.order?.techCard?.materialLines ?? [];
 
-  // 1. Прямое совпадение sourceId.
+  // 1. Прямое совпадение sourceId. Для исторических строк
+  // `TECH_CARD_MATERIAL_LINE` live-источника больше нет (этап 5
+  // «техкарты → номенклатура») — такие строки обогащаются
+  // role/name-фолбэком ниже по снимку заказа.
   if (row.sourceType === 'ORDER_MATERIAL_REQUIREMENT' && row.sourceId) {
     const r = requirements.find((x) => x.id === row.sourceId);
     if (r) return enrichmentFromRequirement(r);
-  }
-  if (row.sourceType === 'TECH_CARD_MATERIAL_LINE' && row.sourceId) {
-    const l = techLines.find((x) => x.id === row.sourceId);
-    if (l) return enrichmentFromTechCardLine(l);
   }
 
   // 2./3. Совпадение по материал-роли (для PATTERN_PARAMETER_NORM /
@@ -3934,22 +3818,6 @@ function resolveWorkshopNeedEnrichment(
       (r) => startsWithTarget(r.name) || startsWithTarget(r.fabricType),
     );
     if (reqPrefix.length === 1) return enrichmentFromRequirement(reqPrefix[0]!);
-
-    const tlMatches = techLines.filter((l) => l.materialRole === role);
-    const tlExact = tlMatches.find(
-      (l) =>
-        target.length > 0 &&
-        (normalizeMatchKey(l.name) === target ||
-          normalizeMatchKey(l.fabricType) === target),
-    );
-    if (tlExact) return enrichmentFromTechCardLine(tlExact);
-    if (tlMatches.length === 1) {
-      return enrichmentFromTechCardLine(tlMatches[0]!);
-    }
-    const tlPrefix = tlMatches.filter(
-      (l) => startsWithTarget(l.name) || startsWithTarget(l.fabricType),
-    );
-    if (tlPrefix.length === 1) return enrichmentFromTechCardLine(tlPrefix[0]!);
   }
 
   return EMPTY_ENRICHMENT;
@@ -3967,20 +3835,6 @@ function enrichmentFromRequirement(
   };
 }
 
-function enrichmentFromTechCardLine(
-  l: EnrichmentTechCardLineRow,
-): ResolvedEnrichment {
-  return {
-    hardwareSizeText: l.hardwareSizeText,
-    hardwareMaterialText: l.hardwareMaterialText,
-    materialImageUrl: l.materialImageUrl,
-    selectedColorText: null,
-    // На live-техкарте нет per-order selectedColorText, но если
-    // правило цвета ORDER_SELECTED_COLOR — UI должен показать warning,
-    // что цвет нужно указать в заказе.
-    requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
-  };
-}
 
 /**
  * Управленческий фильтр «Статус расчёта» → конкретный `Order.status`

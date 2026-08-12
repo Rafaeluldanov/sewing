@@ -32,6 +32,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — order-samples MVP', () => {
   let t: TestApp;
@@ -379,20 +380,15 @@ describeWithDb('integration — order-samples MVP', () => {
   // 11. Sample-needs: при запуске пишем WorkshopNeed с orderSampleId
   // -------------------------------------------------------------------------
 
-  test('start с техкартой → создаются WorkshopNeed с orderSampleId, calculatedQty считается на sample.qty', async () => {
-    // Заказ с техкартой, чтобы был источник для расчёта.
-    const tc = await request(t.app.getHttpServer())
-      .post('/api/tech-cards')
-      .set('Cookie', cookies.shopChief)
-      .send({
-        code: `TC-SMP-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
-        name: 'Sample TC',
-        materialLines: [
-          { name: 'Кулирка 180 г/м²', unit: 'кг', qtyPerUnit: '0.300', note: null },
-          { name: 'Резинка', unit: 'м', qtyPerUnit: '1.500', note: null },
-        ],
-      })
-      .expect(201);
+  test('start со спецификацией → создаются WorkshopNeed с orderSampleId, calculatedQty считается на sample.qty', async () => {
+    // Заказ на лекале со спецификацией, чтобы был источник для расчёта.
+    const pattern = await createSpecPattern(t, cookies.shopChief, {
+      name: 'Sample spec',
+      materialLines: [
+        { name: 'Кулирка 180 г/м²', unit: 'кг', qtyPerUnit: '0.300', note: null },
+        { name: 'Резинка', unit: 'м', qtyPerUnit: '1.500', note: null },
+      ],
+    });
 
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
@@ -401,7 +397,7 @@ describeWithDb('integration — order-samples MVP', () => {
         orderDate: '2026-05-13T00:00:00.000Z',
         productId: seed.product.id,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
-        techCardId: tc.body.id,
+        patternItemId: pattern.id,
       })
       .expect(201);
     await request(t.app.getHttpServer())
@@ -425,7 +421,7 @@ describeWithDb('integration — order-samples MVP', () => {
     const needs = await t.prisma.workshopNeed.findMany({
       where: { orderSampleId: sampleId },
     });
-    // По двум строкам техкарты → две строки потребности.
+    // По двум строкам спецификации → две строки потребности.
     expect(needs.length).toBe(2);
     for (const n of needs) {
       expect(n.orderId).toBe(order.body.id);
@@ -440,10 +436,10 @@ describeWithDb('integration — order-samples MVP', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 12. Sample без техкарты — fail-soft: 0 строк needs, sample создан
+  // 12. Sample без спецификации — fail-soft: 0 строк needs, sample создан
   // -------------------------------------------------------------------------
 
-  test('start без техкарты → sample создаётся, WorkshopNeed не пишется (0 строк)', async () => {
+  test('start без спецификации → sample создаётся, WorkshopNeed не пишется (0 строк)', async () => {
     const { orderId } = await setupOrder(50);
     const startRes = await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/samples/start`)
