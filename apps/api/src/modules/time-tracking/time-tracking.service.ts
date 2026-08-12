@@ -12,14 +12,26 @@ import type {
 import { moscowDayKey, moscowDayWindow } from '../../common/moscow-date.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { MasterEmployeeStatsService } from '../master-employee-stats/master-employee-stats.service.js';
+import {
+  clampSegment,
+  loadShiftSegments,
+  splitSegmentByMoscowDays,
+} from '../shifts/shift-time.js';
 
 /**
  * «Тайм-трекер сотрудника» — вкладка на карточке сотрудника (read-only).
  *
- * Строит рабочий день во времени из уже пишущихся данных: сеансы —
- * `ShiftSession`, содержимое сеанса — собственные `PassportEvent`
- * сотрудника (`OPERATION_FINISHED` / `ISSUED_TO_EMPLOYEE`). Ничего не
- * мутирует. Контракт и семантика — `packages/shared/src/time-tracking.ts`.
+ * Строит рабочий день во времени из уже пишущихся данных: сеанс —
+ * `ShiftSession`, ЧАСЫ — его отрезки `ShiftSegment` (общее ядро
+ * `shifts/shift-time.ts`), содержимое сеанса — собственные
+ * `PassportEvent` сотрудника (`OPERATION_FINISHED` /
+ * `ISSUED_TO_EMPLOYEE`). Ничего не мутирует. Контракт и семантика —
+ * `packages/shared/src/time-tracking.ts`.
+ *
+ * Часы считает НЕ сам: и здесь, и в кабинете мастера время приходит из
+ * одного ядра. Пока расчётов было два, они разъехались на три часа
+ * (12.08.2026) — вкладки обещают одинаковые цифры, поэтому и формула
+ * обязана быть одна.
  *
  * Брак не считаем заново — переиспользуем finisher-attribution из
  * `MasterEmployeeStatsService.getDrill` (окно там и здесь — одни и те
@@ -78,14 +90,14 @@ export class TimeTrackingService {
       return { from: query.from, to: query.to, rows: [] };
     }
 
-    // Сеансы в окне (для часов/счётчика), открытые сеансы СЕЙЧАС
-    // (для «на смене»), завершения в окне (выработка), и брак — из
-    // проверенной агрегации master-stats.
-    const [sessions, openNow, finished, stats] = await Promise.all([
-      this.prisma.shiftSession.findMany({
-        where: { employeeId: { in: empIds }, startedAt: { gte: win.from, lt: win.to } },
-        select: { employeeId: true, startedAt: true, endedAt: true },
-      }),
+    // Часы — по ОТРЕЗКАМ смен (`ShiftSegment`, общее ядро
+    // `shifts/shift-time.ts`), а не по сеансам целиком: тем же расчётом
+    // живёт вкладка мастера, и разъехаться цифрам больше негде. Побочно
+    // это чинит две ошибки прежней выборки «сеансы, начавшиеся в окне»:
+    // смена, начатая до периода, не пропадает, а смена, ушедшая за его
+    // конец, не засчитывается периоду целиком.
+    const [segments, openNow, finished, stats] = await Promise.all([
+      loadShiftSegments(this.prisma, win, empIds),
       this.prisma.shiftSession.findMany({
         where: { employeeId: { in: empIds }, endedAt: null },
         select: {
@@ -110,22 +122,25 @@ export class TimeTrackingService {
       stats.rows.map((r) => [r.employeeId, r.totalDefects]),
     );
 
-    // Сворачиваем сеансы: минуты + счётчик + последняя активность.
+    // Сворачиваем отрезки: минуты + счётчик сеансов + последняя
+    // активность. «Сеансов» считаем по РАЗНЫМ `shiftSessionId`, а не по
+    // числу отрезков: для пользователя сеанс — это смена, а не её
+    // внутренние переключения операции.
     const sessAgg = new Map<
       string,
-      { minutes: number; count: number; lastAt: number }
+      { minutes: number; sessionIds: Set<string>; lastAt: number }
     >();
-    for (const s of sessions) {
-      const end = s.endedAt ?? now;
-      const minutes = Math.max(
-        0,
-        Math.round((end.getTime() - s.startedAt.getTime()) / 60000),
-      );
-      const a = sessAgg.get(s.employeeId) ?? { minutes: 0, count: 0, lastAt: 0 };
+    for (const seg of segments) {
+      const { start, minutes } = clampSegment(seg, win, now);
+      const a = sessAgg.get(seg.employeeId) ?? {
+        minutes: 0,
+        sessionIds: new Set<string>(),
+        lastAt: 0,
+      };
       a.minutes += minutes;
-      a.count += 1;
-      a.lastAt = Math.max(a.lastAt, s.startedAt.getTime());
-      sessAgg.set(s.employeeId, a);
+      a.sessionIds.add(seg.shiftSessionId);
+      a.lastAt = Math.max(a.lastAt, start.getTime());
+      sessAgg.set(seg.employeeId, a);
     }
 
     // Открытые сеансы «сейчас» → на смене + текущий станок/операция.
@@ -172,7 +187,7 @@ export class TimeTrackingService {
         currentEquipmentCode: open?.equipmentCode ?? null,
         currentOperationName: open?.operationName ?? null,
         totalMinutes: minutes,
-        sessionsCount: s?.count ?? 0,
+        sessionsCount: s?.sessionIds.size ?? 0,
         operationsCount: f?.ops ?? 0,
         qtyGood: qty,
         defects: defectsByEmp.get(e.id) ?? 0,
@@ -205,10 +220,32 @@ export class TimeTrackingService {
     const win = this.window(query.from, query.to);
     const now = new Date();
 
-    // Сеансы сотрудника, начавшиеся в окне. Открытые (`endedAt = null`)
-    // считаем до текущего момента — часы «идут».
+    // Отрезки смен сотрудника за окно (общее ядро `shift-time.ts`) —
+    // источник ВСЕХ часов на этом экране, включая длительность сеанса.
+    const segments = await loadShiftSegments(this.prisma, win, [employeeId]);
+    /** shiftSessionId → минуты его отрезков внутри окна. */
+    const minutesBySession = new Map<string, number>();
+    for (const seg of segments) {
+      const { minutes } = clampSegment(seg, win, now);
+      minutesBySession.set(
+        seg.shiftSessionId,
+        (minutesBySession.get(seg.shiftSessionId) ?? 0) + minutes,
+      );
+    }
+
+    // Сами сеансы (шапка карточки: станок, операция, границы). Берём те,
+    // у которых есть отрезки в окне, — так сеанс, начатый вчера и
+    // продолжающийся сегодня, не пропадает из сегодняшнего дня.
     const sessions = await this.prisma.shiftSession.findMany({
-      where: { employeeId, startedAt: { gte: win.from, lt: win.to } },
+      where: {
+        employeeId,
+        OR: [
+          { id: { in: Array.from(minutesBySession.keys()) } },
+          // Подстраховка для смен, заведённых до появления отрезков и не
+          // попавших в бэкфилл: старое условие «начались в окне».
+          { startedAt: { gte: win.from, lt: win.to } },
+        ],
+      },
       include: {
         equipment: { select: { id: true, code: true, name: true } },
         operation: { select: { id: true, code: true, name: true } },
@@ -261,6 +298,14 @@ export class TimeTrackingService {
       string,
       { minutes: number; sessions: number; ops: number; qty: number }
     >();
+    const ensureDayAgg = (day: string) => {
+      let agg = byDayAgg.get(day);
+      if (!agg) {
+        agg = { minutes: 0, sessions: 0, ops: 0, qty: 0 };
+        byDayAgg.set(day, agg);
+      }
+      return agg;
+    };
     let totalMinutes = 0;
     let totalOps = 0;
     let totalQty = 0;
@@ -272,10 +317,12 @@ export class TimeTrackingService {
       const open = s.endedAt === null;
       if (open) openSessionsCount += 1;
 
-      const durationMinutes = Math.max(
-        0,
-        Math.round((end.getTime() - start.getTime()) / 60000),
-      );
+      // Длительность — сумма отрезков сеанса, попавших в окно. Fallback
+      // на «конец минус начало» нужен смене без отрезков (заведена до
+      // появления `ShiftSegment` и мимо бэкфилла).
+      const durationMinutes =
+        minutesBySession.get(s.id) ??
+        Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
 
       // События внутри окна сеанса [start; end].
       const inWindow = events.filter(
@@ -363,18 +410,28 @@ export class TimeTrackingService {
       totalOps += ops;
       totalQty += qty;
 
+      // В подневную разбивку кладём только счётчик сеансов: минуты
+      // раскладываются отдельно, по границам суток (ниже), а операции и
+      // штуки — по дню самого события. Иначе ночная смена целиком
+      // ложилась бы в день своего начала.
       const key = this.dayKey(start);
-      const agg = byDayAgg.get(key) ?? {
-        minutes: 0,
-        sessions: 0,
-        ops: 0,
-        qty: 0,
-      };
-      agg.minutes += durationMinutes;
+      const agg = ensureDayAgg(key);
       agg.sessions += 1;
-      agg.ops += ops;
-      agg.qty += qty;
-      byDayAgg.set(key, agg);
+    }
+
+    // Минуты по суткам — из отрезков (общее ядро): отрезок, пересекающий
+    // полночь, делится между днями ровно так же, как в табеле мастера.
+    for (const seg of segments) {
+      for (const part of splitSegmentByMoscowDays(seg, win, now)) {
+        ensureDayAgg(part.day).minutes += part.minutes;
+      }
+    }
+    // Операции и штуки — по дню самого события.
+    for (const e of events) {
+      if (e.type !== PassportEventType.OPERATION_FINISHED) continue;
+      const agg = ensureDayAgg(this.dayKey(e.createdAt));
+      agg.ops += 1;
+      agg.qty += e.qty ?? 0;
     }
 
     // Дни = объединение дней с сеансами и дней с браком (чтобы итоги

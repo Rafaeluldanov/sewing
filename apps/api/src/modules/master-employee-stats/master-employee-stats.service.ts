@@ -36,6 +36,11 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ShiftsService } from '../shifts/shifts.service.js';
+import {
+  clampSegment,
+  loadShiftSegments,
+  summarizeSegments,
+} from '../shifts/shift-time.js';
 
 /** Накопитель статистики по одной операции сотрудника. */
 interface OpAcc {
@@ -207,55 +212,12 @@ export class MasterEmployeeStatsService {
   }
 
   /**
-   * Отрезки смен (`ShiftSegment`), пересекающие окно, с их рабочим
-   * местом и операцией.
-   *
-   * Условие пересечения, а не «начались внутри»: вечерняя смена,
-   * доработавшая до утра, обязана попасть в оба дня своей частью —
-   * иначе у одного дня пропадут часы, а у другого появятся чужие.
-   * Обрезка по границам окна — на вызывающей стороне (`clampSegment`).
+   * Отрезки смен за окно. Загрузка и обрезка живут в общем ядре
+   * `shifts/shift-time.ts` — тем же расчётом пользуется «Тайм-трекер»
+   * в админке, и разъехаться цифрам больше негде.
    */
-  private async loadSegments(window: { from: Date; to: Date }) {
-    return this.prisma.shiftSegment.findMany({
-      where: {
-        startedAt: { lt: window.to },
-        OR: [{ endedAt: null }, { endedAt: { gt: window.from } }],
-      },
-      select: {
-        id: true,
-        employeeId: true,
-        startedAt: true,
-        endedAt: true,
-        equipment: {
-          select: { id: true, name: true, displayNumber: true },
-        },
-        operation: {
-          select: { id: true, code: true, name: true, category: true },
-        },
-        employee: { select: { id: true, fullName: true, role: true } },
-      },
-      orderBy: { startedAt: 'asc' },
-    });
-  }
-
-  /**
-   * Обрезка отрезка границами окна. Открытый отрезок тянется до
-   * серверного `now` (но не дальше конца окна — вчерашний день не
-   * должен «расти» вместе с текущей смной).
-   */
-  private clampSegment(
-    seg: { startedAt: Date; endedAt: Date | null },
-    window: { from: Date; to: Date },
-    now: Date,
-  ): { start: Date; end: Date; minutes: number } {
-    const rawEnd = seg.endedAt ?? now;
-    const start = seg.startedAt < window.from ? window.from : seg.startedAt;
-    const end = rawEnd > window.to ? window.to : rawEnd;
-    const minutes = Math.max(
-      0,
-      Math.round((end.getTime() - start.getTime()) / 60_000),
-    );
-    return { start, end, minutes };
+  private loadSegments(window: { from: Date; to: Date }) {
+    return loadShiftSegments(this.prisma, window);
   }
 
   // ===========================================================================
@@ -378,7 +340,7 @@ export class MasterEmployeeStatsService {
     }
     const timeByEmployee = new Map<string, TimeAcc>();
     for (const seg of segments) {
-      const { start, minutes } = this.clampSegment(seg, window, now);
+      const { start, minutes } = clampSegment(seg, window, now);
       let t = timeByEmployee.get(seg.employeeId);
       if (!t) {
         t = {
@@ -667,7 +629,7 @@ export class MasterEmployeeStatsService {
     >();
 
     for (const seg of segments) {
-      const { start, end, minutes } = this.clampSegment(seg, window, now);
+      const { start, end, minutes } = clampSegment(seg, window, now);
       const qty = myEvents.reduce(
         (sum, e) =>
           e.createdAt >= start && e.createdAt <= end ? sum + (e.qty ?? 0) : sum,
@@ -709,32 +671,9 @@ export class MasterEmployeeStatsService {
       place.operations.add(seg.operation.id);
     }
 
-    // ---- итоги времени --------------------------------------------------
-    const workedMinutes = segmentDtos.reduce((s, x) => s + x.minutes, 0);
-    let presenceMinutes = 0;
-    let breaks = 0;
-    if (segmentDtos.length > 0) {
-      const first = new Date(segmentDtos[0]!.startedAt).getTime();
-      const lastSeg = segments[segments.length - 1]!;
-      const last = this.clampSegment(lastSeg, window, now).end.getTime();
-      presenceMinutes = Math.max(0, Math.round((last - first) / 60_000));
-      // Пауза = зазор между соседними отрезками от минуты и больше.
-      // Меньше минуты — это переключение операции, а не перерыв.
-      for (let i = 1; i < segments.length; i += 1) {
-        const prevEnd = this.clampSegment(
-          segments[i - 1]!,
-          window,
-          now,
-        ).end.getTime();
-        const currStart = this.clampSegment(
-          segments[i]!,
-          window,
-          now,
-        ).start.getTime();
-        if (currStart - prevEnd >= 60_000) breaks += 1;
-      }
-    }
-    const idleMinutes = Math.max(0, presenceMinutes - workedMinutes);
+    // ---- итоги времени (общее ядро `shifts/shift-time.ts`) --------------
+    const totals = summarizeSegments(segments, window, now);
+    const { workedMinutes, presenceMinutes, idleMinutes, breaks } = totals;
 
     // ---- разбивка по операциям ------------------------------------------
     interface DayOpAcc {
@@ -868,10 +807,7 @@ export class MasterEmployeeStatsService {
       workedMinutes,
       idleMinutes,
       breaks,
-      utilization:
-        presenceMinutes > 0
-          ? Math.round((workedMinutes / presenceMinutes) * 100)
-          : null,
+      utilization: totals.utilization,
       totalQty: myEvents.reduce((s, e) => s + (e.qty ?? 0), 0),
       totalDefects: myDefects.reduce((s, d) => s + d.qty, 0),
       totalDefectsFound: defectsFound.reduce((s, d) => s + (d.qty ?? 0), 0),
