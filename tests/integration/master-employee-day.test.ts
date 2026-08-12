@@ -192,7 +192,8 @@ describeWithDb('integration — табель дня (кабинет мастер
       .get('/api/master/employee-stats/day')
       .query({
         employeeId: seed.employees['seamstress']!.id,
-        date: moscowDay(),
+        from: moscowDay(),
+        to: moscowDay(),
       })
       .set('Cookie', cookies['master']!)
       .expect(200);
@@ -221,7 +222,8 @@ describeWithDb('integration — табель дня (кабинет мастер
       .get('/api/master/employee-stats/day')
       .query({
         employeeId: seed.employees['seamstress']!.id,
-        date: '2020-01-01',
+        from: '2020-01-01',
+        to: '2020-01-01',
       })
       .set('Cookie', cookies['master']!)
       .expect(200);
@@ -304,7 +306,11 @@ describeWithDb('integration — табель дня (кабинет мастер
 
     const res = await api()
       .get('/api/master/employee-stats/day')
-      .query({ employeeId: seed.employees['seamstress']!.id, date: day })
+      .query({
+        employeeId: seed.employees['seamstress']!.id,
+        from: day,
+        to: day,
+      })
       .set('Cookie', cookies['master']!)
       .expect(200);
     const body = res.body as MasterEmployeeDayDto;
@@ -317,7 +323,8 @@ describeWithDb('integration — табель дня (кабинет мастер
       .get('/api/master/employee-stats/day')
       .query({
         employeeId: seed.employees['seamstress']!.id,
-        date: '2026-03-09',
+        from: '2026-03-09',
+        to: '2026-03-09',
       })
       .set('Cookie', cookies['master']!)
       .expect(200);
@@ -351,7 +358,8 @@ describeWithDb('integration — табель дня (кабинет мастер
       .get('/api/master/employee-stats/day')
       .query({
         employeeId: seed.employees['seamstress']!.id,
-        date: '2026-03-10',
+        from: '2026-03-10',
+        to: '2026-03-10',
       })
       .set('Cookie', cookies['master']!)
       .expect(200);
@@ -359,7 +367,8 @@ describeWithDb('integration — табель дня (кабинет мастер
       .get('/api/master/employee-stats/day')
       .query({
         employeeId: seed.employees['seamstress']!.id,
-        date: '2026-03-11',
+        from: '2026-03-11',
+        to: '2026-03-11',
       })
       .set('Cookie', cookies['master']!)
       .expect(200);
@@ -370,12 +379,147 @@ describeWithDb('integration — табель дня (кабинет мастер
     expect((second.body as MasterEmployeeDayDto).workedMinutes).toBe(120);
   });
 
+  test('период больше суток: часы по дням, без событий в отрезках', async () => {
+    // Три дня подряд по два часа.
+    for (const day of ['2026-03-10', '2026-03-11', '2026-03-12']) {
+      const startedAt = new Date(`${day}T09:00:00.000+03:00`);
+      const endedAt = new Date(`${day}T11:00:00.000+03:00`);
+      const session = await t.prisma.shiftSession.create({
+        data: {
+          employeeId: seed.employees['seamstress']!.id,
+          equipmentId: seed.equipment['overlock-01']!.id,
+          operationId: seed.operations.SEW_OVERLOCK_1!.id,
+          startedAt,
+          endedAt,
+        },
+      });
+      await t.prisma.shiftSegment.create({
+        data: {
+          shiftSessionId: session.id,
+          employeeId: seed.employees['seamstress']!.id,
+          equipmentId: seed.equipment['overlock-01']!.id,
+          operationId: seed.operations.SEW_OVERLOCK_1!.id,
+          startedAt,
+          endedAt,
+        },
+      });
+    }
+
+    const res = await api()
+      .get('/api/master/employee-stats/day')
+      .query({
+        employeeId: seed.employees['seamstress']!.id,
+        from: '2026-03-10',
+        to: '2026-03-12',
+      })
+      .set('Cookie', cookies['master']!)
+      .expect(200);
+    const body = res.body as MasterEmployeeDayDto;
+
+    expect(body.workedMinutes).toBe(360);
+    expect(body.byDay).toHaveLength(3);
+    expect(body.byDay.map((d) => d.day)).toEqual([
+      '2026-03-10',
+      '2026-03-11',
+      '2026-03-12',
+    ]);
+    expect(body.byDay.every((d) => d.minutes === 120)).toBe(true);
+    // События в отрезках — только для одних суток: за период их сотни,
+    // а ленты дня на неделе UI и не показывает.
+    expect(body.segments.every((s) => s.events.length === 0)).toBe(true);
+  });
+
+  test('за одни сутки отрезок несёт события с номерами паспортов', async () => {
+    const startedAt = new Date('2026-03-10T09:00:00.000+03:00');
+    const endedAt = new Date('2026-03-10T11:00:00.000+03:00');
+    const session = await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees['seamstress']!.id,
+        equipmentId: seed.equipment['overlock-01']!.id,
+        operationId: seed.operations.SEW_OVERLOCK_1!.id,
+        startedAt,
+        endedAt,
+      },
+    });
+    await t.prisma.shiftSegment.create({
+      data: {
+        shiftSessionId: session.id,
+        employeeId: seed.employees['seamstress']!.id,
+        equipmentId: seed.equipment['overlock-01']!.id,
+        operationId: seed.operations.SEW_OVERLOCK_1!.id,
+        startedAt,
+        endedAt,
+      },
+    });
+    const order = await t.prisma.order.create({
+      data: {
+        number: 'O-DAY-1',
+        orderDate: new Date(),
+        color: seed.product.color,
+        status: 'IN_PRODUCTION',
+        items: {
+          create: {
+            productId: seed.product.id,
+            sizeId: seed.sizes.M!,
+            qtyPlan: 20,
+          },
+        },
+      },
+    });
+    const passport = await t.prisma.passport.create({
+      data: {
+        number: 'P-DAY-1',
+        orderId: order.id,
+        productId: seed.product.id,
+        sizeId: seed.sizes.M!,
+        color: seed.product.color,
+        rollNumber: 'R-DAY',
+        cutDate: startedAt,
+        qtyPlan: 20,
+        qtyCut: 20,
+        qtyGood: 20,
+        qrCode: `passport:day-${Date.now()}`,
+        cutterId: seed.employees['cutter']!.id,
+        creatorId: seed.employees['cutter']!.id,
+      },
+    });
+    await t.prisma.passportEvent.create({
+      data: {
+        passportId: passport.id,
+        employeeId: seed.employees['seamstress']!.id,
+        operationId: seed.operations.SEW_OVERLOCK_1!.id,
+        type: 'OPERATION_FINISHED',
+        qty: 20,
+        createdAt: new Date('2026-03-10T10:30:00.000+03:00'),
+      },
+    });
+
+    const res = await api()
+      .get('/api/master/employee-stats/day')
+      .query({
+        employeeId: seed.employees['seamstress']!.id,
+        from: '2026-03-10',
+        to: '2026-03-10',
+      })
+      .set('Cookie', cookies['master']!)
+      .expect(200);
+    const body = res.body as MasterEmployeeDayDto;
+
+    expect(body.segments).toHaveLength(1);
+    const events = body.segments[0]!.events;
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe('OPERATION_FINISHED');
+    expect(events[0]!.passportNumber).toBe('P-DAY-1');
+    expect(events[0]!.qty).toBe(20);
+  });
+
   test('швея не видит чужой табель', async () => {
     await api()
       .get('/api/master/employee-stats/day')
       .query({
         employeeId: seed.employees['master']!.id,
-        date: moscowDay(),
+        from: moscowDay(),
+        to: moscowDay(),
       })
       .set('Cookie', cookies['seamstress']!)
       .expect(403);

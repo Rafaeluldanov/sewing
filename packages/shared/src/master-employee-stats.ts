@@ -381,12 +381,44 @@ export type MasterUpdateEmployeeAccessDto = z.infer<
  */
 export const MasterEmployeeDayQuerySchema = z.object({
   employeeId: z.string().min(1),
-  /** Московские сутки `YYYY-MM-DD`. */
-  date: z.string().regex(DAY_RE),
+  /**
+   * Период в МОСКОВСКИХ сутках, включительно. Для табеля одного дня
+   * `from === to`; неделя и месяц — тот же контракт с более широким
+   * окном (мастер листает период сегмент-контролом «День · Неделя ·
+   * Месяц»).
+   */
+  from: z.string().regex(DAY_RE),
+  to: z.string().regex(DAY_RE),
 });
 export type MasterEmployeeDayQuery = z.infer<
   typeof MasterEmployeeDayQuerySchema
 >;
+
+/**
+ * Событие внутри отрезка: что именно сотрудник сделал и по какому
+ * паспорту. Отдаётся ТОЛЬКО для однодневного периода (`from === to`):
+ * за неделю таких строк набегают сотни, а лента дня на неделе всё
+ * равно не показывается.
+ */
+export interface MasterEmployeeDayEventDto {
+  /** `OPERATION_FINISHED` — закрыл операцию, `ISSUED_TO_EMPLOYEE` — взял крой. */
+  type: 'OPERATION_FINISHED' | 'ISSUED_TO_EMPLOYEE';
+  at: string;
+  /** Штук (для взятого кроя — `null`). */
+  qty: number | null;
+  passportNumber: string | null;
+  passportColor: string | null;
+  passportSizeCode: string | null;
+}
+
+/** Строка «часы по дням» — график в режимах «Неделя»/«Месяц». */
+export interface MasterEmployeeDayByDayDto {
+  /** Московские сутки `YYYY-MM-DD`. */
+  day: string;
+  minutes: number;
+  qty: number;
+  defects: number;
+}
 
 /** Отрезок работы: одно рабочее место + одна операция. */
 export interface MasterEmployeeDaySegmentDto {
@@ -408,6 +440,13 @@ export interface MasterEmployeeDaySegmentDto {
   qty: number;
   /** Отрезок не закрыт (смена идёт). */
   isOpen: boolean;
+  /**
+   * Что происходило внутри отрезка — по возрастанию времени. Мастер
+   * раскрывает список тапом («3 паспорта»): развёрнутая целиком лента
+   * листалась бы минуту и перестала отвечать на «где был» за один
+   * взгляд. Пусто, если период больше суток.
+   */
+  events: MasterEmployeeDayEventDto[];
 }
 
 /** Строка «Где был»: участок (категория + рабочее место). */
@@ -455,7 +494,8 @@ export interface MasterEmployeeDayDto {
   employeeName: string;
   role: string;
   /** Эхо запроса, московские сутки. */
-  date: string;
+  from: string;
+  to: string;
   /** Серверное «сейчас» (ISO) — от него считаются открытые отрезки. */
   now: string;
   /**
@@ -481,4 +521,11 @@ export interface MasterEmployeeDayDto {
   segments: MasterEmployeeDaySegmentDto[];
   places: MasterEmployeeDayPlaceDto[];
   operations: MasterEmployeeDayOperationDto[];
+  /**
+   * Часы по дням периода — график в режимах «Неделя»/«Месяц». Для
+   * однодневного периода это одна строка, и UI его не рисует.
+   * Дни без работы В СПИСОК НЕ ПОПАДАЮТ: пустые столбики достраивает
+   * фронт, чтобы не гонять по сети нули за весь месяц.
+   */
+  byDay: MasterEmployeeDayByDayDto[];
 }

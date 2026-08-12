@@ -51,7 +51,11 @@ export function getMasterEmployeeDay(
 ): Promise<MasterEmployeeDayDto> {
   return apiFetch<MasterEmployeeDayDto>('/master/employee-stats/day', {
     cache: 'no-store',
-    searchParams: { employeeId: query.employeeId, date: query.date },
+    searchParams: {
+      employeeId: query.employeeId,
+      from: query.from,
+      to: query.to,
+    },
   });
 }
 

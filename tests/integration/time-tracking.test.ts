@@ -191,7 +191,8 @@ describeWithDb('integration — тайм-трекер сотрудника', () 
         .get('/api/master/employee-stats/day')
         .query({
           employeeId: seed.employees['seamstress']!.id,
-          date: '2026-03-10',
+          from: '2026-03-10',
+        to: '2026-03-10',
         })
         .set('Cookie', cookies['manager']!)
         .expect(200)

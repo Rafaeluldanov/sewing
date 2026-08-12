@@ -129,6 +129,30 @@ describe('табель дня — UI', () => {
     expect(view).not.toMatch(/<table className="mstat__table">/);
   });
 
+  test('три режима периода: лента только для дня, иначе часы по дням', () => {
+    const sheet = readSrc('apps/web/app/master/employee-day-sheet.tsx');
+    // Семь суток отрезками на 390px не читаются — на длинном периоде
+    // лента уступает место графику, а столбик тапом ведёт в день.
+    expect(sheet).toMatch(/period !== 'day' &&/);
+    expect(sheet).toMatch(/period === 'day' && lane\.length > 0/);
+    expect(sheet).toMatch(/setPeriod\('day'\)/);
+    expect(sheet).toMatch(/periodRange\(/);
+  });
+
+  test('события паспортов раскрываются тапом, а не показаны всегда', () => {
+    const sheet = readSrc('apps/web/app/master/employee-day-sheet.tsx');
+    expect(sheet).toMatch(/openSegments\.has\(/);
+    expect(sheet).toMatch(/aria-expanded=/);
+    expect(sheet).toMatch(/passportsWord\(/);
+  });
+
+  test('события отдаются только для однодневного периода', () => {
+    const src = readSrc(
+      'apps/api/src/modules/master-employee-stats/master-employee-stats.service.ts',
+    );
+    expect(src).toMatch(/const withEvents = query\.from === query\.to;/);
+  });
+
   test('лента дня вертикальная — высота строки задаётся длительностью', () => {
     const sheet = readSrc('apps/web/app/master/employee-day-sheet.tsx');
     expect(sheet).toMatch(/minHeight: ribbonHeight\(/);

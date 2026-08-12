@@ -20264,6 +20264,149 @@ body:has(.admin-layout) .app-header { display: none !important; }
   color: var(--color-fg-subtle);
 }
 
+/* Переключатель периода в шапке табеля: День · Неделя · Месяц. */
+.mday__periods {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.mday__period {
+  appearance: none;
+  min-height: 40px;
+  border: 0;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mday__period:last-child {
+  border-right: 0;
+}
+.mday__period.is-active {
+  background: var(--color-bg-tint);
+  font-weight: 700;
+}
+
+/* «Часы по дням» — график режимов «Неделя»/«Месяц». Столбик тапабелен:
+   листать стрелками до нужного дня дольше, чем ткнуть в него. */
+.mday__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 116px;
+  overflow-x: auto;
+}
+.mday__barcol {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex: 1 0 34px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.mday__barval {
+  font-size: 10px;
+  color: var(--color-fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.mday__bar {
+  width: 100%;
+  min-height: 3px;
+  border-radius: 4px 4px 0 0;
+  background: var(--color-accent);
+}
+.mday__bar.is-wknd {
+  background: #a9c4e2;
+}
+.mday__bar.is-zero {
+  height: 3px;
+  background: var(--color-bg-muted);
+}
+.mday__barlab {
+  font-size: 10px;
+  color: var(--color-fg-subtle);
+  white-space: nowrap;
+}
+
+/* Раскрытие отрезка: что именно сделано, с номерами паспортов. */
+.mday__toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.mday__chev {
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.mday__chev.is-open {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mday__chev {
+    transition: none;
+  }
+}
+.mday__events {
+  list-style: none;
+  margin: 6px 0 2px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-left: 2px solid var(--color-border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--color-bg-soft);
+}
+.mday__ev {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+}
+.mday__ev-t {
+  color: var(--color-fg-muted);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.mday__ev-main {
+  min-width: 0;
+}
+.mday__ev-title {
+  display: block;
+  color: var(--color-fg-strong);
+}
+.mday__ev.is-issue .mday__ev-title {
+  color: var(--color-fg-muted);
+}
+.mday__ev-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--color-fg-subtle);
+}
+
 /* Вертикальная лента дня: высота строки = длительность отрезка. */
 .mday__lane {
   display: flex;

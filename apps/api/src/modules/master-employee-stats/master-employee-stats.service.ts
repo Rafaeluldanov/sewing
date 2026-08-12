@@ -8,6 +8,7 @@ import type {
   MasterEmployeeAccessDto,
   MasterEmployeeAccessListDto,
   MasterEmployeeDayDto,
+  MasterEmployeeDayEventDto,
   MasterEmployeeDayOperationDto,
   MasterEmployeeDayPlaceDto,
   MasterEmployeeDayQuery,
@@ -39,6 +40,7 @@ import { ShiftsService } from '../shifts/shifts.service.js';
 import {
   clampSegment,
   loadShiftSegments,
+  splitSegmentByMoscowDays,
   summarizeSegments,
 } from '../shifts/shift-time.js';
 
@@ -580,10 +582,13 @@ export class MasterEmployeeStatsService {
    * ответ («сегодня не выходил»).
    */
   async getDay(query: MasterEmployeeDayQuery): Promise<MasterEmployeeDayDto> {
-    const window = moscowDayWindow(query.date);
+    const window = this.window(query.from, query.to);
     const now = new Date();
+    // События внутри отрезков — только для одного дня: за неделю их
+    // набегают сотни, а ленту дня на неделе UI и не показывает.
+    const withEvents = query.from === query.to;
 
-    const [allSegments, events, allDefects, defectsFound, employee] =
+    const [allSegments, events, allDefects, defectsFound, employee, rawEvents] =
       await Promise.all([
         this.loadSegments(window),
         this.loadFinishedEvents(window),
@@ -602,6 +607,35 @@ export class MasterEmployeeStatsService {
           where: { id: query.employeeId },
           select: { fullName: true, role: true },
         }),
+        // Сырые события сотрудника для раскрытия отрезка: закрытия
+        // операций и выдачи кроя с номером паспорта.
+        withEvents
+          ? this.prisma.passportEvent.findMany({
+              where: {
+                employeeId: query.employeeId,
+                type: {
+                  in: [
+                    PassportEventType.OPERATION_FINISHED,
+                    PassportEventType.ISSUED_TO_EMPLOYEE,
+                  ],
+                },
+                createdAt: { gte: window.from, lt: window.to },
+              },
+              select: {
+                type: true,
+                qty: true,
+                createdAt: true,
+                passport: {
+                  select: {
+                    number: true,
+                    color: true,
+                    size: { select: { code: true } },
+                  },
+                },
+              },
+              orderBy: { createdAt: 'asc' },
+            })
+          : Promise.resolve([]),
       ]);
 
     const segments = allSegments.filter(
@@ -635,6 +669,25 @@ export class MasterEmployeeStatsService {
           e.createdAt >= start && e.createdAt <= end ? sum + (e.qty ?? 0) : sum,
         0,
       );
+      const segEvents: MasterEmployeeDayEventDto[] = withEvents
+        ? rawEvents
+            .filter((e) => e.createdAt >= start && e.createdAt <= end)
+            .map((e) => ({
+              type:
+                e.type === PassportEventType.OPERATION_FINISHED
+                  ? ('OPERATION_FINISHED' as const)
+                  : ('ISSUED_TO_EMPLOYEE' as const),
+              at: e.createdAt.toISOString(),
+              qty:
+                e.type === PassportEventType.OPERATION_FINISHED
+                  ? e.qty ?? 0
+                  : null,
+              passportNumber: e.passport?.number ?? null,
+              passportColor: e.passport?.color ?? null,
+              passportSizeCode: e.passport?.size?.code ?? null,
+            }))
+        : [];
+
       segmentDtos.push({
         segmentId: seg.id,
         startedAt: start.toISOString(),
@@ -648,6 +701,7 @@ export class MasterEmployeeStatsService {
         category: seg.operation.category,
         qty,
         isOpen: seg.endedAt === null,
+        events: segEvents,
       });
 
       minutesByOp.set(
@@ -796,12 +850,43 @@ export class MasterEmployeeStatsService {
       }))
       .sort((a, b) => b.minutes - a.minutes);
 
+    // Часы по дням — график режимов «Неделя»/«Месяц». Минуты режем по
+    // суткам тем же ядром, что тайм-трекер; штуки и брак — по дню
+    // самого события.
+    const byDayAgg = new Map<
+      string,
+      { minutes: number; qty: number; defects: number }
+    >();
+    const ensureDay = (day: string) => {
+      let agg = byDayAgg.get(day);
+      if (!agg) {
+        agg = { minutes: 0, qty: 0, defects: 0 };
+        byDayAgg.set(day, agg);
+      }
+      return agg;
+    };
+    for (const seg of segments) {
+      for (const part of splitSegmentByMoscowDays(seg, window, now)) {
+        ensureDay(part.day).minutes += part.minutes;
+      }
+    }
+    for (const e of myEvents) {
+      ensureDay(this.dayKey(e.createdAt)).qty += e.qty ?? 0;
+    }
+    for (const d of myDefects) {
+      ensureDay(this.dayKey(d.createdAt)).defects += d.qty;
+    }
+    const byDay = Array.from(byDayAgg.entries())
+      .map(([day, agg]) => ({ day, ...agg }))
+      .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+
     const first = myEvents[0]?.employee;
     return {
       employeeId: query.employeeId,
       employeeName: employee?.fullName ?? first?.fullName ?? '—',
       role: employee?.role ?? first?.role ?? '',
-      date: query.date,
+      from: query.from,
+      to: query.to,
       now: now.toISOString(),
       presenceMinutes,
       workedMinutes,
@@ -816,6 +901,7 @@ export class MasterEmployeeStatsService {
       segments: segmentDtos,
       places: placeRows,
       operations,
+      byDay,
     };
   }
 

@@ -21,11 +21,23 @@
  * Паузы («вне смены») считаются здесь, а не на бэке: это просто зазоры
  * между соседними отрезками, и гонять их по сети незачем — бэк отдаёт
  * только агрегат (`idleMinutes`, `breaks`) для шапки.
+ *
+ * Три режима периода — «День · Неделя · Месяц». На периоде длиннее
+ * суток лента дня НЕ показывается (семь суток отрезками на 390px не
+ * читаются) — вместо неё график «Часы по дням», где столбик тапом
+ * переключает табель на этот день. «Где был» и «По операциям» просто
+ * считаются за период, вёрстка у них общая.
+ *
+ * Что происходило внутри отрезка (какие паспорта брал и закрывал),
+ * раскрывается тапом: за смену набегает 20–40 событий, и развёрнутая
+ * целиком лента листалась бы минуту, перестав отвечать на «где был» за
+ * один взгляд.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import type {
   MasterEmployeeDayDto,
+  MasterEmployeeDayEventDto,
   MasterEmployeeDaySegmentDto,
 } from '@sewing/shared';
 import { categoryClass, categoryLabel } from '@/lib/operation-category';
@@ -78,6 +90,106 @@ export function shiftDay(date: string, deltaDays: number): string {
   }).format(base);
 }
 
+export type DayPeriod = 'day' | 'week' | 'month';
+
+/** Границы периода `[from; to]` (московские сутки) для якорной даты. */
+export function periodRange(
+  period: DayPeriod,
+  anchor: string,
+): { from: string; to: string } {
+  if (period === 'day') return { from: anchor, to: anchor };
+  if (period === 'week') {
+    // Неделя с понедельника: `getUTCDay` на московском полудне даёт
+    // правильный день недели без возни с локалью.
+    const base = new Date(`${anchor}T12:00:00.000+03:00`);
+    const shift = (base.getUTCDay() + 6) % 7;
+    return { from: shiftDay(anchor, -shift), to: shiftDay(anchor, 6 - shift) };
+  }
+  const [y, m] = anchor.split('-').map(Number);
+  const last = new Date(Date.UTC(y!, m!, 0)).getUTCDate();
+  const mm = String(m).padStart(2, '0');
+  return { from: `${y}-${mm}-01`, to: `${y}-${mm}-${String(last).padStart(2, '0')}` };
+}
+
+/** Сдвиг якоря на соседний период (стрелки «‹ ›»). */
+export function shiftAnchor(
+  period: DayPeriod,
+  anchor: string,
+  delta: number,
+): string {
+  if (period === 'day') return shiftDay(anchor, delta);
+  if (period === 'week') return shiftDay(anchor, delta * 7);
+  const [y, m] = anchor.split('-').map(Number);
+  const d = new Date(Date.UTC(y!, m! - 1 + delta, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
+
+/** Все дни периода включительно — для графика (пустые дни тоже нужны). */
+function eachDay(from: string, to: string): string[] {
+  const out: string[] = [];
+  let cur = from;
+  for (let guard = 0; cur <= to && guard < 400; guard += 1) {
+    out.push(cur);
+    cur = shiftDay(cur, 1);
+  }
+  return out;
+}
+
+/** «10 — 16 августа» / «Август 2026» — подпись периода. */
+function formatPeriodTitle(period: DayPeriod, from: string, to: string): string {
+  if (period === 'day') return formatDayTitle(from);
+  const d = (iso: string) => new Date(`${iso}T12:00:00.000+03:00`);
+  if (period === 'month') {
+    const label = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Moscow',
+      month: 'long',
+      year: 'numeric',
+    }).format(d(from));
+    return label.charAt(0).toUpperCase() + label.slice(1);
+  }
+  const fromLabel = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    day: 'numeric',
+  }).format(d(from));
+  const toLabel = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    day: 'numeric',
+    month: 'long',
+  }).format(d(to));
+  return `${fromLabel} — ${toLabel}`;
+}
+
+/** «пн 10» — подпись столбика графика. */
+function formatDayShort(day: string): string {
+  return new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    weekday: 'short',
+    day: 'numeric',
+  }).format(new Date(`${day}T12:00:00.000+03:00`));
+}
+
+/** Выходной? (для приглушённого столбика графика). */
+function isWeekend(day: string): boolean {
+  const wd = new Date(`${day}T12:00:00.000+03:00`).getUTCDay();
+  return wd === 0 || wd === 6;
+}
+
+/** Сколько РАЗНЫХ паспортов затронуто отрезком (а не событий). */
+function passportCount(events: MasterEmployeeDayEventDto[]): number {
+  return new Set(
+    events.map((e) => e.passportNumber).filter((n): n is string => !!n),
+  ).size;
+}
+
+/** Склонение «паспорт/паспорта/паспортов». */
+function passportsWord(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'паспорт';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'паспорта';
+  return 'паспортов';
+}
+
 /**
  * Высота строки ленты. Пропорциональна длительности, но с полом: восьми-
  * минутный перерыв всё равно должен оставаться кликабельным и читаемым.
@@ -126,15 +238,33 @@ export function EmployeeDaySheet({
   const [day, setDay] = useState<MasterEmployeeDayDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [period, setPeriod] = useState<DayPeriod>('day');
+  // Раскрытые отрезки (id) — что происходило внутри показываем по тапу.
+  const [openSegments, setOpenSegments] = useState<Set<string>>(new Set());
+
+  const range = periodRange(period, date);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const r = await loadEmployeeDayAction({ employeeId, date });
+    const r = await loadEmployeeDayAction({
+      employeeId,
+      from: range.from,
+      to: range.to,
+    });
     if (r.ok) setDay(r.data);
     else setError(r.error);
     setLoading(false);
-  }, [employeeId, date]);
+  }, [employeeId, range.from, range.to]);
+
+  const toggleSegment = useCallback((id: string) => {
+    setOpenSegments((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     void load();
@@ -183,20 +313,45 @@ export function EmployeeDaySheet({
             <button
               type="button"
               className="mday__nav"
-              onClick={() => onDateChange(shiftDay(date, -1))}
-              aria-label="Предыдущий день"
+              onClick={() => onDateChange(shiftAnchor(period, date, -1))}
+              aria-label="Предыдущий период"
             >
               ‹
             </button>
-            <span className="mday__date">{formatDayTitle(date)}</span>
+            <span className="mday__date">
+              {formatPeriodTitle(period, range.from, range.to)}
+            </span>
             <button
               type="button"
               className="mday__nav"
-              onClick={() => onDateChange(shiftDay(date, 1))}
-              aria-label="Следующий день"
+              onClick={() => onDateChange(shiftAnchor(period, date, 1))}
+              aria-label="Следующий период"
             >
               ›
             </button>
+          </div>
+
+          <div className="mday__periods" role="tablist" aria-label="Период">
+            {(
+              [
+                ['day', 'День'],
+                ['week', 'Неделя'],
+                ['month', 'Месяц'],
+              ] as Array<[DayPeriod, string]>
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={period === key}
+                className={
+                  'mday__period' + (period === key ? ' is-active' : '')
+                }
+                onClick={() => setPeriod(key)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           {day && (
@@ -207,16 +362,18 @@ export function EmployeeDaySheet({
                   {formatHM(day.presenceMinutes)}
                 </div>
                 <div className="mday__kpi-hint">
-                  {day.segments.length > 0
-                    ? `${moscowTimeHM(day.segments[0]!.startedAt)}→${
-                        day.hasOpenSegment
-                          ? 'сейчас'
-                          : moscowTimeHM(
-                              day.segments[day.segments.length - 1]!.endedAt ??
-                                day.now,
-                            )
-                      }`
-                    : 'не выходил'}
+                  {day.segments.length === 0
+                    ? 'не выходил'
+                    : period === 'day'
+                      ? `${moscowTimeHM(day.segments[0]!.startedAt)}→${
+                          day.hasOpenSegment
+                            ? 'сейчас'
+                            : moscowTimeHM(
+                                day.segments[day.segments.length - 1]!
+                                  .endedAt ?? day.now,
+                              )
+                        }`
+                      : `${day.byDay.length} дн.`}
                 </div>
               </div>
               <div className="mday__kpi">
@@ -319,7 +476,59 @@ export function EmployeeDaySheet({
             </section>
           )}
 
-          {day && lane.length > 0 && (
+          {day && period !== 'day' && (
+            <section className="mday__section">
+              <h4 className="mday__h">
+                Часы по дням{' '}
+                <span className="mday__note">тап по дню — его табель</span>
+              </h4>
+              <div className="mday__bars">
+                {(() => {
+                  const byDay = new Map(day.byDay.map((d) => [d.day, d]));
+                  const days = eachDay(range.from, range.to);
+                  const max = Math.max(
+                    1,
+                    ...days.map((d) => byDay.get(d)?.minutes ?? 0),
+                  );
+                  return days.map((d) => {
+                    const minutes = byDay.get(d)?.minutes ?? 0;
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        className="mday__barcol"
+                        onClick={() => {
+                          // Тап по столбику — быстрый путь к нужному дню:
+                          // листать стрелками до него дольше.
+                          onDateChange(d);
+                          setPeriod('day');
+                        }}
+                      >
+                        <span className="mday__barval">
+                          {minutes > 0 ? formatHM(minutes) : '—'}
+                        </span>
+                        <span
+                          className={
+                            'mday__bar' +
+                            (minutes === 0 ? ' is-zero' : '') +
+                            (isWeekend(d) ? ' is-wknd' : '')
+                          }
+                          style={
+                            minutes > 0
+                              ? { height: `${Math.max(6, (minutes / max) * 100)}%` }
+                              : undefined
+                          }
+                        />
+                        <span className="mday__barlab">{formatDayShort(d)}</span>
+                      </button>
+                    );
+                  });
+                })()}
+              </div>
+            </section>
+          )}
+
+          {day && period === 'day' && lane.length > 0 && (
             <section className="mday__section">
               <h4 className="mday__h">
                 Лента дня{' '}
@@ -371,6 +580,72 @@ export function EmployeeDaySheet({
                           {formatDuration(item.seg.minutes)}
                           {item.seg.qty > 0 ? ` · ${item.seg.qty} шт` : ''}
                         </span>
+                        {item.seg.events.length > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              className="mday__toggle"
+                              aria-expanded={openSegments.has(item.seg.segmentId)}
+                              onClick={() => toggleSegment(item.seg.segmentId)}
+                            >
+                              <span
+                                className={
+                                  'mday__chev' +
+                                  (openSegments.has(item.seg.segmentId)
+                                    ? ' is-open'
+                                    : '')
+                                }
+                              >
+                                ›
+                              </span>{' '}
+                              {passportCount(item.seg.events)}{' '}
+                              {passportsWord(passportCount(item.seg.events))}
+                            </button>
+                            {openSegments.has(item.seg.segmentId) && (
+                              <ul className="mday__events">
+                                {item.seg.events.map((ev, i) => (
+                                  <li
+                                    key={`${ev.at}:${i}`}
+                                    className={
+                                      'mday__ev' +
+                                      (ev.type === 'ISSUED_TO_EMPLOYEE'
+                                        ? ' is-issue'
+                                        : '')
+                                    }
+                                  >
+                                    <span className="mday__ev-t">
+                                      {moscowTimeHM(ev.at)}
+                                    </span>
+                                    <span className="mday__ev-main">
+                                      <span className="mday__ev-title">
+                                        {ev.type === 'ISSUED_TO_EMPLOYEE'
+                                          ? 'Взял крой'
+                                          : `Закрыл операцию${
+                                              ev.qty !== null
+                                                ? ` · ${ev.qty} шт`
+                                                : ''
+                                            }`}
+                                      </span>
+                                      <span className="mday__ev-sub">
+                                        <b>{ev.passportNumber ?? '—'}</b>
+                                        {[ev.passportColor, ev.passportSizeCode]
+                                          .filter(Boolean)
+                                          .join(', ')
+                                          ? ` · ${[
+                                              ev.passportColor,
+                                              ev.passportSizeCode,
+                                            ]
+                                              .filter(Boolean)
+                                              .join(', ')}`
+                                          : ''}
+                                      </span>
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </>
+                        )}
                       </span>
                     </div>
                   ),
