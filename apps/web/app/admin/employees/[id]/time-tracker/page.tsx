@@ -10,6 +10,7 @@ import { ApiRequestError } from '@/lib/api';
 import { getEmployeeTimeTracking } from '@/lib/time-tracking-api';
 import { AdminPageShell } from '@/components/admin';
 import { formatRole } from '@/lib/admin-labels';
+import { categoryClass, categoryLabel } from '@/lib/operation-category';
 import {
   MSK,
   cap,
@@ -230,7 +231,57 @@ function SessionCard({
           За сеанс не завершено ни одной операции — вероятно, короткий простой
           или ошибочный скан стола.
         </div>
+      ) : session.segments.length > 0 ? (
+        // Отрезки: внутри одной смены операция могла переключаться, и
+        // тогда «4:33 на оверлоке» — это две разные работы. События
+        // паспортов лежат внутри своего отрезка, а не общей свалкой.
+        <div className={styles.sbody}>
+          {session.segments.map((seg) => (
+            <div key={seg.id} className={styles.segRow}>
+              <span className={`${styles.segTime} ${styles.tnum}`}>
+                {fmtTime(seg.startedAt)}—
+                {seg.endedAt ? fmtTime(seg.endedAt) : 'сейчас'}
+              </span>
+              <span className={styles.segBar}>
+                <i className={categoryClass(seg.category)} />
+              </span>
+              <div className={styles.segMain}>
+                <div className={styles.segTitle}>
+                  {seg.operationName}
+                  {seg.open ? (
+                    <span className={`${styles.chip} ${styles.chipLive}`}>
+                      идёт
+                    </span>
+                  ) : null}
+                </div>
+                <div className={styles.segMeta}>
+                  {fmtDurLabel(seg.minutes)}
+                  {seg.qtyGood > 0 ? ` · ${ru(seg.qtyGood)} шт` : ''}
+                  {seg.minutes > 0 && seg.qtyGood > 0
+                    ? ` · ${ru(Math.round((seg.qtyGood / seg.minutes) * 60))} шт/ч`
+                    : ''}
+                  {seg.normPercent !== null
+                    ? ` · норма ${seg.normPercent}%`
+                    : ''}
+                </div>
+                {seg.events.length > 0 && (
+                  <ol className={styles.tl}>
+                    {seg.events.map((ev, i) => (
+                      <TimelineRow
+                        key={`${ev.type}-${ev.at}-${i}`}
+                        ev={ev}
+                        session={session}
+                      />
+                    ))}
+                  </ol>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       ) : (
+        // Смена без отрезков (заведена до появления `ShiftSegment` и мимо
+        // бэкфилла) — прежний плоский таймлайн.
         <div className={styles.sbody}>
           <ol className={styles.tl}>
             {session.events.map((ev, i) => (
@@ -346,6 +397,15 @@ export default async function EmployeeTimeTrackerPage({
       {/* KPI */}
       <div className={styles.kpis}>
         <Kpi
+          label="На работе"
+          value={fmtDurLabel(data.presenceMinutes)}
+          foot={
+            data.idleMinutes > 0
+              ? `вне смены ${fmtDurLabel(data.idleMinutes)}`
+              : 'без пауз'
+          }
+        />
+        <Kpi
           label="Отработано"
           value={fmtDurLabel(data.totalMinutes)}
           tone={data.openSessionsCount > 0 ? 'live' : undefined}
@@ -361,6 +421,13 @@ export default async function EmployeeTimeTrackerPage({
           }
         />
         <Kpi
+          label="Загрузка"
+          value={data.utilization !== null ? `${data.utilization}%` : '—'}
+          foot={
+            data.breaks > 0 ? `${ru(data.breaks)} перерыв(ов)` : 'в смене / на работе'
+          }
+        />
+        <Kpi
           label="Операций"
           value={ru(data.operationsCount)}
           foot="завершено"
@@ -373,19 +440,70 @@ export default async function EmployeeTimeTrackerPage({
           foot="по факту завершений"
         />
         <Kpi
+          label="Норма"
+          value={data.normPercent !== null ? `${data.normPercent}%` : '—'}
+          foot={
+            data.normPercent !== null
+              ? 'план к факту'
+              : 'норма времени не задана'
+          }
+        />
+        <Kpi
           label="Брак"
           value={ru(data.defects)}
           unit="шт"
           tone="warn"
           foot={
-            data.qtyGood > 0
-              ? `${defectPct.toLocaleString('ru-RU', {
-                  maximumFractionDigits: 2,
-                })}% от выработки`
-              : '—'
+            [
+              data.qtyGood > 0
+                ? `${defectPct.toLocaleString('ru-RU', {
+                    maximumFractionDigits: 2,
+                  })}% от выработки`
+                : null,
+              // Брак, который сотрудник НАШЁЛ сам (работа ОТК) — другое
+              // число, чем брак на его операциях; смешивать их нельзя.
+              data.defectsFound > 0 ? `нашёл ${ru(data.defectsFound)}` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ') || '—'
           }
         />
       </div>
+
+      {/* где был — участки периода */}
+      {data.places.length > 0 && (
+        <div className={styles.card}>
+          <div className={styles.cardHd}>
+            <h3>Где был</h3>
+            <span className="muted">доля от времени в смене</span>
+          </div>
+          <div className={styles.places}>
+            {data.places.map((p) => (
+              <div key={p.key} className={styles.place}>
+                <span className={styles.placeName}>
+                  {categoryLabel(p.category)} ·{' '}
+                  {p.equipmentDisplayNumber
+                    ? `№${p.equipmentDisplayNumber}`
+                    : p.equipmentName}
+                </span>
+                <span className={`${styles.placeTime} ${styles.tnum}`}>
+                  {fmtDurLabel(p.minutes)}
+                </span>
+                <span className={styles.placeBar}>
+                  <span
+                    className={`${styles.placeFill} ${categoryClass(p.category)}`}
+                    style={{ width: `${p.share}%` }}
+                  />
+                </span>
+                <span className={styles.placeShare}>
+                  {p.share}%
+                  {p.operations > 1 ? ` · ${ru(p.operations)} операции` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* часы по дням */}
       {period !== 'day' && (

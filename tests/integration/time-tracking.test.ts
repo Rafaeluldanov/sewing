@@ -227,6 +227,121 @@ describeWithDb('integration — тайм-трекер сотрудника', () 
     expect(drill.totalMinutes).toBeLessThanOrEqual(91);
   });
 
+  test('отрезки лежат внутри сеанса, события — внутри своего отрезка', async () => {
+    const session = await seedShift([
+      [
+        new Date('2026-03-10T08:00:00.000+03:00'),
+        new Date('2026-03-10T10:00:00.000+03:00'),
+      ],
+      [
+        new Date('2026-03-10T10:00:00.000+03:00'),
+        new Date('2026-03-10T12:00:00.000+03:00'),
+      ],
+    ]);
+    // Событие во ВТОРОМ отрезке: должно попасть только в него.
+    const order = await t.prisma.order.create({
+      data: {
+        number: 'O-TT-1',
+        orderDate: new Date(),
+        color: seed.product.color,
+        status: 'IN_PRODUCTION',
+        items: {
+          create: {
+            productId: seed.product.id,
+            sizeId: seed.sizes.M!,
+            qtyPlan: 12,
+          },
+        },
+      },
+    });
+    const passport = await t.prisma.passport.create({
+      data: {
+        number: 'P-TT-1',
+        orderId: order.id,
+        productId: seed.product.id,
+        sizeId: seed.sizes.M!,
+        color: seed.product.color,
+        rollNumber: 'R-TT',
+        cutDate: new Date('2026-03-10T08:00:00.000+03:00'),
+        qtyPlan: 12,
+        qtyCut: 12,
+        qtyGood: 12,
+        qrCode: `passport:tt-${Date.now()}`,
+        cutterId: seed.employees['cutter']!.id,
+        creatorId: seed.employees['cutter']!.id,
+      },
+    });
+    await t.prisma.passportEvent.create({
+      data: {
+        passportId: passport.id,
+        employeeId: seed.employees['seamstress']!.id,
+        operationId: seed.operations.SEW_OVERLOCK_1!.id,
+        type: 'OPERATION_FINISHED',
+        qty: 12,
+        createdAt: new Date('2026-03-10T11:00:00.000+03:00'),
+      },
+    });
+
+    const drill = await getDrill('2026-03-10', '2026-03-10');
+    const s = drill.sessions.find((x) => x.id === session.id)!;
+    expect(s.segments).toHaveLength(2);
+    expect(s.segments[0]!.minutes).toBe(120);
+    expect(s.segments[1]!.minutes).toBe(120);
+    expect(s.segments[0]!.qtyGood).toBe(0);
+    expect(s.segments[1]!.qtyGood).toBe(12);
+    expect(
+      s.segments[1]!.events.filter((e) => e.type === 'OPERATION_FINISHED'),
+    ).toHaveLength(1);
+  });
+
+  test('«Где был» складывает время по участку, присутствие включает паузу', async () => {
+    // Две смены с перерывом 40 минут между ними.
+    await seedShift([
+      [
+        new Date('2026-03-10T08:00:00.000+03:00'),
+        new Date('2026-03-10T11:00:00.000+03:00'),
+      ],
+    ]);
+    await seedShift([
+      [
+        new Date('2026-03-10T11:40:00.000+03:00'),
+        new Date('2026-03-10T14:00:00.000+03:00'),
+      ],
+    ]);
+
+    const drill = await getDrill('2026-03-10', '2026-03-10');
+    expect(drill.totalMinutes).toBe(180 + 140);
+    // Присутствие 08:00→14:00 = 6 часов, из них 40 минут вне смены.
+    expect(drill.presenceMinutes).toBe(360);
+    expect(drill.idleMinutes).toBe(40);
+    expect(drill.breaks).toBe(1);
+    expect(drill.utilization).toBe(89);
+    // Оба сеанса на одном рабочем месте — «где был» их складывает.
+    expect(drill.places).toHaveLength(1);
+    expect(drill.places[0]!.minutes).toBe(320);
+    expect(drill.places[0]!.share).toBe(100);
+  });
+
+  test('мини-лента и загрузка приходят в обзор только для одних суток', async () => {
+    await seedShift([
+      [
+        new Date('2026-03-10T08:00:00.000+03:00'),
+        new Date('2026-03-10T12:00:00.000+03:00'),
+      ],
+    ]);
+
+    const oneDay = rowOfSeamstress(await getSummary('2026-03-10', '2026-03-10'));
+    expect(oneDay.ribbon).toHaveLength(1);
+    expect(oneDay.ribbon[0]!.category).toBe('SEWING');
+    // 08:00 МСК = 480-я минута суток.
+    expect(oneDay.ribbon[0]!.startMinute).toBe(480);
+    expect(oneDay.presenceMinutes).toBe(240);
+    expect(oneDay.utilization).toBe(100);
+
+    const week = rowOfSeamstress(await getSummary('2026-03-09', '2026-03-15'));
+    expect(week.ribbon).toHaveLength(0);
+  });
+
   test('швея не видит тайм-трекер', async () => {
     await api()
       .get('/api/admin/employees/time-tracker-summary')

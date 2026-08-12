@@ -8,14 +8,19 @@ import type {
   TimeTrackingSessionDto,
   TimeTrackingSummaryDto,
   TimeTrackingSummaryRowDto,
+  TimeTrackingRibbonPartDto,
+  TimeTrackingPlaceDto,
+  TimeTrackingSegmentDto,
 } from '@sewing/shared';
 import { moscowDayKey, moscowDayWindow } from '../../common/moscow-date.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { MasterEmployeeStatsService } from '../master-employee-stats/master-employee-stats.service.js';
 import {
   clampSegment,
+  groupSegmentsByEmployee,
   loadShiftSegments,
   splitSegmentByMoscowDays,
+  summarizeSegments,
 } from '../shifts/shift-time.js';
 
 /**
@@ -172,6 +177,11 @@ export class TimeTrackingService {
       if (f.employeeId) finAgg.set(f.employeeId, a);
     }
 
+    // Присутствие/загрузка/лента — из тех же отрезков (общее ядро).
+    const segmentsByEmp = groupSegmentsByEmployee(segments);
+    const singleDay = query.from === query.to;
+    const dayStart = win.from.getTime();
+
     const rows: TimeTrackingSummaryRowDto[] = employees.map((e) => {
       const s = sessAgg.get(e.id);
       const f = finAgg.get(e.id);
@@ -179,6 +189,18 @@ export class TimeTrackingService {
       const minutes = s?.minutes ?? 0;
       const qty = f?.qty ?? 0;
       const lastAt = Math.max(s?.lastAt ?? 0, f?.lastAt ?? 0);
+      const mySegments = segmentsByEmp.get(e.id) ?? [];
+      const totals = summarizeSegments(mySegments, win, now);
+      const ribbon: TimeTrackingRibbonPartDto[] = singleDay
+        ? mySegments.map((seg) => {
+            const c = clampSegment(seg, win, now);
+            return {
+              startMinute: Math.round((c.start.getTime() - dayStart) / 60_000),
+              minutes: c.minutes,
+              category: seg.operation.category,
+            };
+          })
+        : [];
       return {
         employeeId: e.id,
         employeeName: e.fullName,
@@ -192,6 +214,10 @@ export class TimeTrackingService {
         qtyGood: qty,
         defects: defectsByEmp.get(e.id) ?? 0,
         perHour: minutes > 0 ? Math.round(qty / (minutes / 60)) : 0,
+        presenceMinutes: totals.presenceMinutes,
+        utilization: totals.utilization,
+        staleShift: totals.staleShift,
+        ribbon,
         lastActivityAt: lastAt > 0 ? new Date(lastAt).toISOString() : null,
       };
     });
@@ -292,6 +318,38 @@ export class TimeTrackingService {
     const defectsByDay = new Map<string, number>();
     for (const d of drill.byDay) defectsByDay.set(d.day, d.defects);
 
+    // Нормы времени операций, встреченных в отрезках: только `FIXED`.
+    // Поразмерную (`BY_SIZE`) к периоду не свести — размеры в нём
+    // перемешаны, а `OPERATION_FINISHED` размера не несёт.
+    const normOps = await this.prisma.operation.findMany({
+      where: {
+        id: { in: Array.from(new Set(segments.map((x) => x.operation.id))) },
+        timeNormMode: 'FIXED',
+      },
+      select: { id: true, timeNormSec: true },
+    });
+    const normByOp = new Map<string, number>();
+    for (const o of normOps) {
+      if (o.timeNormSec !== null && o.timeNormSec > 0) {
+        normByOp.set(o.id, o.timeNormSec);
+      }
+    }
+
+    // «Где был» + план/факт по нормам — по отрезкам периода.
+    const placeAgg = new Map<
+      string,
+      {
+        category: string;
+        equipmentName: string;
+        equipmentDisplayNumber: string | null;
+        minutes: number;
+        operations: Set<string>;
+      }
+    >();
+    /** Σ плановых минут и Σ фактических — только по операциям с нормой. */
+    let normPlanMinutes = 0;
+    let normFactMinutes = 0;
+
     // --- раскладываем события по сеансам и собираем агрегаты ---
     const sessionDtos: TimeTrackingSessionDto[] = [];
     const byDayAgg = new Map<
@@ -389,6 +447,81 @@ export class TimeTrackingService {
         });
       }
 
+      // Отрезки сеанса: то же окно, те же события — но разложенные по
+      // операциям, а не свалкой на весь сеанс.
+      const segmentDtos: TimeTrackingSegmentDto[] = [];
+      for (const seg of segments.filter((x) => x.shiftSessionId === s.id)) {
+        const c = clampSegment(seg, win, now);
+        const segEvents = inWindow.filter(
+          (e) => e.createdAt >= c.start && e.createdAt <= c.end,
+        );
+        let segOps = 0;
+        let segQty = 0;
+        const segEvDtos: TimeTrackingEventDto[] = segEvents.map((e) => {
+          const isFinish = e.type === PassportEventType.OPERATION_FINISHED;
+          if (isFinish) {
+            segOps += 1;
+            segQty += e.qty ?? 0;
+          }
+          return {
+            type: isFinish ? 'OPERATION_FINISHED' : 'ISSUED_TO_EMPLOYEE',
+            at: e.createdAt.toISOString(),
+            operationCode: e.operation?.code ?? null,
+            operationName: e.operation?.name ?? null,
+            passportId: e.passport?.id ?? null,
+            passportNumber: e.passport?.number ?? null,
+            passportColor: e.passport?.color ?? null,
+            passportSizeCode: e.passport?.size?.code ?? null,
+            qty: isFinish ? e.qty ?? 0 : null,
+          };
+        });
+
+        const normSec = normByOp.get(seg.operation.id) ?? null;
+        const planMinutes =
+          normSec !== null && segQty > 0 ? (normSec * segQty) / 60 : null;
+        if (planMinutes !== null && c.minutes > 0) {
+          normPlanMinutes += planMinutes;
+          normFactMinutes += c.minutes;
+        }
+
+        segmentDtos.push({
+          id: seg.id,
+          startedAt: c.start.toISOString(),
+          endedAt: seg.endedAt ? seg.endedAt.toISOString() : null,
+          minutes: c.minutes,
+          operationId: seg.operation.id,
+          operationCode: seg.operation.code,
+          operationName: seg.operation.name,
+          category: seg.operation.category,
+          equipmentId: seg.equipment.id,
+          equipmentName: seg.equipment.name,
+          equipmentDisplayNumber: seg.equipment.displayNumber,
+          operationsCount: segOps,
+          qtyGood: segQty,
+          normPercent:
+            planMinutes !== null && c.minutes > 0
+              ? Math.round((planMinutes / c.minutes) * 100)
+              : null,
+          open: seg.endedAt === null,
+          events: segEvDtos,
+        });
+
+        const placeKey = `${seg.operation.category}:${seg.equipment.id}`;
+        let place = placeAgg.get(placeKey);
+        if (!place) {
+          place = {
+            category: seg.operation.category,
+            equipmentName: seg.equipment.name,
+            equipmentDisplayNumber: seg.equipment.displayNumber,
+            minutes: 0,
+            operations: new Set(),
+          };
+          placeAgg.set(placeKey, place);
+        }
+        place.minutes += c.minutes;
+        place.operations.add(seg.operation.id);
+      }
+
       sessionDtos.push({
         id: s.id,
         startedAt: start.toISOString(),
@@ -404,6 +537,7 @@ export class TimeTrackingService {
         operationsCount: ops,
         qtyGood: qty,
         events: evDtos,
+        segments: segmentDtos,
       });
 
       totalMinutes += durationMinutes;
@@ -460,6 +594,34 @@ export class TimeTrackingService {
       // Новые сверху.
       .sort((x, y) => (x.day < y.day ? 1 : x.day > y.day ? -1 : 0));
 
+    const totals = summarizeSegments(segments, win, now);
+    const places: TimeTrackingPlaceDto[] = Array.from(placeAgg.entries())
+      .map(([key, p]) => ({
+        key,
+        category: p.category,
+        equipmentName: p.equipmentName,
+        equipmentDisplayNumber: p.equipmentDisplayNumber,
+        minutes: p.minutes,
+        share:
+          totals.workedMinutes > 0
+            ? Math.round((p.minutes / totals.workedMinutes) * 100)
+            : 0,
+        operations: p.operations.size,
+      }))
+      .sort((a, b) => b.minutes - a.minutes);
+
+    // Брак, зафиксированный самим сотрудником (работа ОТК) — отдельно от
+    // брака, найденного НА его операциях (`drill.totalDefects`).
+    const defectsFound = await this.prisma.passportEvent.aggregate({
+      where: {
+        type: PassportEventType.DEFECT_RECORDED,
+        employeeId,
+        qty: { gt: 0 },
+        createdAt: { gte: win.from, lt: win.to },
+      },
+      _sum: { qty: true },
+    });
+
     return {
       employeeId: employee.id,
       employeeName: employee.fullName,
@@ -473,6 +635,16 @@ export class TimeTrackingService {
       operationsCount: totalOps,
       qtyGood: totalQty,
       defects: drill.totalDefects,
+      defectsFound: defectsFound._sum.qty ?? 0,
+      presenceMinutes: totals.presenceMinutes,
+      idleMinutes: totals.idleMinutes,
+      breaks: totals.breaks,
+      utilization: totals.utilization,
+      normPercent:
+        normFactMinutes > 0
+          ? Math.round((normPlanMinutes / normFactMinutes) * 100)
+          : null,
+      places,
       byDay,
       // Новые сеансы сверху; события внутри остаются по возрастанию.
       sessions: sessionDtos.slice().reverse(),

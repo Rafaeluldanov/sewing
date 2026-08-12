@@ -107,6 +107,69 @@ export interface TimeTrackingSessionDto {
   qtyGood: number;
   /** Строки таймлайна по возрастанию времени, включая границы сеанса. */
   events: TimeTrackingEventDto[];
+  /**
+   * Отрезки сеанса по возрастанию времени. Пустой список — смена без
+   * `ShiftSegment` (заведена до их появления): UI откатывается на
+   * плоский `events`.
+   */
+  segments: TimeTrackingSegmentDto[];
+}
+
+/**
+ * Отрезок сеанса — участок работы с НЕИЗМЕННОЙ операцией
+ * (`ShiftSegment`). Внутри одной смены их столько, сколько раз
+ * сотрудник переключал операцию на станке.
+ *
+ * До появления отрезков смена показывалась одной строкой с ПОСЛЕДНЕЙ
+ * операцией, и восьмичасовой сеанс с тремя переключениями выглядел как
+ * восемь часов последней работы.
+ *
+ * `events` — те же строки таймлайна, что и раньше, только разложенные
+ * по своему отрезку: сразу видно, к какой операции относится закрытый
+ * паспорт. У смен, заведённых до `ShiftSegment` и не попавших в
+ * бэкфилл, список отрезков пуст — UI в этом случае рисует плоский
+ * таймлайн сеанса (`TimeTrackingSessionDto.events`), как прежде.
+ */
+export interface TimeTrackingSegmentDto {
+  id: string;
+  startedAt: string;
+  /** `null` — отрезок идёт прямо сейчас. */
+  endedAt: string | null;
+  minutes: number;
+  operationId: string;
+  operationCode: string;
+  operationName: string;
+  /** `OperationCategory` — по ней UI красит участок. */
+  category: string;
+  equipmentId: string;
+  equipmentName: string;
+  equipmentDisplayNumber: string | null;
+  /** Закрытых операций внутри отрезка. */
+  operationsCount: number;
+  /** Σ штук годного внутри отрезка. */
+  qtyGood: number;
+  /**
+   * Выполнение нормы, %: план (`Operation.timeNormSec` × штуки) к факту
+   * (минуты отрезка). `null`, если нормы нет, она поразмерная, либо
+   * нет штук/времени.
+   */
+  normPercent: number | null;
+  open: boolean;
+  events: TimeTrackingEventDto[];
+}
+
+/** Строка «Где был»: участок (категория + рабочее место) за период. */
+export interface TimeTrackingPlaceDto {
+  /** `category:equipmentId` — ключ для React. */
+  key: string;
+  category: string;
+  equipmentName: string;
+  equipmentDisplayNumber: string | null;
+  minutes: number;
+  /** Доля от времени в смене, 0–100. */
+  share: number;
+  /** Сколько разных операций сотрудник делал на этом месте. */
+  operations: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +212,30 @@ export interface TimeTrackingDto {
   qtyGood: number;
   /** Σ брака за период (finisher attribution, как в master-stats). */
   defects: number;
+  /**
+   * Брак, который сотрудник ЗАФИКСИРОВАЛ сам (работа ОТК). Это НЕ
+   * `defects`: там брак, найденный на его операциях. Путать нельзя.
+   */
+  defectsFound: number;
+  /**
+   * «На работе»: от начала первого отрезка до конца последнего, минут.
+   * Не сумма отрезков — включает паузы между сеансами.
+   */
+  presenceMinutes: number;
+  /** `presenceMinutes − totalMinutes` («вне смены»). */
+  idleMinutes: number;
+  /** Пауз между отрезками (зазор от минуты). */
+  breaks: number;
+  /** Загрузка, %: `totalMinutes / presenceMinutes`. */
+  utilization: number | null;
+  /**
+   * Выполнение нормы за период, %: Σ(норма × штуки) к Σ(время операций
+   * с заданной нормой). Операции без нормы в расчёт не входят вовсе —
+   * иначе процент занижался бы там, где норма просто не заведена.
+   */
+  normPercent: number | null;
+  /** «Где был» — участки периода, по времени убыв. */
+  places: TimeTrackingPlaceDto[];
   /** Разбивка по дням, новые сверху. */
   byDay: TimeTrackingDayDto[];
   /** Сеансы периода, новые сверху; события внутри — по возрастанию. */
@@ -158,6 +245,18 @@ export interface TimeTrackingDto {
 // ---------------------------------------------------------------------------
 // Обзор ВСЕХ сотрудников (список-уровень вкладки «Сотрудники»)
 // ---------------------------------------------------------------------------
+
+/**
+ * Кусок мини-ленты дня в строке обзора: раскраска участков без
+ * подписей. `startMinute` — минут от начала московских суток (0–1440),
+ * чтобы UI не парсил даты ради процента ширины.
+ */
+export interface TimeTrackingRibbonPartDto {
+  startMinute: number;
+  minutes: number;
+  /** `OperationCategory` — цвет участка. */
+  category: string;
+}
 
 /**
  * Строка обзорной таблицы «Тайм-трекер» по одному сотруднику за период.
@@ -183,6 +282,26 @@ export interface TimeTrackingSummaryRowDto {
   defects: number;
   /** Выработка/час (по факту завершений), 0 если минут нет. */
   perHour: number;
+  /**
+   * «На работе» за период, минут (с паузами между сеансами). Вместе с
+   * `totalMinutes` даёт ответ на вопрос, которого таблица не давала:
+   * человек все эти часы работал или половину простоял.
+   */
+  presenceMinutes: number;
+  /** Загрузка, %: `totalMinutes / presenceMinutes`. */
+  utilization: number | null;
+  /**
+   * Открытая смена тянется с прошлых суток — забыл закрыться. У мастера
+   * на это отдельная плашка; здесь признак нужен, чтобы не принимать
+   * «22:40 отработано» за настоящую переработку.
+   */
+  staleShift: boolean;
+  /**
+   * Мини-лента дня: отрезки на общей для таблицы шкале. Заполняется
+   * ТОЛЬКО когда период = одни сутки (`from === to`) — на неделе лента
+   * превратилась бы в кашу.
+   */
+  ribbon: TimeTrackingRibbonPartDto[];
   /** Последняя активность (последнее завершение/старт сеанса), ISO или null. */
   lastActivityAt: string | null;
 }

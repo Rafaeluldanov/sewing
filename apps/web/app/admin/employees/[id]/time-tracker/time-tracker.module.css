@@ -554,3 +554,96 @@
     transition: none;
   }
 }
+
+/* -----------------------------------------------------------------------
+ * Отрезки внутри сеанса и блок «Где был» (12.08.2026).
+ *
+ * Отрезок = участок работы с неизменной операцией (`ShiftSegment`).
+ * До них сеанс показывался одной строкой с ПОСЛЕДНЕЙ операцией, и
+ * восьмичасовая смена с тремя переключениями выглядела как восемь часов
+ * последней работы. Цвета участков — общие с кабинетом мастера
+ * (`--u-*` в globals.css).
+ * ----------------------------------------------------------------------- */
+
+.segRow {
+  display: grid;
+  grid-template-columns: 108px 10px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--color-border);
+}
+.segRow:last-child {
+  border-bottom: none;
+}
+.segTime {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+  white-space: nowrap;
+}
+.segBar {
+  position: relative;
+}
+.segBar i {
+  position: absolute;
+  inset: 3px 0;
+  border-radius: 3px;
+  display: block;
+}
+.segMain {
+  min-width: 0;
+}
+.segTitle {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--color-fg-strong);
+}
+.segMeta {
+  font-size: 0.82rem;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.places {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+  padding: 14px;
+}
+.place {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 10px;
+  align-items: baseline;
+}
+.placeName {
+  font-size: 0.87rem;
+}
+.placeTime {
+  font-size: 0.87rem;
+  font-weight: 700;
+}
+.placeBar {
+  grid-column: 1 / -1;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  overflow: hidden;
+}
+.placeFill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+}
+.placeShare {
+  grid-column: 1 / -1;
+  font-size: 0.72rem;
+  color: var(--color-fg-subtle);
+}
+
+@media (max-width: 560px) {
+  .segRow {
+    grid-template-columns: 92px 8px minmax(0, 1fr);
+    gap: 8px;
+  }
+}

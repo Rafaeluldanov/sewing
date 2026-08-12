@@ -28,38 +28,8 @@ import type {
   MasterEmployeeDayDto,
   MasterEmployeeDaySegmentDto,
 } from '@sewing/shared';
+import { categoryClass, categoryLabel } from '@/lib/operation-category';
 import { loadEmployeeDayAction } from './employee-stats-actions';
-
-/** Подписи участков по `OperationCategory`. */
-const CATEGORY_LABELS: Record<string, string> = {
-  SEWING: 'Швейный',
-  QC: 'ОТК',
-  IRONING: 'ВТО',
-  PACKING: 'Упаковка',
-  CUTTING: 'Раскрой',
-};
-
-/** Класс-модификатор цвета участка (палитра — в `globals.css`). */
-export function categoryClass(category: string): string {
-  switch (category) {
-    case 'SEWING':
-      return 'is-sewing';
-    case 'QC':
-      return 'is-qc';
-    case 'IRONING':
-      return 'is-ironing';
-    case 'PACKING':
-      return 'is-packing';
-    case 'CUTTING':
-      return 'is-cutting';
-    default:
-      return 'is-other';
-  }
-}
-
-export function categoryLabel(category: string): string {
-  return CATEGORY_LABELS[category] ?? category;
-}
 
 /** «7:57» — часы:минуты для итогов. */
 export function formatHM(minutes: number): string {

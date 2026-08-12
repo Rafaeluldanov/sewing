@@ -212,3 +212,68 @@
     animation: none;
   }
 }
+
+/* -----------------------------------------------------------------------
+ * Мини-лента дня и загрузка (12.08.2026).
+ *
+ * Лента — те же цвета участков, что в кабинете мастера (`--u-*` из
+ * globals.css, палитра проверена на различимость при дальтонизме):
+ * тайм-трекер и табель мастера обязаны читаться как один инструмент.
+ * Колонка появляется только на периоде «День» — на неделе отрезки
+ * сливаются в кашу.
+ * ----------------------------------------------------------------------- */
+
+.ribbonBox {
+  display: inline-block;
+  width: 190px;
+}
+.ribbon {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--color-bg-muted);
+  overflow: hidden;
+}
+.ribbon i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+}
+.ribbonScale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 0.62rem;
+  color: var(--color-fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.util {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.utilBar {
+  width: 54px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  overflow: hidden;
+}
+.utilFill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+}
+
+/* Смена, открытая с прошлых суток: «22:40 отработано» — это забытое
+   закрытие, а не переработка. */
+.stale {
+  color: var(--color-warn-fg);
+  font-weight: 700;
+  cursor: help;
+}

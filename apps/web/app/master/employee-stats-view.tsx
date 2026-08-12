@@ -41,11 +41,8 @@ import type {
 } from '@sewing/shared';
 import { MASTER_ASSIGNABLE_ROLES } from '@sewing/shared';
 import { formatRole } from '@/lib/admin-labels';
-import {
-  categoryClass,
-  EmployeeDaySheet,
-  formatHM,
-} from './employee-day-sheet';
+import { categoryClass } from '@/lib/operation-category';
+import { EmployeeDaySheet, formatHM } from './employee-day-sheet';
 import {
   closeActiveShiftAction,
   loadActiveShiftsAction,

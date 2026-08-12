@@ -1,6 +1,10 @@
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Clock3 } from 'lucide-react';
-import type { TimeTrackingSummaryRowDto } from '@sewing/shared';
+import type {
+  TimeTrackingRibbonPartDto,
+  TimeTrackingSummaryRowDto,
+} from '@sewing/shared';
+import { categoryClass } from '@/lib/operation-category';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getEmployeesTimeTrackingSummary } from '@/lib/time-tracking-api';
 import {
@@ -65,6 +69,72 @@ function Kpi({
 }
 
 /**
+ * Общая шкала мини-лент: от начала самого раннего отрезка до конца
+ * самого позднего по ВСЕЙ таблице, с получасовым полем по краям.
+ * Минимум четыре часа — иначе один короткий заход растянулся бы на всю
+ * ширину и читался как полный рабочий день. `null` — лент нет (период
+ * больше суток или никто не работал).
+ */
+function computeRibbonScale(
+  rows: TimeTrackingSummaryRowDto[],
+): { from: number; span: number } | null {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const r of rows) {
+    for (const part of r.ribbon) {
+      min = Math.min(min, part.startMinute);
+      max = Math.max(max, part.startMinute + part.minutes);
+    }
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  const from = Math.max(0, min - 30);
+  return { from, span: Math.max(240, max + 30 - from) };
+}
+
+/** Подпись часа для шкалы под лентой: минуты от полуночи → «08». */
+function hourLabel(minuteOfDay: number): string {
+  return String(Math.floor(minuteOfDay / 60) % 24).padStart(2, '0');
+}
+
+/**
+ * Мини-лента дня: отрезки смен, раскрашенные по участку. Та же палитра,
+ * что в кабинете мастера (`--u-*` в globals.css) — экраны обязаны
+ * читаться как один инструмент.
+ */
+function DayRibbon({
+  parts,
+  scale,
+}: {
+  parts: TimeTrackingRibbonPartDto[];
+  scale: { from: number; span: number };
+}) {
+  if (parts.length === 0) {
+    return <span className={styles.zero}>—</span>;
+  }
+  return (
+    <span className={styles.ribbonBox}>
+      <span className={styles.ribbon} aria-hidden>
+        {parts.map((p, i) => (
+          <i
+            key={`${p.startMinute}:${i}`}
+            className={categoryClass(p.category)}
+            style={{
+              left: `${((p.startMinute - scale.from) / scale.span) * 100}%`,
+              width: `${Math.max(1, (p.minutes / scale.span) * 100)}%`,
+            }}
+          />
+        ))}
+      </span>
+      <span className={styles.ribbonScale}>
+        <span>{hourLabel(scale.from)}</span>
+        <span>{hourLabel(scale.from + scale.span / 2)}</span>
+        <span>{hourLabel(scale.from + scale.span)}</span>
+      </span>
+    </span>
+  );
+}
+
+/**
  * «Тайм-трекер» — обзор всех сотрудников (вкладка «Сотрудники»,
  * список-уровень). Таблица: строка = сотрудник + часы/сеансы/выработка/
  * брак за период + «на смене сейчас». Провал в строку → таймлайн сеансов
@@ -97,6 +167,16 @@ export default async function EmployeesTimeTrackerOverviewPage({
   const totalOps = rows.reduce((s, r) => s + r.operationsCount, 0);
   const totalQty = rows.reduce((s, r) => s + r.qtyGood, 0);
   const totalDefects = rows.reduce((s, r) => s + r.defects, 0);
+  const totalPresence = rows.reduce((s, r) => s + r.presenceMinutes, 0);
+  // Загрузка по цеху: сумма отработанного к сумме присутствия. Не среднее
+  // из процентов — иначе тот, кто зашёл на 10 минут и всё это время
+  // работал, весил бы столько же, сколько отработавший смену.
+  const utilization =
+    totalPresence > 0 ? Math.round((totalMinutes / totalPresence) * 100) : null;
+
+  // Мини-лента есть только у одних суток; шкала общая для всей таблицы,
+  // иначе одинаковая полоска у двух людей означала бы разные часы.
+  const ribbonScale = computeRibbonScale(rows);
 
   const columns: AdminTableColumn<TimeTrackingSummaryRowDto>[] = [
     {
@@ -131,13 +211,53 @@ export default async function EmployeesTimeTrackerOverviewPage({
           </span>
         ),
     },
+    ...(ribbonScale
+      ? [
+          {
+            key: 'ribbon',
+            header: 'День',
+            render: (r: TimeTrackingSummaryRowDto) => (
+              <DayRibbon parts={r.ribbon} scale={ribbonScale} />
+            ),
+          } as AdminTableColumn<TimeTrackingSummaryRowDto>,
+        ]
+      : []),
     {
       key: 'hours',
       header: 'Отработано',
       align: 'right',
       render: (r) =>
         r.totalMinutes > 0 ? (
-          <span className={styles.tnum}>{fmtDurLabel(r.totalMinutes)}</span>
+          <span className={styles.tnum}>
+            {fmtDurLabel(r.totalMinutes)}
+            {/* Смена, висящая с прошлых суток: «22:40 отработано» — это
+                забытое закрытие, а не переработка. */}
+            {r.staleShift ? (
+              <span className={styles.stale} title="Смена открыта с прошлого дня">
+                {' '}
+                ⚠
+              </span>
+            ) : null}
+          </span>
+        ) : (
+          <span className={styles.zero}>—</span>
+        ),
+    },
+    {
+      key: 'util',
+      header: 'Загрузка',
+      align: 'right',
+      render: (r) =>
+        r.utilization !== null ? (
+          <span className={styles.util}>
+            <span className={styles.utilBar}>
+              <span
+                className={styles.utilFill}
+                style={{ width: `${Math.min(100, r.utilization)}%` }}
+              />
+            </span>
+            <span className={styles.tnum}>{r.utilization}%</span>
+          </span>
         ) : (
           <span className={styles.zero}>—</span>
         ),
@@ -266,6 +386,11 @@ export default async function EmployeesTimeTrackerOverviewPage({
           foot={`из ${ru(rows.length)} сотрудников`}
         />
         <Kpi label="Отработано" value={fmtDurLabel(totalMinutes)} foot="суммарно" />
+        <Kpi
+          label="Загрузка"
+          value={utilization !== null ? `${utilization}%` : '—'}
+          foot="в смене / на работе"
+        />
         <Kpi label="Операций" value={ru(totalOps)} foot="завершено" />
         <Kpi label="Выработка" value={ru(totalQty)} unit="шт" />
         <Kpi
