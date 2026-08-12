@@ -137,7 +137,7 @@
 | --- | --- | --- |
 | `DRAFT` | План ещё редактируется (изделие/маршрут/техкарта/лекало/размерная матрица). | Создание заказа `OrdersService.create`. |
 | `CALCULATION` | Менеджер перевёл заказ в расчёт. Backend автоматически собрал `WorkshopNeed[]`; закупщик правит `purchaseQty` / поставщиков, план уже «заморожен» в snapshot-ах. | `OrdersService.startCalculation`. |
-| `CALCULATION_DONE` | Расчёт завершён, зафиксирован активный `OrderCostEstimate(status=COMPLETED)` и snapshot полей `Order.costEstimate*`. | `OrderCostEstimatesService.completeCalculation`. |
+| `CALCULATION_DONE` | Расчёт завершён по АКТИВНОМУ варианту просчёта: зафиксирован его `OrderCostEstimate(status=COMPLETED)` и snapshot полей `Order.costEstimate*`. Статус следует за активной вкладкой — переключение на вариант без завершённой сметы возвращает заказ в `CALCULATION` (`OrderCalculationsService.activate`), выбор варианта фиксирует только запуск в производство. | `OrderCostEstimatesService.completeCalculation`. |
 | `IN_PRODUCTION` | Запущен в производство. План полностью иммутабелен (ADR-0006). | `OrdersService.start`. |
 | `DONE` | Завершён ручным переводом. | `OrdersService.complete`. |
 | `CANCELLED` | Отменён. | `OrdersService.cancel`. |

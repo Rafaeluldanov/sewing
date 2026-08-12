@@ -32,6 +32,7 @@ import type {
 import type { ListMaterialIssuesQuery } from './dto/list-material-issues.dto.js';
 import type { ReturnMaterialIssueDto } from './dto/return-material-issue.dto.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
 import { normalizeColor } from '@sewing/shared/colors';
 
 /**
@@ -1213,7 +1214,13 @@ export class MaterialIssuesService {
     // в документ расхода с нулевой суммой, и план-факт читал это как
     // экономию на всю плановую сумму.
     const activeEstimate = await tx.orderCostEstimate.findFirst({
-      where: { orderId: passport.orderId, status: 'COMPLETED' },
+      where: {
+        orderId: passport.orderId,
+        status: 'COMPLETED',
+        // Смета — по варианту просчёта: берём активный (см.
+        // `apps/api/src/modules/orders/cost-estimate-scope.ts`).
+        AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE],
+      },
       orderBy: { version: 'desc' },
       select: { usdRateRub: true },
     });

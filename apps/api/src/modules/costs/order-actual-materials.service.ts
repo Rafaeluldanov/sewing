@@ -9,6 +9,7 @@ import type {
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
 
 /** Материальные `sourceType` потребности цеха (для fallback-плана). */
 const MATERIAL_NEED_SOURCE_TYPES = new Set([
@@ -130,8 +131,14 @@ export class OrderActualMaterialsService {
     }
 
     // 3. Активные сметы (latest COMPLETED) — план + курс USD для факта.
+    // Смета — по варианту просчёта: только активный (см.
+    // `apps/api/src/modules/orders/cost-estimate-scope.ts`).
     const estimates = await this.prisma.orderCostEstimate.findMany({
-      where: { orderId: { in: orderIds }, status: 'COMPLETED' },
+      where: {
+        orderId: { in: orderIds },
+        status: 'COMPLETED',
+        AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE],
+      },
       orderBy: { version: 'desc' },
       select: {
         orderId: true,

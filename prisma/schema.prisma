@@ -2295,11 +2295,23 @@ model OrderVariantSize {
 ///   - `costTotalRub` — ярлык вкладки: `Order.costEstimateTotalRub`
 ///     на момент снятия снимка (у активной вкладки UI показывает
 ///     живое значение заказа);
-///   - переключение возможно только в DRAFT|CALCULATION и пока
-///     потребности не ушли в работу закупщику (все non-manual
-///     `WorkshopNeed` в статусе CALCULATED, нет складских движений).
-///     После запуска в производство активный вариант «выбран», прочие
-///     остаются read-only историей просчёта.
+///   - расчёт ЗАВЕРШАЮТ ПО КАЖДОМУ варианту: `OrderCostEstimate`
+///     принадлежит варианту (`OrderCostEstimate.orderCalculationId`),
+///     смета активного варианта и есть «смета заказа». Переключение
+///     вкладки переносит snapshot-поля себестоимости заказа на смету
+///     целевого варианта и двигает `Order.status`: есть смета →
+///     `CALCULATION_DONE`, нет → `CALCULATION` (статус следует за
+///     активным вариантом, поэтому весь остальной UI/бэк, завязанный
+///     на статус, работает без изменений);
+///   - ВЫБОР ВАРИАНТА ФИКСИРУЕТ ЗАПУСК В ПРОИЗВОДСТВО: переключение/
+///     создание/удаление доступны в DRAFT|CALCULATION|CALCULATION_DONE
+///     и на стадии сигнального образца (SAMPLE_PRODUCTION). С
+///     `IN_PRODUCTION` активный вариант «выбран», прочие остаются
+///     read-only историей просчёта. Дополнительный гейт на образце:
+///     restore пересоздаёт `OrderVariant`, поэтому паспорта образца
+///     переносятся на расцветки целевого варианта по ЦВЕТУ, а если
+///     цвета не совпадают — переключение отклоняется 409-кой
+///     (`ORDER_CALCULATION_PASSPORTS_COLOR_MISMATCH`).
 ///
 /// НЕ путать с `OrderVariant` (расцветка): расцветки — часть ОДНОГО
 /// варианта просчёта и производятся все; варианты просчёта —
@@ -2338,6 +2350,10 @@ model OrderCalculation {
   /// Потребности, рассчитанные при этом варианте (`onDelete: SetNull`
   /// со стороны `WorkshopNeed.orderCalculationId`).
   workshopNeeds WorkshopNeed[]
+  /// Сметы, завершённые ПО ЭТОМУ варианту (`onDelete: SetNull` со
+  /// стороны `OrderCostEstimate.orderCalculationId`). Обычно 0–1
+  /// `COMPLETED` + история `REVOKED`.
+  costEstimates OrderCostEstimate[]
 
   @@unique([orderId, ordinal])
   @@index([orderId])
@@ -6175,6 +6191,32 @@ model OrderCostEstimate {
   orderId String
   order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
+  /// Фича «Варианты просчёта заказа»: расчёт завершают ПО КАЖДОМУ
+  /// варианту (клиент сравнивает готовые сметы и выбирает), поэтому
+  /// смета принадлежит конкретной `OrderCalculation`, а не просто
+  /// заказу. Следствия:
+  ///
+  ///   - `COMPLETED`-смет у заказа может быть НЕСКОЛЬКО (по одной на
+  ///     рассчитанный вариант). «Смета заказа» = смета АКТИВНОГО
+  ///     варианта: читатели денег обязаны подмешивать
+  ///     `ACTIVE_CALCULATION_ESTIMATE_WHERE`
+  ///     (`apps/api/src/modules/orders/cost-estimate-scope.ts`) — ровно
+  ///     как `ACTIVE_CALCULATION_NEED_WHERE` у `WorkshopNeed`;
+  ///   - переключение вкладки переносит snapshot-поля заказа
+  ///     (`Order.costEstimateTotalRub`/`…CompletedAt`/`…Version`) на
+  ///     смету целевого варианта и двигает `Order.status` между
+  ///     `CALCULATION` и `CALCULATION_DONE` (см.
+  ///     `OrderCalculationsService.activate`);
+  ///   - `null` = legacy до бэкфилла миграции
+  ///     `20261017100000_order_cost_estimate_per_calculation`.
+  ///
+  /// `onDelete: SetNull` не оставляет смету «ничьей»: удаление варианта
+  /// (`OrderCalculationsService.remove`) в той же транзакции переводит
+  /// его сметы в `REVOKED` — иначе осиротевшая строка снова попала бы в
+  /// scope активного варианта (`orderCalculationId: null`).
+  orderCalculationId String?
+  orderCalculation   OrderCalculation? @relation(fields: [orderCalculationId], references: [id], onDelete: SetNull)
+
   /// Порядковый номер расчёта по этому заказу (`max(version) + 1` на
   /// каждом «Завершить расчёт»). Уникальность гарантирует, что два
   /// конкурирующих completeCalculation не создадут дубликат.
@@ -6220,6 +6262,7 @@ model OrderCostEstimate {
 
   @@unique([orderId, version])
   @@index([orderId])
+  @@index([orderCalculationId])
   @@index([status])
 }
 

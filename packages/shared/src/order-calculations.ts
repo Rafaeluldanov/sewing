@@ -264,6 +264,14 @@ export interface OrderCalculationTabDto {
    * клонирование расчёт не запускают. UI рисует чип «черновик».
    */
   sentToCalculationAt: string | null;
+  /**
+   * Когда по ЭТОМУ варианту завершён расчёт себестоимости (`COMPLETED`
+   * `OrderCostEstimate` варианта). `null` — расчёт по варианту не
+   * завершён. Расчёт завершают по каждому варианту, а выбор фиксирует
+   * запуск в производство, поэтому вкладка обязана показывать «этот
+   * посчитан, тот нет» без переключения. UI рисует чип «рассчитан».
+   */
+  costEstimateCompletedAt: string | null;
   updatedAt: string;
 }
 
@@ -272,9 +280,11 @@ export interface OrderCalculationsDto {
   orderId: string;
   activeId: string;
   /**
-   * Можно ли переключать/создавать/удалять варианты: статус заказа
-   * DRAFT|CALCULATION. Гейты потребностей (закупщик/склад) проверяются
-   * на activate и приходят адресной 409.
+   * Можно ли переключать/создавать/удалять варианты. Выбор варианта
+   * фиксирует ЗАПУСК В ПРОИЗВОДСТВО, поэтому здесь `true` для
+   * DRAFT|CALCULATION|CALCULATION_DONE|SAMPLE_PRODUCTION. Точечные
+   * гейты (паспорта образца на другие расцветки) проверяются на
+   * activate и приходят адресной 409.
    */
   canSwitch: boolean;
   items: OrderCalculationTabDto[];
@@ -303,8 +313,14 @@ export type RenameOrderCalculationDto = z.infer<
 // ---------------------------------------------------------------------------
 
 export const ORDER_CALCULATION_ERROR_CODES = {
-  /** Статус заказа вне DRAFT|CALCULATION — варианты зафиксированы. */
+  /** Заказ уже в производстве — вариант выбран, вкладки зафиксированы. */
   LOCKED: 'ORDER_CALCULATION_LOCKED',
+  /**
+   * Переключение на стадии сигнального образца, у которого паспорта
+   * сшиты по расцветкам, отсутствующим в целевом варианте: restore
+   * пересоздаёт `OrderVariant`, и такие паспорта потеряли бы расцветку.
+   */
+  PASSPORTS_COLOR_MISMATCH: 'ORDER_CALCULATION_PASSPORTS_COLOR_MISMATCH',
   /** Потребности уже в работе у закупщика (строки ≠ CALCULATED). */
   NEEDS_IN_PROGRESS: 'ORDER_CALCULATION_NEEDS_IN_PROGRESS',
   NOT_FOUND: 'ORDER_CALCULATION_NOT_FOUND',

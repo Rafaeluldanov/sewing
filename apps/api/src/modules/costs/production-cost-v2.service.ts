@@ -29,6 +29,7 @@ import { SHIFT_MINUTES } from '@sewing/shared/costs';
 import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
 import { isSalaryEligible } from '../employees/compensation.js';
 import {
   effectiveHourlyRateWithNorm,
@@ -266,7 +267,13 @@ export class ProductionCostV2Service {
 
     const costEstimates = orderIds.length
       ? await this.prisma.orderCostEstimate.findMany({
-          where: { orderId: { in: orderIds }, status: 'COMPLETED' },
+          // Смета — по варианту просчёта: только активный (см.
+          // `apps/api/src/modules/orders/cost-estimate-scope.ts`).
+          where: {
+            orderId: { in: orderIds },
+            status: 'COMPLETED',
+            AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE],
+          },
           orderBy: { version: 'desc' },
           include: {
             lines: {

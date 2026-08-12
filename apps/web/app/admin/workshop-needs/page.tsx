@@ -731,6 +731,12 @@ function OrderNeedGroupCard({
   // `OrdersService.completeCalculation` — отдаёт 409
   // `ORDER_CALCULATION_INVALID_STATUS` иначе). Ищем USD-строки
   // (без CANCELLED), чтобы решить, показывать ли поле «Курс USD/RUB».
+  //
+  // Фича «Варианты просчёта»: расчёт завершают ПО КАЖДОМУ варианту, и
+  // статус заказа следует за активной вкладкой (переключились на
+  // нерассчитанный вариант → снова `CALCULATION`). Поэтому кнопка сама
+  // появляется на том варианте, по которому расчёта ещё нет, и прячется
+  // на уже рассчитанном — отдельного условия по вкладке не нужно.
   const isCalculation = sample.orderStatus === 'CALCULATION';
   const hasUsdLines = needs.some(
     (n) =>

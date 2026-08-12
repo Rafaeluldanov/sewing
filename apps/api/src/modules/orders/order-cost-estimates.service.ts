@@ -24,6 +24,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from './cost-estimate-scope.js';
 
 /**
  * Сервис «Себестоимость заказа» (см.
@@ -35,6 +36,13 @@ import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
  *     `WorkshopNeed` создаёт `OrderCostEstimate(+lines)`,
  *     обновляет snapshot-поля заказа и переводит статус в
  *     `CALCULATION_DONE`;
+ *
+ * Фича «Варианты просчёта»: и строки потребности, и смета — ПО
+ * ВАРИАНТУ. `completeCalculation`/`recalculateCostEstimate` штампуют
+ * `OrderCostEstimate.orderCalculationId` активным вариантом, а все
+ * чтения «активной сметы заказа» скоупятся
+ * `ACTIVE_CALCULATION_ESTIMATE_WHERE` — иначе после переключения
+ * вкладки заказ покажет деньги чужого варианта.
  *   - `reopenCalculation`  — помечает активный расчёт как
  *     `REVOKED`, чистит snapshot-поля заказа, возвращает статус в
  *     `CALCULATION`. `WorkshopNeed`, `PurchaseOrder` и
@@ -434,6 +442,10 @@ export class OrderCostEstimatesService {
       developmentCost,
     } = plan;
 
+    // Фича «Варианты просчёта»: смета принадлежит активному варианту —
+    // расчёт завершают по каждому, выбор фиксирует запуск в производство.
+    const calculationId = await this.getActiveCalculationId(orderId);
+
     // Транзакция: создаём estimate + lines, обновляем snapshot-поля
     // заказа и переводим статус. Аудит — двумя строками
     // (`ORDER_COST_ESTIMATE_CREATED` и `ORDER_CALCULATION_COMPLETED`).
@@ -447,6 +459,7 @@ export class OrderCostEstimatesService {
       const estimate = await tx.orderCostEstimate.create({
         data: {
           orderId,
+          orderCalculationId: calculationId,
           version: nextVersion,
           status: 'COMPLETED',
           totalCostRub,
@@ -476,6 +489,17 @@ export class OrderCostEstimatesService {
           costEstimateStaleReason: null,
         },
       });
+
+      // Ярлык вкладки варианта: при переключении `costTotalRub` снимает
+      // capture, но пока вариант АКТИВЕН, capture ещё не случился —
+      // пишем сумму сразу, иначе вкладка рассчитанного варианта осталась
+      // бы без цены до первого переключения.
+      if (calculationId) {
+        await tx.orderCalculation.update({
+          where: { id: calculationId },
+          data: { costTotalRub: estimate.totalCostRub },
+        });
+      }
 
       await this.audit.log(
         {
@@ -561,8 +585,14 @@ export class OrderCostEstimatesService {
       );
     }
 
+    // Только смета АКТИВНОГО варианта: сметы прочих вариантов — их
+    // собственные документы, reopen их не касается.
     const active = await this.prisma.orderCostEstimate.findFirst({
-      where: { orderId, status: 'COMPLETED' },
+      where: {
+        orderId,
+        status: 'COMPLETED',
+        AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE],
+      },
       orderBy: { version: 'desc' },
     });
 
@@ -592,6 +622,12 @@ export class OrderCostEstimatesService {
           costEstimateCompletedAt: null,
           costEstimateVersion: null,
         },
+      });
+
+      // Ярлык вкладки активного варианта: сметы у него больше нет.
+      await tx.orderCalculation.updateMany({
+        where: { orderId, isActive: true },
+        data: { costTotalRub: null },
       });
 
       await this.audit.log(
@@ -675,11 +711,17 @@ export class OrderCostEstimatesService {
     }
 
     const plan = await this.assembleEstimatePlan(order, dto.usdRateRub);
+    const calculationId = await this.getActiveCalculationId(orderId);
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Отзываем текущий активный расчёт (если есть).
+      // Отзываем текущий активный расчёт (если есть) — только по
+      // активному варианту просчёта, сметы прочих вариантов не трогаем.
       const active = await tx.orderCostEstimate.findFirst({
-        where: { orderId, status: 'COMPLETED' },
+        where: {
+          orderId,
+          status: 'COMPLETED',
+          AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE],
+        },
         orderBy: { version: 'desc' },
       });
       if (active) {
@@ -702,6 +744,7 @@ export class OrderCostEstimatesService {
       const estimate = await tx.orderCostEstimate.create({
         data: {
           orderId,
+          orderCalculationId: calculationId,
           version: nextVersion,
           status: 'COMPLETED',
           totalCostRub: plan.totalCostRub,
@@ -731,6 +774,14 @@ export class OrderCostEstimatesService {
           costEstimateStaleReason: null,
         },
       });
+
+      // Ярлык вкладки активного варианта — см. `completeCalculation`.
+      if (calculationId) {
+        await tx.orderCalculation.update({
+          where: { id: calculationId },
+          data: { costTotalRub: estimate.totalCostRub },
+        });
+      }
 
       await this.audit.log(
         {
@@ -796,7 +847,11 @@ export class OrderCostEstimatesService {
     if (!order) return { recalculated: false, staleReason: null };
 
     const active = await this.prisma.orderCostEstimate.findFirst({
-      where: { orderId, status: 'COMPLETED' },
+      where: {
+        orderId,
+        status: 'COMPLETED',
+        AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE],
+      },
       orderBy: { version: 'desc' },
       include: { lines: { orderBy: { createdAt: 'asc' } } },
     });
@@ -888,13 +943,19 @@ export class OrderCostEstimatesService {
    * Прочитать активный (status = COMPLETED) расчёт заказа. Используется
    * `OrdersService.toDetailDto`, чтобы заполнить
    * `OrderDetailDto.currentCostEstimate`. Возвращает `null` для
-   * заказов без активного расчёта (DRAFT/CALCULATION или после reopen).
+   * заказов без активного расчёта (DRAFT/CALCULATION или после reopen),
+   * а также когда активен вариант просчёта, по которому расчёт ещё не
+   * завершён (сметы прочих вариантов сюда не подставляются).
    */
   async getActiveEstimateForOrder(
     orderId: string,
   ): Promise<OrderCostEstimateDto | null> {
     const row = await this.prisma.orderCostEstimate.findFirst({
-      where: { orderId, status: 'COMPLETED' },
+      where: {
+        orderId,
+        status: 'COMPLETED',
+        AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE],
+      },
       orderBy: { version: 'desc' },
       include: {
         lines: { orderBy: { createdAt: 'asc' } },
@@ -903,6 +964,22 @@ export class OrderCostEstimatesService {
       },
     });
     return row ? this.toEstimateDto(row) : null;
+  }
+
+  /**
+   * Активный вариант просчёта заказа — владелец создаваемой сметы.
+   * `null` для заказов без вариантов (фича выключена / legacy до
+   * бэкфилла): такая смета остаётся order-level и по-прежнему видна
+   * через `ACTIVE_CALCULATION_ESTIMATE_WHERE`.
+   */
+  private async getActiveCalculationId(
+    orderId: string,
+  ): Promise<string | null> {
+    const row = await this.prisma.orderCalculation.findFirst({
+      where: { orderId, isActive: true },
+      select: { id: true },
+    });
+    return row?.id ?? null;
   }
 
   // -------------------------------------------------------------------------

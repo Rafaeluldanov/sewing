@@ -12,6 +12,7 @@ import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
 
 /** Начисления, считающиеся «фактом» на текущий момент (не отменённые). */
 const FACT_ENTRY_STATUSES: EntryStatus[] = [
@@ -151,8 +152,14 @@ export class OrderProductionDocumentService {
         : 0;
 
     // Активная смета (latest COMPLETED) — план материалов + курс USD.
+    // Смета — по варианту просчёта: только активный (см.
+    // `apps/api/src/modules/orders/cost-estimate-scope.ts`).
     const estimate = await this.prisma.orderCostEstimate.findFirst({
-      where: { orderId, status: 'COMPLETED' },
+      where: {
+        orderId,
+        status: 'COMPLETED',
+        AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE],
+      },
       orderBy: { version: 'desc' },
       select: {
         usdRateRub: true,

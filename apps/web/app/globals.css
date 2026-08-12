@@ -15561,6 +15561,13 @@ body:has(.admin-layout) .app-header { display: none !important; }
   white-space: nowrap;
 }
 
+/* «рассчитан»: по варианту завершена смета (расчёт идёт по каждому
+   варианту, выбор фиксирует запуск в производство). */
+.order-calc-tabs__stage--done {
+  background: var(--status-done-bg);
+  color: var(--status-done-fg);
+}
+
 .order-calc-tabs__icon-btn {
   display: inline-flex;
   align-items: center;

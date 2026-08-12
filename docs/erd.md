@@ -784,6 +784,10 @@ master-action'ом, удаление, упаковка прямо из ячей�
   / `CANCELLED`).
 - **`OrderCostEstimate`** *(новый контур)* — итоговый расчёт
   себестоимости. `orderId → Order` (cascade),
+  `orderCalculationId? → OrderCalculation` (`SetNull`) — расчёт
+  завершают ПО КАЖДОМУ варианту просчёта, поэтому `COMPLETED`-смет у
+  заказа может быть несколько; «смета заказа» = смета активного
+  варианта (скоуп `ACTIVE_CALCULATION_ESTIMATE_WHERE`),
   `version: Int` (`(orderId, version)` uniq),
   `status @default("COMPLETED")` (`COMPLETED` / `REVOKED`),
   `totalCostRub: Decimal(14,2)`, `usdRateRub: Decimal(14,4)?`,
@@ -1197,6 +1201,13 @@ master-action'ом, удаление, упаковка прямо из ячей�
   иметь много расчётов (`(orderId, version)` uniq); активный —
   `status = COMPLETED`. Reopen-action помечает старый как `REVOKED`,
   следующий complete создаёт новую запись с `version = max + 1`.
+- Фича «Варианты просчёта»: документ принадлежит ВАРИАНТУ
+  (`orderCalculationId`). `COMPLETED`-смета есть у каждого
+  рассчитанного варианта, а читатели денег скоупятся активным
+  (`apps/api/src/modules/orders/cost-estimate-scope.ts`).
+  Переключение вкладки переносит `Order.costEstimate*` на смету цели и
+  двигает статус заказа `CALCULATION ↔ CALCULATION_DONE`; удаление
+  варианта переводит его смету в `REVOKED`.
 - Snapshot переписывается «как есть»: имя поставщика,
   имя номенклатуры, цена, валюта, курс USD на момент расчёта.
 

@@ -20,8 +20,14 @@
  *   4. Цены закупщика в CALCULATION переживают переключение
  *      (восстановление по match-ключу; статус остаётся CALCULATED).
  *   5. Гейты: REVIEWED-строка → 409; ручная isManual REVIEWED не
- *      блокирует; статус вне DRAFT/CALCULATION → 409; удаление
- *      активного → 409; activate активного → no-op 200.
+ *      блокирует; заказ В ПРОИЗВОДСТВЕ → 409 (до этого момента вкладки
+ *      живые, включая CALCULATION_DONE); удаление активного → 409;
+ *      activate активного → no-op 200.
+ *   6. Расчёт per вариант: «Завершить расчёт» жмут на каждой вкладке,
+ *      смета принадлежит варианту (`OrderCostEstimate.orderCalculationId`),
+ *      переключение переносит себестоимость заказа и двигает статус
+ *      CALCULATION ↔ CALCULATION_DONE, удаление варианта отзывает его
+ *      смету.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -617,6 +623,129 @@ describeWithDb('integration — варианты просчёта заказа (
     expect(poBlocked.body.code).toBe('PURCHASE_ORDER_NEED_INACTIVE_CALCULATION');
   });
 
+  test('расчёт завершают по каждому варианту: смета и статус едут за вкладкой', async () => {
+    await seedFabricSpec('Смета per вариант');
+    const orderId = await createOrder();
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
+
+    const calcA = (
+      await t.prisma.orderCalculation.findFirstOrThrow({
+        where: { orderId, isActive: true },
+        select: { id: true },
+      })
+    ).id;
+    const rowsA = await t.prisma.workshopNeed.count({
+      where: { orderId, orderCalculationId: calcA },
+    });
+    await t.prisma.workshopNeed.updateMany({
+      where: { orderId, orderCalculationId: calcA },
+      data: { purchaseQty: '10', quotedPrice: '100', quotedCurrency: 'RUB' },
+    });
+    const estA = await api()
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    expect(Number(estA.body.totalCostRub)).toBe(rowsA * 10 * 100);
+    // Смета принадлежит варианту A, заказ — «Расчёт завершён».
+    expect(
+      await t.prisma.orderCostEstimate.count({
+        where: { orderId, orderCalculationId: calcA, status: 'COMPLETED' },
+      }),
+    ).toBe(1);
+    expect(
+      (
+        await t.prisma.order.findUniqueOrThrow({
+          where: { id: orderId },
+          select: { status: true },
+        })
+      ).status,
+    ).toBe('CALCULATION_DONE');
+
+    // Клон B рождается БЕЗ сметы: заказ снимает себестоимость A и
+    // возвращается в «Расчёт» — иначе новая вкладка показывала бы
+    // чужие деньги.
+    const cloneRes = await api()
+      .post(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    const calcB = cloneRes.body.items[1].id as string;
+    const afterClone = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { status: true, costEstimateTotalRub: true },
+    });
+    expect(afterClone.status).toBe('CALCULATION');
+    expect(afterClone.costEstimateTotalRub).toBeNull();
+
+    // Второй расчёт — по варианту B, дороже.
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
+    const rowsB = await t.prisma.workshopNeed.count({
+      where: { orderId, orderCalculationId: calcB },
+    });
+    await t.prisma.workshopNeed.updateMany({
+      where: { orderId, orderCalculationId: calcB },
+      data: { purchaseQty: '10', quotedPrice: '200', quotedCurrency: 'RUB' },
+    });
+    const estB = await api()
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    expect(Number(estB.body.totalCostRub)).toBe(rowsB * 10 * 200);
+
+    // Обе вкладки рассчитаны, переключение доступно (вариант фиксирует
+    // только запуск в производство).
+    const tabs = await api()
+      .get(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .expect(200);
+    expect(tabs.body.canSwitch).toBe(true);
+    for (const item of tabs.body.items) {
+      expect(item.costEstimateCompletedAt).not.toBeNull();
+    }
+
+    // Переключение на A: заказ показывает деньги A, статус остаётся
+    // «Расчёт завершён», смета B не тронута.
+    await activate(orderId, calcA);
+    const afterSwitch = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { status: true, costEstimateTotalRub: true },
+    });
+    expect(afterSwitch.status).toBe('CALCULATION_DONE');
+    expect(Number(afterSwitch.costEstimateTotalRub)).toBe(rowsA * 10 * 100);
+    const detail = await api()
+      .get(`/api/orders/${orderId}`)
+      .set('Cookie', manager)
+      .expect(200);
+    expect(Number(detail.body.currentCostEstimate.totalCostRub)).toBe(
+      rowsA * 10 * 100,
+    );
+    expect(
+      await t.prisma.orderCostEstimate.count({
+        where: { orderId, orderCalculationId: calcB, status: 'COMPLETED' },
+      }),
+    ).toBe(1);
+
+    // Удаление варианта отзывает его смету: осиротевшая (SetNull) строка
+    // иначе попала бы в скоуп активного варианта.
+    await api()
+      .delete(`/api/orders/${orderId}/calculations/${calcB}`)
+      .set('Cookie', manager)
+      .expect(200);
+    expect(
+      await t.prisma.orderCostEstimate.count({
+        where: { orderId, status: 'COMPLETED' },
+      }),
+    ).toBe(1);
+  });
+
   test('удаление варианта уносит его потребности — строки не утекают в активный', async () => {
     await seedFabricSpec('Удаление варианта');
     const orderId = await createOrder();
@@ -764,10 +893,34 @@ describeWithDb('integration — варианты просчёта заказа (
       }),
     ).toBe(bRows - 1); // все, кроме вручную помеченной REVIEWED
 
-    // Статусный гейт: вне DRAFT/CALCULATION всё write-API отвечает 409.
+    // Статусный гейт: расчёт завершают ПО КАЖДОМУ варианту, поэтому
+    // `CALCULATION_DONE` вкладки НЕ фиксирует — переключение работает
+    // (выбор фиксирует запуск в производство).
     await t.prisma.order.update({
       where: { id: orderId },
       data: { status: 'CALCULATION_DONE' },
+    });
+    const doneList = await api()
+      .get(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .expect(200);
+    expect(doneList.body.canSwitch).toBe(true);
+    await activate(orderId, calcB);
+    // У варианта B сметы нет → статус заказа вернулся в «Расчёт».
+    expect(
+      (
+        await t.prisma.order.findUniqueOrThrow({
+          where: { id: orderId },
+          select: { status: true },
+        })
+      ).status,
+    ).toBe('CALCULATION');
+    await activate(orderId, calcA);
+
+    // Зафиксирован вариант только запуском в производство.
+    await t.prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'IN_PRODUCTION' },
     });
     const lockedActivate = await activate(orderId, calcB, 409);
     expect(lockedActivate.body.code).toBe('ORDER_CALCULATION_LOCKED');

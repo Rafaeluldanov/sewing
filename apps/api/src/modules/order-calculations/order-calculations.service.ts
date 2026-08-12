@@ -19,6 +19,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrdersService } from '../orders/orders.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { normalizeColor } from '@sewing/shared/colors';
 
 /** Провалидированные ссылки снимка на справочники (см.
  *  `validateSnapshotRefs`): несуществующие FK при restore зануляются. */
@@ -40,12 +41,24 @@ interface SnapshotRefs {
  * себестоимость) работают по `orderId` как раньше и про варианты не
  * знают.
  *
+ * Итерация 4 «расчёт per вариант»: расчёт себестоимости ЗАВЕРШАЮТ ПО
+ * КАЖДОМУ варианту (`OrderCostEstimate.orderCalculationId`), а выбор
+ * фиксирует ЗАПУСК В ПРОИЗВОДСТВО — до `IN_PRODUCTION` вкладки живые
+ * (включая `CALCULATION_DONE` и стадию сигнального образца). Смета
+ * активного варианта и есть «смета заказа», поэтому переключение
+ * переносит snapshot-поля себестоимости и двигает `Order.status` между
+ * `CALCULATION` и `CALCULATION_DONE` (`estimateFieldsForCalculation`) —
+ * статус следует за вкладкой, и завязанный на него UI/бэк («Завершить
+ * расчёт» у закупщика, окно правки, запуск в производство) работает без
+ * изменений.
+ *
  * Переключение (`activate`) — многошаговая операция:
  *   0) fail-fast гейты ДО любых мутаций (статус, валидность снимка и
- *      его FK-ссылок);
+ *      его FK-ссылок, расцветки под паспортами образца);
  *   A+B) одна транзакция: capture живого состояния в старый активный →
- *      restore снимка целевого (Order-поля, расцветки, параметры
- *      техкарт, снимок материалов);
+ *      restore снимка целевого (Order-поля, себестоимость+статус
+ *      целевого варианта, расцветки, паспорта образца по цвету,
+ *      параметры техкарт, снимок материалов);
  *   C) пересборка производных СУЩЕСТВУЮЩИМ путём —
  *      `OrdersService.resyncColorwayDerived` (агрегат OrderItem, снимок
  *      материалов ФАЗА-2 recompute, операционный план, снимок шагов
@@ -109,6 +122,23 @@ export class OrderCalculationsService {
     });
     const active = rows.find((r) => r.isActive) ?? rows[0];
 
+    // «Расчёт завершён» — стадия ВАРИАНТА, а не заказа: у каждого своя
+    // смета. Legacy-сметы без `orderCalculationId` (до бэкфилла)
+    // считаем принадлежащими активной вкладке — ровно как их видит
+    // `ACTIVE_CALCULATION_ESTIMATE_WHERE`.
+    const estimates = await this.prisma.orderCostEstimate.findMany({
+      where: { orderId, status: 'COMPLETED' },
+      orderBy: { version: 'desc' },
+      select: { orderCalculationId: true, completedAt: true },
+    });
+    const completedAtByCalc = new Map<string, Date>();
+    for (const e of estimates) {
+      const calcId = e.orderCalculationId ?? active.id;
+      if (!completedAtByCalc.has(calcId)) {
+        completedAtByCalc.set(calcId, e.completedAt);
+      }
+    }
+
     return {
       orderId,
       activeId: active.id,
@@ -118,6 +148,8 @@ export class OrderCalculationsService {
         ordinal: r.ordinal,
         title: r.title,
         isActive: r.isActive,
+        costEstimateCompletedAt:
+          completedAtByCalc.get(r.id)?.toISOString() ?? null,
         // Активная вкладка показывает ЖИВУЮ себестоимость заказа,
         // неактивные — снимок на момент переключения.
         costTotalRub: r.isActive
@@ -184,6 +216,19 @@ export class OrderCalculationsService {
         data: { orderId, ordinal: nextOrdinal, title, isActive: true },
         select: { id: true },
       });
+      // Клон рождается БЕЗ сметы: расчёт завершают по каждому варианту.
+      // Снимаем с заказа себестоимость прежней вкладки и возвращаем
+      // статус в «Расчёт» — иначе новый вариант показывал бы чужие
+      // деньги и считался бы рассчитанным.
+      await tx.order.update({
+        where: { id: orderId },
+        data: await this.estimateFieldsForCalculation(
+          tx,
+          orderId,
+          created.id,
+          order.status,
+        ),
+      });
       await this.audit.log(
         {
           event: 'ORDER_CALCULATION_CREATED',
@@ -237,6 +282,29 @@ export class OrderCalculationsService {
     const snap = parsed.data;
     const refs = await this.validateSnapshotRefs(snap);
 
+    // Гейт стадии сигнального образца (переключение доступно вплоть до
+    // запуска в производство): restore пересоздаёт `OrderVariant`, а
+    // `Passport.orderVariantId` уходит в SetNull. Паспорта переносим на
+    // расцветки целевого варианта ПО ЦВЕТУ; если цвета там нет —
+    // честная 409 до любых мутаций, а не паспорт без расцветки.
+    const passportLinks = await this.passportVariantLinks(orderId);
+    const targetColors = new Set(
+      snap.variants.map((v) => normalizeColor(v.color)),
+    );
+    const lostColors = [
+      ...new Set(
+        passportLinks
+          .filter((p) => !targetColors.has(normalizeColor(p.color)))
+          .map((p) => p.color),
+      ),
+    ];
+    if (lostColors.length > 0) {
+      throw this.conflict(
+        ORDER_CALCULATION_ERROR_CODES.PASSPORTS_COLOR_MISMATCH,
+        `По заказу уже есть паспорта расцветк${lostColors.length === 1 ? 'и' : 'ок'} «${lostColors.join('», «')}», а в варианте «${target.title}» так${lostColors.length === 1 ? 'ой расцветки' : 'их расцветок'} нет — переключение оставило бы паспорта без расцветки. Добавьте расцветку в вариант или отмените образец.`,
+      );
+    }
+
     // --- Фазы A+B: capture + restore в одной транзакции -------------------
     await this.prisma.$transaction(async (tx) => {
       const currentSnapshot = await this.captureSnapshot(tx, orderId);
@@ -269,6 +337,15 @@ export class OrderCalculationsService {
           patternDevelopmentCostRub: snap.order.patternDevelopmentCostRub,
           patternDevelopmentCostInCostPrice:
             snap.order.patternDevelopmentCostInCostPrice,
+          // Себестоимость и статус расчёта — тоже свойство ВАРИАНТА
+          // (расчёт завершают по каждому). Переносим snapshot-поля на
+          // смету целевого варианта в той же транзакции.
+          ...(await this.estimateFieldsForCalculation(
+            tx,
+            orderId,
+            target.id,
+            order.status,
+          )),
         },
       });
 
@@ -292,6 +369,36 @@ export class OrderCalculationsService {
           select: { id: true },
         });
         variantIdByOrdinal.set(v.ordinal, created.id);
+      }
+
+      // Паспорта (сигнальный образец) — восстанавливаем расцветку по
+      // цвету: `deleteMany` выше увёл `Passport.orderVariantId` в
+      // SetNull. Гейт фазы 0 гарантирует, что цвет в целевом варианте
+      // есть, поэтому паспорт без расцветки здесь не остаётся.
+      if (passportLinks.length > 0) {
+        const variantIdByColor = new Map<string, string>();
+        for (const v of snap.variants) {
+          const key = normalizeColor(v.color);
+          const created = variantIdByOrdinal.get(v.ordinal);
+          if (created && !variantIdByColor.has(key)) {
+            variantIdByColor.set(key, created);
+          }
+        }
+        const passportIdsByColor = new Map<string, string[]>();
+        for (const link of passportLinks) {
+          const key = normalizeColor(link.color);
+          const list = passportIdsByColor.get(key) ?? [];
+          list.push(link.passportId);
+          passportIdsByColor.set(key, list);
+        }
+        for (const [key, ids] of passportIdsByColor) {
+          const variantId = variantIdByColor.get(key);
+          if (!variantId) continue;
+          await tx.passport.updateMany({
+            where: { id: { in: ids } },
+            data: { orderVariantId: variantId },
+          });
+        }
       }
 
       // Параметры техкарт варианта (значения + ad-hoc определения).
@@ -519,6 +626,20 @@ export class OrderCalculationsService {
     const removedNeeds = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.workshopNeed.deleteMany({
         where: { orderId, orderCalculationId: calcId },
+      });
+      // Смета удаляемого варианта — тот же случай, что и потребности:
+      // `OrderCostEstimate.orderCalculationId` уходит в SetNull, а
+      // пустое поле канонический скоуп читает как «смета вне контура
+      // вариантов» и подставил бы её деньги активному варианту.
+      // Документ не сносим (история расчётов), а честно отзываем.
+      await tx.orderCostEstimate.updateMany({
+        where: { orderId, orderCalculationId: calcId, status: 'COMPLETED' },
+        data: {
+          status: 'REVOKED',
+          revokedAt: new Date(),
+          revokedById: actorEmployeeId ?? null,
+          comment: `Вариант просчёта «${target.title}» удалён`,
+        },
       });
       await tx.orderCalculation.delete({ where: { id: calcId } });
       return count;
@@ -980,6 +1101,74 @@ export class OrderCalculationsService {
     }
   }
 
+  /**
+   * Паспорта заказа, привязанные к расцветке, вместе с её цветом.
+   * Нужны переключению варианта: restore пересоздаёт `OrderVariant`, и
+   * привязку паспорта надо снять «до» и вернуть «после» (по цвету).
+   *
+   * На DRAFT/CALCULATION/CALCULATION_DONE список пуст — паспорта
+   * появляются на раскрое и на сигнальном образце.
+   */
+  private async passportVariantLinks(
+    orderId: string,
+  ): Promise<Array<{ passportId: string; color: string }>> {
+    const rows = await this.prisma.passport.findMany({
+      where: { orderId, orderVariantId: { not: null } },
+      select: { id: true, orderVariant: { select: { color: true } } },
+    });
+    return rows
+      .filter((r) => r.orderVariant != null)
+      .map((r) => ({ passportId: r.id, color: r.orderVariant!.color }));
+  }
+
+  /**
+   * Snapshot-поля себестоимости заказа для ЦЕЛЕВОГО варианта плюс
+   * статус расчёта.
+   *
+   * Расчёт завершают по каждому варианту (`OrderCostEstimate`
+   * принадлежит варианту), поэтому при переключении вкладки «смета
+   * заказа» обязана переехать на смету цели, а `Order.status` —
+   * следовать за ней: есть завершённая смета → `CALCULATION_DONE`, нет
+   * → `CALCULATION`. Так весь остальной бэк и UI, завязанные на статус
+   * («Завершить расчёт» у закупщика, окно правки, запуск в
+   * производство), продолжают работать без единой правки.
+   *
+   * Статус двигаем ТОЛЬКО между `CALCULATION` и `CALCULATION_DONE`:
+   * `DRAFT` (расчёт ещё не запускали) и `SAMPLE_PRODUCTION` (идёт
+   * образец) — самостоятельные стадии документа, их переключение
+   * вкладки не отменяет.
+   */
+  private async estimateFieldsForCalculation(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    calculationId: string,
+    currentStatus: OrderStatus,
+  ): Promise<Prisma.OrderUncheckedUpdateInput> {
+    const estimate = await tx.orderCostEstimate.findFirst({
+      where: { orderId, orderCalculationId: calculationId, status: 'COMPLETED' },
+      orderBy: { version: 'desc' },
+      select: { totalCostRub: true, completedAt: true, version: true },
+    });
+
+    const fields: Prisma.OrderUncheckedUpdateInput = {
+      costEstimateTotalRub: estimate?.totalCostRub ?? null,
+      costEstimateCompletedAt: estimate?.completedAt ?? null,
+      costEstimateVersion: estimate?.version ?? null,
+      // Отметка «себестоимость устарела» относилась к прежней смете.
+      costEstimateStaleAt: null,
+      costEstimateStaleReason: null,
+    };
+    if (
+      currentStatus === OrderStatus.CALCULATION ||
+      currentStatus === OrderStatus.CALCULATION_DONE
+    ) {
+      fields.status = estimate
+        ? OrderStatus.CALCULATION_DONE
+        : OrderStatus.CALCULATION;
+    }
+    return fields;
+  }
+
   // -------------------------------------------------------------------------
   // small helpers
   // -------------------------------------------------------------------------
@@ -1021,9 +1210,19 @@ export class OrderCalculationsService {
     return order;
   }
 
+  /**
+   * Вариант считается ВЫБРАННЫМ в момент запуска в производство — до
+   * этого вкладки живые. Завершённый расчёт вариант не фиксирует:
+   * расчёт завершают по каждому варианту, чтобы сравнить готовые сметы
+   * (`OrderCostEstimate.orderCalculationId`), а `CALCULATION_DONE`
+   * следует за активной вкладкой (см. `syncOrderToCalculationEstimate`).
+   */
   private isEditableStatus(status: OrderStatus): boolean {
     return (
-      status === OrderStatus.DRAFT || status === OrderStatus.CALCULATION
+      status === OrderStatus.DRAFT ||
+      status === OrderStatus.CALCULATION ||
+      status === OrderStatus.CALCULATION_DONE ||
+      status === OrderStatus.SAMPLE_PRODUCTION
     );
   }
 
@@ -1031,7 +1230,7 @@ export class OrderCalculationsService {
     if (this.isEditableStatus(status)) return;
     throw this.conflict(
       ORDER_CALCULATION_ERROR_CODES.LOCKED,
-      'Варианты просчёта можно менять только пока заказ в статусе «Черновик» или «Расчёт». После завершения расчёта/запуска активный вариант зафиксирован, остальные — история просчёта.',
+      'Заказ уже запущен в производство — вариант просчёта выбран. Остальные варианты остаются историей просчёта, их нельзя переключать, создавать и удалять.',
     );
   }
 
