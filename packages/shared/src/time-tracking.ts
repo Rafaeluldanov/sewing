@@ -26,10 +26,11 @@
  *     «Статистике по сотрудникам» (`master-employee-stats`, finisher
  *     attribution) — сервис переиспользует ту же проверенную логику.
  *
- * Окно периода — по `YYYY-MM-DD` (UTC-день, как в
- * `master-employee-stats`; на реальных дневных сменах цеха UTC-день и
- * московский день совпадают, границы не пересекаются). Время самих
- * событий — абсолютные метки (ISO), UI форматирует их в `Europe/Moscow`.
+ * Окно периода — по `YYYY-MM-DD` в МОСКОВСКИХ сутках (как в
+ * `master-employee-stats`: цех живёт по Москве, и работа 00:00–03:00
+ * МСК должна оставаться в своём дне, а не уезжать в предыдущий).
+ * Время самих событий — абсолютные метки (ISO), UI форматирует их в
+ * `Europe/Moscow`.
  */
 
 import { z } from 'zod';
@@ -108,7 +109,7 @@ export interface TimeTrackingSessionDto {
 // ---------------------------------------------------------------------------
 
 export interface TimeTrackingDayDto {
-  /** `YYYY-MM-DD` (UTC-день). */
+  /** `YYYY-MM-DD` (московские сутки). */
   day: string;
   minutes: number;
   sessionsCount: number;

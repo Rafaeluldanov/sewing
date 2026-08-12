@@ -9,6 +9,7 @@ import type {
   TimeTrackingSummaryDto,
   TimeTrackingSummaryRowDto,
 } from '@sewing/shared';
+import { moscowDayKey, moscowDayWindow } from '../../common/moscow-date.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { MasterEmployeeStatsService } from '../master-employee-stats/master-employee-stats.service.js';
 
@@ -21,9 +22,9 @@ import { MasterEmployeeStatsService } from '../master-employee-stats/master-empl
  * мутирует. Контракт и семантика — `packages/shared/src/time-tracking.ts`.
  *
  * Брак не считаем заново — переиспользуем finisher-attribution из
- * `MasterEmployeeStatsService.getDrill` (та же UTC-day семантика окна),
- * чтобы «Тайм-трекер» и «Статистика по сотрудникам» показывали
- * одинаковые цифры брака.
+ * `MasterEmployeeStatsService.getDrill` (окно там и здесь — одни и те
+ * же МОСКОВСКИЕ сутки), чтобы «Тайм-трекер» и «Статистика по
+ * сотрудникам» показывали одинаковые цифры брака.
  */
 @Injectable()
 export class TimeTrackingService {
@@ -32,17 +33,27 @@ export class TimeTrackingService {
     private readonly masterStats: MasterEmployeeStatsService,
   ) {}
 
-  /** [from, to] окно по UTC-дням, `to` — конец дня (включительно). */
+  /**
+   * Окно `[from; to)` по МОСКОВСКИМ суткам (`to` — начало следующих за
+   * `to` суток).
+   *
+   * Строго тот же расчёт, что у `MasterEmployeeStatsService.window`, и
+   * это ОБЯЗАТЕЛЬНО: брак сюда приезжает из `masterStats.getStats` /
+   * `getDrill`, и разные окна означали бы разные цифры в двух вкладках,
+   * которые обещают показывать одно и то же (см. шапку файла). Заодно
+   * уходит трёхчасовой сдвиг: сеанс, начатый в 01:00 МСК, больше не
+   * падает в предыдущий день.
+   */
   private window(from: string, to: string): { from: Date; to: Date } {
     return {
-      from: new Date(`${from}T00:00:00.000Z`),
-      to: new Date(`${to}T23:59:59.999Z`),
+      from: moscowDayWindow(from).from,
+      to: moscowDayWindow(to).to,
     };
   }
 
-  /** UTC-`YYYY-MM-DD` из Date (день сеанса/брака). */
+  /** `YYYY-MM-DD` по Москве из Date (день сеанса/брака). */
   private dayKey(d: Date): string {
-    return d.toISOString().slice(0, 10);
+    return moscowDayKey(d);
   }
 
   /**
@@ -72,7 +83,7 @@ export class TimeTrackingService {
     // проверенной агрегации master-stats.
     const [sessions, openNow, finished, stats] = await Promise.all([
       this.prisma.shiftSession.findMany({
-        where: { employeeId: { in: empIds }, startedAt: { gte: win.from, lte: win.to } },
+        where: { employeeId: { in: empIds }, startedAt: { gte: win.from, lt: win.to } },
         select: { employeeId: true, startedAt: true, endedAt: true },
       }),
       this.prisma.shiftSession.findMany({
@@ -88,7 +99,7 @@ export class TimeTrackingService {
         where: {
           employeeId: { in: empIds },
           type: PassportEventType.OPERATION_FINISHED,
-          createdAt: { gte: win.from, lte: win.to },
+          createdAt: { gte: win.from, lt: win.to },
         },
         select: { employeeId: true, qty: true, createdAt: true },
       }),
@@ -197,7 +208,7 @@ export class TimeTrackingService {
     // Сеансы сотрудника, начавшиеся в окне. Открытые (`endedAt = null`)
     // считаем до текущего момента — часы «идут».
     const sessions = await this.prisma.shiftSession.findMany({
-      where: { employeeId, startedAt: { gte: win.from, lte: win.to } },
+      where: { employeeId, startedAt: { gte: win.from, lt: win.to } },
       include: {
         equipment: { select: { id: true, code: true, name: true } },
         operation: { select: { id: true, code: true, name: true } },
@@ -216,7 +227,7 @@ export class TimeTrackingService {
             PassportEventType.ISSUED_TO_EMPLOYEE,
           ],
         },
-        createdAt: { gte: win.from, lte: win.to },
+        createdAt: { gte: win.from, lt: win.to },
       },
       select: {
         type: true,

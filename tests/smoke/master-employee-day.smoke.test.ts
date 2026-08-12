@@ -87,6 +87,19 @@ describe('табель дня — API', () => {
     expect(src).not.toMatch(/lte: window\.to/);
   });
 
+  test('тайм-трекер считает те же сутки, что и статистика', () => {
+    // `TimeTrackingService` берёт брак из `masterStats.getStats/getDrill`,
+    // а сеансы считает сам. Разные окна = разные цифры в двух вкладках,
+    // которые обещают показывать одно и то же.
+    const src = readSrc(
+      'apps/api/src/modules/time-tracking/time-tracking.service.ts',
+    );
+    expect(src).toMatch(/moscowDayWindow/);
+    expect(src).toMatch(/moscowDayKey/);
+    expect(src).not.toMatch(/T00:00:00\.000Z/);
+    expect(src).not.toMatch(/lte: win\.to/);
+  });
+
   test('поразмерная норма времени в табель не идёт', () => {
     const src = readSrc(
       'apps/api/src/modules/master-employee-stats/master-employee-stats.service.ts',
