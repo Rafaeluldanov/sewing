@@ -195,7 +195,13 @@ export class AssistantService {
       });
     } catch (e) {
       const message = describeUpstreamError(e);
-      this.logger.warn(`event=assistant.upstream-error ${message}`);
+      // В лог — ПОЛНЫЙ текст ошибки, а не причёсанный для пользователя:
+      // однажды «Модель ответила ошибкой 400.» в логе стоила получаса
+      // расследования вместо одной строки с причиной.
+      this.logger.warn(
+        `event=assistant.upstream-error model=${model} ` +
+          `raw=${e instanceof Error ? e.message : String(e)}`,
+      );
       await this.persistAnswer({
         thread,
         user,
@@ -659,9 +665,26 @@ function describeUpstreamError(e: unknown): string {
     if (e.status === 401) return 'Ключ Anthropic отклонён (401). Проверьте ключ в настройках.';
     if (e.status === 429) return 'Слишком много запросов к модели. Попробуйте через минуту.';
     if (e.status && e.status >= 500) return 'Сервис модели временно недоступен. Попробуйте позже.';
-    return `Модель ответила ошибкой ${e.status ?? ''}.`.trim();
+    // 400 — это НАША ошибка в запросе (кривая схема инструмента,
+    // недопустимое имя, неверный параметр), а не проблема пользователя.
+    // Причину показываем как есть: сообщение Anthropic предельно
+    // конкретное («tools.0.custom.name: String should match pattern …»),
+    // и без него отладка превращается в гадание. Админ — единственный,
+    // кто видит это окно, посторонним текст не утечёт.
+    if (e.status === 400) {
+      return `Запрос к модели отклонён (400): ${upstreamDetail(e)}`;
+    }
+    return `Модель ответила ошибкой ${e.status ?? ''}: ${upstreamDetail(e)}`.trim();
   }
   return 'Не удалось получить ответ от модели.';
+}
+
+/** Текст причины из тела ошибки Anthropic (или сообщение SDK). */
+function upstreamDetail(e: InstanceType<typeof Anthropic.APIError>): string {
+  const body = e.error as { error?: { message?: unknown } } | undefined;
+  const message = body?.error?.message;
+  if (typeof message === 'string' && message.trim() !== '') return message;
+  return e.message || 'без деталей';
 }
 
 // ---------------------------------------------------------------------------

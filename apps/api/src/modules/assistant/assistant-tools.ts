@@ -13,7 +13,7 @@
  *
  * Границы, которые здесь соблюдаются жёстко:
  *   - НИКАКИХ мутаций. Ни одного `create`/`update`/`delete`;
- *   - никакого самостоятельного пересчёта денег. Инструмент `order.estimate`
+ *   - никакого самостоятельного пересчёта денег. Инструмент `order_estimate`
  *     отдаёт УЖЕ ПОСЧИТАННУЮ системой смету — иначе числа разойдутся со
  *     сметой, «Операциями», «Сводно» и плановой себестоимостью;
  *   - каждый инструмент привязан к группе данных (`AssistantDataScope`).
@@ -48,6 +48,12 @@ export interface AssistantToolResult {
 }
 
 export interface AssistantTool {
+  /**
+   * Машинное имя для API. ТОЛЬКО `[a-zA-Z0-9_-]`, до 128 символов —
+   * это требование Anthropic (`tools.N.custom.name`). Точка в имени
+   * (`orders.search`) валит ВЕСЬ запрос в 400, причём не при старте, а
+   * на первом же вопросе пользователя. Разделитель — подчёркивание.
+   */
   name: string;
   /** Человеческая подпись для строки «Смотрю заказы». */
   label: string;
@@ -109,7 +115,7 @@ function bool(input: Record<string, unknown>, key: string): boolean {
 // ---------------------------------------------------------------------------
 
 const ordersSearch: AssistantTool = {
-  name: 'orders.search',
+  name: 'orders_search',
   label: 'Смотрю заказы',
   scope: 'PRODUCTION',
   description:
@@ -212,7 +218,7 @@ const ordersSearch: AssistantTool = {
 };
 
 const orderGet: AssistantTool = {
-  name: 'order.get',
+  name: 'order_get',
   label: 'Открываю заказ',
   scope: 'PRODUCTION',
   description:
@@ -299,7 +305,7 @@ const orderGet: AssistantTool = {
 };
 
 const passportLocate: AssistantTool = {
-  name: 'passport.locate',
+  name: 'passport_locate',
   label: 'Ищу паспорт',
   scope: 'PRODUCTION',
   description:
@@ -382,7 +388,7 @@ const passportLocate: AssistantTool = {
 };
 
 const productionQueue: AssistantTool = {
-  name: 'production.queue',
+  name: 'production_queue',
   label: 'Считаю очередь по операциям',
   scope: 'PRODUCTION',
   description:
@@ -433,7 +439,7 @@ const productionQueue: AssistantTool = {
 // ---------------------------------------------------------------------------
 
 const workshopNeeds: AssistantTool = {
-  name: 'workshop.needs',
+  name: 'workshop_needs',
   label: 'Смотрю потребность цеха',
   scope: 'SUPPLY',
   description:
@@ -512,7 +518,7 @@ const workshopNeeds: AssistantTool = {
 // ---------------------------------------------------------------------------
 
 const orderEstimate: AssistantTool = {
-  name: 'order.estimate',
+  name: 'order_estimate',
   label: 'Читаю смету заказа',
   scope: 'MONEY',
   description:
@@ -576,7 +582,7 @@ const orderEstimate: AssistantTool = {
 // ---------------------------------------------------------------------------
 
 const docsLookup: AssistantTool = {
-  name: 'docs.lookup',
+  name: 'docs_lookup',
   label: 'Читаю справку',
   scope: null,
   description:
