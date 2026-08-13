@@ -1,0 +1,1030 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ассистент в админке — макет</title>
+<style>
+/* ---------------------------------------------------------------------------
+   Токены — копия из apps/web/app/globals.css (:root). Макет сознательно НЕ
+   тянет globals.css целиком: он должен открываться двойным кликом без сборки.
+   Любая правка палитры/радиусов — сначала в globals.css, потом сюда.
+   --------------------------------------------------------------------------- */
+:root{
+  color-scheme:light; /* админка светлая по ДС — тёмную тему макет не изображает */
+  --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+  --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+  --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f;
+  --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+  --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+  --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0;
+  --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+  --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f;
+  --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+  --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+  --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+  --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+  --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px;
+  --radius-pill:999px;
+  --shadow-xs:0 1px 2px rgba(20,20,20,.04);
+  --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+  --shadow-md:0 6px 18px rgba(20,20,20,.08);
+  --shadow-lg:0 10px 32px rgba(20,20,20,.16),0 2px 8px rgba(20,20,20,.08);
+  --tap-min:48px;
+  --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem;
+  --title-item:1.05rem; --title-section:1rem; --title-subsection:.9rem;
+  --title-label:.78rem;
+
+  --admin-bg:#f7f7f6; --admin-surface:#fff; --admin-soft:#f1f1ef;
+  --admin-border:#e4e4e1; --admin-text:#1b1b1b; --admin-muted:#5f5f5c;
+  --admin-primary:#2f7fd1; --admin-primary-soft:#d9e8fb; --admin-primary-fg:#1f6bc0;
+  --admin-space-xs:6px; --admin-space-sm:10px; --admin-space-md:16px;
+  --admin-space-lg:24px; --admin-radius-card:12px;
+
+  --status-draft-bg:#ececeb; --status-draft-fg:#5f5f5c;
+  --status-calculation-bg:#fcecc9; --status-calculation-fg:#9a6f1e;
+  --status-in-production-bg:#dcebfb; --status-in-production-fg:#3a6fae;
+  --status-done-bg:#e4f4e6; --status-done-fg:#2f7d4e;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--color-bg-soft); color:var(--color-fg);
+  font-family:'PT Sans',ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:16px; line-height:1.45;
+}
+
+/* ============================================================================
+   Обвязка макета (не часть продукта)
+   ========================================================================= */
+.mk-wrap{max-width:1500px;margin:0 auto;padding:1.6rem 1rem 4rem}
+.mk-head h1{font-size:var(--title-page);margin:0 0 .35rem}
+.mk-head p{margin:0;color:var(--color-fg-muted);font-size:.95rem;max-width:70ch}
+.mk-note{
+  margin:1rem 0 0;padding:.7rem .9rem;background:var(--color-accent-soft);
+  border-radius:var(--radius-md);font-size:.9rem;color:#123f6b;max-width:none;
+}
+.mk-note b{font-weight:700}
+.mk-note ul{margin:.4rem 0 0;padding-left:1.1rem}
+.mk-note li{margin:.15rem 0}
+.mk-cap{
+  display:flex;gap:.5rem;align-items:baseline;margin:2.2rem 0 .55rem;
+  font-size:var(--title-label);letter-spacing:.04em;text-transform:uppercase;
+  color:var(--color-fg-subtle);font-weight:700;
+}
+.mk-cap b{
+  font-size:.72rem;background:var(--color-fg);color:#fff;
+  border-radius:var(--radius-pill);padding:.1rem .45rem;letter-spacing:0;
+}
+.mk-sub{margin:0 0 .8rem;font-size:.88rem;color:var(--color-fg-muted);max-width:80ch}
+.mk-grid{
+  display:grid;gap:1.4rem;
+  grid-template-columns:repeat(auto-fit,minmax(370px,1fr));align-items:start;
+}
+.mk-col{min-width:0}
+.mk-colcap{
+  margin:0 0 .5rem;font-size:var(--title-subsection);font-weight:700;
+  display:flex;align-items:center;gap:.45rem;
+}
+.mk-colcap span{
+  font-size:.7rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
+  background:var(--color-bg-muted);color:var(--color-fg-muted);
+  border-radius:var(--radius-pill);padding:.12rem .5rem;
+}
+.mk-colsub{margin:0 0 .6rem;font-size:.85rem;color:var(--color-fg-muted)}
+
+/* ============================================================================
+   Каркас админки (топбар 56 + sidebar 240 + контент) — контекст для шторки
+   ========================================================================= */
+.shell{
+  position:relative;background:var(--admin-bg);
+  border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-md);overflow:hidden;
+}
+.shell__top{
+  height:56px;background:#fff;border-bottom:1px solid var(--admin-border);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 var(--admin-space-md);
+}
+.brand{display:flex;align-items:center;gap:.6rem;font-weight:700;font-size:.95rem}
+.brand__mark{
+  width:28px;height:28px;border-radius:8px;background:var(--admin-primary-soft);
+  color:var(--admin-primary-fg);display:inline-flex;align-items:center;
+  justify-content:center;font-size:.8rem;font-weight:700;
+}
+.topuser{display:flex;align-items:center;gap:.7rem;font-size:.85rem;color:var(--admin-muted)}
+.topuser b{color:var(--admin-text);font-weight:600}
+
+.shell__body{display:grid;grid-template-columns:240px minmax(0,1fr)}
+
+.side{
+  background:var(--admin-surface);border-right:1px solid var(--admin-border);
+  padding:1rem .75rem 1.5rem;
+}
+.side__group{margin-top:.6rem}
+.side__group-h{
+  padding:.4rem .7rem .25rem;font-size:.7rem;font-weight:700;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--color-fg-subtle);
+}
+.side__item{
+  display:flex;align-items:center;gap:.55rem;padding:.42rem .7rem;
+  border-radius:var(--radius-sm);font-size:.9rem;color:var(--admin-text);
+  margin-bottom:2px;
+}
+.side__item--active{background:var(--color-bg-tint);font-weight:700}
+.side__dot{
+  width:16px;height:16px;border-radius:4px;background:var(--color-bg-muted);
+  flex:0 0 auto;
+}
+.side__item--active .side__dot{background:var(--btn-primary-edge)}
+
+.page{padding:var(--admin-space-lg)}
+.page__h{
+  display:flex;align-items:baseline;justify-content:space-between;gap:1rem;
+  margin:0 0 var(--admin-space-md);
+}
+.page__h h1{font-size:var(--title-page);margin:0}
+.tabs{display:flex;gap:.35rem;margin-bottom:.8rem}
+.tab{
+  padding:.3rem .7rem;border-radius:var(--radius-pill);font-size:.85rem;
+  background:var(--color-bg-muted);color:var(--color-fg-muted);
+}
+.tab--on{background:var(--color-fg);color:#fff;font-weight:600}
+.card{
+  background:var(--admin-surface);border:1px solid var(--admin-border);
+  border-radius:var(--admin-radius-card,12px);box-shadow:var(--shadow-xs);
+  padding:var(--admin-space-md);
+}
+.srch{
+  height:36px;border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);
+  background:#fff;color:var(--color-fg-subtle);font-size:.9rem;
+  display:flex;align-items:center;padding:0 .65rem;margin-bottom:.7rem;max-width:340px;
+}
+.cnt{font-size:.82rem;color:var(--color-fg-muted);margin:0 0 .5rem}
+table.t{width:100%;border-collapse:collapse;font-size:.88rem}
+table.t th{
+  text-align:left;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--color-fg-subtle);font-weight:700;padding:.35rem .5rem;
+  border-bottom:1px solid var(--admin-border);
+}
+table.t td{padding:.5rem .5rem;border-bottom:1px solid var(--admin-border)}
+table.t tr:last-child td{border-bottom:0}
+.num{font-variant-numeric:tabular-nums}
+.chip{
+  display:inline-block;padding:.1rem .5rem;border-radius:var(--radius-pill);
+  font-size:.75rem;font-weight:700;white-space:nowrap;
+}
+.chip--prod{background:var(--status-in-production-bg);color:var(--status-in-production-fg)}
+.chip--calc{background:var(--status-calculation-bg);color:var(--status-calculation-fg)}
+.chip--done{background:var(--status-done-bg);color:var(--status-done-fg)}
+.chip--draft{background:var(--status-draft-bg);color:var(--status-draft-fg)}
+
+/* ============================================================================
+   ПРОДУКТ: шторка ассистента
+   ========================================================================= */
+.asst{
+  width:100%;background:#fff;border-left:1px solid var(--color-border-strong);
+  display:flex;flex-direction:column;min-height:0;
+}
+.shell .asst{
+  position:absolute;top:56px;right:0;bottom:0;width:428px;
+  box-shadow:var(--shadow-lg);
+}
+/* Автономная панель для витрины состояний */
+.asst--solo{
+  border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-md);overflow:hidden;height:560px;
+}
+
+.asst__head{
+  display:flex;align-items:center;gap:.5rem;padding:.7rem .9rem;
+  border-bottom:1px solid var(--color-border);flex:0 0 auto;
+}
+.asst__title{font-size:var(--title-modal);font-weight:700;margin:0}
+.asst__beta{
+  font-size:.68rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  background:var(--color-bg-tint);color:var(--color-warn-fg);
+  border-radius:var(--radius-pill);padding:.1rem .45rem;
+}
+.asst__spacer{flex:1 1 auto}
+.iconbtn{
+  width:32px;height:32px;border-radius:var(--radius-sm);border:0;background:transparent;
+  color:var(--color-fg-muted);display:inline-flex;align-items:center;
+  justify-content:center;cursor:pointer;
+}
+.iconbtn:hover{background:var(--color-bg-muted)}
+
+.asst__body{
+  flex:1 1 auto;min-height:0;overflow:auto;padding:.9rem;
+  display:flex;flex-direction:column;gap:.8rem;
+}
+
+/* Сообщения ---------------------------------------------------------------- */
+.msg{max-width:100%;font-size:.92rem}
+.msg--user{align-self:flex-end;max-width:86%}
+.msg--user .msg__b{
+  background:var(--color-bg-muted);border-radius:var(--radius-lg);
+  border-bottom-right-radius:var(--radius-sm);padding:.5rem .7rem;
+}
+.msg--bot .msg__b{color:var(--color-fg)}
+.msg p{margin:0 0 .5rem}
+.msg p:last-child{margin-bottom:0}
+.msg ul{margin:.25rem 0 .5rem;padding-left:1.15rem}
+.msg li{margin:.12rem 0}
+
+/* Строка вызова инструмента (прозрачность: видно, куда полез ассистент) ----- */
+.tool{
+  display:flex;align-items:center;gap:.45rem;font-size:.8rem;
+  color:var(--color-fg-muted);background:var(--color-bg-soft);
+  border:1px solid var(--color-border);border-radius:var(--radius-pill);
+  padding:.25rem .6rem;align-self:flex-start;
+}
+.tool code{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.75rem;
+  color:var(--color-fg-subtle);
+}
+.tool--live{background:var(--color-accent-soft);border-color:#bcd8f6;color:#1f4f80}
+.tool--live code{color:#3a6fae}
+.tool__t{margin-left:.15rem;color:var(--color-fg-subtle);font-variant-numeric:tabular-nums}
+
+/* Компактная таблица внутри ответа ---------------------------------------- */
+.mini{
+  width:100%;border-collapse:collapse;font-size:.84rem;margin:.35rem 0 .55rem;
+}
+.mini th{
+  text-align:left;font-size:.68rem;letter-spacing:.03em;text-transform:uppercase;
+  color:var(--color-fg-subtle);font-weight:700;padding:.25rem .4rem;
+  border-bottom:1px solid var(--color-border);
+}
+.mini td{padding:.35rem .4rem;border-bottom:1px solid var(--color-border)}
+.mini tr:last-child td{border-bottom:0}
+.mini .late{color:var(--color-danger-fg);font-weight:700}
+
+/* Источники — кликабельные строки-сущности (паттерн rowHref) --------------- */
+.srcs{display:grid;gap:.3rem;margin-top:.15rem}
+.srcs__cap{
+  font-size:.68rem;letter-spacing:.04em;text-transform:uppercase;font-weight:700;
+  color:var(--color-fg-subtle);margin:.2rem 0 .1rem;
+}
+.src{
+  display:flex;align-items:center;gap:.5rem;padding:.4rem .55rem;
+  border:1px solid var(--color-border);border-radius:var(--radius-sm);
+  background:#fff;font-size:.84rem;color:var(--color-fg);text-decoration:none;
+}
+.src:hover{border-color:var(--color-border-strong);background:var(--color-bg-soft)}
+.src__n{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.src__m{color:var(--color-fg-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src__go{margin-left:auto;color:var(--color-accent-fg);flex:0 0 auto}
+
+/* Плашки ------------------------------------------------------------------- */
+.note{
+  display:flex;gap:.5rem;padding:.55rem .7rem;border-radius:var(--radius-md);
+  font-size:.84rem;line-height:1.35;
+}
+.note svg{flex:0 0 auto;margin-top:.1rem}
+.note--warn{background:var(--color-warn-soft);color:var(--color-warn-fg)}
+.note--info{background:var(--color-bg-soft);color:var(--color-fg-muted);
+  border:1px solid var(--color-border)}
+.stamp{font-size:.76rem;color:var(--color-fg-subtle);margin-top:.15rem}
+
+/* Пустое состояние --------------------------------------------------------- */
+.empty{padding:.4rem .2rem}
+.empty h3{font-size:var(--title-item);margin:0 0 .3rem}
+.empty p{margin:0 0 .9rem;font-size:.88rem;color:var(--color-fg-muted)}
+.hints{display:grid;gap:.4rem}
+.hint{
+  text-align:left;width:100%;padding:.55rem .7rem;font:inherit;font-size:.86rem;
+  background:#fff;border:1px solid var(--color-border);
+  border-radius:var(--radius-md);color:var(--color-fg);cursor:pointer;
+}
+.hint:hover{background:var(--color-bg-soft);border-color:var(--color-border-strong)}
+.hint b{display:block;font-size:.7rem;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--color-fg-subtle);font-weight:700;margin-bottom:.1rem}
+
+/* Подвал: ввод ------------------------------------------------------------- */
+.asst__foot{
+  flex:0 0 auto;border-top:1px solid var(--color-border);padding:.7rem .9rem .8rem;
+  background:#fff;
+}
+.composer{
+  display:flex;align-items:flex-end;gap:.5rem;border:1px solid var(--color-border-strong);
+  border-radius:var(--radius-md);background:#fff;padding:.45rem .5rem .45rem .65rem;
+}
+.composer__in{
+  flex:1 1 auto;min-height:22px;font-size:.92rem;color:var(--color-fg-subtle);
+  padding:.1rem 0;
+}
+.composer__in--filled{color:var(--color-fg)}
+.send{
+  width:34px;height:34px;flex:0 0 auto;border-radius:var(--radius-sm);
+  background:var(--btn-primary-bg);border:1px solid var(--btn-primary-edge);
+  color:var(--btn-primary-fg);display:inline-flex;align-items:center;
+  justify-content:center;cursor:pointer;
+}
+.send:hover{background:var(--btn-primary-bg-hover)}
+.send--off{background:var(--color-bg-muted);border-color:var(--color-border);
+  color:var(--color-fg-subtle);cursor:default}
+.foot-note{
+  margin:.45rem 0 0;font-size:.74rem;color:var(--color-fg-subtle);line-height:1.3;
+}
+
+/* Плавающая кнопка вызова (свёрнутое состояние) ---------------------------- */
+.fab{
+  position:absolute;right:20px;bottom:20px;height:44px;padding:0 .95rem 0 .8rem;
+  display:inline-flex;align-items:center;gap:.45rem;
+  background:var(--btn-primary-bg);border:1px solid var(--btn-primary-edge);
+  color:var(--btn-primary-fg);border-radius:var(--radius-pill);
+  box-shadow:var(--shadow-md);font-weight:700;font-size:.9rem;cursor:pointer;
+}
+.fab:hover{background:var(--btn-primary-bg-hover)}
+
+/* Индикатор «печатает» ----------------------------------------------------- */
+.caret{
+  display:inline-block;width:7px;height:1.05em;vertical-align:-2px;
+  background:var(--color-fg);margin-left:2px;
+}
+
+/* ============================================================================
+   ПРОДУКТ: вкладка «Интеграции» в настройках компании.
+   Классы — продуктовые (globals.css §«Панель интеграции», §«Admin card»),
+   чтобы макет переводился в разметку один в один.
+   ========================================================================= */
+.setpage{
+  background:var(--admin-bg);border:1px solid var(--color-border-strong);
+  border-radius:var(--radius-lg);box-shadow:var(--shadow-md);
+  padding:var(--admin-space-lg);
+}
+.setpage__h{display:flex;align-items:baseline;gap:.7rem;margin:0 0 .9rem}
+.setpage__h h1{font-size:var(--title-page);margin:0}
+.setpage__route{
+  font-size:.78rem;color:var(--color-fg-subtle);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.setcards{display:grid;gap:var(--admin-space-md);margin-top:var(--admin-space-md)}
+
+.admin-card{
+  background:var(--admin-surface);border:1px solid var(--admin-border);
+  border-radius:var(--admin-radius-card);padding:1.25rem 1.4rem;
+  box-shadow:var(--shadow-xs);display:grid;gap:.85rem;
+}
+.admin-section-header{
+  display:flex;align-items:center;justify-content:space-between;gap:1rem;
+  flex-wrap:wrap;
+}
+.admin-section-header h2{font-size:var(--title-section);margin:0}
+/* Отдельный класс, а не `.hint` — тот занят кнопкой-подсказкой в пустом
+   состоянии шторки и притащил бы сюда рамку и width:100%. */
+.admin-section-header__hint{font-size:.82rem;color:var(--admin-muted)}
+
+.admin-integration-status{
+  display:flex;align-items:center;gap:8px;padding:10px 14px;
+  border:1px solid var(--admin-border);border-radius:12px;font-size:.9rem;
+}
+.admin-integration-status--off{background:var(--admin-soft);color:var(--admin-muted)}
+.admin-integration-status--ok{
+  background:var(--color-ok-soft);border-color:var(--color-ok);color:var(--color-ok-fg);
+}
+.admin-integration-status--warn{
+  background:var(--color-warn-soft);border-color:var(--color-warn);color:var(--color-warn-fg);
+}
+
+.admin-toggle-row{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:12px 14px;border:1px solid var(--admin-border);border-radius:12px;
+  background:var(--admin-surface);
+}
+.admin-toggle-row__text{display:flex;flex-direction:column;gap:2px}
+.admin-toggle-row__text strong{font-size:.92rem}
+
+.admin-switch{position:relative;flex:0 0 auto;width:42px;height:24px}
+.admin-switch__track{
+  position:absolute;inset:0;border-radius:999px;background:var(--admin-border);
+}
+.admin-switch__thumb{
+  position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);
+}
+.admin-switch--on .admin-switch__track{background:var(--admin-primary)}
+.admin-switch--on .admin-switch__thumb{transform:translateX(18px)}
+
+.admin-subhead{
+  font-size:.72rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--admin-muted);margin-top:.35rem;
+}
+.admin-form-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:var(--admin-space-md);align-items:start;
+}
+.admin-field{display:grid;gap:var(--admin-space-xs)}
+.admin-field > label{font-size:.85rem;font-weight:600;color:var(--admin-text)}
+.admin-field__ctl{
+  padding:.6rem .75rem;border-radius:10px;border:1px solid var(--admin-border);
+  background:var(--admin-surface);color:var(--admin-text);font:inherit;width:100%;
+  display:flex;align-items:center;justify-content:space-between;gap:.5rem;
+}
+.admin-field__ctl--muted{color:var(--color-fg-subtle);background:var(--admin-soft)}
+.admin-field__ctl svg{flex:0 0 auto;color:var(--color-fg-subtle)}
+.admin-field__hint{font-size:.78rem;color:var(--admin-muted);line-height:1.3}
+.admin-field__hint b{color:var(--admin-text)}
+
+/* Кнопки формы ------------------------------------------------------------- */
+.frow{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-top:.35rem}
+.btn{
+  height:38px;padding:0 .95rem;border-radius:var(--radius-sm);font:inherit;
+  font-size:.9rem;font-weight:700;display:inline-flex;align-items:center;
+  gap:.4rem;cursor:pointer;border:1px solid var(--color-border-strong);
+  background:#fff;color:var(--color-fg);
+}
+.btn--primary{
+  background:var(--btn-primary-bg);border-color:var(--btn-primary-edge);
+  color:var(--btn-primary-fg);
+}
+.btn--primary:hover{background:var(--btn-primary-bg-hover)}
+.btn:not(.btn--primary):hover{background:var(--color-bg-soft)}
+
+/* Расход за месяц ---------------------------------------------------------- */
+.spend{
+  display:grid;gap:.35rem;padding:12px 14px;border:1px solid var(--admin-border);
+  border-radius:12px;background:var(--admin-soft);
+}
+.spend__top{
+  display:flex;align-items:baseline;justify-content:space-between;gap:.6rem;
+  font-size:.86rem;
+}
+.spend__top b{font-variant-numeric:tabular-nums}
+.spend__bar{height:6px;border-radius:999px;background:#e4e4e1;overflow:hidden}
+.spend__fill{height:100%;width:12.4%;background:var(--admin-primary);border-radius:999px}
+.spend__note{font-size:.78rem;color:var(--admin-muted)}
+</style>
+</head>
+<body>
+<div class="mk-wrap">
+
+  <div class="mk-head">
+    <h1>Ассистент в админке — макет</h1>
+    <p>Окно диалога с ИИ внутри <code>/admin/*</code>: справка по системе + чтение
+       реальных данных. Доступ — всем, у кого открыта админка (ADMIN, SHOP_MANAGER
+       и кастомные роли), поэтому выдача режется правами на бэкенде.</p>
+  </div>
+
+  <div class="mk-note">
+    <b>Границы этого макета.</b>
+    <ul>
+      <li>Ассистент <b>только читает</b>: никаких изменений в БД, кнопок «сделай» нет.</li>
+      <li>Каждый вызов инструмента виден пользователю строкой — не «чёрный ящик».</li>
+      <li>Ответ по данным всегда заканчивается <b>источниками</b> — ссылками на реальные
+          сущности, чтобы число можно было проверить глазами.</li>
+      <li>Права режет бэкенд, а не промпт: закрытые данные ассистент не видит вообще.</li>
+      <li>Настройка — вторая карточка на существующей вкладке «Интеграции»
+          (экран 3), отдельного раздела фича не заводит.</li>
+      <li>Не показано: мобильный вид, история диалогов.</li>
+    </ul>
+  </div>
+
+  <!-- ======================================================================
+       1. В КОНТЕКСТЕ АДМИНКИ
+       =================================================================== -->
+  <div class="mk-cap">Экран 1 <b>шторка открыта</b></div>
+  <p class="mk-sub">Шторка 428 px справа поверх контента, страница не перестраивается.
+     Закрытое состояние — жёлтая пилюля в правом нижнем углу (см. экран 2).</p>
+
+  <div class="shell">
+    <div class="shell__top">
+      <div class="brand"><span class="brand__mark">Ш</span> Швейное производство</div>
+      <div class="topuser"><b>Рафаэль У.</b> · Администратор <span>Выход</span></div>
+    </div>
+    <div class="shell__body">
+
+      <!-- sidebar -->
+      <nav class="side">
+        <div class="side__item"><i class="side__dot"></i> Обзор</div>
+        <div class="side__group">
+          <div class="side__group-h">Продажи</div>
+          <div class="side__item side__item--active"><i class="side__dot"></i> Заказы</div>
+          <div class="side__item"><i class="side__dot"></i> Клиенты</div>
+        </div>
+        <div class="side__group">
+          <div class="side__group-h">Технология</div>
+          <div class="side__item"><i class="side__dot"></i> Номенклатура</div>
+          <div class="side__item"><i class="side__dot"></i> Маршруты</div>
+          <div class="side__item"><i class="side__dot"></i> Операции</div>
+        </div>
+        <div class="side__group">
+          <div class="side__group-h">Производство</div>
+          <div class="side__item"><i class="side__dot"></i> Цеховой монитор</div>
+          <div class="side__item"><i class="side__dot"></i> Оборудование</div>
+        </div>
+        <div class="side__group">
+          <div class="side__group-h">Персонал</div>
+          <div class="side__item"><i class="side__dot"></i> Сотрудники</div>
+          <div class="side__item"><i class="side__dot"></i> Зарплата</div>
+        </div>
+      </nav>
+
+      <!-- контент страницы -->
+      <div class="page">
+        <div class="page__h"><h1>Заказы</h1></div>
+        <div class="card">
+          <div class="tabs">
+            <span class="tab tab--on">Активные</span>
+            <span class="tab">Черновики</span>
+            <span class="tab">Завершённые</span>
+            <span class="tab">Архив</span>
+          </div>
+          <div class="srch">Поиск по номеру, клиенту, изделию…</div>
+          <p class="cnt">Показано 5 из 23</p>
+          <table class="t">
+            <thead>
+              <tr><th>Номер</th><th>Клиент</th><th>Изделие</th><th>Срок</th><th>Статус</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="num">02-00013</td><td>ООО «Ромашка»</td><td>Футболка классик</td><td class="num">18.08</td><td><span class="chip chip--prod">В производстве</span></td></tr>
+              <tr><td class="num">02-00012</td><td>ИП Сергеев</td><td>Худи оверсайз</td><td class="num">15.08</td><td><span class="chip chip--prod">В производстве</span></td></tr>
+              <tr><td class="num">01-00048</td><td>ООО «Ателье-М»</td><td>Лонгслив рибана</td><td class="num">21.08</td><td><span class="chip chip--calc">Расчёт готов</span></td></tr>
+              <tr><td class="num">01-00047</td><td>ООО «Ромашка»</td><td>Свитшот</td><td class="num">12.08</td><td><span class="chip chip--done">Готов</span></td></tr>
+              <tr><td class="num">02-00011</td><td>ООО «Стиль»</td><td>Поло пике</td><td class="num">26.08</td><td><span class="chip chip--draft">Черновик</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ШТОРКА -->
+    <aside class="asst">
+      <div class="asst__head">
+        <h2 class="asst__title">Ассистент</h2>
+        <span class="asst__beta">бета</span>
+        <span class="asst__spacer"></span>
+        <button class="iconbtn" title="Новый диалог" aria-label="Новый диалог">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="iconbtn" title="Закрыть" aria-label="Закрыть">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="asst__body">
+        <div class="msg msg--user"><div class="msg__b">Сколько заказов сейчас в производстве и какие горят по сроку?</div></div>
+
+        <div class="tool">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.3-4.3"/><circle cx="11" cy="11" r="7"/></svg>
+          Смотрю заказы <code>orders.search</code><span class="tool__t">0,4 с</span>
+        </div>
+        <div class="tool">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          Считаю сроки <code>orders.deadlineRisk</code><span class="tool__t">0,6 с</span>
+        </div>
+
+        <div class="msg msg--bot"><div class="msg__b">
+          <p>В производстве <b>7 заказов</b>. Два выходят за срок при текущем темпе:</p>
+          <table class="mini">
+            <thead><tr><th>Заказ</th><th>Срок</th><th>Готово</th><th>Прогноз</th></tr></thead>
+            <tbody>
+              <tr><td class="num">02-00012</td><td class="num">15.08</td><td class="num">42%</td><td class="num late">19.08</td></tr>
+              <tr><td class="num">02-00013</td><td class="num">18.08</td><td class="num">61%</td><td class="num late">20.08</td></tr>
+            </tbody>
+          </table>
+          <p>Узкое место у обоих — <b>распошивальная машина</b>: 4 из 7 заказов ждут
+             операцию «Подгиб низа», очередь 312 паспортов.</p>
+
+          <div class="srcs">
+            <div class="srcs__cap">Источники</div>
+            <a class="src" href="#"><span class="src__n">02-00012</span><span class="src__m">ИП Сергеев · Худи оверсайз</span><span class="src__go">→</span></a>
+            <a class="src" href="#"><span class="src__n">02-00013</span><span class="src__m">ООО «Ромашка» · Футболка классик</span><span class="src__go">→</span></a>
+            <a class="src" href="#"><span class="src__n">Цеховой монитор</span><span class="src__m">Очередь по операциям</span><span class="src__go">→</span></a>
+          </div>
+          <p class="stamp">Данные на 13.08, 14:20 МСК</p>
+        </div></div>
+      </div>
+
+      <div class="asst__foot">
+        <div class="composer">
+          <div class="composer__in">Спросите про заказы, паспорта, цех…</div>
+          <button class="send send--off" aria-label="Отправить">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+        <p class="foot-note">Ассистент только читает данные и видит ровно то же, что и вы.
+           Числа сверяйте по ссылкам-источникам.</p>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ======================================================================
+       2. СВЁРНУТОЕ СОСТОЯНИЕ
+       =================================================================== -->
+  <div class="mk-cap">Экран 2 <b>шторка закрыта</b></div>
+  <p class="mk-sub">Единственный след в интерфейсе — пилюля в правом нижнем углу.
+     Никаких изменений в сайдбаре и шапке: фича = минимальная дельта.</p>
+
+  <div class="shell" style="height:280px">
+    <div class="shell__top">
+      <div class="brand"><span class="brand__mark">Ш</span> Швейное производство</div>
+      <div class="topuser"><b>Рафаэль У.</b> · Администратор <span>Выход</span></div>
+    </div>
+    <div class="shell__body">
+      <nav class="side">
+        <div class="side__item"><i class="side__dot"></i> Обзор</div>
+        <div class="side__group">
+          <div class="side__group-h">Продажи</div>
+          <div class="side__item side__item--active"><i class="side__dot"></i> Заказы</div>
+          <div class="side__item"><i class="side__dot"></i> Клиенты</div>
+        </div>
+      </nav>
+      <div class="page">
+        <div class="page__h"><h1>Заказы</h1></div>
+        <div class="card">
+          <div class="tabs"><span class="tab tab--on">Активные</span><span class="tab">Черновики</span></div>
+          <div class="srch">Поиск по номеру, клиенту, изделию…</div>
+          <p class="cnt">Показано 5 из 23</p>
+        </div>
+      </div>
+    </div>
+    <button class="fab">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.7-.8L3 21l1.9-4.6A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z"/></svg>
+      Спросить
+    </button>
+  </div>
+
+  <!-- ======================================================================
+       3. НАСТРОЙКА — вкладка «Интеграции»
+       =================================================================== -->
+  <div class="mk-cap">Экран 3 <b>настройка</b></div>
+  <p class="mk-sub">Отдельного раздела нет: ассистент — вторая карточка на существующей
+     вкладке «Интеграции» рядом с ERP upgifts. Та же singleton-таблица
+     <code>IntegrationSettings</code>, тот же шифр секретов, тот же серверный фиче-флаг.</p>
+
+  <div class="setpage">
+    <div class="setpage__h">
+      <h1>Настройки компании</h1>
+      <span class="setpage__route">/admin/company-settings?tab=integrations</span>
+    </div>
+    <div class="tabs">
+      <span class="tab">Организация</span>
+      <span class="tab">Подразделения</span>
+      <span class="tab">Производство</span>
+      <span class="tab tab--on">Интеграции</span>
+    </div>
+
+    <div class="setcards">
+
+      <!-- Существующая карточка ERP — контекст, показана свёрнуто -->
+      <div class="admin-card">
+        <div class="admin-section-header">
+          <h2>Интеграция с ERP upgifts</h2>
+          <span class="admin-section-header__hint">Себестоимость и заказы уезжают в upgifts</span>
+        </div>
+        <div class="admin-integration-status admin-integration-status--ok">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>
+          Подключено · проверено 13.08.2026, 09:41 (МСК)
+        </div>
+      </div>
+
+      <!-- НОВАЯ карточка -->
+      <div class="admin-card">
+        <div class="admin-section-header">
+          <h2>Ассистент (ИИ)</h2>
+          <span class="admin-section-header__hint">Окно «Спросить» в админке</span>
+        </div>
+
+        <div class="admin-integration-status admin-integration-status--ok">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>
+          Включён · платформенный ключ · проверен 13.08.2026, 14:05 (МСК)
+        </div>
+
+        <div class="admin-toggle-row">
+          <span class="admin-toggle-row__text">
+            <strong>Ассистент включён</strong>
+            <span class="admin-field__hint">Выключен — окно «Спросить» не показывается,
+              запросы наружу не уходят.</span>
+          </span>
+          <span class="admin-switch admin-switch--on">
+            <span class="admin-switch__track"></span><span class="admin-switch__thumb"></span>
+          </span>
+        </div>
+
+        <div class="admin-subhead">Доступ к модели</div>
+        <div class="admin-form-grid">
+          <div class="admin-field">
+            <label>Источник ключа</label>
+            <div class="admin-field__ctl">Платформенный ключ
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+            <span class="admin-field__hint">Платит владелец платформы. «Свой ключ
+              Anthropic» — компания платит сама.</span>
+          </div>
+          <div class="admin-field">
+            <label>Ключ Anthropic</label>
+            <div class="admin-field__ctl admin-field__ctl--muted">не требуется</div>
+            <span class="admin-field__hint">При своём ключе: <b>••••7f2c</b>,
+              пустое поле = не менять. Хранится шифрованным.</span>
+          </div>
+          <div class="admin-field">
+            <label>Модель</label>
+            <div class="admin-field__ctl">Claude Opus 5
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+            <span class="admin-field__hint">≈ $0,03 за вопрос. Claude Sonnet 5 —
+              втрое дешевле, для типовых вопросов хватает.</span>
+          </div>
+        </div>
+
+        <div class="admin-subhead">Лимиты</div>
+        <div class="admin-form-grid">
+          <div class="admin-field">
+            <label>Вопросов в день на сотрудника</label>
+            <div class="admin-field__ctl">30</div>
+            <span class="admin-field__hint">Исчерпан — ассистент вежливо отказывает
+              до завтра.</span>
+          </div>
+          <div class="admin-field">
+            <label>Потолок расхода в месяц</label>
+            <div class="admin-field__ctl">$100</div>
+            <span class="admin-field__hint">Достигнут — окно отключается само,
+              администратору уходит уведомление.</span>
+          </div>
+        </div>
+
+        <div class="spend">
+          <div class="spend__top">
+            <span>Израсходовано в августе</span>
+            <b>$12,40 из $100 · 418 вопросов</b>
+          </div>
+          <div class="spend__bar"><div class="spend__fill"></div></div>
+          <span class="spend__note">Журнал вопросов — в разделе «Диагностика» →
+            «Действия пользователей».</span>
+        </div>
+
+        <div class="admin-subhead">Что ассистент может читать</div>
+        <div class="admin-toggle-row">
+          <span class="admin-toggle-row__text">
+            <strong>Производство и заказы</strong>
+            <span class="admin-field__hint">Заказы, паспорта, маршруты, смены, цех.</span>
+          </span>
+          <span class="admin-switch admin-switch--on">
+            <span class="admin-switch__track"></span><span class="admin-switch__thumb"></span>
+          </span>
+        </div>
+        <div class="admin-toggle-row">
+          <span class="admin-toggle-row__text">
+            <strong>Снабжение и склад</strong>
+            <span class="admin-field__hint">Потребность цеха, закупки, остатки материалов.</span>
+          </span>
+          <span class="admin-switch admin-switch--on">
+            <span class="admin-switch__track"></span><span class="admin-switch__thumb"></span>
+          </span>
+        </div>
+        <div class="admin-toggle-row">
+          <span class="admin-toggle-row__text">
+            <strong>Деньги и себестоимость</strong>
+            <span class="admin-field__hint">Сметы, плановая себестоимость, маржа.</span>
+          </span>
+          <span class="admin-switch">
+            <span class="admin-switch__track"></span><span class="admin-switch__thumb"></span>
+          </span>
+        </div>
+        <div class="admin-toggle-row">
+          <span class="admin-toggle-row__text">
+            <strong>Зарплата</strong>
+            <span class="admin-field__hint">Выработка в рублях, начисления, выплаты.</span>
+          </span>
+          <span class="admin-switch">
+            <span class="admin-switch__track"></span><span class="admin-switch__thumb"></span>
+          </span>
+        </div>
+
+        <div class="note note--info">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+          <span>Тумблеры только <b>сужают</b>: они закрывают целый класс данных для всех.
+                Кто что видит внутри разрешённого — по-прежнему решает матрица доступов
+                в разделе «Персонал».</span>
+        </div>
+
+        <div class="frow">
+          <button class="btn btn--primary">Сохранить</button>
+          <button class="btn">Проверить ключ</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ======================================================================
+       4. СОСТОЯНИЯ ШТОРКИ
+       =================================================================== -->
+  <div class="mk-cap">Состояния <b>витрина</b></div>
+  <p class="mk-sub">Пять сценариев, которые определяют доверие к окну: с чего начинается
+     разговор, как выглядит работа, справка, упор в права и честное «не знаю».</p>
+
+  <div class="mk-grid">
+
+    <!-- A. Пустое -->
+    <div class="mk-col">
+      <h3 class="mk-colcap">A. Первый вход <span>empty</span></h3>
+      <p class="mk-colsub">Подсказки — по разделу, в котором пользователь стоит.</p>
+      <div class="asst asst--solo">
+        <div class="asst__head">
+          <h2 class="asst__title">Ассистент</h2><span class="asst__beta">бета</span>
+          <span class="asst__spacer"></span>
+          <button class="iconbtn" aria-label="Закрыть"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="asst__body">
+          <div class="empty">
+            <h3>Спросите про производство</h3>
+            <p>Отвечаю по вашим данным и по устройству системы. Ничего не меняю.</p>
+            <div class="hints">
+              <button class="hint"><b>Данные</b>Сколько заказов в производстве и какие горят по сроку?</button>
+              <button class="hint"><b>Данные</b>Где сейчас паспорт P-20260813-0007?</button>
+              <button class="hint"><b>Данные</b>Что мешает запустить заказ 01-00048?</button>
+              <button class="hint"><b>Справка</b>Что значит статус «Расчёт готов»?</button>
+              <button class="hint"><b>Справка</b>Как добавить расцветку в заказ?</button>
+            </div>
+          </div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросите про заказы, паспорта, цех…</div>
+            <button class="send send--off" aria-label="Отправить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+          </div>
+          <p class="foot-note">Ассистент только читает данные и видит ровно то же, что и вы.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- B. В работе -->
+    <div class="mk-col">
+      <h3 class="mk-colcap">B. Работает <span>streaming</span></h3>
+      <p class="mk-colsub">Инструменты подсвечены синим, пока идут. Ответ печатается.</p>
+      <div class="asst asst--solo">
+        <div class="asst__head">
+          <h2 class="asst__title">Ассистент</h2><span class="asst__beta">бета</span>
+          <span class="asst__spacer"></span>
+          <button class="iconbtn" aria-label="Остановить"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">Где сейчас паспорт P-20260813-0007?</div></div>
+          <div class="tool">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.3-4.3"/><circle cx="11" cy="11" r="7"/></svg>
+            Ищу паспорт <code>passport.locate</code><span class="tool__t">0,3 с</span>
+          </div>
+          <div class="tool tool--live">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+            Читаю маршрут <code>route.progress</code>
+          </div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <p>Паспорт <b>P-20260813-0007</b> (заказ 02-00013, размер M, «Белый»)
+               сейчас на операции «Втачка рукава»<span class="caret"></span></p>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросите про заказы, паспорта, цех…</div>
+            <button class="send send--off" aria-label="Отправить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+          </div>
+          <p class="foot-note">Ассистент только читает данные и видит ровно то же, что и вы.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- C. Справка -->
+    <div class="mk-col">
+      <h3 class="mk-colcap">C. Справка по системе <span>docs</span></h3>
+      <p class="mk-colsub">Ответ ведёт в нужный экран, а не заменяет его.</p>
+      <div class="asst asst--solo">
+        <div class="asst__head">
+          <h2 class="asst__title">Ассистент</h2><span class="asst__beta">бета</span>
+          <span class="asst__spacer"></span>
+          <button class="iconbtn" aria-label="Закрыть"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">Что значит статус «Расчёт готов» и что после него можно?</div></div>
+          <div class="tool">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v16H6.5A2.5 2.5 0 0 0 4 21.5Z"/></svg>
+            Читаю документацию <code>docs.search</code><span class="tool__t">0,3 с</span>
+          </div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <p>«Расчёт готов» — заказ просчитан: есть спецификация, потребность цеха
+               и плановая себестоимость. На этом статусе ещё <b>можно править</b>
+               состав и количество — окно правки закрывается запуском в производство.</p>
+            <p>Дальше доступно:</p>
+            <ul>
+              <li>запустить в производство (создаст паспорта);</li>
+              <li>отправить потребность в закупку;</li>
+              <li>вернуть в черновик, пока не выпущен крой.</li>
+            </ul>
+            <div class="srcs">
+              <div class="srcs__cap">Куда пойти</div>
+              <a class="src" href="#"><span class="src__n">Заказ 01-00048</span><span class="src__m">Статус · Расчёт готов</span><span class="src__go">→</span></a>
+              <a class="src" href="#"><span class="src__n">Потребность цеха</span><span class="src__m">Раздел «Снабжение»</span><span class="src__go">→</span></a>
+            </div>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in composer__in--filled">А кто может вернуть заказ в черновик?</div>
+            <button class="send" aria-label="Отправить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+          </div>
+          <p class="foot-note">Ассистент только читает данные и видит ровно то же, что и вы.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- D. Права -->
+    <div class="mk-col">
+      <h3 class="mk-colcap">D. Упор в права <span>403</span></h3>
+      <p class="mk-colsub">Тот же вопрос от мастера цеха. Отказ — из гварда, не из промпта.</p>
+      <div class="asst asst--solo">
+        <div class="asst__head">
+          <h2 class="asst__title">Ассистент</h2><span class="asst__beta">бета</span>
+          <span class="asst__spacer"></span>
+          <button class="iconbtn" aria-label="Закрыть"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">Сколько заработала Иванова за август?</div></div>
+          <div class="tool">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+            Зарплата <code>payroll.employee</code> · нет доступа
+          </div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <p>Не могу показать: зарплатные данные закрыты вашей ролью
+               <b>«Мастер цеха»</b>.</p>
+            <p>Что доступно вам по Ивановой:</p>
+            <ul>
+              <li>выработка в штуках и операциях за смену;</li>
+              <li>отработанные часы и отрезки смен;</li>
+              <li>брак и подкрой.</li>
+            </ul>
+            <div class="note note--warn">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.5 18a1.7 1.7 0 0 0 1.5 2.6h16a1.7 1.7 0 0 0 1.5-2.6L13.7 3.9a1.7 1.7 0 0 0-3 0Z"/></svg>
+              <span>Ассистент не обходит доступы: он получает те же 403, что и интерфейс.
+                    За расширением прав — к администратору.</span>
+            </div>
+            <div class="srcs">
+              <div class="srcs__cap">Доступно вам</div>
+              <a class="src" href="#"><span class="src__n">Иванова А.</span><span class="src__m">Табель дня · 13.08</span><span class="src__go">→</span></a>
+            </div>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросите про заказы, паспорта, цех…</div>
+            <button class="send send--off" aria-label="Отправить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+          </div>
+          <p class="foot-note">Ассистент только читает данные и видит ровно то же, что и вы.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- E. Не знаю -->
+    <div class="mk-col">
+      <h3 class="mk-colcap">E. Честное «не знаю» <span>no-guess</span></h3>
+      <p class="mk-colsub">Самое важное состояние: выдуманное число дороже отказа.</p>
+      <div class="asst asst--solo">
+        <div class="asst__head">
+          <h2 class="asst__title">Ассистент</h2><span class="asst__beta">бета</span>
+          <span class="asst__spacer"></span>
+          <button class="iconbtn" aria-label="Закрыть"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">Какая маржа будет по заказу 02-00013, если поднять цену на 12%?</div></div>
+          <div class="tool">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.3-4.3"/><circle cx="11" cy="11" r="7"/></svg>
+            Смета заказа <code>order.estimate</code><span class="tool__t">0,5 с</span>
+          </div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <p>Считать «что если» я не берусь — сам я такие сценарии не пересчитываю,
+               а угадывать цифру по деньгам не буду.</p>
+            <p>Что знаю точно по 02-00013 на сейчас:</p>
+            <table class="mini">
+              <thead><tr><th>Показатель</th><th>Значение</th></tr></thead>
+              <tbody>
+                <tr><td>Плановая себестоимость</td><td class="num">412 800 ₽</td></tr>
+                <tr><td>Сумма заказа</td><td class="num">528 000 ₽</td></tr>
+                <tr><td>Плановая маржа</td><td class="num">21,8%</td></tr>
+              </tbody>
+            </table>
+            <div class="note note--info">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+              <span>Пересчёт цены — в карточке заказа, вкладка «Смета». Там же
+                    результат разойдётся по «Операциям» и «Сводно».</span>
+            </div>
+            <div class="srcs">
+              <div class="srcs__cap">Источники</div>
+              <a class="src" href="#"><span class="src__n">02-00013</span><span class="src__m">Смета · вариант «Основной»</span><span class="src__go">→</span></a>
+            </div>
+            <p class="stamp">Данные на 13.08, 14:22 МСК</p>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросите про заказы, паспорта, цех…</div>
+            <button class="send send--off" aria-label="Отправить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+          </div>
+          <p class="foot-note">Ассистент только читает данные и видит ровно то же, что и вы.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

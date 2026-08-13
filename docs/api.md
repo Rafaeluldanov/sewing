@@ -108,6 +108,7 @@
 - [40. Print jobs](#40-print-jobs)
 - [41. Printers agent](#41-printers-agent)
 - [42. Company settings](#42-company-settings)
+- [44. Integrations (upgifts + ассистент)](#44-integrations)
 - [45. Assistant (ИИ)](#45-assistant)
 
 ---
@@ -2684,6 +2685,37 @@ GET-состоянии), иначе 400 `AMENDMENT_REASON_REQUIRED`.
 ```
 
 `applied: false` + предупреждение — маршрут не изменился (no-op, аудита нет).
+
+---
+
+<a id="44-integrations"></a>
+## 44. Integrations (upgifts + ассистент)
+
+Источник: `integrations/integrations.controller.ts`.
+
+Singleton-настройки внешних связок тенанта: подключение к ERP upgifts
+(см. `docs/upgifts-integration.md`) и ассистент (ИИ, см. §45 и
+`docs/assistant.md`). Обе связки живут в ОДНОЙ строке
+`IntegrationSettings` — отдельной таблицы и отдельного раздела UI у
+ассистента нет, он вторая карточка на вкладке «Интеграции».
+
+| Метод | Путь                                      | RBAC                | Описание |
+| ----- | ----------------------------------------- | ------------------- | -------- |
+| GET   | `/api/integrations/settings`              | SHOP_MANAGER, ADMIN | Текущие настройки. Секреты не отдаются: только `hasPassword` и `hasOwnAssistantKey`. |
+| PATCH | `/api/integrations/settings`              | SHOP_MANAGER, ADMIN | Частичное обновление (`UpdateIntegrationSettingsSchema`). `undefined` ⇒ не трогаем; пустой пароль/ключ ⇒ «не менять». |
+| POST  | `/api/integrations/upgifts/test-connection` | SHOP_MANAGER, ADMIN | Логин сервисным аккаунтом + `GET /auth/me`. Fail-soft: `{ ok, message }`, а не 5xx. |
+| POST  | `/api/integrations/assistant/test-key`    | SHOP_MANAGER, ADMIN | Проверка ключа Anthropic (`GET /v1/models?limit=1`). Fail-soft: `{ ok, message }`. Итог пишется в `assistantLastCheckOkAt` / `assistantLastCheckError`. |
+
+Включение любой из связок проверяется на полноту: `upgiftsEnabled`
+требует baseUrl+tenant+email+password (400 `INTEGRATION_INCOMPLETE`),
+`assistantEnabled` — доступного ключа (400 `ASSISTANT_KEY_MISSING` при
+источнике «свой» без ключа, 400 `ASSISTANT_PLATFORM_KEY_MISSING`, если на
+сервере нет `ANTHROPIC_API_KEY`).
+
+Секреты (`upgiftsPasswordEnc`, `assistantApiKeyEnc`) шифруются AES-256-GCM
+ключом `INTEGRATION_SECRET_KEY` (`integrations/secret-box.ts`) и наружу не
+отдаются никогда. Audit: `INTEGRATION_SETTINGS_UPDATED` со списком
+изменённых полей, без значений.
 
 ---
 
