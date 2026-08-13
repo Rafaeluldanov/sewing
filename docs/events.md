@@ -359,8 +359,17 @@ COMPANY_SETTINGS | COMPANY_DIVISION |
 SALARY_ENTRY | PAYROLL_CALENDAR_MONTH | PAYROLL_PAYOUT |
 PAYROLL_ACCRUAL_DOCUMENT |
 ORDER_SAMPLE | EMPLOYEE | OPERATION |
-APP_ROLE
+APP_ROLE | ASSISTANT_THREAD
 ```
+
+- `ASSISTANT_THREAD` — диалоги с ассистентом (ИИ), см.
+  `apps/api/src/modules/assistant/*` и `docs/assistant.md`. Событие:
+  - `ASSISTANT_QUESTION_ANSWERED` — ассистент ответил на вопрос.
+    `entityId` — `AssistantThread.id`; payload содержит `model`, список
+    вызванных инструментов (`tools`) и стоимость обращения
+    (`costUsdMicros`). Текст вопроса и ответа в журнал НЕ пишется — он
+    лежит в `AssistantMessage`, дублировать пользовательский ввод в
+    audit незачем.
 
 - `EMPLOYEE` — события:
   - `EMPLOYEE_DELETED` — физическое удаление пустой учётки; снимок в

@@ -108,6 +108,7 @@
 - [40. Print jobs](#40-print-jobs)
 - [41. Printers agent](#41-printers-agent)
 - [42. Company settings](#42-company-settings)
+- [45. Assistant (ИИ)](#45-assistant)
 
 ---
 
@@ -2683,6 +2684,54 @@ GET-состоянии), иначе 400 `AMENDMENT_REASON_REQUIRED`.
 ```
 
 `applied: false` + предупреждение — маршрут не изменился (no-op, аудита нет).
+
+---
+
+<a id="45-assistant"></a>
+## 45. Assistant (ИИ)
+
+Окно «Спросить» в админке: диалог с моделью, которая отвечает по данным
+тенанта и по устройству системы. Этап 0 — **только чтение**: ни одной
+write-ручки, ни одной мутации внутри инструментов. Полный дизайн —
+`docs/assistant.md`, контракт — `packages/shared/src/assistant.ts`,
+backend — `assistant/assistant.controller.ts`.
+
+Фича под серверным флагом `FEATURE_AI_ASSISTANT` (флаг читает web в RSC;
+backend-ручки доступны всегда, но отвечают `ASSISTANT_DISABLED`, пока
+ассистент не включён в настройках компании).
+
+Настройки живут в singleton-строке `IntegrationSettings` рядом со связкой
+upgifts и правятся через `PATCH /api/integrations/settings` (см. §42) —
+своей ручки настроек модуль не заводит.
+
+| Метод | Путь                     | RBAC                | Описание |
+| ----- | ------------------------ | ------------------- | -------- |
+| GET   | `/api/assistant/config`  | SHOP_MANAGER, ADMIN | Доступен ли ассистент, модель, остаток суточного лимита, включённые группы данных. Ключей не отдаёт. |
+| POST  | `/api/assistant/ask`     | SHOP_MANAGER, ADMIN | Вопрос. Ответ — поток `text/event-stream`. Body: `AssistantAskSchema` (`question`, опц. `threadId`, `route`). |
+
+**Ответ `ask` — SSE, а не JSON.** Агентный проход с инструментами живёт
+5–30 секунд, и молчащее окно всё это время читается как «сломалось».
+Кадры — `data: <AssistantStreamEvent>`; типы события: `thread`, `tool`,
+`tool_done`, `text`, `sources`, `done`, `error`. Между кадрами сервер шлёт
+SSE-комментарий `: ping` раз в 15 секунд: `proxy_read_timeout 120s` на
+`/api/` — это бюджет ТИШИНЫ между байтами, и без heartbeat nginx оборвал бы
+долгий проход посреди ответа.
+
+**Ожидаемые отказы приезжают событием `error`, а не HTTP-кодом** (заголовки
+уже ушли): `ASSISTANT_DISABLED`, `ASSISTANT_NO_KEY`,
+`ASSISTANT_DAILY_LIMIT_REACHED`, `ASSISTANT_BUDGET_REACHED`,
+`ASSISTANT_UPSTREAM_ERROR`. HTTP-кодами отвечают только валидация тела
+(400) и чужой тред (404 `ASSISTANT_THREAD_NOT_FOUND`).
+
+**Границы доступа.** Инструменты исполняются в контексте запроса, то есть
+под тем же тенантом и с теми же ролями, что обычный вызов API. Группы
+данных (`PRODUCTION` / `SUPPLY` / `MONEY` / `PAYROLL`) режутся ДО обращения
+к модели: выключенная группа не попадает в запрос, поэтому её нельзя
+выпросить промптом. Деньги и зарплата выключены по умолчанию.
+
+Аудит: `ASSISTANT_QUESTION_ANSWERED` (`entityType = ASSISTANT_THREAD`,
+`entityId = AssistantThread.id`). Текст вопроса в audit не пишется — он
+лежит в `AssistantMessage`.
 
 ---
 

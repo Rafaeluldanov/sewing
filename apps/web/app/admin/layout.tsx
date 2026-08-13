@@ -1,10 +1,12 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeeAdmin } from '@/lib/rbac';
+import { isAssistantEnabled } from '@/lib/feature-flags';
 import {
   AdminSidebar,
   AdminSidebarMobileToggle,
 } from '@/components/admin-sidebar';
+import { AssistantDrawer } from '@/components/assistant/assistant-drawer';
 
 /**
  * Route-level guard и общий layout для всех `/admin/*` страниц
@@ -43,6 +45,13 @@ export default async function AdminSectionLayout({
         </div>
         {children}
       </div>
+      {/*
+        Окно «Спросить» — под серверным флагом FEATURE_AI_ASSISTANT.
+        Флаг читается здесь, в RSC: клиентский компонент монтируется
+        только когда фича включена, поэтому выключенная фича не стоит ни
+        байта в бандле-рантайме и ни одного запроса.
+      */}
+      {isAssistantEnabled() && <AssistantDrawer />}
     </div>
   );
 }

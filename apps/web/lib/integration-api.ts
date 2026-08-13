@@ -9,6 +9,7 @@
  * сервисного аккаунта наружу не приходит (в DTO только `hasPassword`).
  */
 import type {
+  AssistantTestKeyResult,
   IntegrationSettingsDto,
   UpdateIntegrationSettingsDto,
   UpgiftsTestConnectionResult,
@@ -35,4 +36,14 @@ export function testUpgiftsConnection(): Promise<UpgiftsTestConnectionResult> {
     '/integrations/upgifts/test-connection',
     { method: 'POST' },
   );
+}
+
+/**
+ * Кнопка «Проверить ключ» в карточке ассистента. Backend fail-soft:
+ * причина отказа приезжает в `message`, а не 5xx.
+ */
+export function testAssistantKey(): Promise<AssistantTestKeyResult> {
+  return apiFetch<AssistantTestKeyResult>('/integrations/assistant/test-key', {
+    method: 'POST',
+  });
 }

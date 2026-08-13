@@ -58,6 +58,10 @@ services:
       # пароля сервисного аккаунта at-rest. Без него сохранение пароля
       # интеграции отклоняется (см. secret-box.ts). Задаётся в .env.dev.
       INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      # Ассистент (ИИ): платформенный ключ Anthropic. Пусто ⇒ ассистента
+      # нельзя включить с источником ключа «платформенный» (компания
+      # может задать свой ключ в настройках). См. docs/assistant.md.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
       - db
     networks:
@@ -88,6 +92,9 @@ services:
       API_URL: http://api:3001/api
       # Стабильный ключ для Next.js Server Actions (см. .env.dev / .env.prod).
       NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY}
+      # Окно «Спросить» в админке. Флаг СЕРВЕРНЫЙ (не NEXT_PUBLIC_*):
+      # читается в RSC, поэтому не зависит от момента сборки образа.
+      FEATURE_AI_ASSISTANT: ${FEATURE_AI_ASSISTANT:-}
     depends_on:
       - api
     networks:

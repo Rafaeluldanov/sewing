@@ -15,7 +15,7 @@ import {
   listCompanyDivisions,
 } from '@/lib/company-settings-api';
 import { getIntegrationSettings } from '@/lib/integration-api';
-import { isErpIntegrationEnabled } from '@/lib/feature-flags';
+import { isAssistantEnabled, isErpIntegrationEnabled } from '@/lib/feature-flags';
 import { AdminCard, AdminPageShell } from '@/components/admin';
 import {
   CompanySettingsForm,
@@ -24,6 +24,7 @@ import {
 import { DivisionsSection } from './divisions-section';
 import { MaterialStockDivisionOverridesSection } from './material-stock-division-overrides-section';
 import { OffRoutePolicySection } from './off-route-policy-section';
+import { AssistantSection } from './assistant-section';
 import { IntegrationsSection } from './integrations-section';
 
 export const dynamic = 'force-dynamic';
@@ -115,14 +116,20 @@ export default async function AdminCompanySettingsPage({
   const offRouteReadiness: OffRouteReadinessDto | null =
     await getOffRouteReadiness().catch(() => null);
 
-  // Раздел «Интеграции» — под флагом FEATURE_ERP_INTEGRATION. Падение
-  // запроса не должно ронять страницу настроек (деградируем до без раздела).
+  // Вкладка «Интеграции» — две независимые карточки под своими флагами:
+  // ERP upgifts (FEATURE_ERP_INTEGRATION) и ассистент (FEATURE_AI_ASSISTANT).
+  // Настройки у них общие (одна singleton-строка), поэтому грузим их, если
+  // включена хотя бы одна. Падение запроса не должно ронять страницу
+  // настроек — деградируем до вкладки без карточек.
   const erpIntegrationEnabled = isErpIntegrationEnabled();
+  const assistantEnabled = isAssistantEnabled();
+  const anyIntegrationEnabled = erpIntegrationEnabled || assistantEnabled;
   const integrationSettings: IntegrationSettingsDto | null =
-    erpIntegrationEnabled
+    anyIntegrationEnabled
       ? await getIntegrationSettings().catch(() => null)
       : null;
-  const integrationsAvailable = erpIntegrationEnabled && integrationSettings != null;
+  const integrationsAvailable =
+    anyIntegrationEnabled && integrationSettings != null;
 
   // Активная вкладка из URL. Неизвестное/недоступное значение → «org».
   const requestedTab = searchParams?.tab;
@@ -199,7 +206,14 @@ export default async function AdminCompanySettingsPage({
       )}
 
       {tab === 'integrations' && integrationsAvailable && integrationSettings && (
-        <IntegrationsSection settings={integrationSettings} />
+        <>
+          {erpIntegrationEnabled && (
+            <IntegrationsSection settings={integrationSettings} />
+          )}
+          {assistantEnabled && (
+            <AssistantSection settings={integrationSettings} />
+          )}
+        </>
       )}
     </AdminPageShell>
   );

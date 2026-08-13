@@ -72,3 +72,21 @@ export function isErpIntegrationEnabled(): boolean {
   if (raw === '0' || raw === 'false') return false;
   return process.env.NODE_ENV !== 'production';
 }
+
+/**
+ * `FEATURE_AI_ASSISTANT` — окно диалога с ИИ в админке и карточка его
+ * настроек на вкладке «Интеграции» (см. `docs/assistant.md`).
+ *
+ * Флаг СЕРВЕРНЫЙ, не `NEXT_PUBLIC_*`: читается в RSC (layout админки и
+ * страница настроек), поэтому не зависит от того, что было в окружении
+ * на момент сборки образа. Это сознательно — на `NEXT_PUBLIC_*` мы уже
+ * обжигались, когда build-time переменные не доехали до прода.
+ *
+ * На проде OFF по умолчанию, на dev — ON. Явное `=0` выключает везде.
+ */
+export function isAssistantEnabled(): boolean {
+  const raw = process.env.FEATURE_AI_ASSISTANT;
+  if (raw === '1' || raw === 'true') return true;
+  if (raw === '0' || raw === 'false') return false;
+  return process.env.NODE_ENV !== 'production';
+}

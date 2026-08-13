@@ -275,7 +275,16 @@ export class AssistantService {
     sources: AssistantSourceDto[];
     emit: (event: AssistantStreamEvent) => void;
   }): Promise<string> {
-    const client = new Anthropic({ apiKey: args.apiKey });
+    // Таймаут и ретраи задаём явно. Дефолт SDK — 10 минут и 2 повтора,
+    // причём повторы МОЛЧАЛИВЫЕ: наружу не идёт ни байта, а бюджет
+    // тишины у nginx на `/api/` всего 120 секунд. Один повтор и жёсткий
+    // потолок в 90 секунд на запрос укладываются в этот бюджет вместе с
+    // heartbeat-ом из контроллера.
+    const client = new Anthropic({
+      apiKey: args.apiKey,
+      timeout: 90_000,
+      maxRetries: 1,
+    });
     const toolByName = new Map(args.tools.map((t) => [t.name, t]));
 
     const messages: Anthropic.MessageParam[] = [

@@ -71,6 +71,10 @@ services:
       # Терять и ротировать на живую нельзя — старые значения станут
       # нечитаемыми.
       INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      # Ассистент (ИИ): платформенный ключ Anthropic (.env.prod).
+      # Пусто ⇒ ассистента нельзя включить с источником ключа
+      # «платформенный». См. docs/assistant.md.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       # Загруженные пользователем файлы (превью лекал, DXF по размерам,
       # иконки категорий). Persistent named volume — переживает любые
@@ -133,12 +137,14 @@ services:
       #   FEATURE_ERP_INTEGRATION=1    — вкладка «Интеграции» в настройках;
       #   FEATURE_ORDER_CALCULATIONS=1 — вкладки «Варианты просчёта» в заказе;
       #   FEATURE_QTY_CORRECTION=1     — корректировка кол-ва по паспорту (ОТК→мастер);
-      #   FEATURE_ORDER_AMENDMENTS=1   — правка заказа в производстве.
+      #   FEATURE_ORDER_AMENDMENTS=1   — правка заказа в производстве;
+      #   FEATURE_AI_ASSISTANT=1       — окно «Спросить» (ассистент) в админке.
       FEATURE_COLORWAYS: ${FEATURE_COLORWAYS:-0}
       FEATURE_ERP_INTEGRATION: ${FEATURE_ERP_INTEGRATION:-0}
       FEATURE_ORDER_CALCULATIONS: ${FEATURE_ORDER_CALCULATIONS:-1}
       FEATURE_QTY_CORRECTION: ${FEATURE_QTY_CORRECTION:-0}
       FEATURE_ORDER_AMENDMENTS: ${FEATURE_ORDER_AMENDMENTS:-0}
+      FEATURE_AI_ASSISTANT: ${FEATURE_AI_ASSISTANT:-0}
     depends_on:
       - api
     restart: always

@@ -303,9 +303,12 @@ const passportLocate: AssistantTool = {
   label: 'Ищу паспорт',
   scope: 'PRODUCTION',
   description:
-    'Где сейчас паспорт: статус, текущая операция, у кого на руках, ' +
-    'ячейка, к какому заказу относится. Зови на вопросы вида «где ' +
-    'паспорт P-20260813-0007», «что с паспортом …».',
+    'Где сейчас паспорт: статус, операция, у кого на руках, ячейка, к ' +
+    'какому заказу относится. Зови на вопросы вида «где паспорт ' +
+    'P-20260813-0007», «что с паспортом …». Различай два поля: ' +
+    '`operationInProgress` — операция выполняется прямо сейчас (паспорт у ' +
+    'исполнителя), `lastCompletedOperation` — последняя ПРОЙДЕННАЯ ' +
+    'операция (паспорт лежит и ждёт следующей). Не выдавай вторую за первую.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -341,6 +344,15 @@ const passportLocate: AssistantTool = {
     });
     if (!p) return { data: { found: false, number } };
 
+    // ВАЖНО про семантику `currentOperationId`. После завершения операции
+    // сервис пишет туда ЗАВЕРШЁННУЮ операцию и обнуляет `currentEmployeeId`
+    // (см. `passports.service.ts` — `afterSnapshot`). То есть одно и то же
+    // поле значит разное: пока паспорт у исполнителя — это операция В
+    // РАБОТЕ, после сдачи — ПОСЛЕДНЯЯ ПРОЙДЕННАЯ. Отдавать это модели под
+    // одним именем «текущая операция» нельзя: она ответит «шьётся на
+    // распошивалке» про паспорт, который там уже отработал и лежит в ячейке.
+    const inProgress = Boolean(p.currentEmployee);
+
     return {
       data: {
         found: true,
@@ -353,8 +365,9 @@ const passportLocate: AssistantTool = {
         qtyGood: p.qtyGood,
         qtyDefect: p.qtyDefect,
         cutDate: isoDay(p.cutDate),
-        currentOperation: p.currentOperation?.name ?? null,
-        currentEmployee: p.currentEmployee?.fullName ?? null,
+        operationInProgress: inProgress ? (p.currentOperation?.name ?? null) : null,
+        lastCompletedOperation: inProgress ? null : (p.currentOperation?.name ?? null),
+        holder: p.currentEmployee?.fullName ?? null,
         currentCell: p.currentCell?.code ?? null,
       },
       sources: [
@@ -445,8 +458,20 @@ const workshopNeeds: AssistantTool = {
     });
     if (!order) return { data: { found: false, orderNumber } };
 
+    // Потребность принадлежит ВАРИАНТУ ПРОСЧЁТА: у заказа их может быть
+    // несколько, и выборка по одному `orderId` сложила бы строки всех
+    // вариантов — материалы задвоились бы. Берём активный вариант, а если
+    // его нет (заказы до фичи вариантов) — строки без привязки.
+    const activeCalculation = await ctx.prisma.orderCalculation.findFirst({
+      where: { orderId: order.id, isActive: true },
+      select: { id: true },
+    });
+
     const needs = await ctx.prisma.workshopNeed.findMany({
-      where: { orderId: order.id },
+      where: {
+        orderId: order.id,
+        orderCalculationId: activeCalculation ? activeCalculation.id : null,
+      },
       take: ROW_LIMIT,
       select: {
         description: true,

@@ -63,6 +63,21 @@ export class AssistantController {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     };
 
+    /**
+     * Heartbeat. `proxy_read_timeout 120s` на `/api/` — это бюджет
+     * ТИШИНЫ между байтами, а не общего времени ответа. Модель может
+     * молча думать дольше двух минут (особенно на первом проходе, до
+     * первого вызова инструмента), и nginx оборвёт соединение прямо
+     * посреди ответа. SSE-комментарий `:` — валидный кадр, который
+     * клиент игнорирует, а прокси считает трафиком.
+     *
+     * `unref()` — чтобы таймер не держал процесс при остановке.
+     */
+    const heartbeat = setInterval(() => {
+      if (!closed) res.write(': ping\n\n');
+    }, 15_000);
+    heartbeat.unref?.();
+
     try {
       await this.assistant.ask(body, user, emit);
     } catch (e) {
@@ -79,6 +94,7 @@ export class AssistantController {
             : 'Внутренняя ошибка ассистента.',
       });
     } finally {
+      clearInterval(heartbeat);
       if (!closed) res.end();
     }
   }
