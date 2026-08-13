@@ -27,6 +27,16 @@
  */
 
 import { z } from 'zod';
+import {
+  ASSISTANT_API_KEY_MAX_LENGTH,
+  ASSISTANT_DAILY_LIMIT_MAX,
+  ASSISTANT_DAILY_LIMIT_MIN,
+  ASSISTANT_KEY_SOURCES,
+  ASSISTANT_MODEL_IDS,
+  ASSISTANT_MONTHLY_BUDGET_MAX_CENTS,
+  ASSISTANT_MONTHLY_BUDGET_MIN_CENTS,
+  type AssistantKeySource,
+} from './assistant';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -123,6 +133,25 @@ const PasswordField = z.preprocess(
 // Update DTO
 // ---------------------------------------------------------------------------
 
+/**
+ * Ключ Anthropic. Семантика как у пароля upgifts: '' / отсутствие ⇒
+ * «не менять» (форму можно пересохранять, не вводя ключ заново).
+ */
+const AssistantApiKeyField = z.preprocess(
+  (v) => {
+    if (typeof v !== 'string') return undefined;
+    const trimmed = v.trim();
+    return trimmed === '' ? undefined : trimmed;
+  },
+  z
+    .string()
+    .max(
+      ASSISTANT_API_KEY_MAX_LENGTH,
+      `Ключ не длиннее ${ASSISTANT_API_KEY_MAX_LENGTH} символов`,
+    )
+    .optional(),
+);
+
 export const UpdateIntegrationSettingsSchema = z
   .object({
     upgiftsEnabled: z.boolean().optional(),
@@ -137,6 +166,31 @@ export const UpdateIntegrationSettingsSchema = z
       INTEGRATION_ORG_ID_MAX_LENGTH,
       'organization_id',
     ),
+
+    // --- Ассистент (ИИ) — вторая интеграция в этой же singleton-строке ---
+    assistantEnabled: z.boolean().optional(),
+    assistantKeySource: z.enum(ASSISTANT_KEY_SOURCES).optional(),
+    assistantApiKey: AssistantApiKeyField,
+    assistantModel: z.enum(ASSISTANT_MODEL_IDS).optional(),
+    assistantDailyLimitPerUser: z
+      .number()
+      .int('Лимит — целое число')
+      .min(ASSISTANT_DAILY_LIMIT_MIN)
+      .max(
+        ASSISTANT_DAILY_LIMIT_MAX,
+        `Лимит не больше ${ASSISTANT_DAILY_LIMIT_MAX} вопросов в сутки`,
+      )
+      .optional(),
+    assistantMonthlyBudgetCents: z
+      .number()
+      .int('Потолок расхода — целое число центов')
+      .min(ASSISTANT_MONTHLY_BUDGET_MIN_CENTS)
+      .max(ASSISTANT_MONTHLY_BUDGET_MAX_CENTS)
+      .optional(),
+    assistantScopeProduction: z.boolean().optional(),
+    assistantScopeSupply: z.boolean().optional(),
+    assistantScopeMoney: z.boolean().optional(),
+    assistantScopePayroll: z.boolean().optional(),
   })
   .refine(
     (obj) => Object.values(obj).some((v) => v !== undefined),
@@ -164,8 +218,40 @@ export interface IntegrationSettingsDto {
   lastConnectionOkAt: string | null;
   /** Текст последней ошибки соединения (или null, если последняя проверка ок). */
   lastConnectionError: string | null;
+
+  // --- Ассистент (ИИ) ---
+  assistantEnabled: boolean;
+  assistantKeySource: AssistantKeySource;
+  /** Флаг «свой ключ Anthropic задан» — сам ключ не отдаётся никогда. */
+  hasOwnAssistantKey: boolean;
+  /** Задан ли платформенный ключ на сервере (env). Ключ не отдаём. */
+  platformAssistantKeyAvailable: boolean;
+  assistantModel: string;
+  assistantDailyLimitPerUser: number;
+  assistantMonthlyBudgetCents: number;
+  assistantScopeProduction: boolean;
+  assistantScopeSupply: boolean;
+  assistantScopeMoney: boolean;
+  assistantScopePayroll: boolean;
+  assistantLastCheckOkAt: string | null;
+  assistantLastCheckError: string | null;
+  /** Израсходовано с начала календарного месяца, в центах. */
+  assistantSpentThisMonthCents: number;
+  /** Сколько вопросов задано компанией с начала месяца. */
+  assistantQuestionsThisMonth: number;
+
   createdAt: string; // ISO
   updatedAt: string; // ISO
+}
+
+/**
+ * Результат `POST /api/integrations/assistant/test-key`. Как и у
+ * upgifts: никогда не 5xx из-за внешнего сервиса — причина приезжает
+ * текстом, чтобы форма её показала.
+ */
+export interface AssistantTestKeyResult {
+  ok: boolean;
+  message: string;
 }
 
 // ---------------------------------------------------------------------------

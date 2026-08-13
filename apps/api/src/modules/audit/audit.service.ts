@@ -255,6 +255,16 @@ export type AuditEntityType =
    */
   | 'INTEGRATION_SETTINGS'
   /**
+   * Диалоги с ассистентом (ИИ) — см. `apps/api/src/modules/assistant/*`,
+   * `prisma/schema.prisma::AssistantThread`. Событие:
+   *   - `ASSISTANT_QUESTION_ANSWERED` — ассистент ответил на вопрос.
+   *     `entityId` — `AssistantThread.id`; payload содержит модель,
+   *     список вызванных инструментов и стоимость обращения. Текст
+   *     вопроса в audit НЕ пишется: он уже лежит в `AssistantMessage`,
+   *     дублировать пользовательский ввод в журнал незачем.
+   */
+  | 'ASSISTANT_THREAD'
+  /**
    * Подразделения компании (управленческий справочник, см.
    * `apps/api/src/modules/company-settings/company-divisions.*`,
    * `prisma/schema.prisma::CompanyDivision`). События:

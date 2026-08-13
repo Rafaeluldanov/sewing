@@ -6785,8 +6785,138 @@ model IntegrationSettings {
   /// Текст последней ошибки соединения (null, если последняя проверка ок).
   lastConnectionError String?
 
+  // -------------------------------------------------------------------------
+  // Ассистент (ИИ) — вторая интеграция в этой же singleton-строке.
+  //
+  // Отдельной таблицы фича сознательно не заводит: «одна компания — одна
+  // связка с внешним сервисом» здесь ровно та же, что у upgifts, и
+  // настройки живут на одной вкладке «Интеграции».
+  // См. `packages/shared/src/assistant.ts`, `apps/api/src/modules/assistant/*`.
+  // -------------------------------------------------------------------------
+
+  /// Мастер-выключатель. `true` разрешён сервисом только когда ключ
+  /// реально доступен (платформенный из env либо свой сохранённый) —
+  /// проверка в `IntegrationsService.update`.
+  assistantEnabled Boolean @default(false)
+
+  /// Источник ключа: `PLATFORM` (env `ANTHROPIC_API_KEY`, платит владелец
+  /// установки) или `OWN` (ключ компании в `assistantApiKeyEnc`).
+  /// Строка, а не enum: список источников может расшириться, а миграция
+  /// enum-а в Postgres дороже, чем проверка в Zod.
+  assistantKeySource String @default("PLATFORM")
+
+  /// Ключ Anthropic компании, ЗАШИФРОВАННЫЙ тем же AES-256-GCM, что и
+  /// пароль upgifts (`secret-box.ts`). Наружу не отдаётся никогда —
+  /// в DTO только `hasOwnKey`.
+  assistantApiKeyEnc String?
+
+  /// Идентификатор модели (`claude-opus-5` / `claude-sonnet-5`).
+  /// Допустимые значения — `ASSISTANT_MODELS` в shared.
+  assistantModel String @default("claude-opus-5")
+
+  /// Лимит вопросов в сутки на одного сотрудника. `0` ⇒ без лимита.
+  assistantDailyLimitPerUser Int @default(30)
+
+  /// Потолок расхода в месяц, В ЦЕНТАХ ($100 = 10000). `0` ⇒ без потолка.
+  /// Целое, а не Float: деньги дробным типом не хранят.
+  assistantMonthlyBudgetCents Int @default(10000)
+
+  /// Группы данных, доступные ассистенту. Выключенная группа не доезжает
+  /// до модели: её инструменты не попадают в запрос вообще.
+  /// Деньги и зарплата по умолчанию ВЫКЛЮЧЕНЫ.
+  assistantScopeProduction Boolean @default(true)
+  assistantScopeSupply     Boolean @default(true)
+  assistantScopeMoney      Boolean @default(false)
+  assistantScopePayroll    Boolean @default(false)
+
+  /// Итог последней проверки ключа (кнопка «Проверить ключ»).
+  assistantLastCheckOkAt  DateTime?
+  assistantLastCheckError String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// AssistantThread / AssistantMessage — история диалогов с ассистентом.
+// ---------------------------------------------------------------------------
+//
+// Зачем хранить. Три причины, и ни одна из них не «чтобы было»:
+//   1) многоходовый диалог — уточняющий вопрос должен видеть предыдущий;
+//   2) лимиты и расход — суточный лимит на сотрудника и месячный потолок
+//      компании считаются по этим строкам, а не по внешнему биллингу;
+//   3) разбор полётов — когда ассистент ответит ерунду, нужно поднять
+//      ровно тот вызов: какие инструменты звал и сколько токенов сжёг.
+//
+// Треды принадлежат СОТРУДНИКУ: чужой тред не открывается (404), потому
+// что в ответах лежат данные, отфильтрованные под права его автора.
+// ---------------------------------------------------------------------------
+
+enum AssistantMessageRole {
+  USER
+  ASSISTANT
+}
+
+model AssistantThread {
+  id String @id @default(cuid())
+
+  /// Автор треда. Внешнего ключа сознательно нет: удаление сотрудника не
+  /// должно ронять историю, а `employeeId` нужен только для фильтра
+  /// «мои треды» и подсчёта лимита.
+  employeeId String
+
+  /// Первые слова первого вопроса — заголовок в списке диалогов.
+  title String?
+
+  messages AssistantMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId, createdAt])
+}
+
+model AssistantMessage {
+  id String @id @default(cuid())
+
+  threadId String
+  thread   AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  /// Дублируем автора на сообщении: суточный лимит считается по
+  /// сообщениям роли `USER` за московские сутки, и join к треду ради
+  /// этого не нужен.
+  employeeId String
+
+  role    AssistantMessageRole
+  content String
+
+  /// Вызовы инструментов (`AssistantToolCallDto[]`) — для показа в шторке
+  /// и для разбора полётов. Json, а не таблица: читается всегда целиком.
+  toolCalls Json?
+
+  /// Ссылки-источники (`AssistantSourceDto[]`), по которым проверяют ответ.
+  sources Json?
+
+  /// Модель, которая отвечала. Хранится на сообщении, а не берётся из
+  /// настроек: настройку могли поменять после ответа.
+  model String?
+
+  inputTokens       Int?
+  cachedInputTokens Int?
+  outputTokens      Int?
+
+  /// Стоимость обращения в МИКРОДОЛЛАРАХ ($0,03 = 30000). Центов не
+  /// хватает: типовой вопрос дешевле цента, и всё бы округлилось в ноль.
+  costUsdMicros Int?
+
+  /// Машинный код ошибки, если ответа не получилось
+  /// (`ASSISTANT_DAILY_LIMIT_REACHED`, `ASSISTANT_UPSTREAM_ERROR`, …).
+  errorCode String?
+
+  createdAt DateTime @default(now())
+
+  @@index([threadId, createdAt])
+  @@index([employeeId, createdAt])
 }
 
 // ---------------------------------------------------------------------------

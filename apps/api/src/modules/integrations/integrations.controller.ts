@@ -43,4 +43,9 @@ export class IntegrationsController {
   testConnection() {
     return this.integrations.testConnection();
   }
+
+  @Post('assistant/test-key')
+  testAssistantKey() {
+    return this.integrations.testAssistantKey();
+  }
 }

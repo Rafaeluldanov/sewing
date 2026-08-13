@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { AssistantKeySource } from '@sewing/shared/assistant';
 import {
   INTEGRATION_SETTINGS_SINGLETON_ID,
+  type AssistantTestKeyResult,
   type IntegrationSettingsDto,
   type UpdateIntegrationSettingsDto,
   type UpgiftsTestConnectionResult,
@@ -54,7 +56,35 @@ export class IntegrationsService {
   // ===========================================================================
 
   async get(): Promise<IntegrationSettingsDto> {
-    return toDto(await this.getOrCreate());
+    const row = await this.getOrCreate();
+    return toDto(row, await this.assistantStats());
+  }
+
+  /**
+   * Расход ассистента с начала календарного месяца — показывается в
+   * карточке настроек рядом с потолком. Лимит, расход по которому не
+   * видно, никто не настраивает осмысленно.
+   */
+  private async assistantStats(): Promise<AssistantStats> {
+    const from = new Date();
+    const monthStart = new Date(
+      Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1),
+    );
+    const [agg, questions] = await Promise.all([
+      this.prisma.assistantMessage.aggregate({
+        where: { createdAt: { gte: monthStart } },
+        _sum: { costUsdMicros: true },
+      }),
+      this.prisma.assistantMessage.count({
+        where: { createdAt: { gte: monthStart }, role: 'USER' },
+      }),
+    ]);
+    return {
+      // Микродоллары → центы: $0,03 = 30000 микро = 3 цента.
+      spentThisMonthCents: Math.round((agg._sum.costUsdMicros ?? 0) / 10_000),
+      questionsThisMonth: questions,
+      platformKeyAvailable: Boolean(process.env.ANTHROPIC_API_KEY?.trim()),
+    };
   }
 
   // ===========================================================================
@@ -145,8 +175,11 @@ export class IntegrationsService {
       }
     }
 
+    // --- ассистент (ИИ) -----------------------------------------------------
+    this.applyAssistantPatch(dto, current, data, changed);
+
     if (changed.length === 0) {
-      return toDto(current);
+      return toDto(current, await this.assistantStats());
     }
 
     const updated = await this.prisma.integrationSettings.update({
@@ -166,7 +199,167 @@ export class IntegrationsService {
       payload: { changed },
       employeeId: actorEmployeeId ?? null,
     });
-    return toDto(updated);
+    return toDto(updated, await this.assistantStats());
+  }
+
+  /**
+   * Патч полей ассистента. Вынесен из `update`, чтобы тело метода не
+   * превратилось в простыню: логика та же (undefined ⇒ не трогаем), плюс
+   * одна проверка полноты — включить можно только когда ключ реально
+   * доступен, иначе пользователь включит фичу и получит молчащее окно.
+   */
+  private applyAssistantPatch(
+    dto: UpdateIntegrationSettingsDto,
+    current: IntegrationSettingsRow,
+    data: Prisma.IntegrationSettingsUpdateInput,
+    changed: string[],
+  ): void {
+    if (dto.assistantApiKey !== undefined) {
+      try {
+        data.assistantApiKeyEnc = encryptSecret(dto.assistantApiKey);
+      } catch (e) {
+        if (e instanceof IntegrationSecretKeyMissingError) {
+          throw new BadRequestException({
+            statusCode: 400,
+            code: 'INTEGRATION_SECRET_KEY_MISSING',
+            message:
+              'Не задан ключ шифрования INTEGRATION_SECRET_KEY — ключ ' +
+              'Anthropic не сохранён. Обратитесь к администратору сервера.',
+          });
+        }
+        throw e;
+      }
+      changed.push('assistantApiKey');
+    }
+
+    const scalarKeys = [
+      'assistantKeySource',
+      'assistantModel',
+      'assistantDailyLimitPerUser',
+      'assistantMonthlyBudgetCents',
+      'assistantScopeProduction',
+      'assistantScopeSupply',
+      'assistantScopeMoney',
+      'assistantScopePayroll',
+      'assistantEnabled',
+    ] as const;
+    for (const key of scalarKeys) {
+      const value = dto[key];
+      if (value === undefined) continue;
+      if (value !== current[key]) {
+        (data as Record<string, unknown>)[key] = value;
+        changed.push(key);
+      }
+    }
+
+    // Проверка полноты для включённого ассистента.
+    const enabled = dto.assistantEnabled ?? current.assistantEnabled;
+    if (!enabled) return;
+
+    const keySource = dto.assistantKeySource ?? current.assistantKeySource;
+    const hasOwnKey =
+      data.assistantApiKeyEnc !== undefined
+        ? Boolean(data.assistantApiKeyEnc)
+        : Boolean(current.assistantApiKeyEnc);
+
+    if (keySource === 'OWN' && !hasOwnKey) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'ASSISTANT_KEY_MISSING',
+        message:
+          'Чтобы включить ассистента со своим ключом, сохраните ключ Anthropic.',
+      });
+    }
+    if (keySource === 'PLATFORM' && !process.env.ANTHROPIC_API_KEY?.trim()) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'ASSISTANT_PLATFORM_KEY_MISSING',
+        message:
+          'На сервере не задан ANTHROPIC_API_KEY. Попросите администратора ' +
+          'добавить его или переключитесь на свой ключ Anthropic.',
+      });
+    }
+  }
+
+  // ===========================================================================
+  // ПРОВЕРКА КЛЮЧА АССИСТЕНТА
+  // ===========================================================================
+
+  /**
+   * Проверка ключа Anthropic: самый дешёвый из возможных запросов —
+   * список моделей. Никогда не бросает: причина приезжает текстом,
+   * как и у `testConnection` для upgifts.
+   */
+  async testAssistantKey(): Promise<AssistantTestKeyResult> {
+    const row = await this.getOrCreate();
+    let apiKey: string | null = null;
+
+    if (row.assistantKeySource === 'OWN') {
+      if (!row.assistantApiKeyEnc) {
+        return { ok: false, message: 'Ключ Anthropic компании не сохранён.' };
+      }
+      try {
+        apiKey = decryptSecret(row.assistantApiKeyEnc);
+      } catch {
+        return {
+          ok: false,
+          message: 'Не удалось расшифровать сохранённый ключ (сменился INTEGRATION_SECRET_KEY?).',
+        };
+      }
+    } else {
+      apiKey = process.env.ANTHROPIC_API_KEY?.trim() || null;
+      if (!apiKey) {
+        return {
+          ok: false,
+          message: 'На сервере не задан ANTHROPIC_API_KEY.',
+        };
+      }
+    }
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/models?limit=1', {
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) {
+        const message =
+          res.status === 401
+            ? 'Ключ отклонён Anthropic (401) — проверьте значение.'
+            : `Anthropic ответил ${res.status}.`;
+        await this.recordAssistantCheck(false, message);
+        return { ok: false, message };
+      }
+      await this.recordAssistantCheck(true, null);
+      return { ok: true, message: 'Ключ рабочий, модель доступна.' };
+    } catch (e) {
+      const message =
+        e instanceof Error && e.name === 'TimeoutError'
+          ? 'Anthropic не ответил за 15 секунд.'
+          : `Не удалось связаться с Anthropic: ${String(e)}`;
+      await this.recordAssistantCheck(false, message);
+      return { ok: false, message };
+    }
+  }
+
+  private async recordAssistantCheck(
+    ok: boolean,
+    error: string | null,
+  ): Promise<void> {
+    try {
+      await this.prisma.integrationSettings.update({
+        where: { id: INTEGRATION_SETTINGS_SINGLETON_ID },
+        data: {
+          assistantLastCheckOkAt: ok ? new Date() : undefined,
+          assistantLastCheckError: ok ? null : error,
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`recordAssistantCheck failed: ${String(e)}`);
+    }
   }
 
   // ===========================================================================
@@ -300,7 +493,17 @@ export class IntegrationsService {
 // DTO mapper (пароль НИКОГДА не отдаём — только hasPassword)
 // ---------------------------------------------------------------------------
 
-function toDto(r: IntegrationSettingsRow): IntegrationSettingsDto {
+/** Счётчики ассистента, которые не хранятся в строке настроек. */
+interface AssistantStats {
+  spentThisMonthCents: number;
+  questionsThisMonth: number;
+  platformKeyAvailable: boolean;
+}
+
+function toDto(
+  r: IntegrationSettingsRow,
+  assistant: AssistantStats,
+): IntegrationSettingsDto {
   return {
     id: r.id,
     upgiftsEnabled: r.upgiftsEnabled,
@@ -313,6 +516,25 @@ function toDto(r: IntegrationSettingsRow): IntegrationSettingsDto {
       ? r.lastConnectionOkAt.toISOString()
       : null,
     lastConnectionError: r.lastConnectionError,
+
+    assistantEnabled: r.assistantEnabled,
+    assistantKeySource: r.assistantKeySource as AssistantKeySource,
+    hasOwnAssistantKey: Boolean(r.assistantApiKeyEnc),
+    platformAssistantKeyAvailable: assistant.platformKeyAvailable,
+    assistantModel: r.assistantModel,
+    assistantDailyLimitPerUser: r.assistantDailyLimitPerUser,
+    assistantMonthlyBudgetCents: r.assistantMonthlyBudgetCents,
+    assistantScopeProduction: r.assistantScopeProduction,
+    assistantScopeSupply: r.assistantScopeSupply,
+    assistantScopeMoney: r.assistantScopeMoney,
+    assistantScopePayroll: r.assistantScopePayroll,
+    assistantLastCheckOkAt: r.assistantLastCheckOkAt
+      ? r.assistantLastCheckOkAt.toISOString()
+      : null,
+    assistantLastCheckError: r.assistantLastCheckError,
+    assistantSpentThisMonthCents: assistant.spentThisMonthCents,
+    assistantQuestionsThisMonth: assistant.questionsThisMonth,
+
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
   };
