@@ -50,6 +50,7 @@
 | Enum | Значения | Источник |
 | --- | --- | --- |
 | `ApprovalMode` | `IMMEDIATE`, `AFTER_RELEASE` | `prisma/schema.prisma::enum ApprovalMode` |
+| `AssistantMessageRole` | `USER`, `ASSISTANT` | `prisma/schema.prisma::enum AssistantMessageRole` |
 | `CompensationType` | `PIECEWORK`, `SALARY`, `MIXED` | `prisma/schema.prisma::enum CompensationType` |
 | `CuttingClosureRequestStatus` | `REQUESTED`, `APPROVED`, `REJECTED` | `prisma/schema.prisma::enum CuttingClosureRequestStatus` |
 | `EarningSource` | `PASSPORT_CREATED`, `OPERATION_TRANSITION` | `prisma/schema.prisma::enum EarningSource` |
@@ -1087,6 +1088,47 @@ master-action'ом, удаление, упаковка прямо из ячей�
     карточки не сносила заказ / экран / сотрудника.
 - Audit под `entityType = COMPANY_SETTINGS` / `COMPANY_DIVISION`
   (см. `docs/events.md §3.2`).
+
+---
+
+### 2.16 Assistant (ИИ)
+
+Контур окна «Спросить» в админке. Настроек своих не заводит — они
+доливаются в singleton `IntegrationSettings` (см. §2.15 и
+`docs/assistant.md`). Здесь только история диалогов.
+
+- **`AssistantThread`** — диалог одного сотрудника.
+  - `employeeId String` БЕЗ внешнего ключа: удаление сотрудника не
+    должно ронять историю, а поле нужно только для фильтра «мои треды»
+    и для суточного лимита.
+  - `title String?` — первые 80 символов первого вопроса, заголовок в
+    списке диалогов.
+  - `@@index([employeeId, createdAt])`.
+  - Тред принадлежит автору: чужой отдаёт 404
+    `ASSISTANT_THREAD_NOT_FOUND` — в ответах лежат данные,
+    отфильтрованные под права именно его автора.
+- **`AssistantMessage`** — сообщение в треде.
+  - `role AssistantMessageRole` (`USER` / `ASSISTANT`), `content String`.
+  - `threadId → AssistantThread` (`onDelete: Cascade`).
+  - `employeeId String` продублирован с треда: суточный лимит считается
+    по сообщениям роли `USER` за московские сутки, и join ради этого
+    не нужен.
+  - `toolCalls Json?` / `sources Json?` — вызовы инструментов и
+    ссылки-источники (`AssistantToolCallDto[]` / `AssistantSourceDto[]`).
+    Json, а не таблицы: читаются всегда целиком, вместе с сообщением.
+  - `model String?` хранится НА СООБЩЕНИИ, а не берётся из настроек:
+    настройку могли поменять после ответа.
+  - `inputTokens` / `cachedInputTokens` / `outputTokens` +
+    **`costUsdMicros Int?`** — стоимость в МИКРОДОЛЛАРАХ ($0,03 =
+    30000). В центах типовой вопрос округлился бы в ноль, и месячный
+    потолок расхода перестал бы работать.
+  - `errorCode String?` — машинный код, если ответа не получилось
+    (`ASSISTANT_DAILY_LIMIT_REACHED`, `ASSISTANT_UPSTREAM_ERROR`, …).
+    Такие сообщения исключаются из истории, уезжающей в модель.
+  - `@@index([threadId, createdAt])`, `@@index([employeeId, createdAt])`
+    — второй под запрос «сколько вопросов задал сотрудник X сегодня».
+- Audit под `entityType = ASSISTANT_THREAD`
+  (событие `ASSISTANT_QUESTION_ANSWERED`, см. `docs/events.md`).
 
 ---
 
