@@ -71,6 +71,7 @@ import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
 import { OperationSwitcher } from '@/app/work/operation-switcher';
 import { PACKING_INTAKE_WORDING } from '@/app/work/work-wording';
 import { Icon } from '@/components/icon';
+import { PassportsInWorkCard } from '@/components/passports-in-work-card';
 import {
   closeBoxTerminalAction,
   createBoxTerminalAction,
@@ -216,6 +217,25 @@ export function PackingTerminal({
         <OperationSwitcher
           shift={initialShift!}
           availableOperations={availableOperations}
+        />
+      )}
+
+      {/*
+       * «В работе у вас» — только для коробочного режима. В швейном
+       * режиме те же паспорта уже рисует `SeamstressActivePanel`
+       * (`currentWork`), дублировать нечего.
+       *
+       * Зачем в коробках: паспорт, взятый на «Распаковке», числится за
+       * упаковщиком до закрытия операции, и `switchOperation` из-за
+       * него отвечает `SHIFT_HAS_ACTIVE_PASSPORTS`. Раньше в этом
+       * режиме список не грузился вовсе — паспорт пропадал с экрана, и
+       * причина отказа была невидимой. Строки не кликабельны: закрыть
+       * такой паспорт можно только на его операции (см. подсказку).
+       */}
+      {onBoxPackingShift && (
+        <PassportsInWorkCard
+          items={currentWork}
+          hint="Паспорт числится за вами с другой операции и не закрыт — пока он на руках, сменить операцию нельзя. Завершите смену и начните новую на его операции, чтобы закрыть, либо попросите мастера снять паспорт с вас."
         />
       )}
 

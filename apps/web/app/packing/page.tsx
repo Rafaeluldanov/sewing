@@ -158,12 +158,23 @@ export default async function PackingPage({
       applicable: false,
       orders: [],
     };
+    // «В работе у вас» нужен в ОБОИХ режимах, а не только в швейном.
+    // Паспорт, взятый на «Распаковке», числится за упаковщиком
+    // (`currentEmployeeId`, `IN_PROGRESS`), пока операция не закрыта, и
+    // переехать на «Упаковку» он может только через stop/start смены
+    // (`switchOperation` режет `SHIFT_HAS_ACTIVE_PASSPORTS`). В
+    // коробочном режиме список не запрашивался вовсе — паспорт исчезал
+    // с экрана и обратно чип уже не пускал. Тот же инцидент, что на
+    // `/qc` и `/wto` (9dae473, 27719be).
+    if (isShiftActive) {
+      currentWork = await getCurrentWork().catch((e) => {
+        if (!(e instanceof ApiRequestError)) throw e;
+        return [] as CurrentWorkPassportDto[];
+      });
+    }
+
     if (isPlainPackingMode) {
-      const [work, banner, rework] = await Promise.all([
-        getCurrentWork().catch((e) => {
-          if (!(e instanceof ApiRequestError)) throw e;
-          return [] as CurrentWorkPassportDto[];
-        }),
+      const [banner, rework] = await Promise.all([
         getCutIssueBanner(shift!.operationId).catch((e) => {
           if (!(e instanceof ApiRequestError)) throw e;
           return { applicable: false, orders: [] } as OrderCutIssueRuleBannerDto;
@@ -173,7 +184,6 @@ export default async function PackingPage({
           return [] as ReworkPassportDto[];
         }),
       ]);
-      currentWork = work;
       cutIssueBanner = banner;
       myRework = rework;
     }
