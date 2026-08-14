@@ -47,12 +47,14 @@
  */
 
 import { useEffect, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import type {
   DefectTypeDto,
   QcIncomingReworkDto,
   QcPassportDetailDto,
 } from '@sewing/shared/qc';
 import type {
+  CurrentWorkPassportDto,
   EmployeeLiteDto,
   OperationLiteDto,
   ShiftMetaDto,
@@ -112,6 +114,16 @@ interface Props {
    */
   availableOperations: OperationLiteDto[];
   /**
+   * Паспорты, которые числятся за этим сотрудником и ещё не закрыты
+   * (`currentEmployeeId = me`, `IN_PROGRESS`). Источник — тот же
+   * `GET /shifts/current-work`, что у швеи на `/work`, и ровно тот
+   * набор, из-за которого backend отказывает в смене операции
+   * (`SHIFT_HAS_ACTIVE_PASSPORTS`). Нужен, чтобы открытый паспорт
+   * переживал перезагрузку страницы: рабочая карточка живёт в
+   * client-state и после F5 исчезала, хотя паспорт оставался на руках.
+   */
+  passportsInWork: CurrentWorkPassportDto[];
+  /**
    * Паспорты, которые мастер вернул на эту ОТК-операцию через
    * backward `set-route-step` и ждут повторной проверки. SSR-список
    * из `GET /api/qc/incoming-reworks`; терминал рисует баннер над
@@ -135,6 +147,7 @@ export function QcTerminal({
   initialShift,
   activeOperationCategory,
   availableOperations,
+  passportsInWork,
   incomingReworks,
   qtyCorrectionEnabled,
 }: Props) {
@@ -178,6 +191,7 @@ export function QcTerminal({
       ) : (
         <QcScanTerminal
           defectTypes={defectTypes}
+          passportsInWork={passportsInWork}
           incomingReworks={incomingReworks}
           qtyCorrectionEnabled={qtyCorrectionEnabled}
         />
@@ -220,6 +234,7 @@ function WrongOperationCard({
 
 interface ScanTerminalProps {
   defectTypes: DefectTypeDto[];
+  passportsInWork: CurrentWorkPassportDto[];
   incomingReworks: QcIncomingReworkDto[];
   qtyCorrectionEnabled: boolean;
 }
@@ -232,9 +247,11 @@ interface ScanTerminalProps {
  */
 function QcScanTerminal({
   defectTypes,
+  passportsInWork,
   incomingReworks,
   qtyCorrectionEnabled,
 }: ScanTerminalProps) {
+  const router = useRouter();
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
@@ -272,6 +289,34 @@ function QcScanTerminal({
       setDetail(res.detail);
       setManualCode('');
       setManualOpen(false);
+    });
+  };
+
+  /**
+   * Открыть паспорт, который УЖЕ на руках у ОТК, без повторного скана.
+   * Отличие от `lookup` принципиальное: `lookupQcPassportAction` сначала
+   * дёргает `POST /api/passports/:id/scan` (приём паспорта на операцию
+   * смены), а здесь паспорт уже принят — нужен только read-only
+   * `GET /api/qc/passports/:id`. Иначе после смены операции чипом скан
+   * переставил бы паспорт на другую операцию.
+   */
+  const openPassportInWork = (passportId: string) => {
+    setError(null);
+    setInfo(null);
+    startTransition(async () => {
+      const res = await refreshQcPassportAction(passportId);
+      if (!res.ok) {
+        setError({ message: res.error, requestId: res.errorRequestId });
+        return;
+      }
+      if (res.detail.removedFromQc) {
+        setInfo('Паспорт ушёл на следующую операцию.');
+        // Список «в работе» пришёл из SSR — просим страницу перечитать,
+        // иначе ушедший паспорт остался бы в нём до следующего рендера.
+        router.refresh();
+        return;
+      }
+      setDetail(res.detail);
     });
   };
 
@@ -368,6 +413,11 @@ function QcScanTerminal({
       setInfo('Проверка отмечена как выполненная');
       playOperationCompletedSound();
       setDetail(res.detail);
+      // `completeQc` снимает владельца — паспорт больше не «на руках»,
+      // и SSR-список «В работе у вас» обязан это увидеть (иначе он
+      // так и звал бы закрыть уже закрытый паспорт, а смена операции
+      // выглядела бы заблокированной без причины).
+      router.refresh();
     });
   };
 
@@ -397,6 +447,7 @@ function QcScanTerminal({
       );
       playOperationCompletedSound();
       setDetail(null);
+      router.refresh();
     });
   };
 
@@ -437,6 +488,7 @@ function QcScanTerminal({
   const handleScanNext = () => {
     setDetail(null);
     setError(null);
+    router.refresh();
     setInfo(null);
     setScannerOpen(true);
   };
@@ -471,6 +523,14 @@ function QcScanTerminal({
           onQtyCorrectionCancel={handleQtyCorrectionCancel}
           onScanNext={handleScanNext}
           onRefresh={refresh}
+        />
+      )}
+
+      {!detail && passportsInWork.length > 0 && (
+        <PassportsInWorkCard
+          items={passportsInWork}
+          pending={isPending}
+          onOpen={openPassportInWork}
         />
       )}
 
@@ -574,6 +634,72 @@ function QcScanTerminal({
         />
       )}
     </>
+  );
+}
+
+/**
+ * Карточка «В работе у вас» — паспорта, которые ОТК приняла сканом и
+ * ещё не закрыла («Проверка выполнена» снимает владельца, см.
+ * `QcService.completeQc`).
+ *
+ * Зачем: рабочая карточка `QcWorkCard` живёт в client-state терминала,
+ * поэтому после F5 / возврата в кабинет / перезапуска приложения экран
+ * показывал чистую кнопку «Сканировать паспорт», а паспорт всё это
+ * время числился за ОТК. Вылезло это на смене операции: backend не даёт
+ * переключиться, пока есть незакрытые паспорта
+ * (`SHIFT_HAS_ACTIVE_PASSPORTS`), а найти их в кабинете было негде.
+ *
+ * Тап по строке НЕ сканирует паспорт заново — открывает карточку
+ * read-only запросом (`openPassportInWork`), чтобы не переставить
+ * паспорт на операцию текущей смены.
+ */
+function PassportsInWorkCard({
+  items,
+  pending,
+  onOpen,
+}: {
+  items: CurrentWorkPassportDto[];
+  pending: boolean;
+  onOpen: (passportId: string) => void;
+}) {
+  return (
+    <div
+      className="scan-card scan-card--simple"
+      aria-label="Паспорта в работе у вас"
+    >
+      <h2 className="scan-card__title">
+        <Icon name="qc" size={22} />
+        <span style={{ marginLeft: '0.45rem' }}>
+          {items.length === 1
+            ? 'В работе у вас'
+            : `В работе у вас (${items.length})`}
+        </span>
+      </h2>
+      <p className="scan-card__hint">
+        Паспорт принят, но проверка не закрыта. Нажмите, чтобы вернуться
+        к карточке — сканировать заново не нужно.
+      </p>
+      <ul className="operation-switcher__list">
+        {items.map((p) => (
+          <li key={p.id}>
+            <button
+              type="button"
+              className="operation-switcher__option"
+              onClick={() => onOpen(p.id)}
+              disabled={pending}
+            >
+              <span className="operation-switcher__option-name">
+                {p.number} · {p.productName}, {p.color}, {p.sizeCode} ·{' '}
+                {p.qtyGood} шт.
+              </span>
+              <span className="operation-switcher__option-code">
+                {p.currentOperationName ?? 'без операции'}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

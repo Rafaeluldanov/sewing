@@ -3,7 +3,11 @@ import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { getActiveWorkplaceLabel } from '@/lib/rbac';
 import { listDefectTypes, listQcIncomingReworks } from '@/lib/qc-api';
-import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
+import {
+  getCurrentShift,
+  getCurrentWork,
+  getShiftMeta,
+} from '@/lib/shifts-api';
 import { operationsForEquipment } from '@/lib/equipment-operations';
 import { isQtyCorrectionEnabled } from '@/lib/feature-flags';
 import { TerminalShell } from '@/components/terminal-shell';
@@ -94,6 +98,26 @@ export default async function QcPage() {
     }
   }
 
+  // Паспорта, которые ОТК уже взяла в работу сканом, но ещё не закрыла
+  // («Проверка выполнена» снимает владельца, см. `QcService.completeQc`).
+  // До этого `/qc` держал открытый паспорт ТОЛЬКО в client-state
+  // терминала: после F5, разряженного телефона или возврата в кабинет
+  // экран показывал чистую кнопку «Сканировать паспорт», хотя паспорт
+  // числился за ОТК. Всплыло это на смене операции — backend режет
+  // переключение с `SHIFT_HAS_ACTIVE_PASSPORTS`, а найти «зависший»
+  // паспорт в кабинете было негде. Источник тот же, что у швеи на
+  // `/work`, и ровно тот же набор, что проверяет
+  // `ShiftsService.switchOperation`. fail-soft: список — подсказка, а не
+  // условие работы терминала.
+  let passportsInWork: Awaited<ReturnType<typeof getCurrentWork>> = [];
+  if (isShiftActive) {
+    try {
+      passportsInWork = await getCurrentWork();
+    } catch (e) {
+      if (!(e instanceof ApiRequestError)) throw e;
+    }
+  }
+
   const headerFields = isShiftActive
     ? [
         {
@@ -143,6 +167,7 @@ export default async function QcPage() {
         initialShift={currentShift}
         activeOperationCategory={activeOperationCategory}
         availableOperations={availableOperations}
+        passportsInWork={passportsInWork}
         incomingReworks={incomingReworks}
         qtyCorrectionEnabled={isQtyCorrectionEnabled()}
       />
