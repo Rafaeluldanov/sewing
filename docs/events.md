@@ -431,6 +431,11 @@ runtime-коде (не из комментариев/документации). 
   `before`/`after`-снэпшоты полей паспорта.
 - `MASTER_PASSPORT_UNASSIGNED` — `MasterActionsService.unassign`
   (`master-actions.service.ts:94`). Управленческое действие мастера.
+- `MASTER_PASSPORT_SELF_OPERATION_ROLLED_BACK` — компенсация внутри
+  `MasterActionsService.performSelfOperation`: завершение операции
+  упало уже после выдачи, поэтому владельца сняли, чтобы паспорт не
+  завис за мастером. Payload — `before`/`after` + `reason` (текст
+  исходной ошибки). Само действие при этом отдаёт исходную ошибку.
 - `MASTER_PASSPORT_TRANSFERRED` — `MasterActionsService.transfer`
   (`master-actions.service.ts:196`).
 - `MASTER_PASSPORT_RETURNED_TO_CELL` —

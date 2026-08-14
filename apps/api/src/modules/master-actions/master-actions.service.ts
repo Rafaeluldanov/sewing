@@ -1245,10 +1245,27 @@ export class MasterActionsService {
 
     try {
       await this.passports.issueToEmployee(passport.id, actor.employeeId);
-      await this.passports.completeOperationByEmployee(
-        passport.id,
-        actor.employeeId,
-      );
+      try {
+        await this.passports.completeOperationByEmployee(
+          passport.id,
+          actor.employeeId,
+        );
+      } catch (e) {
+        // `issueToEmployee` уже закрепил паспорт за мастером, а
+        // завершение упало на своём гейте (повтор операции, откат
+        // назад, работа вне маршрута, сбой БД). Без компенсации
+        // паспорт зависает «в работе у мастера»: её кабинет такие
+        // паспорта не показывает, а следующая попытка того же
+        // действия упрётся в `PASSPORT_ALREADY_ISSUED` — разруливать
+        // пришлось бы вручную через «Снять с сотрудника».
+        await this.releaseAfterFailedSelfOperation(
+          passport.id,
+          actor,
+          before,
+          e,
+        );
+        throw e;
+      }
     } finally {
       if (technicalShiftId) {
         const endedAt = new Date();
@@ -1285,6 +1302,78 @@ export class MasterActionsService {
       passport: this.snapshot(updated),
       before: this.beforeSnapshot(before),
     };
+  }
+
+  /**
+   * Компенсация неудавшегося `performSelfOperation`: снять паспорт с
+   * мастера, если завершение операции упало уже ПОСЛЕ выдачи.
+   *
+   * Пара `issueToEmployee` + `completeOperationByEmployee` — два
+   * независимых вызова со своими транзакциями; общую сюда не завести,
+   * не переписав оба публичных метода под внешний `tx` (их зовут все
+   * швейные каналы). Поэтому компенсируем то единственное, что
+   * оставляет застрявшее состояние, — владельца.
+   *
+   * Снимаем ТОЛЬКО `currentEmployeeId` — ровно семантика `unassign`
+   * («точечная коррекция владельца, не движение по маршруту»).
+   * `currentOperationId` / `currentRouteStepIndex` / статус / ячейку не
+   * откатываем: `issueToEmployee` менял их вместе с `CellContent` и
+   * событиями, и ручной откат кусками рисковал бы рассинхроном. Паспорт
+   * остаётся стоять на операции без владельца — состояние штатное, его
+   * же даёт мастерский «Снять с сотрудника».
+   *
+   * Исходную ошибку компенсация не глотает: `performSelfOperation`
+   * пробрасывает её дальше. Если упадёт сама компенсация — пишем в лог
+   * и молчим, иначе мастер увидит вторичную ошибку вместо причины.
+   */
+  private async releaseAfterFailedSelfOperation(
+    passportId: string,
+    actor: AuthPrincipal,
+    before: MasterActionPassportSnapshotDto,
+    cause: unknown,
+  ): Promise<void> {
+    try {
+      const current = await this.loadPassportOrThrow(passportId);
+      // Паспорт может быть уже не за мастером (гонка с другим
+      // действием) — тогда компенсировать нечего.
+      if (current.currentEmployeeId !== actor.employeeId) return;
+
+      await this.prisma.$transaction(async (tx) => {
+        const next = await tx.passport.update({
+          where: { id: passportId },
+          data: { currentEmployeeId: null },
+          include: passportInclude,
+        });
+        await this.audit.log(
+          {
+            event: 'MASTER_PASSPORT_SELF_OPERATION_ROLLED_BACK',
+            entityType: 'PASSPORT',
+            entityId: passportId,
+            employeeId: actor.employeeId,
+            payload: this.auditPayload({
+              reason:
+                cause instanceof Error ? cause.message : String(cause),
+              before,
+              after: this.snapshot(next),
+            }),
+          },
+          tx,
+        );
+      });
+      this.logger.warn(
+        `event=master.self-operation.rollback passportId=${passportId} actor=${actor.employeeId} cause=${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+      );
+    } catch (rollbackError) {
+      this.logger.error(
+        `event=master.self-operation.rollback-failed passportId=${passportId} actor=${actor.employeeId} error=${
+          rollbackError instanceof Error
+            ? rollbackError.message
+            : String(rollbackError)
+        }`,
+      );
+    }
   }
 
   /**
