@@ -6,6 +6,11 @@ import {
   type CuttingTaskSummaryDto,
 } from '@sewing/shared/cutting-tasks';
 import type { RecutSessionDto } from '@sewing/shared/recut';
+import type {
+  OperationLiteDto,
+  ShiftSessionDto,
+} from '@sewing/shared/shifts';
+import { OperationSwitcher } from '@/app/work/operation-switcher';
 import { RecutPanel } from './recut-panel';
 
 /**
@@ -20,6 +25,16 @@ interface Props {
   done: CuttingTaskSummaryDto[];
   recutActive: RecutSessionDto | null;
   loadError?: string | null;
+  /** Активная смена — доска рендерится только при ней (см. `page.tsx`). */
+  shift: ShiftSessionDto;
+  /**
+   * Операции, разрешённые на раскройном столе смены
+   * (`EquipmentOperation`). В сиде их пять — «Раскрой», «Деление
+   * кроя», «Подготовка основы», «Подготовка рибаны», «Выдача кроя», —
+   * и без chip'а любой переход между ними означал «завершить смену и
+   * снова сканировать стол».
+   */
+  availableOperations: OperationLiteDto[];
 }
 
 export function CutterBoard({
@@ -28,10 +43,22 @@ export function CutterBoard({
   done,
   recutActive,
   loadError = null,
+  shift,
+  availableOperations,
 }: Props) {
   return (
     <div className="constructor-page">
       <h1 className="constructor-page__title">Раскрой</h1>
+
+      {/*
+       * Chip «Сменить операцию» — тот же, что у швеи, ОТК, ВТО и
+       * упаковщика. На раскройном столе разрешено несколько операций,
+       * и переключение между ними меняет только табель/оплату
+       * (`ShiftSegment`), а не доску: гейт кабинета проверяет лишь
+       * наличие активной смены (`requireActiveCutterShift`). Одна
+       * операция на столе → компонент вернёт null.
+       */}
+      <OperationSwitcher shift={shift} availableOperations={availableOperations} />
 
       {loadError && (
         <div className="error-box" role="alert">

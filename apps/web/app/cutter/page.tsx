@@ -3,6 +3,7 @@ import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listCuttingTasks } from '@/lib/cutting-tasks-api';
 import { getActiveRecut } from '@/lib/recut-api';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
+import { operationsForEquipment } from '@/lib/equipment-operations';
 import { type CuttingTaskSummaryDto } from '@sewing/shared/cutting-tasks';
 import { type RecutSessionDto } from '@sewing/shared/recut';
 import { redirect } from 'next/navigation';
@@ -80,6 +81,15 @@ export default async function CutterCabinetPage() {
   const fresh = tasks.filter((t) => t.status === 'NEW');
   const done = tasks.filter((t) => t.status === 'DONE');
 
+  // Операции раскройного стола текущей смены (`EquipmentOperation`,
+  // ADR-0017) — для chip'а «Сменить операцию». Считаем тем же
+  // хелпером, что `/work`, `/qc`, `/wto` и `/packing`.
+  const currentEquipment =
+    meta.equipment.find((e) => e.id === currentShift!.equipmentId) ?? null;
+  const availableOperations = currentEquipment
+    ? operationsForEquipment(currentEquipment, meta.operations)
+    : [];
+
   return (
     <CutterBoard
       inProgress={inProgress}
@@ -87,6 +97,8 @@ export default async function CutterCabinetPage() {
       done={done}
       recutActive={recutActive}
       loadError={error}
+      shift={currentShift!}
+      availableOperations={availableOperations}
     />
   );
 }
