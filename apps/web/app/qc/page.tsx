@@ -4,6 +4,7 @@ import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { getActiveWorkplaceLabel } from '@/lib/rbac';
 import { listDefectTypes, listQcIncomingReworks } from '@/lib/qc-api';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
+import { operationsForEquipment } from '@/lib/equipment-operations';
 import { isQtyCorrectionEnabled } from '@/lib/feature-flags';
 import { TerminalShell } from '@/components/terminal-shell';
 import { QcTerminal } from './qc-terminal';
@@ -108,6 +109,19 @@ export default async function QcPage() {
       ]
     : [];
 
+  // Операции, разрешённые на рабочем месте текущей смены
+  // (`EquipmentOperation`, ADR-0017). Если их 2+ — терминал отрендерит
+  // chip «Сменить операцию», и ОТК перейдёт с межоперационной проверки
+  // на финальную не завершая смену и не пересканируя стол: рабочее
+  // место-то одно и то же. Считаем ровно как `/work/page.tsx` и
+  // `/packing/page.tsx`, через общий хелпер.
+  const currentEquipment = currentShift
+    ? meta.equipment.find((e) => e.id === currentShift.equipmentId) ?? null
+    : null;
+  const availableOperations = currentEquipment
+    ? operationsForEquipment(currentEquipment, meta.operations)
+    : [];
+
   const roleLabel = getActiveWorkplaceLabel(me.user);
 
   return (
@@ -128,6 +142,7 @@ export default async function QcPage() {
         employee={employee}
         initialShift={currentShift}
         activeOperationCategory={activeOperationCategory}
+        availableOperations={availableOperations}
         incomingReworks={incomingReworks}
         qtyCorrectionEnabled={isQtyCorrectionEnabled()}
       />

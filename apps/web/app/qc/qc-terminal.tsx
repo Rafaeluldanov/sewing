@@ -15,8 +15,12 @@
  *      это типично рабочее место `qc-station-01` с allow-листом из
  *      одной операции `QC` (см. `prisma/seed.ts`).
  *   2. **Смена активна, но не на категории `QC`** (например, ОТК
- *      открыл смену не на том станке) → банер с подсказкой завершить
- *      смену через меню в правом верхнем углу. Сканирование паспортов
+ *      открыл смену не на той операции стола) → банер с подсказкой:
+ *      если на рабочем месте разрешено 2+ операций — вернуться на ОТК
+ *      chip'ом «Сменить операцию» (`OperationSwitcher`, тот же, что у
+ *      швеи и упаковщика: `POST /shifts/switch-operation` меняет
+ *      операцию внутри смены, стол пересканировать не нужно), иначе —
+ *      завершить смену через меню в правом верхнем углу. Сканирование паспортов
  *      из такой смены backend всё равно не пропустит дальше: QC
  *      endpoints доступны по RBAC, но `passports/:id/scan` подсадит
  *      паспорт в чужой `currentOperationId`, поэтому вход в работу
@@ -50,6 +54,7 @@ import type {
 } from '@sewing/shared/qc';
 import type {
   EmployeeLiteDto,
+  OperationLiteDto,
   ShiftMetaDto,
   ShiftSessionDto,
 } from '@sewing/shared/shifts';
@@ -60,6 +65,7 @@ import {
 } from '@/app/work/feedback';
 import { SeamstressShiftStart } from '@/app/work/seamstress-shift-start';
 import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
+import { OperationSwitcher } from '@/app/work/operation-switcher';
 import { Icon } from '@/components/icon';
 import { QcWorkCard } from './qc-work-card';
 import {
@@ -99,6 +105,13 @@ interface Props {
    */
   activeOperationCategory: string | null;
   /**
+   * Все операции, разрешённые на рабочем месте текущей смены
+   * (`EquipmentOperation`, включая активную). Источник — тот же
+   * `operationsForEquipment(meta)`, что у швеи и упаковщика. Если их
+   * 2+, рендерим chip «Сменить операцию».
+   */
+  availableOperations: OperationLiteDto[];
+  /**
    * Паспорты, которые мастер вернул на эту ОТК-операцию через
    * backward `set-route-step` и ждут повторной проверки. SSR-список
    * из `GET /api/qc/incoming-reworks`; терминал рисует баннер над
@@ -121,11 +134,13 @@ export function QcTerminal({
   employee,
   initialShift,
   activeOperationCategory,
+  availableOperations,
   incomingReworks,
   qtyCorrectionEnabled,
 }: Props) {
   const isShiftActive = !!(initialShift && initialShift.active);
   const onQcShift = isShiftActive && activeOperationCategory === 'QC';
+  const canSwitchOperation = isShiftActive && availableOperations.length > 1;
 
   // `SeamstressActionsMenu` нужен во всех ветках: на `/qc` для роли QC
   // глобальный `<AppHeader>` скрыт (см. `components/app-header.tsx`,
@@ -134,10 +149,32 @@ export function QcTerminal({
   return (
     <div className="seamstress-work">
       <SeamstressActionsMenu shiftActive={isShiftActive} />
+
+      {/*
+       * Chip «Сменить операцию» — над обеими рабочими ветками, как у
+       * упаковщика (`packing-terminal.tsx`). Смысл для ОТК тот же: на
+       * одном столе бывает несколько разрешённых операций (проверка
+       * между швейными этапами и финальная), и гонять человека через
+       * «Завершить смену → снова сканировать QR стола» ради
+       * переключения незачем. Backend не даст переключиться, пока на
+       * руках есть незакрытые паспорта (`SHIFT_HAS_ACTIVE_PASSPORTS`),
+       * — сообщение компонент покажет сам. Если на рабочем месте
+       * разрешена одна операция, вернёт null.
+       */}
+      {isShiftActive && (
+        <OperationSwitcher
+          shift={initialShift!}
+          availableOperations={availableOperations}
+        />
+      )}
+
       {!isShiftActive ? (
         <SeamstressShiftStart meta={meta} employee={employee} />
       ) : !onQcShift ? (
-        <WrongOperationCard operationName={initialShift!.operationName} />
+        <WrongOperationCard
+          operationName={initialShift!.operationName}
+          canSwitchOperation={canSwitchOperation}
+        />
       ) : (
         <QcScanTerminal
           defectTypes={defectTypes}
@@ -149,7 +186,19 @@ export function QcTerminal({
   );
 }
 
-function WrongOperationCard({ operationName }: { operationName: string }) {
+function WrongOperationCard({
+  operationName,
+  canSwitchOperation,
+}: {
+  operationName: string;
+  /**
+   * На рабочем месте смены разрешена ещё хотя бы одна операция, значит
+   * сверху висит chip «Сменить операцию» — подсказываем именно его, а
+   * не «завершите смену»: пересканировать стол ради возврата на ОТК не
+   * нужно. Без альтернатив остаётся прежний текст.
+   */
+  canSwitchOperation: boolean;
+}) {
   return (
     <div
       className="scan-card scan-card--simple"
@@ -160,9 +209,10 @@ function WrongOperationCard({ operationName }: { operationName: string }) {
         <span style={{ marginLeft: '0.45rem' }}>Смена не на ОТК</span>
       </h2>
       <p className="scan-card__hint">
-        Текущая операция — <strong>{operationName}</strong>. Чтобы
-        принимать паспорты на ОТК, завершите смену через меню в правом
-        верхнем углу и начните новую на рабочем месте ОТК.
+        Текущая операция — <strong>{operationName}</strong>.{' '}
+        {canSwitchOperation
+          ? 'Чтобы принимать паспорты на ОТК, нажмите «Сменить» в строке операции выше и выберите операцию ОТК — смену завершать не нужно.'
+          : 'Чтобы принимать паспорты на ОТК, завершите смену через меню в правом верхнем углу и начните новую на рабочем месте ОТК.'}
       </p>
     </div>
   );
