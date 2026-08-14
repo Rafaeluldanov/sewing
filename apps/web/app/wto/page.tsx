@@ -2,7 +2,12 @@ import { redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { getActiveWorkplaceLabel } from '@/lib/rbac';
-import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
+import {
+  getCurrentShift,
+  getCurrentWork,
+  getShiftMeta,
+} from '@/lib/shifts-api';
+import { operationsForEquipment } from '@/lib/equipment-operations';
 import { TerminalShell } from '@/components/terminal-shell';
 import { WtoTerminal } from './wto-terminal';
 
@@ -83,6 +88,30 @@ export default async function WtoPage() {
       ]
     : [];
 
+  // Операции рабочего места текущей смены (`EquipmentOperation`,
+  // ADR-0017) и паспорта, которые числятся за сотрудником и ещё не
+  // закрыты — ровно та же пара, что на `/qc`. Первое кормит chip
+  // «Сменить операцию» (2+ операций на столе — переключаемся, не
+  // пересканируя стол), второе не даёт паспорту стать невидимым после
+  // перезагрузки: рабочая карточка ВТО живёт в client-state, а
+  // владельца снимает только «Завершить ВТО» (`WtoService.completeWto`).
+  // fail-soft: списки — подсказка, а не условие работы терминала.
+  const currentEquipment = currentShift
+    ? meta.equipment.find((e) => e.id === currentShift.equipmentId) ?? null
+    : null;
+  const availableOperations = currentEquipment
+    ? operationsForEquipment(currentEquipment, meta.operations)
+    : [];
+
+  let passportsInWork: Awaited<ReturnType<typeof getCurrentWork>> = [];
+  if (isShiftActive) {
+    try {
+      passportsInWork = await getCurrentWork();
+    } catch (e) {
+      if (!(e instanceof ApiRequestError)) throw e;
+    }
+  }
+
   const roleLabel = getActiveWorkplaceLabel(me.user);
 
   return (
@@ -102,6 +131,8 @@ export default async function WtoPage() {
         employee={employee}
         initialShift={currentShift}
         activeOperationCategory={activeOperationCategory}
+        availableOperations={availableOperations}
+        passportsInWork={passportsInWork}
       />
     </TerminalShell>
   );

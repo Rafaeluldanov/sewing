@@ -16,8 +16,10 @@
  *      это типично рабочее место `wto-station-01` с allow-листом из
  *      одной операции `WTO` (см. `prisma/seed.ts`).
  *   2. **Смена активна, но не на категории `IRONING`** (например, ВТО
- *      открыл смену не на том станке) → банер с подсказкой завершить
- *      смену через меню в правом верхнем углу. Сканирование паспортов
+ *      открыл смену не на той операции стола) → банер с подсказкой:
+ *      при 2+ операциях на рабочем месте — вернуться chip'ом «Сменить
+ *      операцию» (`POST /shifts/switch-operation`, стол пересканировать
+ *      не нужно), иначе — завершить смену через меню. Сканирование паспортов
  *      из такой смены backend всё равно не пропустит дальше: WTO
  *      endpoints доступны по RBAC, но `passports/:id/scan` подсадит
  *      паспорт в чужой `currentOperationId`, поэтому вход в работу
@@ -44,9 +46,12 @@
  */
 
 import { useEffect, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import type { WtoPassportDetailDto } from '@sewing/shared/wto';
 import type {
+  CurrentWorkPassportDto,
   EmployeeLiteDto,
+  OperationLiteDto,
   ShiftMetaDto,
   ShiftSessionDto,
 } from '@sewing/shared/shifts';
@@ -57,7 +62,9 @@ import {
 } from '@/app/work/feedback';
 import { SeamstressShiftStart } from '@/app/work/seamstress-shift-start';
 import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
+import { OperationSwitcher } from '@/app/work/operation-switcher';
 import { Icon } from '@/components/icon';
+import { PassportsInWorkCard } from '@/components/passports-in-work-card';
 import { WtoWorkCard } from './wto-work-card';
 import { WtoCompletedRow } from './wto-completed-row';
 import {
@@ -89,6 +96,19 @@ interface Props {
    * показываем банер и предлагаем завершить смену через меню.
    */
   activeOperationCategory: string | null;
+  /**
+   * Все операции, разрешённые на рабочем месте текущей смены
+   * (`EquipmentOperation`, включая активную). Если их 2+, рендерим
+   * chip «Сменить операцию» — тот же, что у швеи, ОТК и упаковщика.
+   */
+  availableOperations: OperationLiteDto[];
+  /**
+   * Паспорты, которые числятся за этим сотрудником и ещё не закрыты
+   * (`currentEmployeeId = me`, `IN_PROGRESS`). Источник —
+   * `GET /shifts/current-work`, ровно тот набор, из-за которого
+   * backend отказывает в смене операции (`SHIFT_HAS_ACTIVE_PASSPORTS`).
+   */
+  passportsInWork: CurrentWorkPassportDto[];
 }
 
 interface ErrorState {
@@ -101,9 +121,12 @@ export function WtoTerminal({
   employee,
   initialShift,
   activeOperationCategory,
+  availableOperations,
+  passportsInWork,
 }: Props) {
   const isShiftActive = !!(initialShift && initialShift.active);
   const onWtoShift = isShiftActive && activeOperationCategory === 'IRONING';
+  const canSwitchOperation = isShiftActive && availableOperations.length > 1;
 
   // `SeamstressActionsMenu` нужен во всех ветках: на `/wto` для роли
   // IRONING глобальный `<AppHeader>` скрыт (см.
@@ -112,18 +135,50 @@ export function WtoTerminal({
   return (
     <div className="seamstress-work">
       <SeamstressActionsMenu shiftActive={isShiftActive} />
+
+      {/*
+       * Chip «Сменить операцию» — над обеими рабочими ветками, как на
+       * `/qc` и `/packing`: на одном рабочем месте бывает несколько
+       * разрешённых операций, и гонять человека через «Завершить смену
+       * → снова сканировать QR стола» ради переключения незачем.
+       * Backend не даст переключиться, пока на руках есть незакрытые
+       * паспорта (`SHIFT_HAS_ACTIVE_PASSPORTS`) — сообщение компонент
+       * покажет сам. Одна операция на месте → вернёт null.
+       */}
+      {isShiftActive && (
+        <OperationSwitcher
+          shift={initialShift!}
+          availableOperations={availableOperations}
+        />
+      )}
+
       {!isShiftActive ? (
         <SeamstressShiftStart meta={meta} employee={employee} />
       ) : !onWtoShift ? (
-        <WrongOperationCard operationName={initialShift!.operationName} />
+        <WrongOperationCard
+          operationName={initialShift!.operationName}
+          canSwitchOperation={canSwitchOperation}
+        />
       ) : (
-        <WtoScanTerminal />
+        <WtoScanTerminal passportsInWork={passportsInWork} />
       )}
     </div>
   );
 }
 
-function WrongOperationCard({ operationName }: { operationName: string }) {
+function WrongOperationCard({
+  operationName,
+  canSwitchOperation,
+}: {
+  operationName: string;
+  /**
+   * На рабочем месте смены разрешена ещё хотя бы одна операция, значит
+   * сверху висит chip «Сменить операцию» — подсказываем его, а не
+   * «завершите смену»: пересканировать стол ради возврата на ВТО не
+   * нужно. Без альтернатив остаётся прежний текст.
+   */
+  canSwitchOperation: boolean;
+}) {
   return (
     <div
       className="scan-card scan-card--simple"
@@ -134,9 +189,10 @@ function WrongOperationCard({ operationName }: { operationName: string }) {
         <span style={{ marginLeft: '0.45rem' }}>Смена не на ВТО</span>
       </h2>
       <p className="scan-card__hint">
-        Текущая операция — <strong>{operationName}</strong>. Чтобы
-        принимать паспорта на ВТО, завершите смену через меню в правом
-        верхнем углу и начните новую на рабочем месте ВТО.
+        Текущая операция — <strong>{operationName}</strong>.{' '}
+        {canSwitchOperation
+          ? 'Чтобы принимать паспорта на ВТО, нажмите «Сменить» в строке операции выше и выберите операцию ВТО — смену завершать не нужно.'
+          : 'Чтобы принимать паспорта на ВТО, завершите смену через меню в правом верхнем углу и начните новую на рабочем месте ВТО.'}
       </p>
     </div>
   );
@@ -148,7 +204,12 @@ function WrongOperationCard({ operationName }: { operationName: string }) {
  * остались как раньше — изменилась только обвязка в `WtoTerminal`
  * (start-shift gate сверху, см. JSDoc файла).
  */
-function WtoScanTerminal() {
+function WtoScanTerminal({
+  passportsInWork,
+}: {
+  passportsInWork: CurrentWorkPassportDto[];
+}) {
+  const router = useRouter();
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
@@ -189,6 +250,33 @@ function WtoScanTerminal() {
       setDetail(res.detail);
       setManualCode('');
       setManualOpen(false);
+    });
+  };
+
+  /**
+   * Открыть паспорт, который УЖЕ на руках, без повторного скана.
+   * Отличие от `accept` принципиальное: `acceptOnWtoAction` дёргает
+   * `POST /api/passports/:id/scan` (зачисление на ВТО), а здесь
+   * паспорт уже зачислен — нужен только read-only
+   * `GET /api/wto/passports/:id`. Иначе скан переставил бы паспорт на
+   * операцию текущей смены (после переключения чипом — на другую).
+   */
+  const openPassportInWork = (passportId: string) => {
+    setError(null);
+    setInfo(null);
+    startTransition(async () => {
+      const res = await refreshWtoPassportAction(passportId);
+      if (!res.ok) {
+        setError({ message: res.error, requestId: res.errorRequestId });
+        return;
+      }
+      if (res.detail.removedFromWto) {
+        setInfo('Паспорт ушёл на следующую операцию.');
+        // Список «в работе» пришёл из SSR — просим страницу перечитать.
+        router.refresh();
+        return;
+      }
+      setDetail(res.detail);
     });
   };
 
@@ -256,6 +344,9 @@ function WtoScanTerminal() {
       setInfo('ВТО отмечено как завершённое');
       playOperationCompletedSound();
       setDetail(res.detail);
+      // `completeWto` снимает владельца — паспорт больше не «на руках»,
+      // и SSR-список «В работе у вас» обязан это увидеть.
+      router.refresh();
     });
   };
 
@@ -263,6 +354,7 @@ function WtoScanTerminal() {
     setDetail(null);
     setError(null);
     setInfo(null);
+    router.refresh();
     setScannerOpen(true);
   };
 
@@ -292,6 +384,15 @@ function WtoScanTerminal() {
        * скажет `removedFromWto=true` — строка исчезнет полностью.
        */}
       {detail && detail.wtoCompletedAt && <WtoCompletedRow detail={detail} />}
+
+      {!detail && (
+        <PassportsInWorkCard
+          items={passportsInWork}
+          hint="Паспорт зачислен на ВТО, но не закрыт. Нажмите, чтобы вернуться к карточке — сканировать заново не нужно."
+          pending={isPending}
+          onOpen={openPassportInWork}
+        />
+      )}
 
       <div className="scan-card scan-card--simple" aria-label="Сканировать паспорт">
         <div>

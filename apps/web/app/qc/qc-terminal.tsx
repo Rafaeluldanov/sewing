@@ -69,6 +69,7 @@ import { SeamstressShiftStart } from '@/app/work/seamstress-shift-start';
 import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
 import { OperationSwitcher } from '@/app/work/operation-switcher';
 import { Icon } from '@/components/icon';
+import { PassportsInWorkCard } from '@/components/passports-in-work-card';
 import { QcWorkCard } from './qc-work-card';
 import {
   cancelQtyCorrectionAction,
@@ -529,6 +530,7 @@ function QcScanTerminal({
       {!detail && passportsInWork.length > 0 && (
         <PassportsInWorkCard
           items={passportsInWork}
+          hint="Паспорт принят, но проверка не закрыта. Нажмите, чтобы вернуться к карточке — сканировать заново не нужно."
           pending={isPending}
           onOpen={openPassportInWork}
         />
@@ -634,72 +636,6 @@ function QcScanTerminal({
         />
       )}
     </>
-  );
-}
-
-/**
- * Карточка «В работе у вас» — паспорта, которые ОТК приняла сканом и
- * ещё не закрыла («Проверка выполнена» снимает владельца, см.
- * `QcService.completeQc`).
- *
- * Зачем: рабочая карточка `QcWorkCard` живёт в client-state терминала,
- * поэтому после F5 / возврата в кабинет / перезапуска приложения экран
- * показывал чистую кнопку «Сканировать паспорт», а паспорт всё это
- * время числился за ОТК. Вылезло это на смене операции: backend не даёт
- * переключиться, пока есть незакрытые паспорта
- * (`SHIFT_HAS_ACTIVE_PASSPORTS`), а найти их в кабинете было негде.
- *
- * Тап по строке НЕ сканирует паспорт заново — открывает карточку
- * read-only запросом (`openPassportInWork`), чтобы не переставить
- * паспорт на операцию текущей смены.
- */
-function PassportsInWorkCard({
-  items,
-  pending,
-  onOpen,
-}: {
-  items: CurrentWorkPassportDto[];
-  pending: boolean;
-  onOpen: (passportId: string) => void;
-}) {
-  return (
-    <div
-      className="scan-card scan-card--simple"
-      aria-label="Паспорта в работе у вас"
-    >
-      <h2 className="scan-card__title">
-        <Icon name="qc" size={22} />
-        <span style={{ marginLeft: '0.45rem' }}>
-          {items.length === 1
-            ? 'В работе у вас'
-            : `В работе у вас (${items.length})`}
-        </span>
-      </h2>
-      <p className="scan-card__hint">
-        Паспорт принят, но проверка не закрыта. Нажмите, чтобы вернуться
-        к карточке — сканировать заново не нужно.
-      </p>
-      <ul className="operation-switcher__list">
-        {items.map((p) => (
-          <li key={p.id}>
-            <button
-              type="button"
-              className="operation-switcher__option"
-              onClick={() => onOpen(p.id)}
-              disabled={pending}
-            >
-              <span className="operation-switcher__option-name">
-                {p.number} · {p.productName}, {p.color}, {p.sizeCode} ·{' '}
-                {p.qtyGood} шт.
-              </span>
-              <span className="operation-switcher__option-code">
-                {p.currentOperationName ?? 'без операции'}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 
