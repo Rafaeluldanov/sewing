@@ -1,0 +1,2036 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>База знаний — макет</title>
+<style>
+/* ---------------------------------------------------------------------------
+   Токены — копия из apps/web/app/globals.css (:root), тот же блок, что в
+   docs/mockups/admin-assistant-mockup.html. Макет открывается двойным кликом
+   без сборки. Любая правка палитры/радиусов — сначала в globals.css, потом сюда.
+   --------------------------------------------------------------------------- */
+:root{
+  color-scheme:light; /* админка светлая по ДС — тёмную тему макет не изображает */
+  --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+  --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+  --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f;
+  --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+  --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+  --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0;
+  --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+  --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f;
+  --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+  --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+  --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+  --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+  --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px;
+  --radius-pill:999px;
+  --shadow-xs:0 1px 2px rgba(20,20,20,.04);
+  --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+  --shadow-md:0 6px 18px rgba(20,20,20,.08);
+  --shadow-lg:0 10px 32px rgba(20,20,20,.16),0 2px 8px rgba(20,20,20,.08);
+  --tap-min:48px;
+  --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem;
+  --title-item:1.05rem; --title-section:1rem; --title-subsection:.9rem;
+  --title-label:.78rem;
+
+  --admin-bg:#f7f7f6; --admin-surface:#fff; --admin-soft:#f1f1ef;
+  --admin-border:#e4e4e1; --admin-text:#1b1b1b; --admin-muted:#5f5f5c;
+  --admin-primary:#2f7fd1; --admin-primary-soft:#d9e8fb; --admin-primary-fg:#1f6bc0;
+  --admin-space-xs:6px; --admin-space-sm:10px; --admin-space-md:16px;
+  --admin-space-lg:24px; --admin-radius-card:12px;
+
+  --status-draft-bg:#ececeb; --status-draft-fg:#5f5f5c;
+  --status-calculation-bg:#fcecc9; --status-calculation-fg:#9a6f1e;
+  --status-in-production-bg:#dcebfb; --status-in-production-fg:#3a6fae;
+  --status-done-bg:#e4f4e6; --status-done-fg:#2f7d4e;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--color-bg-soft); color:var(--color-fg);
+  font-family:'PT Sans',ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:16px; line-height:1.45;
+}
+
+/* ============================================================================
+   Обвязка макета (не часть продукта)
+   ========================================================================= */
+.mk-wrap{max-width:1500px;margin:0 auto;padding:1.6rem 1rem 4rem}
+.mk-head h1{font-size:var(--title-page);margin:0 0 .35rem}
+.mk-head p{margin:0;color:var(--color-fg-muted);font-size:.95rem;max-width:78ch}
+.mk-note{
+  margin:1rem 0 0;padding:.7rem .9rem;background:var(--color-accent-soft);
+  border-radius:var(--radius-md);font-size:.9rem;color:#123f6b;
+}
+.mk-note b{font-weight:700}
+.mk-note ul{margin:.4rem 0 0;padding-left:1.1rem}
+.mk-note li{margin:.15rem 0}
+.mk-cap{
+  display:flex;gap:.5rem;align-items:baseline;margin:2.2rem 0 .55rem;
+  font-size:var(--title-label);letter-spacing:.04em;text-transform:uppercase;
+  color:var(--color-fg-subtle);font-weight:700;
+}
+.mk-cap b{
+  font-size:.72rem;background:var(--color-fg);color:#fff;
+  border-radius:var(--radius-pill);padding:.1rem .45rem;letter-spacing:0;
+}
+.mk-sub{margin:0 0 .8rem;font-size:.88rem;color:var(--color-fg-muted);max-width:88ch}
+.mk-grid{
+  display:grid;gap:1.4rem;
+  grid-template-columns:repeat(auto-fit,minmax(370px,1fr));align-items:start;
+}
+.mk-col{min-width:0}
+.mk-colcap{
+  margin:0 0 .5rem;font-size:var(--title-subsection);font-weight:700;
+  display:flex;align-items:center;gap:.45rem;
+}
+.mk-colcap span{
+  font-size:.7rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
+  background:var(--color-bg-muted);color:var(--color-fg-muted);
+  border-radius:var(--radius-pill);padding:.12rem .5rem;
+}
+.mk-colsub{margin:0 0 .6rem;font-size:.85rem;color:var(--color-fg-muted)}
+
+/* ============================================================================
+   Каркас админки (топбар 56 + sidebar 240 + контент)
+   ========================================================================= */
+.shell{
+  position:relative;background:var(--admin-bg);
+  border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-md);overflow:hidden;
+}
+.shell__top{
+  height:56px;background:#fff;border-bottom:1px solid var(--admin-border);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 var(--admin-space-md);
+}
+.brand{display:flex;align-items:center;gap:.6rem;font-weight:700;font-size:.95rem}
+.brand__mark{
+  width:28px;height:28px;border-radius:8px;background:var(--admin-primary-soft);
+  color:var(--admin-primary-fg);display:inline-flex;align-items:center;
+  justify-content:center;font-size:.8rem;font-weight:700;
+}
+.topuser{display:flex;align-items:center;gap:.7rem;font-size:.85rem;color:var(--admin-muted)}
+.topuser b{color:var(--admin-text);font-weight:600}
+
+.shell__body{display:grid;grid-template-columns:240px minmax(0,1fr)}
+
+.side{
+  background:var(--admin-surface);border-right:1px solid var(--admin-border);
+  padding:1rem .75rem 1.5rem;
+}
+.side__group{margin-top:.6rem}
+.side__group-h{
+  padding:.4rem .7rem .25rem;font-size:.7rem;font-weight:700;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--color-fg-subtle);
+}
+.side__item{
+  display:flex;align-items:center;gap:.55rem;padding:.42rem .7rem;
+  border-radius:var(--radius-sm);font-size:.9rem;color:var(--admin-text);
+  margin-bottom:2px;
+}
+.side__item--active{background:var(--color-bg-tint);font-weight:700}
+.side__dot{
+  width:16px;height:16px;border-radius:4px;background:var(--color-bg-muted);
+  flex:0 0 auto;
+}
+.side__item--active .side__dot{background:var(--btn-primary-edge)}
+
+.page{padding:var(--admin-space-lg)}
+.page__h{
+  display:flex;align-items:center;justify-content:space-between;gap:1rem;
+  margin:0 0 var(--admin-space-md);
+}
+.page__h h1{font-size:var(--title-page);margin:0}
+.page__route{
+  font-size:.78rem;color:var(--color-fg-subtle);margin-left:.6rem;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:400;
+}
+
+/* Одна AdminCard: вкладки → поиск → «Активные · Всего: N» → таблица --------- */
+.admin-card{
+  background:var(--admin-surface);border:1px solid var(--admin-border);
+  border-radius:var(--admin-radius-card);padding:1.25rem 1.4rem;
+  box-shadow:var(--shadow-xs);display:grid;gap:.85rem;
+}
+.tabs{display:flex;gap:.35rem;flex-wrap:wrap}
+.tab{
+  padding:.3rem .7rem;border-radius:var(--radius-pill);font-size:.85rem;
+  background:var(--color-bg-muted);color:var(--color-fg-muted);
+}
+.tab--on{background:var(--color-fg);color:#fff;font-weight:600}
+.tab i{font-style:normal;font-variant-numeric:tabular-nums;opacity:.7;margin-left:.25rem}
+.tab--warn{background:var(--color-warn-soft);color:var(--color-warn-fg);font-weight:600}
+.srch{
+  height:36px;border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);
+  background:#fff;color:var(--color-fg-subtle);font-size:.9rem;
+  display:flex;align-items:center;gap:.45rem;padding:0 .65rem;max-width:360px;
+}
+.admin-section-header{
+  display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;
+}
+.admin-section-header h2{font-size:var(--title-section);margin:0}
+.admin-section-header__hint{font-size:.82rem;color:var(--admin-muted)}
+
+.admin-table-wrap{
+  border:1px solid var(--admin-border);border-radius:var(--radius-md);overflow:hidden;
+}
+table.t{width:100%;border-collapse:collapse;font-size:.88rem}
+table.t th{
+  text-align:left;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--color-fg-subtle);font-weight:700;padding:.5rem .7rem;
+  background:var(--color-bg-soft);border-bottom:1px solid var(--admin-border);
+}
+table.t td{padding:.55rem .7rem;border-bottom:1px solid var(--admin-border);vertical-align:top}
+table.t tr:last-child td{border-bottom:0}
+table.t tbody tr:hover{background:var(--color-bg-soft)}
+.num{font-variant-numeric:tabular-nums}
+.ttl{font-weight:600;color:var(--color-fg)}
+.kw{font-size:.78rem;color:var(--color-fg-subtle);margin-top:.1rem}
+.muted{color:var(--color-fg-muted)}
+.subtle{color:var(--color-fg-subtle)}
+
+.chip{
+  display:inline-block;padding:.1rem .5rem;border-radius:var(--radius-pill);
+  font-size:.75rem;font-weight:700;white-space:nowrap;
+}
+.chip--pub{background:var(--status-done-bg);color:var(--status-done-fg)}
+.chip--draft{background:var(--status-draft-bg);color:var(--status-draft-fg)}
+.chip--sys{background:var(--color-accent-soft);color:var(--color-accent-fg)}
+.chip--stale{background:var(--color-warn-soft);color:var(--color-warn-fg)}
+.chip--nothelp{background:var(--color-danger-soft);color:var(--color-danger-fg)}
+.chip--ref{background:var(--color-accent-soft);color:var(--color-accent-fg)}
+.chip--ai{background:var(--color-bg-muted);color:var(--color-fg-muted)}
+.why{font-size:.78rem;color:var(--color-fg-muted);margin-top:.15rem;line-height:1.3}
+.why code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.74rem}
+.chip--area{background:var(--color-bg-muted);color:var(--color-fg-muted);font-weight:600}
+
+/* Кнопки ------------------------------------------------------------------- */
+.btn{
+  height:38px;padding:0 .95rem;border-radius:var(--radius-sm);font:inherit;
+  font-size:.9rem;font-weight:700;display:inline-flex;align-items:center;
+  gap:.4rem;cursor:pointer;border:1px solid var(--color-border-strong);
+  background:#fff;color:var(--color-fg);
+}
+.btn--primary{
+  background:var(--btn-primary-bg);border-color:var(--btn-primary-edge);
+  color:var(--btn-primary-fg);
+}
+.btn--primary:hover{background:var(--btn-primary-bg-hover)}
+.btn:not(.btn--primary):hover{background:var(--color-bg-soft)}
+.btn--sm{height:30px;padding:0 .6rem;font-size:.8rem}
+.btn--link{
+  border:0;background:transparent;color:var(--color-accent-fg);padding:0;height:auto;
+  font-weight:600;font-size:.84rem;
+}
+.frow{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+
+/* Карточка статьи (редактор) ----------------------------------------------- */
+.edit{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:var(--admin-space-md);align-items:start}
+@media (max-width:1100px){.edit{grid-template-columns:minmax(0,1fr)}}
+.admin-field{display:grid;gap:var(--admin-space-xs)}
+.admin-field > label{font-size:.85rem;font-weight:600;color:var(--admin-text)}
+.admin-field__ctl{
+  padding:.6rem .75rem;border-radius:10px;border:1px solid var(--admin-border);
+  background:var(--admin-surface);color:var(--admin-text);font:inherit;width:100%;
+  display:flex;align-items:center;justify-content:space-between;gap:.5rem;
+}
+.admin-field__ctl--muted{color:var(--color-fg-subtle);background:var(--admin-soft)}
+.admin-field__hint{font-size:.78rem;color:var(--admin-muted);line-height:1.3}
+.admin-form-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  gap:var(--admin-space-md);align-items:start;
+}
+.md{
+  border:1px solid var(--admin-border);border-radius:10px;background:#fff;overflow:hidden;
+}
+.md__bar{
+  display:flex;gap:.3rem;padding:.35rem .45rem;border-bottom:1px solid var(--admin-border);
+  background:var(--color-bg-soft);
+}
+.md__b{
+  font-size:.78rem;font-weight:700;color:var(--color-fg-muted);padding:.15rem .45rem;
+  border-radius:var(--radius-sm);
+}
+.md__b--on{background:#fff;border:1px solid var(--admin-border);color:var(--color-fg)}
+.md__area{
+  padding:.7rem .8rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:.82rem;line-height:1.5;color:var(--color-fg);white-space:pre-wrap;min-height:190px;
+}
+.tags{display:flex;flex-wrap:wrap;gap:.35rem;padding:.45rem .5rem;border:1px solid var(--admin-border);border-radius:10px;background:#fff}
+.tag{
+  display:inline-flex;align-items:center;gap:.3rem;background:var(--color-bg-muted);
+  border-radius:var(--radius-pill);padding:.12rem .5rem;font-size:.8rem;color:var(--color-fg-muted);
+}
+.tag em{font-style:normal;color:var(--color-fg-subtle);cursor:pointer}
+.tags__in{font-size:.85rem;color:var(--color-fg-subtle);padding:.12rem .3rem}
+
+.aside{display:grid;gap:var(--admin-space-md)}
+.panel{
+  border:1px solid var(--admin-border);border-radius:12px;background:var(--admin-surface);
+  padding:.85rem .95rem;display:grid;gap:.5rem;
+}
+.panel--soft{background:var(--admin-soft)}
+.panel h3{
+  margin:0;font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--admin-muted);
+}
+.kv{display:flex;align-items:baseline;justify-content:space-between;gap:.6rem;font-size:.86rem}
+.kv b{font-variant-numeric:tabular-nums}
+.src-q{
+  font-size:.86rem;color:var(--color-fg);background:#fff;border:1px solid var(--admin-border);
+  border-radius:var(--radius-sm);padding:.45rem .55rem;
+}
+.check{display:flex;align-items:center;gap:.45rem;font-size:.86rem}
+.check i{
+  width:16px;height:16px;border-radius:4px;border:1px solid var(--color-border-strong);
+  background:#fff;flex:0 0 auto;
+}
+.check--on i{background:var(--admin-primary);border-color:var(--admin-primary)}
+
+/* Шторка ассистента (упрощённая копия из admin-assistant-mockup.html) ------- */
+.asst{
+  border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-md);overflow:hidden;background:#fff;
+  display:flex;flex-direction:column;height:520px;
+}
+.asst__head{
+  display:flex;align-items:center;gap:.5rem;padding:.7rem .9rem;
+  border-bottom:1px solid var(--color-border);flex:0 0 auto;
+}
+.asst__title{
+  font-size:var(--title-modal);font-weight:700;margin:0;
+  display:flex;align-items:center;gap:.4rem;
+}
+.asst__title svg{color:var(--color-fg-muted)}
+/* Метка на ответах модели — симметрична «Из базы знаний» на статьях.
+   Бейдж «Бета» висит на ответах ассистента, а не на окне: окно живёт и при
+   выключенном ассистенте. */
+.aicap{
+  display:flex;align-items:center;gap:.35rem;font-size:.68rem;font-weight:700;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--color-accent-fg);
+  margin-bottom:.35rem;
+}
+.asst__body{
+  flex:1 1 auto;min-height:0;overflow:auto;padding:.9rem;
+  display:flex;flex-direction:column;gap:.8rem;
+}
+.msg{max-width:100%;font-size:.92rem}
+.msg--user{align-self:flex-end;max-width:86%}
+.msg--user .msg__b{
+  background:var(--color-bg-muted);border-radius:var(--radius-lg);
+  border-bottom-right-radius:var(--radius-sm);padding:.5rem .7rem;
+}
+.msg p{margin:0 0 .5rem}
+.msg p:last-child{margin-bottom:0}
+.msg ul{margin:.25rem 0 .5rem;padding-left:1.15rem}
+.msg li{margin:.12rem 0}
+.tool{
+  display:flex;align-items:center;gap:.45rem;font-size:.8rem;
+  color:var(--color-fg-muted);background:var(--color-bg-soft);
+  border:1px solid var(--color-border);border-radius:var(--radius-pill);
+  padding:.25rem .6rem;align-self:flex-start;
+}
+.tool code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.75rem;color:var(--color-fg-subtle)}
+.srcs{display:grid;gap:.3rem;margin-top:.15rem}
+.srcs__cap{
+  font-size:.68rem;letter-spacing:.04em;text-transform:uppercase;font-weight:700;
+  color:var(--color-fg-subtle);margin:.2rem 0 .1rem;
+}
+.src{
+  display:flex;align-items:center;gap:.5rem;padding:.4rem .55rem;
+  border:1px solid var(--color-border);border-radius:var(--radius-sm);
+  background:#fff;font-size:.84rem;color:var(--color-fg);text-decoration:none;
+}
+.src__ic{
+  width:18px;height:18px;border-radius:4px;background:var(--color-bg-tint);
+  color:var(--color-warn-fg);font-size:.65rem;font-weight:700;flex:0 0 auto;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.src__m{color:var(--color-fg-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src__go{margin-left:auto;color:var(--color-accent-fg);flex:0 0 auto}
+.note{
+  display:flex;gap:.5rem;padding:.55rem .7rem;border-radius:var(--radius-md);
+  font-size:.84rem;line-height:1.35;
+}
+.note--warn{background:var(--color-warn-soft);color:var(--color-warn-fg)}
+.note--info{background:var(--color-bg-soft);color:var(--color-fg-muted);border:1px solid var(--color-border)}
+.rate{display:flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--color-fg-subtle)}
+.rate span{
+  border:1px solid var(--color-border);border-radius:var(--radius-sm);
+  padding:.1rem .4rem;background:#fff;
+}
+.asst__foot{
+  flex:0 0 auto;border-top:1px solid var(--color-border);padding:.7rem .9rem .8rem;background:#fff;
+}
+.composer{
+  display:flex;align-items:flex-end;gap:.5rem;border:1px solid var(--color-border-strong);
+  border-radius:var(--radius-md);background:#fff;padding:.45rem .5rem .45rem .65rem;
+}
+.composer__in{flex:1 1 auto;min-height:22px;font-size:.92rem;color:var(--color-fg-subtle);padding:.1rem 0}
+.send{
+  width:34px;height:34px;flex:0 0 auto;border-radius:var(--radius-sm);
+  background:var(--btn-primary-bg);border:1px solid var(--btn-primary-edge);
+  color:var(--btn-primary-fg);display:inline-flex;align-items:center;justify-content:center;
+}
+
+/* Кабинет сотрудника (телефон) — ТОТ ЖЕ компонент окна, другой корпус:
+   у шторки он справа и узкий, здесь — во весь экран и с тач-целями 48. */
+.phone{
+  width:100%;max-width:376px;border:1px solid var(--color-border-strong);
+  border-radius:var(--radius-xl);box-shadow:var(--shadow-md);overflow:hidden;
+  background:#fff;display:flex;flex-direction:column;height:588px;
+}
+.phone__top{
+  height:56px;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
+  gap:.5rem;padding:0 .8rem;border-bottom:1px solid var(--color-border);
+}
+.phone__title{display:flex;align-items:center;gap:.45rem;font-weight:700;font-size:1rem}
+.phone__title svg{color:var(--color-fg-muted)}
+.phone__badge{
+  font-size:.72rem;font-weight:700;background:var(--color-bg-tint);color:var(--color-warn-fg);
+  border-radius:var(--radius-pill);padding:.12rem .5rem;
+}
+.phone__body{
+  flex:1 1 auto;min-height:0;overflow:auto;padding:.8rem;
+  display:flex;flex-direction:column;gap:.6rem;background:var(--color-bg-soft);
+}
+.phone__foot{
+  flex:0 0 auto;border-top:1px solid var(--color-border);padding:.7rem .8rem .8rem;background:#fff;
+}
+.composer--tap{min-height:var(--tap-min);padding:.5rem .5rem .5rem .75rem}
+.composer--tap .composer__in{font-size:1rem}
+.composer--tap .send{width:40px;height:40px}
+.kb-item{
+  display:grid;gap:.15rem;padding:.6rem .7rem;background:#fff;
+  border:1px solid var(--color-border);border-radius:var(--radius-md);min-height:var(--tap-min);
+}
+.kb-item b{font-size:.92rem;font-weight:700}
+.kb-item span{font-size:.8rem;color:var(--color-fg-muted)}
+.kb-cap{
+  font-size:.7rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--color-fg-subtle);margin-top:.2rem;
+}
+.phone .kbans{background:#fff}
+.phone .msg--user .msg__b{background:var(--color-bg-muted)}
+
+/* Схема маршрутизации вопроса ---------------------------------------------- */
+.fig{
+  margin:0;background:#fff;border:1px solid var(--admin-border);
+  border-radius:12px;padding:1rem 1.1rem;overflow-x:auto;
+}
+.fig svg{
+  width:100%;min-width:860px;max-width:1040px;height:auto;display:block;
+  color:var(--color-fg);
+}
+.fig figcaption{margin:.7rem 0 0;font-size:.82rem;color:var(--color-fg-muted);max-width:88ch}
+.svg-t{font-family:'PT Sans',ui-sans-serif,system-ui,sans-serif}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.8rem;margin-top:1rem}
+.stat{
+  border:1px solid var(--admin-border);border-radius:12px;background:#fff;
+  padding:.75rem .9rem;display:grid;gap:.1rem;
+}
+.stat b{font-size:1.3rem;font-variant-numeric:tabular-nums;line-height:1.2}
+.stat span{font-size:.84rem;color:var(--color-fg-muted)}
+.stat em{
+  font-style:normal;font-size:.7rem;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--color-fg-subtle);margin-top:.2rem;
+}
+.stat--guess b{color:var(--color-warn-fg)}
+
+/* Наполнение базы: интервью с мастером ------------------------------------- */
+.interview{display:grid;grid-template-columns:340px minmax(0,1fr);gap:var(--admin-space-md);align-items:start}
+@media (max-width:1100px){.interview{grid-template-columns:minmax(0,1fr)}}
+.prog{display:grid;gap:.3rem}
+.prog__top{display:flex;align-items:baseline;justify-content:space-between;font-size:.85rem}
+.prog__top b{font-variant-numeric:tabular-nums}
+.prog__bar{height:6px;border-radius:999px;background:var(--color-bg-muted);overflow:hidden}
+.prog__fill{height:100%;width:23%;background:var(--btn-primary-edge);border-radius:999px}
+.qlist{display:grid;gap:.3rem;margin-top:.3rem}
+.qitem{
+  display:flex;align-items:flex-start;gap:.5rem;padding:.45rem .55rem;
+  border:1px solid var(--color-border);border-radius:var(--radius-sm);
+  background:#fff;font-size:.85rem;line-height:1.3;
+}
+.qitem i{
+  width:15px;height:15px;flex:0 0 auto;margin-top:.1rem;border-radius:4px;
+  border:1px solid var(--color-border-strong);background:#fff;
+}
+.qitem--done{color:var(--color-fg-muted)}
+.qitem--done i{background:var(--color-ok);border-color:var(--color-ok)}
+.qitem--now{border-color:var(--btn-primary-edge);background:var(--color-bg-tint);font-weight:700}
+.qitem--now i{border-color:var(--btn-primary-edge)}
+.qsrc{display:grid;gap:.35rem}
+.qsrc__row{
+  display:flex;align-items:baseline;gap:.5rem;font-size:.85rem;padding:.35rem 0;
+  border-bottom:1px solid var(--color-border);
+}
+.qsrc__row:last-child{border-bottom:0}
+.qsrc__n{
+  width:20px;height:20px;flex:0 0 auto;border-radius:50%;background:var(--color-bg-muted);
+  color:var(--color-fg-muted);font-size:.72rem;font-weight:700;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+
+/* Ответ из базы внутри шторки ---------------------------------------------- */
+.kbans{
+  border:1px solid var(--color-border);border-left:3px solid var(--btn-primary-edge);
+  border-radius:var(--radius-md);background:#fffdf6;padding:.6rem .7rem;
+}
+.kbans__cap{
+  display:flex;align-items:center;gap:.35rem;font-size:.68rem;font-weight:700;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--color-warn-fg);
+  margin-bottom:.35rem;
+}
+.kbans h4{margin:0 0 .3rem;font-size:.95rem}
+.kbans p{margin:0 0 .4rem;font-size:.88rem}
+.kbans ul{margin:.2rem 0 .45rem;padding-left:1.1rem;font-size:.88rem}
+.kbans li{margin:.1rem 0}
+.kbans__foot{
+  display:flex;align-items:center;justify-content:space-between;gap:.5rem;
+  border-top:1px solid var(--color-border);padding-top:.45rem;margin-top:.1rem;
+}
+
+/* Схема слоёв --------------------------------------------------------------- */
+.layers{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem}
+.layer{
+  border:1px solid var(--admin-border);border-radius:12px;background:#fff;padding:.9rem 1rem;
+  display:grid;gap:.4rem;
+}
+.layer h4{margin:0;font-size:var(--title-subsection)}
+.layer p{margin:0;font-size:.85rem;color:var(--color-fg-muted)}
+.layer code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem}
+.layer--sys{border-left:3px solid var(--color-accent)}
+.layer--own{border-left:3px solid var(--btn-primary-edge)}
+</style>
+</head>
+<body>
+<div class="mk-wrap">
+
+  <div class="mk-head">
+    <h1>База знаний — макет</h1>
+    <p>Редактируемая справка компании: сотрудник ищет ответ сам, ассистент цитирует
+       те же статьи и сам подсказывает, чего в базе не хватает. Продолжение макета
+       <code>admin-assistant-mockup.html</code> — те же токены, тот же каркас админки.</p>
+  </div>
+
+  <div class="mk-note">
+    <b>Границы макета.</b>
+    <ul>
+      <li>Два слоя знания: <b>системные</b> статьи едут в коде (<code>assistant/knowledge.ts</code>),
+          редактировать их из админки нельзя; <b>наши</b> статьи лежат в тенантной БД
+          и правятся мастером/админом. Поиск один на оба слоя.</li>
+      <li>Поиск — Postgres FTS (русский словарь) + <code>pg_trgm</code> на опечатки.
+          Никаких эмбеддингов на этом этапе: 0 токенов, работает при выключенном ассистенте.</li>
+      <li>Видимость статьи режется теми же четырьмя областями, что и у ассистента
+          (<code>assistantScopeProduction / Supply / Money / Payroll</code>) плюс роли.</li>
+      <li>Автопубликации нет. Ассистент может только предложить черновик — публикует человек.</li>
+      <li>Экраны 1–3 работают без ИИ вообще. Экран 4 — связка с ассистентом, отдельный этап.</li>
+    </ul>
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Схема <b>два слоя</b></div>
+  <p class="mk-sub">Почему не одна таблица: у нас DB-per-tenant. Статья «паспорт = расклад × размер × рулон»
+     не должна расходиться с релизом и лежать в 20 копиях, а «брак несём Ирине» не место в коде.</p>
+  <div class="layers">
+    <div class="layer layer--sys">
+      <h4>Слой «как устроен продукт» <span class="chip chip--sys">Система</span></h4>
+      <p>Код, <code>apps/api/src/modules/assistant/knowledge.ts</code>. Статусы заказа, паспорт,
+         роли, московские сутки. Правится в PR вместе с фичей, одинакова у всех тенантов.
+         В админке видна только на чтение — чтобы автор статьи знал, что уже покрыто.</p>
+    </div>
+    <div class="layer layer--own">
+      <h4>Слой «как принято у нас» <span class="chip chip--pub">Наша</span></h4>
+      <p>Таблица <code>KnowledgeArticle</code> в тенантной БД. Регламенты цеха, кто за что отвечает,
+         частые вопросы швей. Правится в админке, у каждой компании своя.</p>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Экран 1 <b>список статей</b></div>
+  <p class="mk-sub">Каркас как у любого админского списка: одна <code>AdminCard</code> →
+     вкладки → поиск → «Активные · Всего: N» → таблица в <code>.admin-table-wrap</code>.
+     Дельта к эталону <code>/admin/routes</code> — только колонки и две лишние вкладки.</p>
+
+  <div class="shell">
+    <div class="shell__top">
+      <div class="brand"><span class="brand__mark">SW</span> Швейка · Демо-цех</div>
+      <div class="topuser">Мастер цеха · <b>Ирина К.</b></div>
+    </div>
+    <div class="shell__body">
+      <nav class="side">
+        <div class="side__item"><i class="side__dot"></i> Обзор</div>
+        <div class="side__group">
+          <div class="side__group-h">Заказы</div>
+          <div class="side__item"><i class="side__dot"></i> Заказы</div>
+          <div class="side__item"><i class="side__dot"></i> Клиенты</div>
+        </div>
+        <div class="side__group">
+          <div class="side__group-h">Производство</div>
+          <div class="side__item"><i class="side__dot"></i> Номенклатура</div>
+          <div class="side__item"><i class="side__dot"></i> Маршруты</div>
+          <div class="side__item"><i class="side__dot"></i> Операции</div>
+        </div>
+        <div class="side__group">
+          <div class="side__group-h">Персонал</div>
+          <div class="side__item"><i class="side__dot"></i> Сотрудники</div>
+          <div class="side__item"><i class="side__dot"></i> Зарплата</div>
+        </div>
+        <div class="side__group">
+          <div class="side__group-h">Справка</div>
+          <div class="side__item side__item--active"><i class="side__dot"></i> База знаний</div>
+        </div>
+      </nav>
+
+      <main class="page">
+        <div class="page__h">
+          <h1>База знаний <span class="page__route">/admin/knowledge</span></h1>
+          <button class="btn btn--primary">＋ Статья</button>
+        </div>
+
+        <div class="admin-card">
+          <div class="tabs">
+            <span class="tab tab--on">Активные <i>14</i></span>
+            <span class="tab">Черновики <i>2</i></span>
+            <span class="tab tab--warn">Не отвечено <i>9</i></span>
+            <span class="tab tab--warn">На проверку <i>6</i></span>
+            <span class="tab">Системные <i>6</i></span>
+            <span class="tab">Архив <i>3</i></span>
+          </div>
+
+          <div class="srch">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+            Поиск по заголовку и тексту
+          </div>
+
+          <div class="admin-section-header">
+            <h2>Активные · Всего: 14</h2>
+            <span class="admin-section-header__hint">2 статьи не проверяли больше полугода</span>
+          </div>
+
+          <div class="admin-table-wrap">
+            <table class="t">
+              <thead>
+                <tr>
+                  <th style="width:38%">Статья</th>
+                  <th>Область</th>
+                  <th>Кто видит</th>
+                  <th class="num">Показов</th>
+                  <th>Проверена</th>
+                  <th>Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <div class="ttl">Что делать, если рулон закончился посреди настила</div>
+                    <div class="kw">рулон · настил · раскрой · нехватка</div>
+                  </td>
+                  <td><span class="chip chip--area">Производство</span></td>
+                  <td class="muted">Все</td>
+                  <td class="num">38</td>
+                  <td class="num muted">12.08.2026</td>
+                  <td><span class="chip chip--pub">Опубликована</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Как оформить брак и отправить на подкрой</div>
+                    <div class="kw">брак · подкрой · отк · дырка</div>
+                  </td>
+                  <td><span class="chip chip--area">Производство</span></td>
+                  <td class="muted">Швея, ОТК, Мастер</td>
+                  <td class="num">24</td>
+                  <td class="num muted">02.07.2026</td>
+                  <td><span class="chip chip--pub">Опубликована</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Кому звонить, если сканер не читает паспорт</div>
+                    <div class="kw">сканер · qr · паспорт · не читает</div>
+                  </td>
+                  <td><span class="chip chip--area">Общее</span></td>
+                  <td class="muted">Все</td>
+                  <td class="num">51</td>
+                  <td class="num"><span class="chip chip--stale">14.02.2026</span></td>
+                  <td><span class="chip chip--pub">Опубликована</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Порядок приёмки ткани от поставщика</div>
+                    <div class="kw">приёмка · поставка · недовоз · рулоны</div>
+                  </td>
+                  <td><span class="chip chip--area">Снабжение</span></td>
+                  <td class="muted">Снабжение, Мастер</td>
+                  <td class="num">7</td>
+                  <td class="num muted">11.08.2026</td>
+                  <td><span class="chip chip--draft">Черновик</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Как считается сдельная выработка за смену</div>
+                    <div class="kw">выработка · сдельная · зарплата · qtyGood</div>
+                  </td>
+                  <td><span class="chip chip--area">Зарплата</span></td>
+                  <td class="muted">Мастер, Админ</td>
+                  <td class="num">12</td>
+                  <td class="num muted">05.08.2026</td>
+                  <td><span class="chip chip--pub">Опубликована</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl subtle">Что такое паспорт и как он движется по маршруту</div>
+                    <div class="kw">паспорт · маршрут · скан · qr</div>
+                  </td>
+                  <td><span class="chip chip--area">Производство</span></td>
+                  <td class="muted">Все</td>
+                  <td class="num">64</td>
+                  <td class="num subtle">с релизом</td>
+                  <td><span class="chip chip--sys">Система</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl subtle">Статусы заказа и что на каждом можно</div>
+                    <div class="kw">статус · черновик · расчёт · производство</div>
+                  </td>
+                  <td><span class="chip chip--area">Производство</span></td>
+                  <td class="muted">Все</td>
+                  <td class="num">29</td>
+                  <td class="num subtle">с релизом</td>
+                  <td><span class="chip chip--sys">Система</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Экран 2 <b>карточка статьи</b></div>
+  <p class="mk-sub">Markdown с превью, без WYSIWYG. Справа — откуда статья взялась и как её читают:
+     это то, по чему потом решают, жива она ещё или пора переписать.</p>
+
+  <div class="shell">
+    <div class="shell__top">
+      <div class="brand"><span class="brand__mark">SW</span> Швейка · Демо-цех</div>
+      <div class="topuser">Мастер цеха · <b>Ирина К.</b></div>
+    </div>
+    <div class="shell__body">
+      <nav class="side">
+        <div class="side__item"><i class="side__dot"></i> Обзор</div>
+        <div class="side__group">
+          <div class="side__group-h">Справка</div>
+          <div class="side__item side__item--active"><i class="side__dot"></i> База знаний</div>
+        </div>
+      </nav>
+
+      <main class="page">
+        <div class="page__h">
+          <h1>Приёмка ткани <span class="page__route">/admin/knowledge/postavka-priemka</span></h1>
+          <div class="frow">
+            <button class="btn">Сохранить черновик</button>
+            <button class="btn btn--primary">Опубликовать</button>
+          </div>
+        </div>
+
+        <div class="edit">
+          <div class="admin-card">
+            <div class="admin-field">
+              <label>Заголовок</label>
+              <div class="admin-field__ctl">Порядок приёмки ткани от поставщика</div>
+            </div>
+
+            <div class="admin-field">
+              <label>Текст</label>
+              <div class="md">
+                <div class="md__bar">
+                  <span class="md__b md__b--on">Текст</span>
+                  <span class="md__b">Превью</span>
+                </div>
+                <div class="md__area">Приёмку делает кладовщик вместе с мастером смены.
+
+1. Сверить накладную с заказом поставщику в /admin/purchase-orders.
+2. Перемерить **каждый** рулон: фактическая длина пишется в приёмку,
+   а не длина из накладной.
+3. Недовоз больше 2% — не принимаем молча: фото рулона и звонок
+   снабжению в тот же день.
+4. Брак ткани (дыры, полосы, разнотон) — отдельной строкой в приёмке,
+   такой рулон в раскрой не уходит.
+
+Если поставщик привёз раньше срока — принимаем, склад не отказывает.</div>
+              </div>
+              <div class="admin-field__hint">Markdown. Коротко: одна статья — один вопрос.
+                Длинную лучше разрезать, поиск точнее попадает.</div>
+            </div>
+
+            <div class="admin-field">
+              <label>Ключевые слова</label>
+              <div class="tags">
+                <span class="tag">приёмка <em>×</em></span>
+                <span class="tag">поставка <em>×</em></span>
+                <span class="tag">недовоз <em>×</em></span>
+                <span class="tag">рулоны <em>×</em></span>
+                <span class="tags__in">добавить…</span>
+              </div>
+              <div class="admin-field__hint">Нужны для синонимов и жаргона, которых нет в тексте
+                («ткань пришла», «привезли»). Основной поиск и так идёт по всему тексту.</div>
+            </div>
+
+            <div class="admin-form-grid">
+              <div class="admin-field">
+                <label>Область</label>
+                <div class="admin-field__ctl">Снабжение
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+                </div>
+                <div class="admin-field__hint">Те же области, что у ассистента.</div>
+              </div>
+              <div class="admin-field">
+                <label>Кто видит</label>
+                <div class="admin-field__ctl">Снабжение, Мастер
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+                </div>
+                <div class="admin-field__hint">Пусто = видят все, у кого открыта область.</div>
+              </div>
+              <div class="admin-field">
+                <label>Перепроверить через</label>
+                <div class="admin-field__ctl">6 месяцев
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+                </div>
+                <div class="admin-field__hint">Дальше статья подсвечивается в списке.</div>
+              </div>
+            </div>
+
+            <div class="check check--on"><i></i> Ассистенту можно цитировать эту статью</div>
+          </div>
+
+          <aside class="aside">
+            <div class="panel panel--soft">
+              <h3>Откуда взялась</h3>
+              <div class="src-q">«кто принимает ткань и что делать если привезли меньше?»</div>
+              <div class="kv"><span class="muted">Спрашивали</span><b>4 раза</b></div>
+              <div class="kv"><span class="muted">Последний раз</span><b>11.08.2026</b></div>
+              <div class="admin-field__hint">Черновик собрал ассистент из ответа мастера.
+                Текст всё равно проверяет человек — иначе в базу уедет догадка.</div>
+            </div>
+
+            <div class="panel">
+              <h3>Как читают</h3>
+              <div class="kv"><span class="muted">Показов за месяц</span><b>7</b></div>
+              <div class="kv"><span class="muted">Из них ассистентом</span><b>5</b></div>
+              <div class="kv"><span class="muted">Помогла</span><b>4 · не помогла 1</b></div>
+            </div>
+
+            <div class="panel">
+              <h3>История</h3>
+              <div class="kv"><span class="muted">Создана</span><b>11.08.2026</b></div>
+              <div class="kv"><span class="muted">Автор</span><b>Ирина К.</b></div>
+              <div class="kv"><span class="muted">Проверена</span><b>—</b></div>
+              <button class="btn btn--link">Все версии</button>
+            </div>
+          </aside>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Экран 3 <b>вкладка «Не отвечено»</b></div>
+  <p class="mk-sub">Самая ценная часть: список того, чего в базе нет, собранный из реальных вопросов.
+     Похожие вопросы схлопнуты в одну строку с частотой — писать статьи можно сверху вниз.</p>
+
+  <div class="shell">
+    <div class="shell__top">
+      <div class="brand"><span class="brand__mark">SW</span> Швейка · Демо-цех</div>
+      <div class="topuser">Мастер цеха · <b>Ирина К.</b></div>
+    </div>
+    <div class="shell__body">
+      <nav class="side">
+        <div class="side__item"><i class="side__dot"></i> Обзор</div>
+        <div class="side__group">
+          <div class="side__group-h">Справка</div>
+          <div class="side__item side__item--active"><i class="side__dot"></i> База знаний</div>
+        </div>
+      </nav>
+
+      <main class="page">
+        <div class="page__h">
+          <h1>База знаний <span class="page__route">/admin/knowledge?tab=gaps</span></h1>
+          <button class="btn btn--primary">＋ Статья</button>
+        </div>
+
+        <div class="admin-card">
+          <div class="tabs">
+            <span class="tab">Активные <i>14</i></span>
+            <span class="tab">Черновики <i>2</i></span>
+            <span class="tab tab--on">Не отвечено <i>9</i></span>
+            <span class="tab tab--warn">На проверку <i>6</i></span>
+            <span class="tab">Системные <i>6</i></span>
+            <span class="tab">Архив <i>3</i></span>
+          </div>
+
+          <div class="srch">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+            Поиск по вопросам
+          </div>
+
+          <div class="admin-section-header">
+            <h2>За 30 дней · Всего: 9</h2>
+            <span class="admin-section-header__hint">Вопросы, на которые не нашлось статьи</span>
+          </div>
+
+          <div class="admin-table-wrap">
+            <table class="t">
+              <thead>
+                <tr>
+                  <th style="width:44%">Вопрос</th>
+                  <th class="num">Раз</th>
+                  <th>Кто спрашивал</th>
+                  <th>Последний раз</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <div class="ttl">Куда девать остаток рулона после раскроя</div>
+                    <div class="kw">+ 3 похожих: «остаток ткани», «куда сдавать обрезки»</div>
+                  </td>
+                  <td class="num">6</td>
+                  <td class="muted">Раскройщик · 3 чел.</td>
+                  <td class="num muted">сегодня, 11:20</td>
+                  <td><button class="btn btn--sm btn--primary">Написать статью</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Можно ли шить без паспорта, если он не напечатался</div>
+                    <div class="kw">+ 1 похожий</div>
+                  </td>
+                  <td class="num">5</td>
+                  <td class="muted">Швея · 4 чел.</td>
+                  <td class="num muted">вчера, 16:05</td>
+                  <td><button class="btn btn--sm btn--primary">Написать статью</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Кто принимает ткань и что делать при недовозе</div>
+                    <div class="kw">черновик уже создан</div>
+                  </td>
+                  <td class="num">4</td>
+                  <td class="muted">Снабжение · 2 чел.</td>
+                  <td class="num muted">11.08, 09:41</td>
+                  <td><button class="btn btn--sm">Открыть черновик</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Во сколько начинается вторая смена в пятницу</div>
+                  </td>
+                  <td class="num">3</td>
+                  <td class="muted">Швея · 3 чел.</td>
+                  <td class="num muted">10.08, 18:12</td>
+                  <td><button class="btn btn--sm">Написать статью</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl subtle">Какая у меня зарплата за август</div>
+                    <div class="kw">закрыто правами · статья не нужна</div>
+                  </td>
+                  <td class="num">2</td>
+                  <td class="muted">Швея · 2 чел.</td>
+                  <td class="num muted">09.08, 12:30</td>
+                  <td><button class="btn btn--sm">Скрыть</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Экран 4 <b>связка с ассистентом</b></div>
+  <p class="mk-sub">Один инструмент <code>docs.lookup</code> ищет по обоим слоям и возвращает источники —
+     поле <code>sources</code> в <code>AssistantMessage</code> под это уже есть. Ответ всегда со ссылкой
+     на статью, чтобы сотрудник мог перечитать первоисточник, а не верить пересказу.</p>
+
+  <div class="mk-grid">
+
+    <div class="mk-col">
+      <h3 class="mk-colcap">A. Ответ из базы <span>hit</span></h3>
+      <p class="mk-colsub">Нашлась наша статья. Видно, что ассистент ходил именно в базу.</p>
+      <div class="asst">
+        <div class="asst__head">
+          <h2 class="asst__title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M3 2.5h10v11H3z"/><path d="M5.5 6h5M5.5 9h3"/></svg>
+            Справка
+          </h2>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">на настиле кончился рулон, что делать?</div></div>
+          <div class="tool">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+            Ищу в базе знаний <code>docs.lookup</code>
+          </div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <div class="aicap">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M8 2.5 9.6 6.4 13.5 8 9.6 9.6 8 13.5 6.4 9.6 2.5 8 6.4 6.4z"/></svg>
+              Ответ ассистента · бета
+            </div>
+            <p>По регламенту цеха:</p>
+            <ul>
+              <li>настил не докладываем «на глаз» — остаток рулона уходит в остатки, длина фиксируется;</li>
+              <li>берём новый рулон той же партии, при смене партии зовём мастера (разнотон);</li>
+              <li>если партии нет — раскрой останавливаем, вопрос снабжению в тот же день.</li>
+            </ul>
+            <div class="srcs">
+              <div class="srcs__cap">Источник</div>
+              <a class="src" href="#">
+                <span class="src__ic">Н</span>
+                <span class="src__m">Что делать, если рулон закончился посреди настила</span>
+                <span class="src__go">→</span>
+              </a>
+              <a class="src" href="#">
+                <span class="src__ic" style="background:var(--color-accent-soft);color:var(--color-accent-fg)">С</span>
+                <span class="src__m">Единица выпуска: расклад × размер × рулон</span>
+                <span class="src__go">→</span>
+              </a>
+            </div>
+            <div class="rate"><span>👍</span><span>👎</span> Ответ помог?</div>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросить ещё…</div>
+            <button class="send">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 8h10M8.5 4.5 12.5 8l-4 3.5"/></svg>
+            </button>
+          </div>
+          <p class="foot-note" style="margin:.45rem 0 0;font-size:.74rem;color:var(--color-fg-subtle)">
+            «Н» — статья компании, «С» — системная справка.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="mk-col">
+      <h3 class="mk-colcap">B. Не нашлось <span>gap</span></h3>
+      <p class="mk-colsub">Ассистент не выдумывает регламент. Вопрос уходит во вкладку «Не отвечено».</p>
+      <div class="asst">
+        <div class="asst__head">
+          <h2 class="asst__title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M3 2.5h10v11H3z"/><path d="M5.5 6h5M5.5 9h3"/></svg>
+            Справка
+          </h2>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">куда девать остаток рулона после раскроя?</div></div>
+          <div class="tool">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+            Ищу в базе знаний <code>docs.lookup</code> · ничего
+          </div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <div class="aicap">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M8 2.5 9.6 6.4 13.5 8 9.6 9.6 8 13.5 6.4 9.6 2.5 8 6.4 6.4z"/></svg>
+              Ответ ассистента · бета
+            </div>
+            <p>В базе знаний такого правила нет, а придумывать порядок работы цеха я не буду —
+               в этом ответе легко ошибиться.</p>
+            <div class="note note--info">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+                <circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v4M8 4.9v.9"/></svg>
+              <span>Вопрос передан мастеру — он попадёт в список «Не отвечено» в базе знаний.
+                    Как появится статья, пришлю ответ.</span>
+            </div>
+            <p style="margin-top:.5rem">Пока спросите мастера смены напрямую.</p>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросить ещё…</div>
+            <button class="send">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 8h10M8.5 4.5 12.5 8l-4 3.5"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mk-col">
+      <h3 class="mk-colcap">C. Пополнение <span>draft</span></h3>
+      <p class="mk-colsub">Мастер ответил в чате — ассистент предлагает сохранить это статьёй.
+         Публикует человек, статья создаётся черновиком.</p>
+      <div class="asst">
+        <div class="asst__head">
+          <h2 class="asst__title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M3 2.5h10v11H3z"/><path d="M5.5 6h5M5.5 9h3"/></svg>
+            Справка
+          </h2>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">остатки сдают кладовщику, в журнал остатков, до 30 см — в обрезки</div></div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <div class="aicap">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M8 2.5 9.6 6.4 13.5 8 9.6 9.6 8 13.5 6.4 9.6 2.5 8 6.4 6.4z"/></svg>
+              Ответ ассистента · бета
+            </div>
+            <p>Записал. Похожий вопрос задавали <b>6 раз</b> за месяц — сохранить как статью базы знаний?</p>
+            <div class="note note--warn">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+                <path d="M8 2.5 14.5 13.5h-13z"/><path d="M8 6.6v3.1M8 11.4v.6"/></svg>
+              <span>Черновик, не публикация. Текст проверит и опубликует человек.</span>
+            </div>
+            <div class="srcs">
+              <div class="srcs__cap">Черновик</div>
+              <a class="src" href="#">
+                <span class="src__ic">Н</span>
+                <span class="src__m">Куда девать остаток рулона после раскроя</span>
+                <span class="src__go">→</span>
+              </a>
+            </div>
+            <div class="frow" style="margin-top:.45rem">
+              <button class="btn btn--sm btn--primary">Сохранить черновик</button>
+              <button class="btn btn--sm">Не надо</button>
+            </div>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросить ещё…</div>
+            <button class="send">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 8h10M8.5 4.5 12.5 8l-4 3.5"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Экран 5 <b>одно окно, два корпуса</b></div>
+  <p class="mk-sub">Это тот же компонент, что шторка на экранах 4 и 6 — то же поле ввода, те же три
+     уровня ответа, та же ручка API. Отличается только оболочка: в админке окно живёт шторкой справа,
+     в кабинете — во весь экран, с тач-целями 48. Второго входа «поиск по справке» нет: поиск и есть
+     это окно, просто на нижних уровнях он отвечает без модели.</p>
+
+  <div class="mk-grid">
+
+    <div class="mk-col">
+      <h3 class="mk-colcap">Пустое состояние <span>/work → «Справка»</span></h3>
+      <p class="mk-colsub">Подсказки — не выдумка дизайнера, а реальный топ показов из базы
+         плюс статьи, привязанные к участку сотрудника.</p>
+      <div class="phone">
+        <div class="phone__top">
+          <span class="phone__title">
+            <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M3 2.5h10v11H3z"/><path d="M5.5 6h5M5.5 9h3"/></svg>
+            Справка
+          </span>
+          <span class="phone__badge">Швея</span>
+        </div>
+        <div class="phone__body">
+          <div class="kb-cap">Спрашивают чаще всего</div>
+          <div class="kb-item">
+            <b>Как оформить брак и отправить на подкрой</b>
+            <span>брак · подкрой · ОТК</span>
+          </div>
+          <div class="kb-item">
+            <b>Кому звонить, если сканер не читает паспорт</b>
+            <span>сканер · QR · паспорт</span>
+          </div>
+          <div class="kb-item">
+            <b>Что делать, если рулон закончился посреди настила</b>
+            <span>рулон · настил · раскрой</span>
+          </div>
+          <div class="kb-cap">Для вашего участка</div>
+          <div class="kb-item">
+            <b>Порядок передачи паспорта следующей операции</b>
+            <span>передача · ячейка · маршрут</span>
+          </div>
+        </div>
+        <div class="phone__foot">
+          <div class="composer composer--tap">
+            <div class="composer__in">Спросите или найдите…</div>
+            <button class="send">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 8h10M8.5 4.5 12.5 8l-4 3.5"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mk-col">
+      <h3 class="mk-colcap">Ответ статьёй <span>L1 · 0 токенов</span></h3>
+      <p class="mk-colsub">Та же карточка «Из базы знаний», что в шторке админки, — и тот же
+         аварийный выход «Это не то».</p>
+      <div class="phone">
+        <div class="phone__top">
+          <span class="phone__title">
+            <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M3 2.5h10v11H3z"/><path d="M5.5 6h5M5.5 9h3"/></svg>
+            Справка
+          </span>
+          <span class="phone__badge">Швея</span>
+        </div>
+        <div class="phone__body">
+          <div class="msg msg--user"><div class="msg__b">как оформить брак?</div></div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <div class="kbans">
+              <div class="kbans__cap">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M3 3h10v10H3z"/><path d="M5.5 6.5h5M5.5 9.5h3"/></svg>
+                Из базы знаний · мгновенно
+              </div>
+              <h4>Как оформить брак и отправить на подкрой</h4>
+              <p>Брак фиксируем сразу, не в конце смены: иначе выработка за смену посчитается
+                 по бракованным изделиям.</p>
+              <ul>
+                <li>отметьте годные и брак по паспорту в своём кабинете;</li>
+                <li>дырка или прорез — кнопка «Подкрой» на карточке паспорта;</li>
+                <li>скажите мастеру: без мастера подкрой не запускается.</li>
+              </ul>
+              <div class="kbans__foot">
+                <span class="subtle" style="font-size:.76rem">Проверено 02.07.2026</span>
+                <button class="btn btn--sm">Это не то</button>
+              </div>
+            </div>
+            <div class="rate" style="margin-top:.45rem"><span>👍</span><span>👎</span> Помогло?</div>
+          </div></div>
+        </div>
+        <div class="phone__foot">
+          <div class="composer composer--tap">
+            <div class="composer__in">Спросите или найдите…</div>
+            <button class="send">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 8h10M8.5 4.5 12.5 8l-4 3.5"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mk-col">
+      <h3 class="mk-colcap">Модель недоступна <span>окно живо</span></h3>
+      <p class="mk-colsub">Ассистент выключен, бюджет выбран или роли не открыт L2 — окно продолжает
+         работать поиском по базе. Ради этого оно и принадлежит справке, а не ассистенту.</p>
+      <div class="phone">
+        <div class="phone__top">
+          <span class="phone__title">
+            <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M3 2.5h10v11H3z"/><path d="M5.5 6h5M5.5 9h3"/></svg>
+            Справка
+          </span>
+          <span class="phone__badge">Швея</span>
+        </div>
+        <div class="phone__body">
+          <div class="msg msg--user"><div class="msg__b">во сколько вторая смена в пятницу</div></div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <p style="font-size:.9rem">Точного ответа в справке нет. Ближайшее по вашему запросу:</p>
+            <div class="srcs">
+              <a class="src" href="#">
+                <span class="src__ic">Н</span>
+                <span class="src__m">График смен и пересменка</span>
+                <span class="src__go">→</span>
+              </a>
+              <a class="src" href="#">
+                <span class="src__ic">Н</span>
+                <span class="src__m">Опоздание и уход раньше: к кому идти</span>
+                <span class="src__go">→</span>
+              </a>
+            </div>
+            <div class="note note--info" style="margin-top:.5rem">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+                <circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v4M8 4.9v.9"/></svg>
+              <span>Ассистент сейчас отвечать не может. Вопрос передан мастеру — как появится
+                    статья, она придёт сюда.</span>
+            </div>
+          </div></div>
+        </div>
+        <div class="phone__foot">
+          <div class="composer composer--tap">
+            <div class="composer__in">Найдите в справке…</div>
+            <button class="send send--off" style="background:var(--color-bg-muted);border-color:var(--color-border);color:var(--color-fg-subtle)">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+            </button>
+          </div>
+          <p class="foot-note" style="margin:.45rem 0 0;font-size:.74rem;color:var(--color-fg-subtle)">
+            Работает поиск по базе. Ответы ассистента временно недоступны.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="mk-note">
+    <b>Что это значит для кода.</b>
+    <ul>
+      <li>Ручка перестаёт быть админской: сейчас <code>@Roles('SHOP_MANAGER', 'ADMIN')</code>
+          в <code>assistant.controller.ts</code>. Поиск и роутер (L1/L2) — всем аутентифицированным,
+          дорогая модель (L3) — по ролям и настройке компании.</li>
+      <li>Разные права на разные уровни = предохранитель по деньгам: цех получает мгновенные
+          ответы бесплатно, а «пускать ли швей в модель» решает админ и это не блокирует запуск базы.</li>
+      <li>Окно называется «Справка», а не «Ассистент». Ассистент — верхний уровень внутри него,
+          и бейдж «бета» висит на его ответах, а не на окне.</li>
+      <li>Вход <b>один</b>: кнопка «Справка» в шапке админки и вкладка в кабинете. Отдельной кнопки
+          «Спросить ассистента» рядом с поиском по базе нет — иначе человек гадает, куда идти
+          с вопросом, а половина вопросов уходит в дорогую модель просто потому, что кнопка заметнее.</li>
+      <li>Компонент один, корпуса два: шторка в <code>apps/web/app/admin/layout.tsx</code>
+          и вкладка в кабинетах <code>/work</code>, <code>/qc</code>, <code>/wto</code>,
+          <code>/packing</code>.</li>
+    </ul>
+  </div>
+
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Схема <b>путь вопроса</b></div>
+  <p class="mk-sub">Сейчас <code>docs.lookup</code> — инструмент модели: чтобы понять, что нужна статья,
+     запрос уже улетел в Anthropic. Развилка должна стоять <b>до</b> модели — в
+     <code>assistant.service.ts::ask()</code>, сразу после проверки лимитов. Уровня «кэш готовых
+     ответов» здесь нет намеренно: живая речь не повторяется дословно, и такой кэш только рисковал бы
+     выдать чужой ответ на похожий вопрос. Его место занял дешёвый роутер.</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 1040 552" role="img" class="svg-t"
+         aria-label="Вопрос сотрудника проходит фильтр «про свои данные», затем поиск по базе знаний и дешёвый роутер на Haiku, который выбирает статью из пяти кандидатов, и только если ни одна не подходит — уходит в дорогую модель; её ответ пополняет базу через журнал «не отвечено» и черновик статьи.">
+      <defs>
+        <marker id="ar" viewBox="0 0 8 8" refX="7.2" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0.6 L7.4 4 L0 7.4 z" fill="currentColor"/>
+        </marker>
+        <marker id="arm" viewBox="0 0 8 8" refX="7.2" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0.6 L7.4 4 L0 7.4 z" fill="#8a8a86"/>
+        </marker>
+      </defs>
+
+      <!-- Спина: путь вопроса ------------------------------------------------ -->
+      <rect x="360" y="20" width="240" height="56" rx="10" fill="#fff" stroke="#d4d4d0"/>
+      <text x="480" y="44" text-anchor="middle" font-size="12.5" font-weight="700" fill="currentColor">Вопрос сотрудника</text>
+      <text x="480" y="62" text-anchor="middle" font-size="10.5" fill="#5f5f5c">шторка админки или кабинет</text>
+
+      <rect x="360" y="110" width="240" height="66" rx="10" fill="#fff" stroke="#d4d4d0"/>
+      <text x="480" y="138" text-anchor="middle" font-size="12.5" font-weight="700" fill="currentColor">Про свои данные?</text>
+      <text x="480" y="157" text-anchor="middle" font-size="10.5" fill="#5f5f5c">номер паспорта, «сколько я…»</text>
+
+      <rect x="360" y="210" width="240" height="66" rx="10" fill="#fdf3da" stroke="#e7b51e"/>
+      <text x="480" y="238" text-anchor="middle" font-size="12.5" font-weight="700" fill="currentColor">L1 · поиск по базе</text>
+      <text x="480" y="257" text-anchor="middle" font-size="10.5" fill="#5f5f5c">FTS отдаёт до пяти кандидатов</text>
+
+      <rect x="360" y="310" width="240" height="66" rx="10" fill="#fdf3da" stroke="#e7b51e"/>
+      <text x="480" y="338" text-anchor="middle" font-size="12.5" font-weight="700" fill="currentColor">L2 · роутер на Haiku 4.5</text>
+      <text x="480" y="357" text-anchor="middle" font-size="10.5" fill="#5f5f5c">выбирает статью из пяти заголовков</text>
+
+      <rect x="360" y="410" width="240" height="76" rx="10" fill="#d9e8fb" stroke="#2f7fd1"/>
+      <text x="480" y="440" text-anchor="middle" font-size="12.5" font-weight="700" fill="currentColor">L3 · модель + инструменты</text>
+      <text x="480" y="459" text-anchor="middle" font-size="10.5" fill="#5f5f5c">агентный цикл, до 6 проходов</text>
+      <text x="480" y="476" text-anchor="middle" font-size="10.5" fill="#5f5f5c">ест суточный лимит сотрудника</text>
+
+      <line x1="480" y1="76"  x2="480" y2="108" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+      <line x1="480" y1="176" x2="480" y2="208" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+      <text x="490" y="197" font-size="10.5" fill="#5f5f5c">нет</text>
+      <line x1="480" y1="276" x2="480" y2="308" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+      <text x="490" y="297" font-size="10.5" fill="#5f5f5c">лидера нет</text>
+      <line x1="480" y1="376" x2="480" y2="408" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+      <text x="490" y="397" font-size="10.5" fill="#5f5f5c">не подошла ни одна</text>
+
+      <!-- Что получает сотрудник --------------------------------------------- -->
+      <rect x="60" y="210" width="240" height="66" rx="10" fill="#fff" stroke="#d4d4d0"/>
+      <text x="180" y="234" text-anchor="middle" font-size="12.5" font-weight="700" fill="currentColor">Статья целиком</text>
+      <text x="180" y="252" text-anchor="middle" font-size="11" font-weight="700" fill="#2f7d4e">0 ₽ · ~200 мс</text>
+      <text x="180" y="268" text-anchor="middle" font-size="10.5" fill="#5f5f5c">явный лидер поиска</text>
+
+      <rect x="60" y="310" width="240" height="66" rx="10" fill="#fff" stroke="#d4d4d0"/>
+      <text x="180" y="334" text-anchor="middle" font-size="12.5" font-weight="700" fill="currentColor">Статья целиком</text>
+      <text x="180" y="352" text-anchor="middle" font-size="11" font-weight="700" fill="#2f7d4e">≈ $0,0004 · ~1 с</text>
+      <text x="180" y="368" text-anchor="middle" font-size="10.5" fill="#5f5f5c">роутер выбрал из пяти</text>
+
+      <rect x="60" y="410" width="240" height="76" rx="10" fill="#fff" stroke="#d4d4d0"/>
+      <text x="180" y="440" text-anchor="middle" font-size="12.5" font-weight="700" fill="currentColor">Ответ модели</text>
+      <text x="180" y="459" text-anchor="middle" font-size="11" font-weight="700" fill="#9a6f1e">≈ $0,01–0,03 · 5–10 с</text>
+      <text x="180" y="476" text-anchor="middle" font-size="10.5" fill="#5f5f5c">со ссылками на источники</text>
+
+      <line x1="358" y1="243" x2="302" y2="243" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+      <line x1="358" y1="343" x2="302" y2="343" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+      <line x1="358" y1="448" x2="302" y2="448" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+
+      <!-- Аварийный выход: статья не подошла ---------------------------------- -->
+      <line x1="180" y1="276" x2="180" y2="308" stroke="#8a8a86" stroke-width="1.3"
+            stroke-dasharray="4 3" marker-end="url(#arm)"/>
+      <text x="170" y="297" text-anchor="end" font-size="10.5" fill="#8a8a86">«это не то»</text>
+      <line x1="180" y1="376" x2="180" y2="408" stroke="#8a8a86" stroke-width="1.3"
+            stroke-dasharray="4 3" marker-end="url(#arm)"/>
+      <text x="170" y="397" text-anchor="end" font-size="10.5" fill="#8a8a86">«это не то»</text>
+
+      <!-- База знаний и петля пополнения -------------------------------------- -->
+      <rect x="690" y="210" width="320" height="166" rx="10" fill="#f7f7f6" stroke="#d4d4d0"/>
+      <text x="850" y="242" text-anchor="middle" font-size="13" font-weight="700" fill="currentColor">База знаний</text>
+      <line x1="714" y1="256" x2="986" y2="256" stroke="#e4e4e1" stroke-width="1"/>
+      <text x="714" y="280" font-size="11" fill="currentColor">Статьи компании — правит мастер</text>
+      <text x="714" y="300" font-size="11" fill="currentColor">Системные статьи — едут в коде</text>
+      <text x="714" y="330" font-size="10.5" fill="#5f5f5c">Postgres FTS, русский словарь</text>
+      <text x="714" y="348" font-size="10.5" fill="#5f5f5c">+ pg_trgm на опечатки и жаргон</text>
+
+      <line x1="688" y1="243" x2="602" y2="243" stroke="#8a8a86" stroke-width="1.3"
+            stroke-dasharray="2 3" marker-end="url(#arm)"/>
+      <text x="645" y="235" text-anchor="middle" font-size="10" fill="#8a8a86">читает</text>
+
+      <rect x="690" y="410" width="320" height="76" rx="10" fill="#fff" stroke="#d4d4d0"/>
+      <text x="850" y="440" text-anchor="middle" font-size="12.5" font-weight="700" fill="currentColor">Журнал «не отвечено» + черновик</text>
+      <text x="850" y="459" text-anchor="middle" font-size="10.5" fill="#5f5f5c">частота вопроса, кто спрашивал</text>
+      <text x="850" y="476" text-anchor="middle" font-size="10.5" fill="#5f5f5c">публикует человек, не модель</text>
+
+      <line x1="602" y1="448" x2="688" y2="448" stroke="#8a8a86" stroke-width="1.3"
+            stroke-dasharray="4 3" marker-end="url(#arm)"/>
+      <text x="645" y="440" text-anchor="middle" font-size="10" fill="#8a8a86">пишет</text>
+      <line x1="850" y1="408" x2="850" y2="378" stroke="#8a8a86" stroke-width="1.3"
+            stroke-dasharray="4 3" marker-end="url(#arm)"/>
+      <text x="860" y="396" font-size="10" fill="#8a8a86">после проверки человеком</text>
+
+      <!-- Обход: вопрос про свои данные кэшировать нечего --------------------- -->
+      <path d="M358 143 H30 V520 H480 V488" fill="none" stroke="currentColor" stroke-width="1.4"
+            stroke-dasharray="6 4" marker-end="url(#ar)"/>
+      <text x="350" y="136" text-anchor="end" font-size="10.5" fill="#5f5f5c">да</text>
+      <text x="255" y="512" text-anchor="middle" font-size="10.5" fill="#5f5f5c">свои данные кэшировать нечего — сразу в модель</text>
+    </svg>
+    <figcaption>Между бесплатным поиском и дорогой моделью стоит роутер за четыре сотых цента: он читает
+      только пять заголовков и решает, отвечает ли какая-то статья на вопрос. Дорогая модель включается,
+      когда база тему не покрывает, — и каждый такой случай попадает в журнал, чтобы в следующий раз
+      сработал уровень выше.</figcaption>
+  </figure>
+
+  <div class="admin-card" style="margin-top:1rem">
+    <div class="admin-section-header">
+      <h2>Прайс моделей и что он значит для лимитов</h2>
+      <span class="admin-section-header__hint">цены за миллион токенов, прайс Anthropic</span>
+    </div>
+    <div class="admin-table-wrap">
+      <table class="t">
+        <thead>
+          <tr>
+            <th>Модель</th>
+            <th class="num">Вход</th>
+            <th class="num">Выход</th>
+            <th class="num">Вопрос ≈</th>
+            <th>Роль в схеме</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="ttl">Claude Opus 5</span><div class="kw">текущий дефолт ассистента</div></td>
+            <td class="num">$5</td>
+            <td class="num">$25</td>
+            <td class="num">≈ $0,03</td>
+            <td class="muted">сложные вопросы по данным</td>
+          </tr>
+          <tr>
+            <td><span class="ttl">Claude Sonnet 5</span><div class="kw">вводная цена до 31.08.2026, затем $3 / $15</div></td>
+            <td class="num">$2</td>
+            <td class="num">$10</td>
+            <td class="num">≈ $0,012</td>
+            <td class="muted">разумный дефолт для L3</td>
+          </tr>
+          <tr>
+            <td><span class="ttl">Claude Haiku 4.5</span><div class="kw">пять заголовков на вход, одно число на выход</div></td>
+            <td class="num">$1</td>
+            <td class="num">$5</td>
+            <td class="num">≈ $0,0004</td>
+            <td class="muted">роутер L2</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="admin-field__hint">
+      Модель выбирается в настройках компании (<code>assistantModel</code>) — переключение на Sonnet
+      уменьшает счёт в 2,5 раза и не требует ни строчки кода. <b>Засада:</b> в
+      <code>assistant/pricing.ts</code> заведены только Opus и Sonnet, а неизвестная модель считается
+      по прайсу Opus. Дадим выбрать Haiku без строки в прайсе — месячный расход завысится впятеро
+      и потолок выберется раньше времени.
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <b>в 60 раз</b>
+      <span>роутер на Haiku дешевле полного ответа модели</span>
+      <em>факт · прайс Anthropic</em>
+    </div>
+    <div class="stat">
+      <b>$100 / мес</b>
+      <span>дефолтный потолок расхода на компанию из миграции</span>
+      <em>факт · assistantMonthlyBudgetCents</em>
+    </div>
+    <div class="stat stat--guess">
+      <b>60–80%</b>
+      <span>вопросов «как устроено» должны закрываться без дорогой модели</span>
+      <em>гипотеза · проверяется журналом</em>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Экран 6 <b>как это видит сотрудник</b></div>
+  <p class="mk-sub">Разница между уровнями не должна быть тайной: человеку видно, откуда ответ и
+     сколько он ждал. Иначе мгновенный ответ из базы прочитается как «ассистент отмахнулся».</p>
+
+  <div class="mk-grid">
+
+    <div class="mk-col">
+      <h3 class="mk-colcap">L1 · ответ статьёй <span>0 токенов</span></h3>
+      <p class="mk-colsub">Модель не вызывалась вообще. Суточный лимит не тратится — и это сказано прямо.</p>
+      <div class="asst">
+        <div class="asst__head">
+          <h2 class="asst__title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M3 2.5h10v11H3z"/><path d="M5.5 6h5M5.5 9h3"/></svg>
+            Справка
+          </h2>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">как оформить брак?</div></div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <div class="kbans">
+              <div class="kbans__cap">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M3 3h10v10H3z"/><path d="M5.5 6.5h5M5.5 9.5h3"/></svg>
+                Из базы знаний · мгновенно
+              </div>
+              <h4>Как оформить брак и отправить на подкрой</h4>
+              <ul>
+                <li>отметить годные и брак по паспорту сразу, не в конце смены;</li>
+                <li>дырка или прорез — кнопка «Подкрой» на карточке паспорта;</li>
+                <li>сказать мастеру: без мастера подкрой не запускается.</li>
+              </ul>
+              <div class="kbans__foot">
+                <span class="subtle" style="font-size:.76rem">Проверено 02.07.2026 · Ирина К.</span>
+                <button class="btn btn--sm">Это не то</button>
+              </div>
+            </div>
+            <p class="stamp" style="margin:.4rem 0 0;font-size:.76rem;color:var(--color-fg-subtle)">
+              Ответ из базы — вопрос к ассистенту не потрачен.</p>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросить ещё…</div>
+            <button class="send">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 8h10M8.5 4.5 12.5 8l-4 3.5"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mk-col">
+      <h3 class="mk-colcap">После «это не то» <span>L3</span></h3>
+      <p class="mk-colsub">Статья остаётся в ленте — видно, что именно не подошло. Клик записан:
+         это сигнал, что текст мимо вопроса.</p>
+      <div class="asst">
+        <div class="asst__head">
+          <h2 class="asst__title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M3 2.5h10v11H3z"/><path d="M5.5 6h5M5.5 9h3"/></svg>
+            Справка
+          </h2>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">как оформить брак?</div></div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <div class="kbans" style="opacity:.55">
+              <div class="kbans__cap">Из базы знаний · не подошло</div>
+              <h4>Как оформить брак и отправить на подкрой</h4>
+            </div>
+          </div></div>
+          <div class="msg msg--user"><div class="msg__b">брак нашли уже после упаковки</div></div>
+          <div class="tool">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+            Смотрю паспорт <code>passport.locate</code>
+          </div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <div class="aicap">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M8 2.5 9.6 6.4 13.5 8 9.6 9.6 8 13.5 6.4 9.6 2.5 8 6.4 6.4z"/></svg>
+              Ответ ассистента · бета
+            </div>
+            <p>Упакованный паспорт назад по маршруту не двигается: коробку сначала
+               распаковывает упаковка, только потом ОТК отмечает брак.</p>
+            <div class="note note--info">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+                <circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v4M8 4.9v.9"/></svg>
+              <span>Порядок для вашего цеха в базе не описан — вопрос ушёл мастеру.</span>
+            </div>
+            <p class="stamp" style="margin:.4rem 0 0;font-size:.76rem;color:var(--color-fg-subtle)">
+              Вопрос 3 из 30 за сегодня.</p>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросить ещё…</div>
+            <button class="send">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 8h10M8.5 4.5 12.5 8l-4 3.5"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mk-col">
+      <h3 class="mk-colcap">Свои данные <span>мимо базы</span></h3>
+      <p class="mk-colsub">Фильтр по номеру паспорта и «сколько я» уводит вопрос в модель сразу:
+         кэшировать тут нечего, а поиск по базе только добавил бы задержку.</p>
+      <div class="asst">
+        <div class="asst__head">
+          <h2 class="asst__title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M3 2.5h10v11H3z"/><path d="M5.5 6h5M5.5 9h3"/></svg>
+            Справка
+          </h2>
+        </div>
+        <div class="asst__body">
+          <div class="msg msg--user"><div class="msg__b">где сейчас паспорт P-20260814-0007?</div></div>
+          <div class="tool">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+            Ищу паспорт <code>passport.locate</code>
+          </div>
+          <div class="msg msg--bot"><div class="msg__b">
+            <div class="aicap">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M8 2.5 9.6 6.4 13.5 8 9.6 9.6 8 13.5 6.4 9.6 2.5 8 6.4 6.4z"/></svg>
+              Ответ ассистента · бета
+            </div>
+            <p>Паспорт на операции «Распошив», исполнитель — Смирнова А.,
+               ячейка B-14. В работе с 09:12 сегодня.</p>
+            <div class="srcs">
+              <div class="srcs__cap">Источник</div>
+              <a class="src" href="#">
+                <span class="src__ic" style="background:var(--color-accent-soft);color:var(--color-accent-fg)">П</span>
+                <span class="src__m">P-20260814-0007 · заказ ТЕЕ-00142</span>
+                <span class="src__go">→</span>
+              </a>
+            </div>
+            <p class="stamp" style="margin:.4rem 0 0;font-size:.76rem;color:var(--color-fg-subtle)">
+              Вопрос 4 из 30 за сегодня.</p>
+          </div></div>
+        </div>
+        <div class="asst__foot">
+          <div class="composer">
+            <div class="composer__in">Спросить ещё…</div>
+            <button class="send">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 8h10M8.5 4.5 12.5 8l-4 3.5"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Экран 7 <b>наполнение базы</b></div>
+  <p class="mk-sub">Пустая база первый месяц гонит всех в дорогую модель — это главный риск запуска.
+     Откуда берутся первые статьи, по убыванию качества:</p>
+
+  <div class="admin-card" style="margin-bottom:1rem">
+    <div class="qsrc">
+      <div class="qsrc__row">
+        <span class="qsrc__n">1</span>
+        <span><b>Интервью с мастером</b> — система задаёт 30 типовых вопросов, собранных из экранов
+          и ролей; мастер отвечает своими словами, ассистент причёсывает в статью, мастер публикует.
+          Вечер работы. Единственный источник, который знает, как принято <b>в этом</b> цеху.</span>
+      </div>
+      <div class="qsrc__row">
+        <span class="qsrc__n">2</span>
+        <span><b>Бумажки, которые уже есть</b> — инструкции по ТБ, регламенты приёмки, приказы
+          в Word или на стене. Импорт файлом → нарезка на статьи → вычитка. Дешевле интервью,
+          если они существуют.</span>
+      </div>
+      <div class="qsrc__row">
+        <span class="qsrc__n">3</span>
+        <span><b>Системный слой</b> — 6 статей в <code>knowledge.ts</code> расширяем разово
+          до тридцати из <code>docs/screens.md</code> и flow-документов. Это «как устроена система»,
+          едет в коде, одинаково у всех тенантов.</span>
+      </div>
+      <div class="qsrc__row">
+        <span class="qsrc__n">4</span>
+        <span><b>Две недели «в долг»</b> — модель отвечает, каждый ответ с 👍 ложится черновиком.
+          Не требует времени мастера, но за наполнение платим токенами.</span>
+      </div>
+    </div>
+    <div class="admin-field__hint">
+      <b>Чего делать нельзя:</b> генерировать «как принято у нас» из кода или документации. Модель
+      напишет правдоподобный регламент, которого в цеху нет, — это худшее, что можно положить в базу.
+      Отсюда правило «публикует человек» на всех экранах.
+    </div>
+  </div>
+
+  <div class="shell">
+    <div class="shell__top">
+      <div class="brand"><span class="brand__mark">SW</span> Швейка · Демо-цех</div>
+      <div class="topuser">Мастер цеха · <b>Ирина К.</b></div>
+    </div>
+    <div class="shell__body">
+      <nav class="side">
+        <div class="side__item"><i class="side__dot"></i> Обзор</div>
+        <div class="side__group">
+          <div class="side__group-h">Справка</div>
+          <div class="side__item side__item--active"><i class="side__dot"></i> База знаний</div>
+        </div>
+      </nav>
+
+      <main class="page">
+        <div class="page__h">
+          <h1>Наполнение <span class="page__route">/admin/knowledge?tab=setup</span></h1>
+          <button class="btn">Отложить на потом</button>
+        </div>
+
+        <div class="admin-card">
+          <div class="tabs">
+            <span class="tab">Активные <i>7</i></span>
+            <span class="tab">Черновики <i>2</i></span>
+            <span class="tab tab--warn">Не отвечено <i>9</i></span>
+            <span class="tab tab--on">Наполнение <i>7/30</i></span>
+            <span class="tab">Системные <i>30</i></span>
+          </div>
+
+          <div class="interview">
+            <div>
+              <div class="prog">
+                <div class="prog__top"><span>Типовые вопросы цеха</span><b>7 из 30</b></div>
+                <div class="prog__bar"><span class="prog__fill"></span></div>
+              </div>
+              <div class="qlist">
+                <div class="qitem qitem--done"><i></i> Как оформить брак и отправить на подкрой</div>
+                <div class="qitem qitem--done"><i></i> Кому звонить, если сканер не читает паспорт</div>
+                <div class="qitem qitem--done"><i></i> Что делать, если рулон закончился на настиле</div>
+                <div class="qitem qitem--now"><i></i> Куда девать остаток рулона после раскроя</div>
+                <div class="qitem"><i></i> Порядок передачи паспорта следующей операции</div>
+                <div class="qitem"><i></i> Кто принимает ткань и что делать при недовозе</div>
+                <div class="qitem"><i></i> График смен и пересменка</div>
+                <div class="qitem"><i></i> Что делать, если сломалась машина посреди смены</div>
+                <div class="qitem"><i></i> Как отпроситься и к кому идти</div>
+              </div>
+              <div class="admin-field__hint" style="margin-top:.6rem">
+                Вопросы собраны из экранов и ролей системы. Ненужный можно пропустить —
+                он уйдёт вниз списка, а не исчезнет.
+              </div>
+            </div>
+
+            <div class="admin-card" style="box-shadow:none;border-color:var(--btn-primary-edge)">
+              <div class="admin-field">
+                <label>Вопрос 4 из 30</label>
+                <div class="admin-field__ctl admin-field__ctl--muted" style="color:var(--color-fg)">
+                  Куда девать остаток рулона после раскроя?
+                </div>
+                <div class="admin-field__hint">Спрашивали 6 раз за месяц — вопрос поднят наверх
+                  из журнала «Не отвечено».</div>
+              </div>
+
+              <div class="admin-field">
+                <label>Ответьте своими словами</label>
+                <div class="md">
+                  <div class="md__bar">
+                    <span class="md__b md__b--on">Ответ мастера</span>
+                    <span class="md__b">🎤 Надиктовать</span>
+                  </div>
+                  <div class="md__area" style="min-height:110px">остатки сдают кладовщику, пишут в журнал остатков
+до 30 см — в обрезки, отдельный мешок
+если рулон именной под заказ — не смешивать, подписать номер заказа</div>
+                </div>
+                <div class="admin-field__hint">Пишите как говорите. Причёсывать текст будет ассистент,
+                  а вы проверите результат.</div>
+              </div>
+
+              <div class="frow">
+                <button class="btn btn--primary">Собрать статью</button>
+                <button class="btn">Пропустить вопрос</button>
+              </div>
+
+              <div class="panel panel--soft" style="margin-top:.2rem">
+                <h3>Черновик статьи</h3>
+                <div style="font-size:.9rem;display:grid;gap:.4rem">
+                  <b style="font-size:.95rem">Куда девать остаток рулона после раскроя</b>
+                  <span>Остаток рулона сдают кладовщику и записывают в журнал остатков — «на глаз»
+                    в цеху ничего не остаётся.</span>
+                  <span>Куски короче 30 см идут в обрезки, в отдельный мешок.</span>
+                  <span>Именной рулон под конкретный заказ с общими остатками не смешивают:
+                    подписывают номером заказа и хранят отдельно.</span>
+                </div>
+                <div class="frow" style="margin-top:.3rem">
+                  <button class="btn btn--sm btn--primary">Опубликовать</button>
+                  <button class="btn btn--sm">Править</button>
+                  <span class="subtle" style="font-size:.76rem">Область: Производство · Видят: все</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Экран 8 <b>вкладка «На проверку»</b></div>
+  <p class="mk-sub">Очередь собирается <b>по сигналу</b>, а не по расписанию: истёк срок, читатели жмут
+     «это не то», сторож нашёл ссылку на то, чего в системе больше нет. Список, который заполняется сам,
+     открывают; список «перечитать все статьи раз в квартал» — нет.</p>
+
+  <div class="shell">
+    <div class="shell__top">
+      <div class="brand"><span class="brand__mark">SW</span> Швейка · Демо-цех</div>
+      <div class="topuser">Мастер цеха · <b>Ирина К.</b></div>
+    </div>
+    <div class="shell__body">
+      <nav class="side">
+        <div class="side__item"><i class="side__dot"></i> Обзор</div>
+        <div class="side__group">
+          <div class="side__group-h">Справка</div>
+          <div class="side__item side__item--active"><i class="side__dot"></i> База знаний</div>
+        </div>
+      </nav>
+
+      <main class="page">
+        <div class="page__h">
+          <h1>База знаний <span class="page__route">/admin/knowledge?tab=review</span></h1>
+          <button class="btn btn--primary">＋ Статья</button>
+        </div>
+
+        <div class="admin-card">
+          <div class="tabs">
+            <span class="tab">Активные <i>14</i></span>
+            <span class="tab">Черновики <i>2</i></span>
+            <span class="tab tab--warn">Не отвечено <i>9</i></span>
+            <span class="tab tab--on">На проверку <i>6</i></span>
+            <span class="tab">Системные <i>6</i></span>
+            <span class="tab">Архив <i>3</i></span>
+          </div>
+
+          <div class="tabs" style="margin-top:-.2rem">
+            <span class="tab tab--on">Все <i>6</i></span>
+            <span class="tab">Просрочены <i>2</i></span>
+            <span class="tab">«Это не то» <i>2</i></span>
+            <span class="tab">Расхождения <i>1</i></span>
+            <span class="tab">Рецензент ИИ <i>1</i></span>
+          </div>
+
+          <div class="admin-section-header">
+            <h2>Требуют внимания · Всего: 6</h2>
+            <span class="admin-section-header__hint">Проверено сегодня: 3</span>
+          </div>
+
+          <div class="admin-table-wrap">
+            <table class="t">
+              <thead>
+                <tr>
+                  <th style="width:42%">Статья</th>
+                  <th>Почему в списке</th>
+                  <th class="num">Показов</th>
+                  <th>Проверена</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <div class="ttl">Порядок передачи паспорта следующей операции</div>
+                    <div class="why">Упомянута операция <b>«Распошив»</b>, которой нет в справочнике
+                      операций — переименована или удалена.</div>
+                  </td>
+                  <td><span class="chip chip--ref">Расхождение</span></td>
+                  <td class="num">33</td>
+                  <td class="num muted">03.07.2026</td>
+                  <td><button class="btn btn--sm btn--primary">Открыть</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Кому звонить, если сканер не читает паспорт</div>
+                    <div class="why">Ссылка на <code>/admin/employees?tab=contacts</code> — такого
+                      раздела в системе нет.</div>
+                  </td>
+                  <td><span class="chip chip--stale">Просрочена</span></td>
+                  <td class="num">51</td>
+                  <td class="num"><span class="chip chip--stale">14.02.2026</span></td>
+                  <td><button class="btn btn--sm">Актуально</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Как считается сдельная выработка за смену</div>
+                    <div class="why">Показана 24 раза, из них <b>7 раз</b> нажали «это не то» —
+                      статья отвечает не на тот вопрос, с которым приходят.</div>
+                  </td>
+                  <td><span class="chip chip--nothelp">«Это не то» 29%</span></td>
+                  <td class="num">24</td>
+                  <td class="num muted">05.08.2026</td>
+                  <td><button class="btn btn--sm btn--primary">Открыть</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Что делать, если рулон закончился посреди настила</div>
+                    <div class="why">Статья говорит «раскрой останавливаем», в маршрутах заказа
+                      появился шаг «Добор рулона» — возможно, правило изменилось.</div>
+                  </td>
+                  <td><span class="chip chip--ai">Рецензент ИИ</span></td>
+                  <td class="num">38</td>
+                  <td class="num muted">12.08.2026</td>
+                  <td><button class="btn btn--sm btn--primary">Открыть</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">График смен и пересменка</div>
+                    <div class="why">Полгода без подтверждения. Если ничего не менялось — один клик.</div>
+                  </td>
+                  <td><span class="chip chip--stale">Просрочена</span></td>
+                  <td class="num">19</td>
+                  <td class="num"><span class="chip chip--stale">09.02.2026</span></td>
+                  <td><button class="btn btn--sm">Актуально</button></td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="ttl">Как оформить брак и отправить на подкрой</div>
+                    <div class="why">👎 5 из 18 за месяц. Раньше жалоб не было.</div>
+                  </td>
+                  <td><span class="chip chip--nothelp">👎 28%</span></td>
+                  <td class="num">18</td>
+                  <td class="num muted">02.07.2026</td>
+                  <td><button class="btn btn--sm btn--primary">Открыть</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="mk-note">
+    <b>Откуда берётся каждая строка.</b>
+    <ul>
+      <li><b>Просрочена</b> — считается запросом из <code>reviewedAt + reviewEvery</code>, хранить нечего.
+          Кнопка «Актуально» обновляет дату в один клик, не открывая редактор: если подтверждение стоит
+          дороже клика, подтверждать перестанут и подсветка станет фоновым шумом.</li>
+      <li><b>«Это не то» и 👎</b> — доля от показов по <code>KnowledgeFeedback</code>, тоже запросом.
+          Порог не абсолютный: три «не то» на трёх показах — сигнал, три на трёхстах — нет.</li>
+      <li><b>Расхождение</b> — ночная задача грепает текст статей по справочникам БД и таблице маршрутов
+          <code>apps/web</code>: операции, статусы, роли, адреса экранов. Ловит ровно то протухание,
+          которое глазами не видно. Аналог уже живущего в проекте
+          <code>scripts/docs/check-docs.mjs</code>.</li>
+      <li><b>Рецензент ИИ</b> — раз в месяц Haiku читает статью вместе с фактами из системы и говорит,
+          где они расходятся. Это подсказка человеку, не правка текста: ≈ $0,001 на статью,
+          шестьдесят статей — меньше десяти центов в месяц.</li>
+    </ul>
+  </div>
+
+  <!-- ====================================================================== -->
+  <div class="mk-cap">Модель <b>что заводим в БД</b></div>
+  <div class="admin-card" style="background:#fff">
+    <div class="md">
+      <div class="md__bar"><span class="md__b md__b--on">prisma/schema.prisma — эскиз</span></div>
+      <div class="md__area">model KnowledgeArticle {
+  id          String    @id @default(cuid())
+  slug        String    @unique          // человекочитаемый адрес статьи
+  title       String
+  body        String                     // markdown
+  keywords    String[]                   // синонимы/жаргон, которых нет в тексте
+  area        KnowledgeArea              // PRODUCTION | SUPPLY | MONEY | PAYROLL | GENERAL
+  roles       Role[]                     // пусто = все, у кого открыта область
+  status      KnowledgeStatus            // DRAFT | PUBLISHED | ARCHIVED
+  assistantOk Boolean   @default(true)   // можно ли цитировать ассистенту
+  reviewEvery Int?                       // месяцев до перепроверки
+  reviewedAt  DateTime?
+  authorId    String
+  updatedById String?
+  viewCount   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  // + tsvector-колонка и GIN-индекс — сырым SQL в миграции:
+  //   to_tsvector('russian', title || ' ' || body || ' ' || array_to_string(keywords,' '))
+  //   Prisma русский FTS не выразит, поиск через $queryRaw.
+}
+
+model KnowledgeGap {           // журнал «не нашлось»
+  id          String   @id @default(cuid())
+  question    String
+  normalized  String            // для схлопывания похожих
+  employeeId  String
+  threadId    String?           // ссылка на диалог ассистента
+  articleId   String?           // чем закрыли
+  hiddenAt    DateTime?         // «статья не нужна» (закрыто правами и т.п.)
+  createdAt   DateTime @default(now())
+}
+
+model KnowledgeRoute {         // решение роутера — чтобы его можно было судить
+  id          String   @id @default(cuid())
+  question    String
+  candidates  Json               // топ-5 от FTS: id + ts_rank
+  level       KnowledgeLevel     // L1 | L2 | L3 — где закрылся вопрос
+  articleId   String?            // что показали
+  costUsdMicros Int   @default(0)
+  createdAt   DateTime @default(now())
+}
+// Кэша «вопрос → готовый ответ» здесь нет намеренно: живая речь не
+// повторяется дословно, попаданий было бы мало, а цена ошибки — чужой
+// ответ на похожий вопрос. Роутер решает ту же задачу честнее.
+
+// + поле на AssistantMessage: дошёл ли вопрос до дорогой модели.
+//   Сейчас askedToday() считает ВСЕ USER-сообщения (assistant.service.ts:575) —
+//   без этого признака бесплатный ответ из базы съедал бы суточный лимит,
+//   ровно наоборот тому, что мы хотим поощрять.
+//   reachedModel Boolean @default(true)
+
+model KnowledgeFeedback {      // 👍/👎 и «это не то»
+  id         String   @id @default(cuid())
+  articleId  String?
+  messageId  String?           // AssistantMessage
+  employeeId String
+  helpful    Boolean
+  comment    String?
+  createdAt  DateTime @default(now())
+}
+
+model KnowledgeIssue {        // вкладка «На проверку»
+  id         String   @id @default(cuid())
+  articleId  String
+  kind       KnowledgeIssueKind  // REF_BROKEN | AI_REVIEW
+  detail     String              // «упомянута операция „Распошив", которой нет»
+  resolvedAt DateTime?
+  createdAt  DateTime @default(now())
+}
+// Здесь ТОЛЬКО то, что нужно вычислять фоном. «Просрочена» считается из
+// reviewedAt + reviewEvery, «это не то» и 👎 — из KnowledgeFeedback, обе
+// запросом на лету. Складывать в таблицу производные сигналы — значит
+// заводить второй источник правды, который разойдётся с первым.</div>
+    </div>
+  </div>
+
+  <div class="mk-note" style="margin-top:1.4rem">
+    <b>Порядок работ.</b>
+    <ul>
+      <li><b>Э1</b> — модель + <code>/admin/knowledge</code> (экраны 1–2) + читалка сотрудника (экран 5).
+          Сюда же имя автора, срок годности с кнопкой «Актуально» и 👍/👎 — они почти бесплатны,
+          а без них проверять статьи будет нечем.
+          Ассистента не трогаем: база полезна сама по себе и не зависит от бюджета на токены.</li>
+      <li><b>Э2</b> — <code>docs.lookup</code> читает БД поверх кода, ответ с источниками (экран 4A).</li>
+      <li><b>Э3</b> — развилка перед моделью (схема выше, экран 6): поиск, роутер на Haiku и признак
+          «дошло до дорогой модели» на сообщении, чтобы дешёвый ответ не ел суточный лимит.
+          Сюда же строка Haiku в <code>pricing.ts</code> — иначе расход считается по прайсу Opus.</li>
+      <li><b>Э4</b> — петля пополнения: журнал пробелов (экран 3), «сохранить статьёй» (4C), 👍/👎,
+          вкладка «На проверку» со сторожем ссылок (экран 8).</li>
+      <li><b>Э5</b> — по потребности: ежемесячный ИИ-рецензент, привязка статьи к операции/участку, кэш маршрутизации
+          («этот вопрос уже привёл к этой статье»), векторный поиск. Вектор откладываем не из-за денег —
+          эмбеддинги стоят копейки, — а из-за инфраструктуры: pgvector, отдельный провайдер и пересчёт
+          при каждой правке статьи.</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

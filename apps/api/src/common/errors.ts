@@ -3063,6 +3063,22 @@ export class ClientNotFoundException extends BusinessException {
 }
 
 /**
+ * Статья базы знаний не найдена. Бросается из `KnowledgeService`
+ * (`get/getBySlug/update/confirmReview`). Массовые операции архива сюда
+ * НЕ попадают — там ненайденный id уезжает в `skipped` с причиной
+ * `NOT_FOUND`, чтобы остальная пачка обработалась.
+ */
+export class KnowledgeArticleNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'KNOWLEDGE_ARTICLE_NOT_FOUND',
+      'Статья базы знаний не найдена',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
  * Менеджер пытается привязать заказ к деактивированной карточке
  * клиента (`isActive = false`). На MVP это soft-error на API-уровне:
  * UI скрывает неактивных в селекте, но прямой POST/PATCH

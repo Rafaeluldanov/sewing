@@ -43,6 +43,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
   BadgeRussianRuble,
+  BookOpen,
   Box,
   Building2,
   ChevronDown,
@@ -198,6 +199,16 @@ function buildGroups(modules: ModuleFlags): NavGroup[] {
         ...(modules.treasury
           ? [{ href: '/admin/treasury', label: 'Казначейство', Icon: Wallet }]
           : []),
+      ],
+    },
+    {
+      key: 'help',
+      label: 'Справка',
+      items: [
+        // Редактируемая справка компании: то, чего нет ни в коде, ни в
+        // документации («куда девать остаток рулона»). Слой «как устроен
+        // продукт» живёт в коде — см. packages/shared/src/knowledge.ts.
+        { href: '/admin/knowledge', label: 'База знаний', Icon: BookOpen },
       ],
     },
     {

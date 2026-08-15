@@ -74,6 +74,7 @@ import { TreasuryModule } from './modules/treasury/treasury.module.js';
 import { SuperadminModule } from './modules/superadmin/superadmin.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
 import { AssistantModule } from './modules/assistant/assistant.module.js';
+import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 
 @Module({
   imports: [
@@ -152,6 +153,7 @@ import { AssistantModule } from './modules/assistant/assistant.module.js';
     SuperadminModule,
     IntegrationsModule,
     AssistantModule,
+    KnowledgeModule,
   ],
 })
 export class AppModule {}

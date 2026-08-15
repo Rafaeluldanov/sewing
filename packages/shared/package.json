@@ -35,6 +35,7 @@
     "./company-divisions": "./src/company-divisions.ts",
     "./integration": "./src/integration.ts",
     "./assistant": "./src/assistant.ts",
+    "./knowledge": "./src/knowledge.ts",
     "./costs": "./src/costs.ts",
     "./dashboard": "./src/dashboard.ts",
     "./printers": "./src/printers.ts",

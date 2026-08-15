@@ -132,6 +132,7 @@ describe('Admin UI 2.5 — карточка сотрудника', () => {
 
 const LIST_PAGES = [
   'apps/web/app/admin/employees/page.tsx',
+  'apps/web/app/admin/knowledge/page.tsx',
   'apps/web/app/admin/equipment/page.tsx',
   'apps/web/app/admin/operations/page.tsx',
   'apps/web/app/admin/routes/page.tsx',

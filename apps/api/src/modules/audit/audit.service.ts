@@ -11,6 +11,15 @@ import { PrismaService } from '../../prisma/prisma.service.js';
  * остаётся единой.
  */
 export type AuditEntityType =
+  /**
+   * Статьи базы знаний (`apps/api/src/modules/knowledge/*`,
+   * `prisma/schema.prisma::KnowledgeArticle`). События —
+   * `KNOWLEDGE_ARTICLE_CREATED/UPDATED/REVIEWED/ARCHIVED/RESTORED/PURGED`.
+   * `entityId` — `KnowledgeArticle.id`. Аудит здесь не формальность:
+   * статья — это инструкция для цеха, и «кто и когда это написал»
+   * спрашивают ровно тогда, когда по ней сделали неправильно.
+   */
+  | 'KNOWLEDGE_ARTICLE'
   | 'PASSPORT'
   | 'ORDER'
   | 'QC'
