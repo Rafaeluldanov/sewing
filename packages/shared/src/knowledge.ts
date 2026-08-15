@@ -339,6 +339,85 @@ export interface KnowledgeSearchHitDto {
 }
 
 // ---------------------------------------------------------------------------
+// Читалка сотрудника
+// ---------------------------------------------------------------------------
+
+/**
+ * Что сотрудник сказал о статье.
+ *
+ * `NOT_WHAT_I_MEANT` — не разновидность 👎, а отдельный исход: поиск
+ * привёл не туда. Лечится заголовком и ключевыми словами, тогда как
+ * `NOT_HELPFUL` — переписыванием текста. Смешать их значит потерять
+ * различие ровно там, где оно подсказывает, что чинить.
+ */
+export const KNOWLEDGE_FEEDBACK_KINDS = [
+  'HELPFUL',
+  'NOT_HELPFUL',
+  'NOT_WHAT_I_MEANT',
+] as const;
+export type KnowledgeFeedbackKind = (typeof KNOWLEDGE_FEEDBACK_KINDS)[number];
+
+export const KnowledgeFeedbackSchema = z.object({
+  kind: z.enum(KNOWLEDGE_FEEDBACK_KINDS),
+  /** Запрос, по которому статью нашли — источник самых полезных правок. */
+  query: z.string().trim().max(200).optional(),
+});
+export type KnowledgeFeedbackDto = z.infer<typeof KnowledgeFeedbackSchema>;
+
+export const HelpSearchQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+});
+export type HelpSearchQuery = z.infer<typeof HelpSearchQuerySchema>;
+
+/** Строка списка в читалке: заголовок, область и подсказка, о чём статья. */
+export interface HelpArticleListItemDto {
+  slug: string;
+  title: string;
+  area: KnowledgeArea;
+  keywords: string[];
+  /** Фрагмент вокруг совпадения; при показе топа — начало статьи. */
+  snippet: string;
+}
+
+/** Статья для чтения. Без служебных полей — сотруднику они не нужны. */
+export interface HelpArticleDto {
+  slug: string;
+  title: string;
+  body: string;
+  area: KnowledgeArea;
+  /** Когда статью последний раз подтверждали. Показываем честно. */
+  reviewedAt: string | null;
+  /** Кто отвечает за текст — чтобы было к кому идти с вопросом. */
+  authorName: string | null;
+}
+
+/**
+ * Выдача читалки на один запрос.
+ *
+ * `exact` отделён от `others` не ради красоты: если у поиска есть явный
+ * лидер, сотруднику показывают статью целиком, а не список из пяти
+ * ссылок, по которым ещё надо кликать. Тот же признак дальше отличает
+ * L1 от L2 в маршрутизации вопроса.
+ */
+export interface HelpSearchResultDto {
+  /** Явный лидер: показываем сразу, если он есть. */
+  exact: HelpArticleDto | null;
+  /** Остальные кандидаты — списком. */
+  others: HelpArticleListItemDto[];
+}
+
+/**
+ * Насколько лидер должен опережать второго, чтобы показать его статью
+ * целиком.
+ *
+ * 1.8 — не выведенная константа, а стартовая настройка: лучше иногда
+ * показать список там, где хватило бы статьи, чем уверенно открыть
+ * человеку не то. Порог пересматриваем по доле «это не то» в отзывах —
+ * ровно для этого она и собирается.
+ */
+export const HELP_LEADER_RATIO = 1.8;
+
+// ---------------------------------------------------------------------------
 // Срок годности
 // ---------------------------------------------------------------------------
 

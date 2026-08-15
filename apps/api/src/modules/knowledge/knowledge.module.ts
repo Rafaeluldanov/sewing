@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { HelpController } from './help.controller.js';
 import { KnowledgeController } from './knowledge.controller.js';
 import { KnowledgeService } from './knowledge.service.js';
 
@@ -11,7 +12,7 @@ import { KnowledgeService } from './knowledge.service.js';
  * по системной справке был ОДИН, а не два разных.
  */
 @Module({
-  controllers: [KnowledgeController],
+  controllers: [KnowledgeController, HelpController],
   providers: [KnowledgeService],
   exports: [KnowledgeService],
 })

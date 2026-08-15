@@ -23485,3 +23485,184 @@ input.mcbx__input:disabled {
   background: var(--admin-primary);
   border-radius: 999px;
 }
+
+/* ===========================================================================
+   Окно «Справка» (`/help`) — читалка базы знаний для сотрудника.
+
+   Экран цеховой: одна колонка, крупный шрифт, тач-цели не меньше
+   `--tap-min`. Поле ввода прижато к верху, а не к низу, как в шторке
+   админки: здесь это отдельная страница, и клавиатура телефона не
+   должна перекрывать результат.
+   =========================================================================== */
+.help {
+  display: grid;
+  gap: 0.9rem;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0.25rem 0 2.5rem;
+}
+.help__head { display: grid; gap: 0.25rem; }
+.help__title { margin: 0; font-size: var(--title-hero); font-weight: 700; }
+.help__hint { margin: 0; font-size: 0.9rem; color: var(--color-fg-muted); }
+.help__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--color-accent-fg);
+  text-decoration: none;
+  min-height: var(--tap-min);
+}
+.help__search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.35rem 0.35rem 0.7rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  min-height: var(--tap-min);
+}
+.help__search svg { color: var(--color-fg-subtle); flex: 0 0 auto; }
+.help__search input[type='search'] {
+  flex: 1 1 auto;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 1rem;
+  color: var(--color-fg);
+  min-width: 0;
+  padding: 0;
+}
+.help__search-btn {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 0.9rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--btn-primary-edge);
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.help__list { display: grid; gap: 0.5rem; }
+.help__list-title {
+  margin: 0.4rem 0 0;
+  font-size: var(--title-label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+  font-weight: 700;
+}
+.help-item {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.7rem 0.8rem;
+  min-height: var(--tap-min);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  text-decoration: none;
+  color: var(--color-fg);
+}
+.help-item__title { font-size: 0.95rem; font-weight: 700; }
+.help-item__snippet {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.help-item__area { font-size: 0.75rem; color: var(--color-fg-subtle); }
+.help-article {
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--btn-primary-edge);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  padding: 0.9rem 1rem;
+}
+.help-article__title { margin: 0 0 0.2rem; font-size: var(--title-item); }
+.help-article__meta {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  color: var(--color-fg-subtle);
+}
+.help-article__body { font-size: 0.95rem; line-height: 1.5; }
+.help-article__body p { margin: 0 0 0.6rem; }
+.help-article__body h3 {
+  margin: 0.8rem 0 0.35rem;
+  font-size: var(--title-subsection);
+}
+.help-article__body ul,
+.help-article__body ol { margin: 0 0 0.6rem; padding-left: 1.25rem; }
+.help-article__body li { margin: 0.15rem 0; }
+.help-article__body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--color-bg-muted);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+}
+.help-feedback {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--color-border);
+}
+.help-feedback__label { font-size: 0.82rem; color: var(--color-fg-muted); }
+.help-feedback__btn {
+  min-height: 36px;
+  min-width: 40px;
+  padding: 0 0.6rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.help-feedback__btn:disabled { opacity: 0.6; cursor: default; }
+.help-feedback__btn--wide { min-width: auto; }
+.help-feedback__thanks {
+  margin: 0.7rem 0 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.85rem;
+  color: var(--color-ok-fg);
+}
+.help-feedback__error { font-size: 0.8rem; color: var(--color-danger-fg); }
+.help__empty {
+  padding: 0.9rem 1rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  color: var(--color-fg-muted);
+}
+.help__empty p { margin: 0; }
+/* Кнопка «Справка» в столбике цеховых экранов — та же геометрия, что у
+   соседей по `.employee-toolbar` (icon-only 40×40). */
+.help-fab {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-card);
+  color: var(--color-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+}
+.help-fab:active { background: var(--color-bg-muted); }
+.employee-toolbar .help-fab { position: static; inset: auto; pointer-events: auto; }

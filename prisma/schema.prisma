@@ -6939,12 +6939,49 @@ model KnowledgeArticle {
   /// понимать, какие статьи живые, и считать долю «это не то».
   viewCount Int @default(0)
 
+  feedback KnowledgeFeedback[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status, area])
   @@index([status, updatedAt])
   @@index([authorId])
+}
+
+/// Что сотрудник сказал о статье. Три исхода, а не булево «полезно»:
+/// «это не то» — сигнал, что статья ОТВЕЧАЕТ НЕ НА ТОТ вопрос, с
+/// которым пришли (её нашёл поиск, но мимо), а 👎 — что статья про то,
+/// но плохая. Лечатся они по-разному: первое — правкой заголовка и
+/// ключевых слов, второе — переписыванием текста.
+enum KnowledgeFeedbackKind {
+  HELPFUL
+  NOT_HELPFUL
+  NOT_WHAT_I_MEANT
+}
+
+model KnowledgeFeedback {
+  id String @id @default(cuid())
+
+  articleId String
+  article   KnowledgeArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  /// Кто нажал. Без FK — как везде в этой фиче: удаление сотрудника не
+  /// должно уносить сигнал о статье. Нужен, чтобы один человек не
+  /// накрутил долю «это не то» десятью нажатиями подряд.
+  employeeId String
+
+  kind KnowledgeFeedbackKind
+
+  /// Запрос, по которому статью нашли. Ради него всё и затевалось: по
+  /// паре «искали X → сказали „это не то"» видно, какого заголовка или
+  /// ключевого слова статье не хватает.
+  query String?
+
+  createdAt DateTime @default(now())
+
+  @@index([articleId, kind])
+  @@index([employeeId, createdAt])
 }
 
 enum AssistantMessageRole {

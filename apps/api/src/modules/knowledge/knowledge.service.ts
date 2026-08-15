@@ -1,10 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
+  HELP_LEADER_RATIO,
   KNOWLEDGE_DEFAULT_REVIEW_MONTHS,
   knowledgeSlugFromTitle,
   type CreateKnowledgeArticleDto,
+  type HelpArticleDto,
+  type HelpArticleListItemDto,
+  type HelpSearchQuery,
+  type HelpSearchResultDto,
   type KnowledgeArticleDto,
+  type KnowledgeFeedbackDto,
   type KnowledgeSearchHitDto,
   type ListKnowledgeQuery,
   type SearchKnowledgeQuery,
@@ -16,6 +22,7 @@ import type {
 } from '@sewing/shared/archive';
 import { KnowledgeArticleNotFoundException } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { AuditService } from '../audit/audit.service.js';
 
 /**
@@ -125,7 +132,23 @@ export class KnowledgeService {
    * (нужен уровень выше).
    */
   async search(query: SearchKnowledgeQuery): Promise<KnowledgeSearchHitDto[]> {
-    const limit = query.limit ?? 5;
+    const rows = await this.searchRows(query.q, query.limit ?? 5);
+    return rows.map((r) => ({
+      id: r.id,
+      slug: r.slug,
+      title: r.title,
+      area: r.area,
+      snippet: r.snippet,
+      rank: r.rank,
+    }));
+  }
+
+  /**
+   * Внутренняя выдача поиска: то же, что `search()`, плюс роли и
+   * ключевые слова — их нужно знать, чтобы отфильтровать по видимости
+   * и собрать строку списка, не ходя в базу второй раз.
+   */
+  private async searchRows(q: string, limit: number): Promise<SearchRow[]> {
     const cfg = KnowledgeService.FTS_CONFIG;
 
     const hits = await this.prisma.$queryRaw<
@@ -134,22 +157,25 @@ export class KnowledgeService {
         slug: string;
         title: string;
         area: string;
+        roles: string[];
+        keywords: string[];
         snippet: string;
         rank: number;
       }>
     >`
       SELECT a."id", a."slug", a."title", a."area"::text AS "area",
+             a."roles", a."keywords",
              ts_headline(
                ${cfg}::regconfig,
                a."body",
-               plainto_tsquery(${cfg}::regconfig, ${query.q}),
+               plainto_tsquery(${cfg}::regconfig, ${q}),
                'MaxWords=24, MinWords=8, ShortWord=3, MaxFragments=1, FragmentDelimiter=" … "'
              ) AS "snippet",
              ts_rank(
                setweight(to_tsvector(${cfg}::regconfig, a."title"), 'A') ||
                setweight(to_tsvector(${cfg}::regconfig, array_to_string(a."keywords", ' ')), 'B') ||
                setweight(to_tsvector(${cfg}::regconfig, a."body"), 'C'),
-               plainto_tsquery(${cfg}::regconfig, ${query.q})
+               plainto_tsquery(${cfg}::regconfig, ${q})
              )::float8 AS "rank"
         FROM "KnowledgeArticle" a
        WHERE a."status" = 'PUBLISHED'::"KnowledgeStatus"
@@ -157,19 +183,15 @@ export class KnowledgeService {
                setweight(to_tsvector(${cfg}::regconfig, a."title"), 'A') ||
                setweight(to_tsvector(${cfg}::regconfig, array_to_string(a."keywords", ' ')), 'B') ||
                setweight(to_tsvector(${cfg}::regconfig, a."body"), 'C')
-             ) @@ plainto_tsquery(${cfg}::regconfig, ${query.q})
+             ) @@ plainto_tsquery(${cfg}::regconfig, ${q})
        ORDER BY "rank" DESC, a."updatedAt" DESC
        LIMIT ${limit}
     `;
 
     if (hits.length > 0) {
       return hits.map((h) => ({
-        id: h.id,
-        slug: h.slug,
-        title: h.title,
-        area: h.area as KnowledgeSearchHitDto['area'],
-        snippet: h.snippet,
-        rank: h.rank,
+        ...h,
+        area: h.area as SearchRow['area'],
       }));
     }
 
@@ -177,9 +199,9 @@ export class KnowledgeService {
       where: {
         status: 'PUBLISHED',
         OR: [
-          { title: { contains: query.q, mode: 'insensitive' } },
-          { keywords: { has: query.q.toLowerCase() } },
-          { body: { contains: query.q, mode: 'insensitive' } },
+          { title: { contains: q, mode: 'insensitive' } },
+          { keywords: { has: q.toLowerCase() } },
+          { body: { contains: q, mode: 'insensitive' } },
         ],
       },
       orderBy: [{ viewCount: 'desc' }, { updatedAt: 'desc' }],
@@ -190,11 +212,216 @@ export class KnowledgeService {
       slug: a.slug,
       title: a.title,
       area: a.area,
-      snippet: snippetAround(a.body, query.q),
+      roles: a.roles,
+      keywords: a.keywords,
+      snippet: snippetAround(a.body, q),
       // Ноль, а не выдуманное число: подстроковое совпадение не
-      // ранжировано, и роутер не должен принимать его за лидера.
+      // ранжировано, и «явным лидером» его считать нельзя.
       rank: 0,
     }));
+  }
+
+  // ===========================================================================
+  // ЧИТАЛКА СОТРУДНИКА
+  // ===========================================================================
+
+  /**
+   * Что показать в окне «Справка»: топ статей или результат поиска.
+   *
+   * Пустой запрос — не пустой экран: показываем то, что читают чаще
+   * всего, и статьи участка. Человек у машины второй раз формулировать
+   * не станет, и первое, что он видит, должно быть уже полезным.
+   */
+  async help(
+    query: HelpSearchQuery,
+    user: AuthPrincipal,
+  ): Promise<HelpSearchResultDto> {
+    if (!query.q) {
+      const top = await this.prisma.knowledgeArticle.findMany({
+        where: this.visibleWhere(user),
+        orderBy: [{ viewCount: 'desc' }, { updatedAt: 'desc' }],
+        take: 8,
+      });
+      return { exact: null, others: top.map(toListItem) };
+    }
+
+    // Берём с запасом и режем видимостью в TS, а не в SQL: правило
+    // видимости одно на все поверхности, и дублировать его во втором
+    // языке — верный способ однажды разойтись.
+    const hits = await this.searchRows(query.q, 20);
+    const visible = hits.filter((h) => this.canSee(h.roles, h.area, user));
+    if (visible.length === 0) return { exact: null, others: [] };
+
+    const [leader, second] = visible;
+    const isLeader =
+      leader.rank > 0 &&
+      (second === undefined || leader.rank >= second.rank * HELP_LEADER_RATIO);
+
+    if (!isLeader) {
+      return {
+        exact: null,
+        others: visible.slice(0, 5).map((h) => ({
+          slug: h.slug,
+          title: h.title,
+          area: h.area,
+          keywords: h.keywords,
+          snippet: h.snippet,
+        })),
+      };
+    }
+
+    // Явный лидер — открываем статью целиком, без промежуточного
+    // списка из одной ссылки.
+    const exact = await this.readForEmployee(leader.slug, user);
+    return {
+      exact,
+      others: visible.slice(1, 5).map((h) => ({
+        slug: h.slug,
+        title: h.title,
+        area: h.area,
+        keywords: h.keywords,
+        snippet: h.snippet,
+      })),
+    };
+  }
+
+  /**
+   * Статья для сотрудника. Считает показ.
+   *
+   * Инкремент делается здесь, а не на фронте: показ — это факт выдачи
+   * текста сервером, и считать его должен тот, кто текст отдал.
+   * Ошибка счётчика не должна ронять чтение, поэтому апдейт идёт
+   * fail-soft.
+   */
+  async readForEmployee(
+    slug: string,
+    user: AuthPrincipal,
+  ): Promise<HelpArticleDto> {
+    const row = await this.prisma.knowledgeArticle.findUnique({
+      where: { slug },
+    });
+    // Невидимая статья и несуществующая — для сотрудника одно и то же:
+    // разное поведение подсказало бы, что «что-то про зарплату здесь
+    // есть, просто вам нельзя».
+    if (!row || row.status !== 'PUBLISHED') {
+      throw new KnowledgeArticleNotFoundException();
+    }
+    if (!this.canSee(row.roles, row.area, user)) {
+      throw new KnowledgeArticleNotFoundException();
+    }
+
+    try {
+      await this.prisma.knowledgeArticle.update({
+        where: { id: row.id },
+        data: { viewCount: { increment: 1 } },
+      });
+    } catch (e) {
+      this.logger.warn(
+        `event=knowledge.view.count_failed slug=${slug} err=${String(e)}`,
+      );
+    }
+
+    const author = row.authorId
+      ? await this.prisma.employee.findUnique({
+          where: { id: row.authorId },
+          select: { fullName: true },
+        })
+      : null;
+
+    return {
+      slug: row.slug,
+      title: row.title,
+      body: row.body,
+      area: row.area,
+      reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
+      authorName: author?.fullName ?? null,
+    };
+  }
+
+  /**
+   * 👍 / 👎 / «это не то».
+   *
+   * Запрос, по которому статью нашли, сохраняется вместе с отзывом:
+   * пара «искали X → сказали „это не то"» — самая полезная подсказка
+   * автору, потому что показывает не «статья плохая», а каким словом
+   * её не нашли.
+   */
+  async submitFeedback(
+    slug: string,
+    dto: KnowledgeFeedbackDto,
+    user: AuthPrincipal,
+  ): Promise<{ ok: true }> {
+    const row = await this.prisma.knowledgeArticle.findUnique({
+      where: { slug },
+      select: { id: true, roles: true, area: true, status: true },
+    });
+    if (!row || row.status !== 'PUBLISHED') {
+      throw new KnowledgeArticleNotFoundException();
+    }
+    if (!this.canSee(row.roles, row.area, user)) {
+      throw new KnowledgeArticleNotFoundException();
+    }
+
+    await this.prisma.knowledgeFeedback.create({
+      data: {
+        articleId: row.id,
+        employeeId: user.employeeId,
+        kind: dto.kind,
+        query: dto.query ?? null,
+      },
+    });
+    this.logger.log(
+      `event=knowledge.feedback slug=${slug} kind=${dto.kind} q="${dto.query ?? ''}"`,
+    );
+    return { ok: true };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Видимость
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Правило одно на все поверхности читалки.
+   *
+   *   1. Статья должна быть опубликована.
+   *   2. Роли статьи пусты — видна всем; заданы — нужна хотя бы одна
+   *      совпадающая с ролями сотрудника.
+   *   3. ИСКЛЮЧЕНИЕ для «Денег» и «Зарплаты»: статья без явно
+   *      выставленных ролей в этих областях видна только
+   *      управленческому слою. Автор, забывший отметить роли, не должен
+   *      случайно открыть цеху расчёт маржи — а забыть галочку легко.
+   */
+  private canSee(
+    articleRoles: string[],
+    area: string,
+    user: AuthPrincipal,
+  ): boolean {
+    const mine = user.roles ?? [user.role];
+    if (articleRoles.length > 0) {
+      return articleRoles.some((r) => mine.includes(r));
+    }
+    if (area === 'MONEY' || area === 'PAYROLL') {
+      return mine.includes('ADMIN') || mine.includes('SHOP_MANAGER');
+    }
+    return true;
+  }
+
+  /** Тот же фильтр в терминах Prisma — для выборок без сырого SQL. */
+  private visibleWhere(user: AuthPrincipal): Prisma.KnowledgeArticleWhereInput {
+    const mine = user.roles ?? [user.role];
+    const manager = mine.includes('ADMIN') || mine.includes('SHOP_MANAGER');
+    return {
+      status: 'PUBLISHED',
+      OR: [
+        {
+          roles: { isEmpty: true },
+          ...(manager
+            ? {}
+            : { area: { notIn: ['MONEY', 'PAYROLL'] as const } }),
+        },
+        { roles: { hasSome: mine } },
+      ],
+    };
   }
 
   // ===========================================================================
@@ -518,6 +745,35 @@ export class KnowledgeService {
       updatedAt: r.updatedAt.toISOString(),
     }));
   }
+}
+
+/** Строка выдачи поиска с полями, нужными для фильтра видимости. */
+interface SearchRow {
+  id: string;
+  slug: string;
+  title: string;
+  area: KnowledgeSearchHitDto['area'];
+  roles: string[];
+  keywords: string[];
+  snippet: string;
+  rank: number;
+}
+
+/** Строка списка читалки из строки таблицы. */
+function toListItem(a: {
+  slug: string;
+  title: string;
+  area: KnowledgeSearchHitDto['area'];
+  keywords: string[];
+  body: string;
+}): HelpArticleListItemDto {
+  return {
+    slug: a.slug,
+    title: a.title,
+    area: a.area,
+    keywords: a.keywords,
+    snippet: a.body.slice(0, 140).trim(),
+  };
 }
 
 /**
