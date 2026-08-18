@@ -10,6 +10,15 @@ include:
 
 services:
   api:
+    # Авторестарт: до этого у dev-сервисов политики не было вовсе, и любой
+    # OOM-kill или падение entrypoint (напр. P1000 от postgres) оставляли
+    # дев лежать до ручного `up -d`. Прод-стек так живёт с самого начала.
+    restart: unless-stopped
+    # Потолки ресурсов. На хосте одновременно крутятся прод-стек, dev-стек
+    # и vscode-server; 13.08 глобальный OOM-killer уже унёс dev next-server.
+    # Лимиты гарантируют, что всплеск дева убивает ДЕВ, а не прод-контейнер.
+    mem_limit: 2g
+    cpus: "2"
     build:
       context: .
       dockerfile: apps/api/Dockerfile.dev
@@ -68,11 +77,22 @@ services:
       - app-network
 
   web:
+    # См. комментарий у api: авторестарт + потолки, чтобы webpack-компиляция
+    # Next dev не выедала машину целиком. web прожорливее api (next-server
+    # держит ~1 ГБ RSS и растёт по мере компиляции маршрутов).
+    restart: unless-stopped
+    mem_limit: 3g
+    cpus: "3"
     build:
       context: .
       dockerfile: apps/web/Dockerfile.dev
     ports:
       - "3000:3000"
+    # Turbopack как dev-бандлер вместо webpack: холодная компиляция маршрута
+    # падает в разы. В Next 14.2 он ещё experimental, поэтому переключатель —
+    # NEXT_DEV_TURBO в .env.dev: пусто ⇒ старый webpack, 1 ⇒ --turbo. Откат
+    # не требует пересборки образа: убрать переменную и `up -d web`.
+    command: ["sh", "-lc", "npx next dev -p 3000 ${NEXT_DEV_TURBO:+--turbo}"]
     volumes:
       - .:/app
       - /app/node_modules
