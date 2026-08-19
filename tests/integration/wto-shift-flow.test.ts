@@ -251,6 +251,132 @@ describeWithDb('integration — WTO shift-gated scan flow', () => {
     expect(after.status).toBe('IN_PROGRESS');
   });
 
+  /**
+   * Зеркало ОТК-сценария из `qc-shift-flow.test.ts` (инцидент
+   * 19.08.2026). После «Завершить ВТО» паспорт остаётся стоять на ВТО и
+   * лежит у отпарщика — и уходит в повторный скан из стопки. Пока
+   * `completeWto` владельца не снимал, такой скан гасила ветка
+   * `sameOp && sameEmployee`; после фикса 10.08.2026 владельца нет, и
+   * скан снова забирал проверенный паспорт на руки — так на проде
+   * зависли 5 паспортов O-20260530-0001 (11.08.2026).
+   *
+   * Контракт: скан проверенного паспорта — no-op, а карточка
+   * по-прежнему открывается (`removedFromWto=false`).
+   */
+  test('повторный scan уже отпаренного паспорта — no-op: ни события, ни владельца, карточка открыта', async () => {
+    const passportId = await prepareInProgressPassport(true);
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.ironing)
+      .send({
+        equipmentId: seed.equipment['ironing-station-01'].id,
+        operationId: seed.operations.IRONING.id,
+      })
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.ironing)
+      .send({})
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({})
+      .expect(201);
+
+    const scansBefore = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'OPERATION_SCAN' },
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.ironing)
+      .send({})
+      .expect(201);
+
+    const after = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: {
+        currentEmployeeId: true,
+        currentOperationId: true,
+        status: true,
+      },
+    });
+    expect(after.currentEmployeeId).toBeNull();
+    expect(after.currentOperationId).toBe(seed.operations.IRONING.id);
+    expect(after.status).toBe('IN_PROGRESS');
+    const scansAfter = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'OPERATION_SCAN' },
+    });
+    expect(scansAfter).toBe(scansBefore);
+
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/wto/passports/${passportId}`)
+      .set('Cookie', cookies.ironing)
+      .expect(200);
+    expect(detail.body.removedFromWto).toBe(false);
+    expect(typeof detail.body.wtoCompletedAt).toBe('string');
+  });
+
+  /**
+   * Вторая половина фикса — для паспортов, где лишний скан уже записан
+   * (продовый бэклог). `removedFromWto` считает «ушёл дальше» только по
+   * сканам НЕ-ВТО операций, поэтому карточка открывается и повторное
+   * «Завершить ВТО» снимает висящего владельца без мастера.
+   */
+  test('лишний ВТО-скан в истории не считается уходом на следующую операцию', async () => {
+    const passportId = await prepareInProgressPassport(true);
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.ironing)
+      .send({
+        equipmentId: seed.equipment['ironing-station-01'].id,
+        operationId: seed.operations.IRONING.id,
+      })
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.ironing)
+      .send({})
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({})
+      .expect(201);
+
+    await t.prisma.passportEvent.create({
+      data: {
+        passportId,
+        type: 'OPERATION_SCAN',
+        operationId: seed.operations.IRONING.id,
+        employeeId: seed.employees['ironing'].id,
+        qty: 1,
+      },
+    });
+    await t.prisma.passport.update({
+      where: { id: passportId },
+      data: { currentEmployeeId: seed.employees['ironing'].id },
+    });
+
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/wto/passports/${passportId}`)
+      .set('Cookie', cookies.ironing)
+      .expect(200);
+    expect(detail.body.removedFromWto).toBe(false);
+
+    await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({})
+      .expect(201);
+    const after = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: { currentEmployeeId: true },
+    });
+    expect(after.currentEmployeeId).toBeNull();
+  });
+
   test('GET /api/shifts/meta для IRONING возвращает ironing-station с allow-листом {IRONING} — start-shift форма получает то же, что у швеи', async () => {
     // Проверяем backend-side контракт, на который опирается
     // `SeamstressShiftStart` на /wto: оборудование `ironing-station-01`

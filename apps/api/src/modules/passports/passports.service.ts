@@ -2759,48 +2759,50 @@ export class PassportsService {
         session.operationId,
       );
       if (reworkPending) throw new PassportReworkPendingException();
+    }
 
-      // Повторный скан паспорта, который ОТК уже проверил (инцидент
-      // 19.08.2026, заказ 02-00013, 10 паспортов).
-      //
-      // `QcService.completeQc` пишет `QC_PASSED`, снимает владельца, но
-      // НЕ двигает `currentOperationId` / `currentRouteStepIndex`:
-      // паспорт остаётся стоять на ОТК и ждёт, пока его заберёт
-      // следующая операция. Физически он так и лежит на столе
-      // контролёра — и уходит в повторный скан из стопки.
-      //
-      // До 11.08.2026 такой скан был безобиден: владельцем оставалась
-      // сама ОТК, и ниже срабатывала идемпотентная ветка
-      // `sameOp && sameEmployee`. После фикса «ОТК отпускает паспорт»
-      // (`completeQc`, инцидент 10.08.2026) владельца больше нет,
-      // `sameEmployee` = false — и скан уходил в полную ветку перехода,
-      // снова забирая паспорт контролёру на руки. Дальше он вставал
-      // намертво: следующий исполнитель получал 409
-      // `PASSPORT_ALREADY_ISSUED`, а сама ОТК уже не могла его отпустить
-      // — терминал по `QcService.loadDetail::removedFromQc` (есть
-      // `OPERATION_SCAN` после `QC_PASSED` — а это её же скан) отвечал
-      // «Паспорт ушёл на следующую операцию» и не открывал карточку.
-      // Снимал только мастер.
-      //
-      // Поэтому: паспорт уже стоит на этой ОТК-операции и все её
-      // проходы по маршруту закрыты — скан считаем no-op. Событие не
-      // пишем, владельца не трогаем. Условие «проход закрыт» — зеркало
-      // идемпотентности `QcService.completeQc`: считаем `QC_PASSED`
-      // после последнего rework на этой же операции и сравниваем с
-      // числом вхождений ОТК в маршрут заказа (ОТК может стоять в
-      // маршруте дважды — межоперационная проверка и финальная).
-      if (passport.currentOperationId === session.operationId) {
-        const qcSettled = await this.isQcPassSettled(
-          passportId,
-          session.operationId,
-          passport.orderId,
+    // Повторный скан паспорта, который роль-терминал уже проверил
+    // (инцидент 19.08.2026: заказ 02-00013, 10 паспортов на ОТК;
+    // 11.08.2026: 5 паспортов O-20260530-0001 на ВТО — тот же класс).
+    //
+    // `QcService.completeQc` / `WtoService.completeWto` пишут
+    // `QC_PASSED` / `WTO_PASSED`, снимают владельца, но НЕ двигают
+    // `currentOperationId` / `currentRouteStepIndex`: паспорт остаётся
+    // стоять на своём шаге и ждёт, пока его заберёт следующая операция.
+    // Физически он так и лежит на столе контролёра — и уходит в
+    // повторный скан из стопки.
+    //
+    // До 11.08.2026 такой скан был безобиден: владельцем оставался сам
+    // контролёр, и ниже срабатывала идемпотентная ветка
+    // `sameOp && sameEmployee`. После фикса «ОТК/ВТО отпускают паспорт»
+    // (инцидент 10.08.2026) владельца больше нет, `sameEmployee` =
+    // false — и скан уходил в полную ветку перехода, снова забирая
+    // паспорт контролёру на руки. Дальше он вставал намертво:
+    // следующий исполнитель получал 409 `PASSPORT_ALREADY_ISSUED`, а
+    // сам контролёр уже не мог его отпустить — терминал по
+    // `removedFromQc` / `removedFromWto` (есть `OPERATION_SCAN` после
+    // проверки — а это его же скан) отвечал «Паспорт ушёл на следующую
+    // операцию» и не открывал карточку. Снимал только мастер.
+    //
+    // Поэтому: паспорт уже стоит на этой роль-операции и все её проходы
+    // по маршруту закрыты — скан считаем no-op. Событие не пишем,
+    // владельца не трогаем.
+    if (
+      (session.operation.category === OperationCategory.QC ||
+        session.operation.category === OperationCategory.IRONING) &&
+      passport.currentOperationId === session.operationId
+    ) {
+      const settled = await this.isRoleCheckSettled(
+        passportId,
+        session.operationId,
+        passport.orderId,
+        session.operation.category,
+      );
+      if (settled) {
+        this.logger.log(
+          `event=passport.scan.already_checked passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId} category=${session.operation.category}`,
         );
-        if (qcSettled) {
-          this.logger.log(
-            `event=passport.scan.qc_already_passed passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId}`,
-          );
-          return this.getOne(passportId);
-        }
+        return this.getOne(passportId);
       }
     }
 
@@ -3755,27 +3757,37 @@ export class PassportsService {
    * обязан её отсканировать — не блокируем.
    */
   /**
-   * «ОТК по паспорту уже отработала на этой операции» — все проходы
-   * проверки, положенные по маршруту, закрыты `QC_PASSED`.
+   * «Роль-терминал по паспорту уже отработал на этой операции» — все
+   * проходы проверки, положенные по маршруту, закрыты `QC_PASSED` (для
+   * ОТК) или `WTO_PASSED` (для ВТО).
    *
-   * Зеркало идемпотентной ветки `QcService.completeQc`: там ровно
-   * такой же счёт (`passedCount >= max(1, qcOccurrences)`) решает, не
-   * писать ли повторный `QC_PASSED`. Здесь тот же признак закрывает
+   * Зеркало идемпотентных веток `QcService.completeQc` /
+   * `WtoService.completeWto`: там ровно такой же счёт
+   * (`passedCount >= max(1, occurrences)`) решает, не писать ли
+   * повторное событие проверки. Здесь тот же признак закрывает
    * повторный скан — иначе он снова забирает проверенный паспорт
    * контролёру на руки (см. `scanOnOperation`, инцидент 19.08.2026).
    *
-   * `QC_PASSED` считаем только после последнего
-   * `OPERATION_REWORK_OPENED` на этой ОТК-операции: если мастер вернул
+   * События проверки считаем только после последнего
+   * `OPERATION_REWORK_OPENED` на этой же операции: если мастер вернул
    * паспорт на повторную проверку (`MasterActionsService.setRouteStep`,
    * ветка `reopenFinishedTarget`), старая проверка не в счёт — идёт
-   * новый проход, и сканировать ОТК обязана.
+   * новый проход, и сканировать контролёр обязан. Для ВТО это строже,
+   * чем идемпотентность самой `completeWto` (она rework не смотрит), и
+   * это намеренно: расхождение работает в безопасную сторону — скан,
+   * который может быть нужен, мы не блокируем.
    */
-  private async isQcPassSettled(
+  private async isRoleCheckSettled(
     passportId: string,
     operationId: string,
     orderId: string,
+    category: OperationCategory,
   ): Promise<boolean> {
-    const lastReworkOnQcOp = await this.prisma.passportEvent.findFirst({
+    const passType =
+      category === OperationCategory.QC
+        ? PassportEventType.QC_PASSED
+        : PassportEventType.WTO_PASSED;
+    const lastReworkOnOp = await this.prisma.passportEvent.findFirst({
       where: {
         passportId,
         operationId,
@@ -3787,17 +3799,17 @@ export class PassportsService {
     const passedCount = await this.prisma.passportEvent.count({
       where: {
         passportId,
-        type: PassportEventType.QC_PASSED,
-        ...(lastReworkOnQcOp
-          ? { createdAt: { gt: lastReworkOnQcOp.createdAt } }
+        type: passType,
+        ...(lastReworkOnOp
+          ? { createdAt: { gt: lastReworkOnOp.createdAt } }
           : {}),
       },
     });
     if (passedCount === 0) return false;
-    const qcOccurrences = await this.prisma.orderRouteStep.count({
+    const occurrences = await this.prisma.orderRouteStep.count({
       where: { orderId, operationId },
     });
-    return passedCount >= Math.max(1, qcOccurrences);
+    return passedCount >= Math.max(1, occurrences);
   }
 
   async hasOpenRework(

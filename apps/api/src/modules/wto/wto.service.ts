@@ -302,11 +302,24 @@ export class WtoService {
       ) {
         removedFromWto = true;
       } else {
+        // «Ушёл дальше» = паспорт перехватила СЛЕДУЮЩАЯ операция.
+        // Сканы по самой ВТО-категории из признака исключены намеренно
+        // — зеркало `QcService.loadDetail` (инцидент 19.08.2026):
+        // повторный скан проверенного паспорта самим отпарщиком — это
+        // его же событие, а карточка от него схлопывалась с текстом
+        // «паспорт ушёл на следующую операцию». Паспорт при этом
+        // никуда не уходил, а наоборот вставал отпарщику на руки — и
+        // снять его он уже не мог. Сам повторный скан теперь no-op
+        // (`PassportsService.scanOnOperation`), а этот фильтр
+        // дополнительно расшивает уже накопленные паспорта: карточка
+        // открывается, «Завершить ВТО» снимает владельца (см. ветку
+        // освобождения в `completeWto` до идемпотентного выхода).
         const moved = await this.prisma.passportEvent.findFirst({
           where: {
             passportId,
             type: PassportEventType.OPERATION_SCAN,
             createdAt: { gt: lastWto.createdAt },
+            operation: { category: { not: OperationCategory.IRONING } },
           },
           select: { id: true },
         });
