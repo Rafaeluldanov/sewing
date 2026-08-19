@@ -376,6 +376,116 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
   });
 
   /**
+   * Инцидент 19.08.2026 (заказ 02-00013, 10 паспортов). После
+   * «Проверка выполнена» паспорт остаётся стоять на ОТК и лежит на
+   * столе контролёра — и уходит в повторный скан из стопки. Пока
+   * `completeQc` владельца не снимал, такой скан гасила ветка
+   * `sameOp && sameEmployee`; после фикса 10.08.2026 владельца нет, и
+   * скан снова забирал проверенный паспорт контролёру на руки. Дальше
+   * паспорт вставал намертво: следующий исполнитель получал 409
+   * `PASSPORT_ALREADY_ISSUED`, а ОТК не могла его отпустить — терминал
+   * по `removedFromQc` (её же скан после `QC_PASSED`) отвечал «паспорт
+   * ушёл на следующую операцию» и карточку не открывал.
+   *
+   * Контракт: скан проверенного паспорта — no-op (события нет, владелец
+   * не появляется), а карточка по-прежнему открывается.
+   */
+  test('повторный scan уже проверенного паспорта — no-op: ни события, ни владельца, карточка открыта', async () => {
+    const passportId = await prepareQcReady();
+    await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/complete`)
+      .set('Cookie', cookies.qc)
+      .send({})
+      .expect(201);
+
+    const scansBefore = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'OPERATION_SCAN' },
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.qc)
+      .send({})
+      .expect(201);
+
+    const after = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: {
+        currentEmployeeId: true,
+        currentOperationId: true,
+        currentRouteStepIndex: true,
+        status: true,
+      },
+    });
+    // Главное: паспорт не вернулся «на руки» ОТК.
+    expect(after.currentEmployeeId).toBeNull();
+    expect(after.currentOperationId).toBe(seed.operations.QC.id);
+    expect(after.status).toBe('IN_PROGRESS');
+    // Событие тоже не пишем — иначе `removedFromQc` схлопнул бы
+    // карточку и ОТК потеряла бы доступ к паспорту.
+    const scansAfter = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'OPERATION_SCAN' },
+    });
+    expect(scansAfter).toBe(scansBefore);
+
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/qc/passports/${passportId}`)
+      .set('Cookie', cookies.qc)
+      .expect(200);
+    expect(detail.body.removedFromQc).toBe(false);
+    expect(typeof detail.body.qcCompletedAt).toBe('string');
+  });
+
+  /**
+   * Вторая половина того же фикса — для паспортов, где лишний скан уже
+   * записан (продовый бэклог до 19.08.2026). `removedFromQc` считает
+   * «ушёл дальше» только по сканам НЕ-ОТК операций, поэтому карточка
+   * открывается и повторное «Проверка выполнена» снимает владельца.
+   */
+  test('лишний ОТК-скан в истории не считается уходом на следующую операцию', async () => {
+    const passportId = await prepareQcReady();
+    await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/complete`)
+      .set('Cookie', cookies.qc)
+      .send({})
+      .expect(201);
+
+    // Воспроизводим продовое состояние: лишний OPERATION_SCAN по
+    // ОТК-операции после QC_PASSED + висящий владелец.
+    await t.prisma.passportEvent.create({
+      data: {
+        passportId,
+        type: 'OPERATION_SCAN',
+        operationId: seed.operations.QC.id,
+        employeeId: seed.employees['qc'].id,
+        qty: 1,
+      },
+    });
+    await t.prisma.passport.update({
+      where: { id: passportId },
+      data: { currentEmployeeId: seed.employees['qc'].id },
+    });
+
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/qc/passports/${passportId}`)
+      .set('Cookie', cookies.qc)
+      .expect(200);
+    expect(detail.body.removedFromQc).toBe(false);
+
+    // И контролёр сама расшивает паспорт, без мастера.
+    await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/complete`)
+      .set('Cookie', cookies.qc)
+      .send({})
+      .expect(201);
+    const after = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: { currentEmployeeId: true },
+    });
+    expect(after.currentEmployeeId).toBeNull();
+  });
+
+  /**
    * Обратная сторона того же контракта: снимаем владельца, только если
    * паспорт ФИЗИЧЕСКИ стоит на ОТК. Контролёр может нажать «Проверка
    * выполнена» и по паспорту, который числится за швеёй (её операция

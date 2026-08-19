@@ -2759,6 +2759,49 @@ export class PassportsService {
         session.operationId,
       );
       if (reworkPending) throw new PassportReworkPendingException();
+
+      // Повторный скан паспорта, который ОТК уже проверил (инцидент
+      // 19.08.2026, заказ 02-00013, 10 паспортов).
+      //
+      // `QcService.completeQc` пишет `QC_PASSED`, снимает владельца, но
+      // НЕ двигает `currentOperationId` / `currentRouteStepIndex`:
+      // паспорт остаётся стоять на ОТК и ждёт, пока его заберёт
+      // следующая операция. Физически он так и лежит на столе
+      // контролёра — и уходит в повторный скан из стопки.
+      //
+      // До 11.08.2026 такой скан был безобиден: владельцем оставалась
+      // сама ОТК, и ниже срабатывала идемпотентная ветка
+      // `sameOp && sameEmployee`. После фикса «ОТК отпускает паспорт»
+      // (`completeQc`, инцидент 10.08.2026) владельца больше нет,
+      // `sameEmployee` = false — и скан уходил в полную ветку перехода,
+      // снова забирая паспорт контролёру на руки. Дальше он вставал
+      // намертво: следующий исполнитель получал 409
+      // `PASSPORT_ALREADY_ISSUED`, а сама ОТК уже не могла его отпустить
+      // — терминал по `QcService.loadDetail::removedFromQc` (есть
+      // `OPERATION_SCAN` после `QC_PASSED` — а это её же скан) отвечал
+      // «Паспорт ушёл на следующую операцию» и не открывал карточку.
+      // Снимал только мастер.
+      //
+      // Поэтому: паспорт уже стоит на этой ОТК-операции и все её
+      // проходы по маршруту закрыты — скан считаем no-op. Событие не
+      // пишем, владельца не трогаем. Условие «проход закрыт» — зеркало
+      // идемпотентности `QcService.completeQc`: считаем `QC_PASSED`
+      // после последнего rework на этой же операции и сравниваем с
+      // числом вхождений ОТК в маршрут заказа (ОТК может стоять в
+      // маршруте дважды — межоперационная проверка и финальная).
+      if (passport.currentOperationId === session.operationId) {
+        const qcSettled = await this.isQcPassSettled(
+          passportId,
+          session.operationId,
+          passport.orderId,
+        );
+        if (qcSettled) {
+          this.logger.log(
+            `event=passport.scan.qc_already_passed passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId}`,
+          );
+          return this.getOne(passportId);
+        }
+      }
     }
 
     const sameOp = passport.currentOperationId === session.operationId;
@@ -3711,6 +3754,52 @@ export class PassportsService {
    * REWORK_OPENED при этом висит на самой ОТК-операции, и ОТК наоборот
    * обязан её отсканировать — не блокируем.
    */
+  /**
+   * «ОТК по паспорту уже отработала на этой операции» — все проходы
+   * проверки, положенные по маршруту, закрыты `QC_PASSED`.
+   *
+   * Зеркало идемпотентной ветки `QcService.completeQc`: там ровно
+   * такой же счёт (`passedCount >= max(1, qcOccurrences)`) решает, не
+   * писать ли повторный `QC_PASSED`. Здесь тот же признак закрывает
+   * повторный скан — иначе он снова забирает проверенный паспорт
+   * контролёру на руки (см. `scanOnOperation`, инцидент 19.08.2026).
+   *
+   * `QC_PASSED` считаем только после последнего
+   * `OPERATION_REWORK_OPENED` на этой ОТК-операции: если мастер вернул
+   * паспорт на повторную проверку (`MasterActionsService.setRouteStep`,
+   * ветка `reopenFinishedTarget`), старая проверка не в счёт — идёт
+   * новый проход, и сканировать ОТК обязана.
+   */
+  private async isQcPassSettled(
+    passportId: string,
+    operationId: string,
+    orderId: string,
+  ): Promise<boolean> {
+    const lastReworkOnQcOp = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId,
+        operationId,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+    const passedCount = await this.prisma.passportEvent.count({
+      where: {
+        passportId,
+        type: PassportEventType.QC_PASSED,
+        ...(lastReworkOnQcOp
+          ? { createdAt: { gt: lastReworkOnQcOp.createdAt } }
+          : {}),
+      },
+    });
+    if (passedCount === 0) return false;
+    const qcOccurrences = await this.prisma.orderRouteStep.count({
+      where: { orderId, operationId },
+    });
+    return passedCount >= Math.max(1, qcOccurrences);
+  }
+
   async hasOpenRework(
     passportId: string,
     excludeOperationId?: string | null,
