@@ -43,3 +43,6 @@ apps/api/apps/
 # входящие файлы на разбор (xlsx и т.п.) — в git не кладём, только README
 docs/upload/*
 !docs/upload/README.md
+
+# PDF-экспорты макетов — производные от HTML рядом, в git не кладём
+docs/mockups/*.pdf
