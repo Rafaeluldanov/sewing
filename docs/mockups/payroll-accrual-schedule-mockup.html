@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Зарплата: дни начисления и отсечка по закрытым заказам (прототип)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-xs:0 1px 2px rgba(20,20,20,.04);
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --shadow-lg:0 10px 32px rgba(20,20,20,.16),0 2px 8px rgba(20,20,20,.08);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 90px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1320px; margin:0 auto; padding:0 20px; }
+
+  /* ---------- навигация документа ---------- */
+  .topnav{ position:sticky; top:0; z-index:60; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1320px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:600; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:92ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:var(--title-hero); margin:0 0 .3rem; }
+  .sect > p.lead{ margin:0 0 1rem; color:var(--color-fg-muted); max-width:92ch; }
+  .note{ background:var(--color-bg-tint); border:1px solid #e7d9a8; border-radius:var(--radius-md); padding:.6rem .8rem; font-size:.85rem; margin:.8rem 0; max-width:92ch; }
+  .note b{ font-weight:700; }
+  .note--warn{ background:var(--color-warn-soft); border-color:#e5c37a; }
+  .note--danger{ background:var(--color-danger-soft); border-color:#edb9b3; }
+  .note--ok{ background:var(--color-ok-soft); border-color:#a9d9b5; }
+  .caption{ font-size:.78rem; color:var(--color-fg-subtle); padding:.4rem .1rem 0; }
+
+  /* ---------- каркас экрана админки ---------- */
+  .screen{ background:var(--color-bg-soft); border:1px solid var(--color-border-strong); border-radius:var(--radius-lg); box-shadow:var(--shadow-md); overflow:hidden; }
+  .screen__chrome{ background:#fff; border-bottom:1px solid var(--color-border); padding:.45rem .8rem; display:flex; align-items:center; gap:.5rem; font-size:.8rem; color:var(--color-fg-subtle); }
+  .screen__dot{ width:9px; height:9px; border-radius:50%; background:var(--color-border-strong); }
+  .screen__url{ background:var(--color-bg-muted); border-radius:var(--radius-pill); padding:.1rem .6rem; font-size:.78rem; color:var(--color-fg-muted); }
+  .screen__body{ padding:1.1rem 1.2rem 1.3rem; }
+
+  .page-head{ display:flex; align-items:flex-start; gap:.8rem; margin-bottom:1rem; }
+  .page-head__icon{ width:38px; height:38px; border-radius:var(--radius-md); background:var(--color-bg-tint); border:1px solid #e7d9a8; display:flex; align-items:center; justify-content:center; font-size:1.1rem; }
+  .page-head h3{ margin:0; font-size:var(--title-page); }
+  .page-head .sub{ margin:.1rem 0 0; font-size:.86rem; color:var(--color-fg-muted); }
+  .page-head .acts{ margin-left:auto; display:flex; gap:.4rem; align-items:center; }
+
+  .card{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:1rem 1.05rem; box-shadow:var(--shadow-sm); }
+  .card + .card{ margin-top:.8rem; }
+  .card__title{ margin:0 0 .15rem; font-size:var(--title-section); display:flex; align-items:center; gap:.45rem; }
+  .card__cap{ margin:0 0 .85rem; font-size:.83rem; color:var(--color-fg-muted); }
+  .card__sep{ height:1px; background:var(--color-border); margin:.9rem -1.05rem; }
+
+  /* ---------- формы ---------- */
+  .field{ display:flex; flex-direction:column; gap:.3rem; }
+  .field + .field{ margin-top:.9rem; }
+  .field > label, .grp-title{ font-size:var(--title-label); font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); }
+  .field input[type=text], .field input[type=date], .field input[type=time], .field select, .field textarea{
+    font:inherit; font-size:.9rem; padding:.45rem .55rem; border:1px solid var(--color-border-strong);
+    border-radius:var(--radius-sm); background:#fff; color:var(--color-fg); width:100%; max-width:320px;
+  }
+  .hint{ font-size:.8rem; color:var(--color-fg-subtle); max-width:78ch; }
+  .fields2{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:.9rem 1.4rem; }
+
+  .daychips{ display:flex; flex-wrap:wrap; gap:.35rem; align-items:center; }
+  .daychip{ display:inline-flex; align-items:center; gap:.4rem; background:var(--color-accent-soft); color:var(--color-accent-fg); border:1px solid #b9d4f2; border-radius:var(--radius-pill); padding:.22rem .6rem .22rem .7rem; font-size:.9rem; font-weight:700; font-variant-numeric:tabular-nums; }
+  .daychip__x{ cursor:pointer; opacity:.55; font-weight:400; }
+  .daychip--add{ background:#fff; color:var(--color-fg-muted); border:1px dashed var(--color-border-strong); font-weight:400; cursor:pointer; }
+
+  .radio{ display:flex; gap:.55rem; align-items:flex-start; padding:.55rem .65rem; border:1px solid var(--color-border); border-radius:var(--radius-sm); background:#fff; }
+  .radio + .radio{ margin-top:.35rem; }
+  .radio--on{ border-color:var(--color-accent); background:var(--color-accent-soft); box-shadow:0 0 0 3px rgba(47,127,209,.12); }
+  .radio input{ margin-top:.22rem; accent-color:var(--color-accent); width:16px; height:16px; flex:0 0 auto; }
+  .radio__t{ font-size:.92rem; font-weight:700; }
+  .radio__d{ font-size:.82rem; color:var(--color-fg-muted); }
+  .radio__code{ font-size:.78rem; color:var(--color-fg-subtle); margin-top:.15rem; }
+
+  .chk{ display:flex; gap:.5rem; align-items:flex-start; font-size:.9rem; padding:.4rem .1rem; }
+  .chk input{ margin-top:.2rem; accent-color:var(--color-accent); width:16px; height:16px; flex:0 0 auto; }
+  .chk__d{ font-size:.82rem; color:var(--color-fg-muted); }
+  .chk--off{ color:var(--color-fg-subtle); }
+
+  .sw{ position:relative; width:34px; height:19px; border-radius:var(--radius-pill); background:var(--color-border-strong); flex:0 0 auto; }
+  .sw::after{ content:''; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:#fff; box-shadow:var(--shadow-sm); }
+  .sw--on{ background:var(--color-ok); }
+  .sw--on::after{ left:auto; right:2px; }
+  .swrow{ display:flex; align-items:center; gap:.55rem; font-size:.92rem; font-weight:700; }
+
+  .btn{ font:inherit; font-size:.86rem; font-weight:700; padding:.42rem .8rem; border-radius:var(--radius-sm); border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg); cursor:pointer; }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .btn--ghost{ border-color:transparent; color:var(--color-accent-fg); background:transparent; }
+  .btn--sm{ font-size:.8rem; padding:.28rem .6rem; }
+  .btn--danger{ color:var(--color-danger-fg); border-color:#edb9b3; background:#fff; }
+  .actions{ display:flex; gap:.5rem; align-items:center; margin-top:1rem; }
+
+  /* ---------- списки/таблицы ---------- */
+  table.t{ border-collapse:collapse; width:100%; font-size:.87rem; background:#fff; }
+  table.t th, table.t td{ border-bottom:1px solid var(--color-border); padding:.5rem .6rem; text-align:left; vertical-align:middle; }
+  table.t th{ background:var(--color-bg-soft); font-size:var(--title-label); text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); font-weight:700; }
+  table.t td.num, table.t th.num{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  table.t tr:last-child td{ border-bottom:0; }
+  table.t tr.tot td{ background:var(--color-bg-soft); font-weight:700; }
+  .tbl-wrap{ border:1px solid var(--color-border); border-radius:var(--radius-md); overflow:hidden; }
+  .sub-row td{ background:var(--color-bg-soft); font-size:.83rem; color:var(--color-fg-muted); }
+
+  .badge{ display:inline-block; font-size:.74rem; font-weight:700; padding:.1rem .5rem; border-radius:var(--radius-pill); background:var(--color-bg-muted); color:var(--color-fg-muted); white-space:nowrap; }
+  .badge--ok{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .badge--warn{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+  .badge--acc{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  .badge--danger{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+
+  .navlist{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.4rem; }
+  .navlist a{ display:flex; align-items:center; gap:.75rem; padding:.6rem .75rem; border:1px solid var(--color-border); border-radius:var(--radius-sm); text-decoration:none; color:inherit; background:#fff; }
+  .navlist a:hover{ background:var(--color-bg-soft); }
+  .navlist .ic{ width:26px; text-align:center; font-size:1.05rem; }
+  .navlist .t{ font-weight:700; font-size:.93rem; }
+  .navlist .d{ font-size:.82rem; color:var(--color-fg-muted); }
+  .navlist .go{ margin-left:auto; color:var(--color-fg-subtle); }
+  .navlist a.new{ border-color:var(--btn-primary-edge); box-shadow:0 0 0 3px rgba(255,210,63,.25); }
+
+  .kpi{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.6rem; }
+  .kpi__c{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-md); padding:.6rem .7rem; }
+  .kpi__v{ font-size:1.35rem; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.1; }
+  .kpi__l{ font-size:var(--title-label); text-transform:uppercase; letter-spacing:.03em; color:var(--color-fg-muted); margin-top:.15rem; }
+  .kpi__c--ok .kpi__v{ color:var(--color-ok-fg); }
+  .kpi__c--warn .kpi__v{ color:var(--color-warn-fg); }
+  .kpi__c--acc .kpi__v{ color:var(--color-accent-fg); }
+
+  .timeline{ display:flex; flex-wrap:wrap; gap:.5rem; }
+  .tl{ flex:1 1 190px; border:1px solid var(--color-border); border-radius:var(--radius-md); padding:.55rem .7rem; background:#fff; }
+  .tl--next{ border-color:var(--color-accent); background:var(--color-accent-soft); }
+  .tl__d{ font-weight:700; font-size:1.05rem; font-variant-numeric:tabular-nums; }
+  .tl__p{ font-size:.8rem; color:var(--color-fg-muted); }
+
+  .split{ display:grid; grid-template-columns:minmax(0,1fr); gap:1rem; }
+  @media (min-width:1080px){ .split--2{ grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); } }
+
+  code{ background:var(--color-bg-muted); border-radius:4px; padding:.05em .35em; font-size:.86em; }
+  pre{ background:#1f1f1e; color:#f1f1ef; border-radius:var(--radius-md); padding:.85rem .95rem; overflow:auto; font-size:.82rem; line-height:1.55; }
+  pre .k{ color:#ffd23f; } pre .s{ color:#9fd7a4; } pre .c{ color:#8a8a86; }
+  table.spec{ border-collapse:collapse; width:100%; font-size:.86rem; background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-md); overflow:hidden; }
+  table.spec th, table.spec td{ border-bottom:1px solid var(--color-border); padding:.5rem .65rem; text-align:left; vertical-align:top; }
+  table.spec th{ background:var(--color-bg-soft); font-size:var(--title-label); text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); }
+  table.spec tr:last-child td{ border-bottom:0; }
+  ul.tight{ margin:.35rem 0 0; padding-left:1.1rem; }
+  ul.tight li{ margin-bottom:.3rem; }
+</style>
+</head>
+<body>
+
+<nav class="topnav"><div class="topnav__in">
+  <span class="topnav__brand">Зарплата · дни начисления</span>
+  <a href="#idea">Идея</a>
+  <a href="#hub">1. Где живёт</a>
+  <a href="#rules">2. Правила начисления</a>
+  <a href="#create">3. Новый документ</a>
+  <a href="#draft">4. Черновик и «отложено»</a>
+  <a href="#board">5. Ведомость</a>
+  <a href="#spec">6. Что нужно в данных</a>
+  <a href="#risks">7. Развилки и риски</a>
+</div></nav>
+
+<div class="doc">
+
+  <section class="intro" id="idea">
+    <h1>Зарплата: дни начисления и отсечка по закрытым заказам</h1>
+    <p>
+      Сегодня момент начисления нигде не настраивается. Менеджер идёт в
+      <code>/admin/payroll/accrual-documents/new</code>, руками ставит «Дату начисления»
+      (по умолчанию — сегодня), и в документ падает <b>всё, что накопилось до этой даты</b>:
+      сдельные <code>OperationEntry</code> в статусе APPROVED и окладные <code>SalaryEntry</code>.
+      Ни расписания, ни правила «заказ ещё не закрыт — не платим» в коде нет.
+    </p>
+    <p>
+      Предложение: завести <b>одну настройку расписания</b> — дни месяца, в которые считается
+      зарплата, и правило отсечки. Отсечка — <b>по закрытому заказу</b>: сдельщина попадает
+      в расчёт, только если заказ, на котором она заработана, закрыт до дня начисления.
+      Всё остальное не пропадает, а <b>переезжает в следующий документ</b> и до тех пор
+      видно отдельной строкой «отложено».
+    </p>
+    <div class="principles">
+      <div class="principle"><b>Дни задаёт менеджер</b><span>Список чисел месяца: 5, 15, 25 — или одно 15-е. Период документа = от предыдущего дня начисления до текущего включительно. Никакого зашитого в код «раз в месяц».</span></div>
+      <div class="principle"><b>Отсечка — закрытый заказ</b><span>В расчёт входит сдельщина по заказам со статусом «Готов» и датой закрытия ≤ дня начисления. Заказ в производстве не оплачивается, даже если операции по нему давно закрыты.</span></div>
+      <div class="principle"><b>Оклад живёт по датам</b><span><code>SalaryEntry</code> не привязан к заказу вовсе — часы смены, месячный оклад и подкрой идут по своей дате ≤ дня начисления. Правило «закрытого заказа» к ним неприменимо физически.</span></div>
+      <div class="principle"><b>Черновик сам, деньги — руками</b><span>В день начисления система создаёт документ в статусе «Черновик» и уведомляет менеджера. Проведение (и списание из кассы) остаётся ручным действием человека.</span></div>
+      <div class="principle"><b>Ничего не теряется</b><span>Что не прошло отсечку — не исчезает и не «сгорает»: сумма видна как «отложено», с раскладкой по заказам, и войдёт в первый же документ после закрытия заказа.</span></div>
+    </div>
+    <div class="note">
+      <b>Дельта к текущему UI минимальная.</b> Новых разделов не появляется: одна строка в уже
+      существующем хабе «Настройки зарплаты», один экран формы, один блок в форме создания
+      документа и одна колонка в черновике. Ведомость <code>/admin/payroll</code> и выплаты
+      не трогаем.
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <section class="sect" id="hub">
+    <h2>1. Где живёт настройка</h2>
+    <p class="lead">
+      Экран «Настройки зарплаты» уже есть и работает как навигационный хаб: ставки — в операциях,
+      оклады — в сотрудниках, норма часов — в производственном календаре. Расписание начислений
+      ложится туда же пятой строкой и своим экраном (как календарь) — это единственное место,
+      где менеджер уже ищет «ручки» зарплаты.
+    </p>
+
+    <div class="screen">
+      <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/payroll/settings</span></div>
+      <div class="screen__body">
+        <div class="page-head">
+          <div class="page-head__icon">⚙</div>
+          <div>
+            <h3>Настройки зарплаты</h3>
+            <p class="sub">Ставки и тарифы — в профильных разделах, календарь и расписание — здесь</p>
+          </div>
+          <div class="acts"><button class="btn">← К ведомости</button></div>
+        </div>
+
+        <div class="card">
+          <h4 class="card__title">Где править</h4>
+          <p class="card__cap">
+            Ведомость зарплаты работает на чтение и агрегирует данные из существующих контуров,
+            поэтому формы ставок не дублируем — ссылки ведут в разделы, где эти значения ведутся.
+          </p>
+          <ul class="navlist">
+            <li><a href="#rules" class="new">
+              <span class="ic">🗓</span>
+              <span><span class="t">Правила начисления <span class="badge badge--acc">новое</span></span>
+              <span class="d">Дни начисления зарплаты и что попадает в расчёт: 5, 15, 25 · по закрытым заказам</span></span>
+              <span class="go">→</span></a></li>
+            <li><a href="#"><span class="ic">✂</span><span><span class="t">Ставки операций</span><span class="d">Тариф сдельщины: FIXED / BY_SIZE / SALARY_ONLY (ADR-0020)</span></span><span class="go">→</span></a></li>
+            <li><a href="#"><span class="ic">👥</span><span><span class="t">Ставки сотрудников</span><span class="d">Вид оклада (часовой / месячный), ставка и compensationType (ADR-0021)</span></span><span class="go">→</span></a></li>
+            <li><a href="#"><span class="ic">📅</span><span><span class="t">Производственный календарь</span><span class="d">Норма дней и часов месяца — знаменатель ставки ₽/час у месячного оклада</span></span><span class="go">→</span></a></li>
+            <li><a href="#"><span class="ic">🏢</span><span><span class="t">Подразделения и реквизиты</span><span class="d">CompanyDivision — фильтр ведомости и заказов</span></span><span class="go">→</span></a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="caption">Существующий экран `apps/web/app/admin/payroll/settings/page.tsx` — добавлена одна строка списка.</p>
+  </section>
+
+  <!-- =================================================================== -->
+  <section class="sect" id="rules">
+    <h2>2. Экран «Правила начисления»</h2>
+    <p class="lead">
+      Одна форма на всю компанию (singleton-настройка, как реквизиты). Всё, что менеджер здесь
+      задаёт, дальше работает само: подставляет дату в форму документа, отбирает строки и
+      создаёт черновик в назначенный день.
+    </p>
+
+    <div class="screen">
+      <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/payroll/settings/schedule</span></div>
+      <div class="screen__body">
+        <div class="page-head">
+          <div class="page-head__icon">🗓</div>
+          <div>
+            <h3>Правила начисления</h3>
+            <p class="sub">Когда считаем зарплату и что попадает в расчёт</p>
+          </div>
+          <div class="acts">
+            <span class="badge">изменено 12.08.2026, Акмарал Ж.</span>
+            <button class="btn">← Назад</button>
+          </div>
+        </div>
+
+        <div class="split split--2">
+          <div>
+            <!-- ---------- Дни начисления ---------- -->
+            <div class="card">
+              <h4 class="card__title">Дни начисления</h4>
+              <p class="card__cap">Числа месяца, в которые формируется документ начисления. Период документа считается от предыдущего дня начисления до текущего включительно.</p>
+
+              <div class="field">
+                <label>Числа месяца</label>
+                <div class="daychips">
+                  <span class="daychip">5 <span class="daychip__x">✕</span></span>
+                  <span class="daychip">15 <span class="daychip__x">✕</span></span>
+                  <span class="daychip">25 <span class="daychip__x">✕</span></span>
+                  <span class="daychip daychip--add">＋ добавить день</span>
+                </div>
+                <p class="hint">Можно оставить одно число — тогда начисление раз в месяц. Если в месяце нет такого числа (30, 31 в феврале) — берём последний день месяца.</p>
+              </div>
+
+              <div class="field">
+                <label>Время автоматического формирования</label>
+                <input type="time" value="03:00" />
+                <p class="hint">Московское время. Ночью, чтобы черновик уже ждал менеджера утром и не ловил середину рабочей смены.</p>
+              </div>
+
+              <div class="card__sep"></div>
+
+              <div class="grp-title" style="margin-bottom:.45rem">Ближайшие начисления</div>
+              <div class="timeline">
+                <div class="tl tl--next"><div class="tl__d">25 августа <span class="badge badge--acc">через 2 дня</span></div><div class="tl__p">период 16.08 — 25.08.2026</div></div>
+                <div class="tl"><div class="tl__d">5 сентября</div><div class="tl__p">период 26.08 — 05.09.2026</div></div>
+                <div class="tl"><div class="tl__d">15 сентября</div><div class="tl__p">период 06.09 — 15.09.2026</div></div>
+              </div>
+            </div>
+
+            <!-- ---------- Что попадает в расчёт ---------- -->
+            <div class="card">
+              <h4 class="card__title">Что попадает в расчёт</h4>
+              <p class="card__cap">Правило отсечки для <b>сдельных</b> начислений — раскрой, пошив, ОТК/ВТО со сдельной расценкой.</p>
+
+              <label class="radio radio--on">
+                <input type="radio" name="basis" checked />
+                <span>
+                  <span class="radio__t">Заказ закрыт целиком</span>
+                  <span class="radio__d">В расчёт входит сдельщина по заказам в статусе «Готов», закрытым до дня начисления. Заказ в производстве не оплачивается, даже если операции по нему давно завершены.</span>
+                  <span class="radio__code">Order.status = DONE и Order.completedAt ≤ дата начисления</span>
+                </span>
+              </label>
+
+              <label class="radio">
+                <input type="radio" name="basis" />
+                <span>
+                  <span class="radio__t">Паспорт упакован</span>
+                  <span class="radio__d">Платим по подтверждённой работе, не дожидаясь закрытия всего заказа: сдельщина подтверждается в момент закрытия коробки.</span>
+                  <span class="radio__code">OperationEntry.status = APPROVED и approvedAt ≤ дата начисления</span>
+                </span>
+              </label>
+
+              <label class="radio">
+                <input type="radio" name="basis" />
+                <span>
+                  <span class="radio__t">День выполнения работы</span>
+                  <span class="radio__d">Как система работает сейчас: входит всё начисленное до даты, независимо от упаковки и статуса заказа.</span>
+                  <span class="radio__code">OperationEntry.createdAt ≤ дата начисления</span>
+                </span>
+              </label>
+
+              <div class="card__sep"></div>
+
+              <div class="grp-title" style="margin-bottom:.35rem">Правило распространяется на</div>
+              <label class="chk"><input type="checkbox" checked /><span><b>Пошив, ОТК, ВТО (сдельно)</b><br /><span class="chk__d">Начисления по операциям маршрута.</span></span></label>
+              <label class="chk"><input type="checkbox" /><span><b>Раскрой</b><br /><span class="chk__d">Раскройщик получает деньги в момент выпуска паспорта, задолго до закрытия заказа. Галочка выключена — раскрой платим по факту выпуска, не дожидаясь закрытия заказа.</span></span></label>
+              <label class="chk chk--off"><input type="checkbox" checked disabled /><span><b>Оклад, часы смены, подкрой</b> <span class="badge">всегда по дате</span><br /><span class="chk__d">Окладные начисления не привязаны к заказу — входят по своей дате ≤ дня начисления.</span></span></label>
+            </div>
+          </div>
+
+          <div>
+            <!-- ---------- Автоформирование ---------- -->
+            <div class="card">
+              <h4 class="card__title">Автоматическое формирование</h4>
+              <p class="card__cap">Что система делает сама в день начисления.</p>
+
+              <div class="swrow" style="margin-bottom:.5rem"><span class="sw sw--on"></span> Создавать черновик документа</div>
+              <p class="hint" style="margin-bottom:.9rem">
+                Документ создаётся в статусе «Черновик» — суммы посчитаны, но деньги никуда не ушли.
+                Проведение остаётся ручным: менеджер сверяет и жмёт «Провести».
+              </p>
+
+              <div class="swrow" style="margin-bottom:.5rem"><span class="sw sw--on"></span> Уведомлять о готовом черновике</div>
+              <div class="field" style="margin-top:.35rem">
+                <label>Кому</label>
+                <select><option>Начальник производства и администратор</option></select>
+                <p class="hint">Уведомление в колокольчик админки. Роли те же, что видят чужие начисления.</p>
+              </div>
+
+              <div class="card__sep"></div>
+              <div class="swrow" style="opacity:.55"><span class="sw"></span> Проводить документ автоматически</div>
+              <p class="hint">Выключено сознательно: проведение создаёт выплаты и списывает деньги из кассы — это должно оставаться решением человека.</p>
+            </div>
+
+            <!-- ---------- Предпросмотр ---------- -->
+            <div class="card">
+              <h4 class="card__title">Предпросмотр на 25.08.2026</h4>
+              <p class="card__cap">Сколько получится по текущим правилам, если начислить прямо сейчас.</p>
+              <div class="kpi">
+                <div class="kpi__c kpi__c--ok"><div class="kpi__v">274 180 ₽</div><div class="kpi__l">войдёт в расчёт</div></div>
+                <div class="kpi__c kpi__c--warn"><div class="kpi__v">63 940 ₽</div><div class="kpi__l">отложено</div></div>
+                <div class="kpi__c"><div class="kpi__v">18</div><div class="kpi__l">сотрудников</div></div>
+              </div>
+              <div class="note note--warn" style="margin-bottom:0">
+                <b>Отложено 63 940 ₽</b> — сдельщина по 3 незакрытым заказам:
+                02-00013 (41 200 ₽), 01-00042 (17 300 ₽), 02-00019 (5 440 ₽).
+                Войдёт в первый документ после закрытия заказа.
+              </div>
+            </div>
+
+            <div class="card">
+              <h4 class="card__title">История изменений</h4>
+              <table class="t">
+                <tr><td>12.08.2026 10:14</td><td>Акмарал Ж.</td><td>дни 1, 16 → 5, 15, 25</td></tr>
+                <tr><td>03.07.2026 16:02</td><td>Администратор</td><td>отсечка: по дате работы → по закрытому заказу</td></tr>
+              </table>
+              <p class="hint" style="margin-top:.5rem">Пишется в общий журнал аудита: настройка напрямую двигает деньги.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn--primary">Сохранить</button>
+          <button class="btn">Отмена</button>
+          <span class="hint" style="margin-left:.4rem">Изменение правил не трогает уже проведённые документы и выплаты.</span>
+        </div>
+      </div>
+    </div>
+    <p class="caption">Новый экран. Каркас — `AdminPageShell` + `AdminCard`, как у производственного календаря.</p>
+  </section>
+
+  <!-- =================================================================== -->
+  <section class="sect" id="create">
+    <h2>3. Форма «Новый документ начисления»</h2>
+    <p class="lead">
+      Форма уже существует и почти не меняется: дата теперь <b>подставлена по расписанию</b>,
+      а под ней появляется живая справка «что войдёт» — чтобы менеджер увидел отложенную сумму
+      до того, как нажмёт «Сформировать», а не после.
+    </p>
+
+    <div class="screen">
+      <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/payroll/accrual-documents/new</span></div>
+      <div class="screen__body">
+        <div class="page-head">
+          <div class="page-head__icon">₽</div>
+          <div>
+            <h3>Новый документ начисления</h3>
+            <p class="sub">Начисления и окладные дни до даты документа включительно</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="fields2">
+            <div>
+              <div class="field">
+                <label>Дата начисления *</label>
+                <input type="date" value="2026-08-25" />
+                <p class="hint">
+                  <span class="badge badge--acc">по расписанию</span>
+                  Ближайший день начисления — 25 августа. Период: 16.08 — 25.08.2026.
+                  Дату можно изменить вручную, правило отсечки при этом сохранится.
+                </p>
+              </div>
+
+              <div class="field">
+                <label>Сотрудник</label>
+                <select><option>— все сотрудники —</option></select>
+                <p class="hint">Оставьте «все сотрудники», чтобы начислить всем сразу.</p>
+              </div>
+
+              <div class="field">
+                <label>Комментарий менеджера</label>
+                <textarea rows="2" placeholder="Необязательно"></textarea>
+              </div>
+            </div>
+
+            <div>
+              <div class="grp-title" style="margin-bottom:.4rem">Что войдёт в документ</div>
+              <div class="tbl-wrap">
+                <table class="t">
+                  <tr><td>Сдельно — заказы закрыты до 25.08</td><td class="num">168 420 ₽</td></tr>
+                  <tr><td>Раскрой — по выпуску паспортов</td><td class="num">21 060 ₽</td></tr>
+                  <tr><td>Оклад и часы смены</td><td class="num">78 300 ₽</td></tr>
+                  <tr><td>Подкрой (почасовая доплата)</td><td class="num">6 400 ₽</td></tr>
+                  <tr class="tot"><td>Итого к начислению</td><td class="num">274 180 ₽</td></tr>
+                </table>
+              </div>
+
+              <div class="note note--warn">
+                <b>Не войдёт: 63 940 ₽</b> — сдельщина по заказам, не закрытым на 25.08.
+                <ul class="tight">
+                  <li>02-00013 «Футболка чёрная» — в производстве, упаковано 380 из 500 — <b>41 200 ₽</b></li>
+                  <li>01-00042 «Худи серое» — в производстве, упаковано 90 из 200 — <b>17 300 ₽</b></li>
+                  <li>02-00019 «Лонгслив» — ОТК, упаковано 0 из 120 — <b>5 440 ₽</b></li>
+                </ul>
+                Эти суммы не сгорают — попадут в документ, следующий за закрытием заказа.
+              </div>
+
+              <p class="hint">Правило отсечки: <b>заказ закрыт целиком</b> · <a href="#rules">изменить правила</a></p>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn--primary">Сформировать документ</button>
+            <button class="btn btn--ghost">Отмена</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="caption">Существующая форма `accrual-documents/new/create-form.tsx` — добавлены подстановка даты и блок «Что войдёт».</p>
+  </section>
+
+  <!-- =================================================================== -->
+  <section class="sect" id="draft">
+    <h2>4. Черновик документа: колонка «Отложено»</h2>
+    <p class="lead">
+      Автосозданный черновик отличается от ручного только пометкой «сформирован по расписанию».
+      Главное новое — колонка «Отложено»: менеджер сразу видит, у кого деньги придержаны и почему,
+      и может это объяснить сотруднику, не поднимая заказы.
+    </p>
+
+    <div class="screen">
+      <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/payroll/accrual-documents/cldoc14</span></div>
+      <div class="screen__body">
+        <div class="page-head">
+          <div class="page-head__icon">📄</div>
+          <div>
+            <h3>Документ начисления от 25.08.2026</h3>
+            <p class="sub">
+              <span class="badge">Черновик</span>
+              <span class="badge badge--acc">сформирован по расписанию 25.08 в 03:00</span>
+              · период 16.08 — 25.08.2026 · 18 сотрудников
+            </p>
+          </div>
+          <div class="acts">
+            <button class="btn btn--sm">Пересчитать</button>
+            <button class="btn btn--sm btn--danger">Отменить</button>
+            <button class="btn btn--primary">Провести</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="kpi" style="margin-bottom:.85rem">
+            <div class="kpi__c"><div class="kpi__v">189 480 ₽</div><div class="kpi__l">сдельно</div></div>
+            <div class="kpi__c"><div class="kpi__v">84 700 ₽</div><div class="kpi__l">оклад</div></div>
+            <div class="kpi__c kpi__c--ok"><div class="kpi__v">274 180 ₽</div><div class="kpi__l">к выплате</div></div>
+            <div class="kpi__c kpi__c--warn"><div class="kpi__v">63 940 ₽</div><div class="kpi__l">отложено</div></div>
+          </div>
+
+          <div class="tbl-wrap">
+            <table class="t">
+              <thead>
+                <tr>
+                  <th>Сотрудник</th><th>Роль</th>
+                  <th class="num">Сдельно</th><th class="num">Оклад</th>
+                  <th class="num">Корректировка</th><th class="num">К выплате</th>
+                  <th class="num">Отложено</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Ахмедова А.</td><td>Швея</td>
+                  <td class="num">24 300</td><td class="num">—</td>
+                  <td class="num">—</td><td class="num"><b>24 300 ₽</b></td>
+                  <td class="num"><span class="badge badge--warn">18 900 ₽</span></td>
+                </tr>
+                <tr class="sub-row">
+                  <td colspan="7">↳ отложено: 02-00013 «Футболка чёрная» — заказ в производстве (упаковано 380 из 500), 14 200 ₽ · 01-00042 «Худи серое» — заказ в производстве, 4 700 ₽</td>
+                </tr>
+                <tr>
+                  <td>Ким Л.</td><td>Швея</td>
+                  <td class="num">21 850</td><td class="num">—</td>
+                  <td class="num">—</td><td class="num"><b>21 850 ₽</b></td>
+                  <td class="num"><span class="badge badge--warn">12 600 ₽</span></td>
+                </tr>
+                <tr>
+                  <td>Сидорова Н.</td><td>Раскройщик</td>
+                  <td class="num">21 060</td><td class="num">—</td>
+                  <td class="num">—</td><td class="num"><b>21 060 ₽</b></td>
+                  <td class="num">—</td>
+                </tr>
+                <tr class="sub-row">
+                  <td colspan="7">↳ раскрой выведен из-под правила «закрытый заказ» — платится по факту выпуска паспортов</td>
+                </tr>
+                <tr>
+                  <td>Петрова О.</td><td>ОТК</td>
+                  <td class="num">—</td><td class="num">18 400</td>
+                  <td class="num">—</td><td class="num"><b>18 400 ₽</b></td>
+                  <td class="num">—</td>
+                </tr>
+                <tr>
+                  <td>Жумабаева А.</td><td>Мастер</td>
+                  <td class="num">3 900</td><td class="num">32 000</td>
+                  <td class="num">+2 000</td><td class="num"><b>37 900 ₽</b></td>
+                  <td class="num">—</td>
+                </tr>
+                <tr class="tot">
+                  <td colspan="2">Итого · 18 сотрудников</td>
+                  <td class="num">189 480</td><td class="num">84 700</td>
+                  <td class="num">+2 000</td><td class="num">274 180 ₽</td>
+                  <td class="num">63 940 ₽</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="note note--ok">
+            <b>«Отложено» — не строка документа, а справка.</b> В проводку и в выплаты попадает
+            только колонка «К выплате»; отложенные суммы остаются свободными начислениями и
+            подхватятся следующим документом, когда заказ закроется. Ручная корректировка
+            (<code>manualAdjustRub</code>) продолжает работать как сейчас — если нужно выплатить
+            часть отложенного авансом.
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="caption">Существующий экран документа — добавлены колонка «Отложено», раскрывающая строка-пояснение и KPI-плитка.</p>
+  </section>
+
+  <!-- =================================================================== -->
+  <section class="sect" id="board">
+    <h2>5. Напоминание в ведомости</h2>
+    <p class="lead">
+      Одна карточка сверху на <code>/admin/payroll</code>: до какого числа считаем и сколько уже
+      набежало. Чтобы «день зарплаты» не был календарной памятью одного человека.
+    </p>
+
+    <div class="screen">
+      <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/payroll</span></div>
+      <div class="screen__body">
+        <div class="page-head">
+          <div class="page-head__icon">₽</div>
+          <div>
+            <h3>Ведомость зарплаты</h3>
+            <p class="sub">01.08.2026 — 23.08.2026 · все подразделения</p>
+          </div>
+          <div class="acts"><button class="btn btn--sm">Фильтры</button><button class="btn btn--primary btn--sm">Начислить</button></div>
+        </div>
+
+        <div class="card" style="border-color:var(--btn-primary-edge); background:var(--color-bg-tint)">
+          <div style="display:flex; flex-wrap:wrap; gap:1rem; align-items:center">
+            <div>
+              <div style="font-size:var(--title-item); font-weight:700">Следующее начисление — 25 августа, через 2 дня</div>
+              <div style="font-size:.86rem; color:var(--color-fg-muted)">
+                Период 16.08 — 25.08 · накоплено <b>274 180 ₽</b> · отложено по незакрытым заказам <b>63 940 ₽</b>
+              </div>
+            </div>
+            <div style="margin-left:auto; display:flex; gap:.4rem">
+              <button class="btn btn--sm">Правила</button>
+              <button class="btn btn--primary btn--sm">Начислить сейчас</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="kpi">
+            <div class="kpi__c"><div class="kpi__v">338 120 ₽</div><div class="kpi__l">всего за период</div></div>
+            <div class="kpi__c kpi__c--ok"><div class="kpi__v">274 180 ₽</div><div class="kpi__l">утверждено</div></div>
+            <div class="kpi__c kpi__c--warn"><div class="kpi__v">63 940 ₽</div><div class="kpi__l">ожидает закрытия заказа</div></div>
+            <div class="kpi__c kpi__c--acc"><div class="kpi__v">84 700 ₽</div><div class="kpi__l">оклад</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <section class="sect" id="spec">
+    <h2>6. Что нужно в данных и коде</h2>
+    <p class="lead">Границы фичи: одна новая таблица настройки, одно новое поле у заказа, фильтр в подборе строк документа и планировщик.</p>
+
+    <table class="spec">
+      <tr><th style="width:26%">Что</th><th>Зачем и как</th></tr>
+      <tr>
+        <td><b>Таблица <code>PayrollAccrualSchedule</code></b><br /><span class="badge badge--acc">новое</span></td>
+        <td>
+          Singleton-настройка компании: <code>daysOfMonth Int[]</code>, <code>cutoffBasis</code>
+          (<code>ORDER_COMPLETED | PASSPORT_PACKED | WORK_DATE</code>), <code>appliesToSewing</code>,
+          <code>appliesToCutting</code>, <code>autoCreateDraft</code>, <code>runAtLocalTime</code>,
+          <code>notifyRoles</code>, <code>lastRunOn</code>. Правится только ADMIN / SHOP_MANAGER,
+          каждое изменение — в <code>AuditLog</code>.
+        </td>
+      </tr>
+      <tr>
+        <td><b><code>Order.completedAt</code></b><br /><span class="badge badge--warn">нужна миграция</span></td>
+        <td>
+          Даты закрытия заказа в схеме <b>нет</b> — есть только <code>status = DONE</code> и
+          <code>updatedAt</code>, который двигает любая правка. Ставим момент перехода в DONE
+          (там же, где сейчас авто-«Готово» при полной упаковке), бэкфилл историческим заказам —
+          по последней закрытой коробке, иначе по <code>updatedAt</code>. Без этого поля правило
+          «закрыт до 15-го» посчитать нечем.
+        </td>
+      </tr>
+      <tr>
+        <td><b>Отбор строк документа</b><br /><code>computeLines(...)</code></td>
+        <td>
+          Сейчас: <code>OperationEntry.status = APPROVED и createdAt ≤ cutoff</code>. Становится:
+          то же плюс фильтр по заказу — <code>passport.order.status = DONE</code> и
+          <code>completedAt ≤ cutoff</code>, с исключением для раскроя
+          (<code>sourceEventType = PASSPORT_CREATED</code>), если галочка выключена.
+          <code>SalaryEntry</code> отбирается как раньше — по <code>date ≤ cutoff</code>.
+        </td>
+      </tr>
+      <tr>
+        <td><b>«Отложено»</b></td>
+        <td>
+          Тот же запрос с инвертированным условием, сгруппированный по сотруднику и заказу.
+          Показывается в форме создания, в черновике и в карточке ведомости. В БД не хранится —
+          считается на лету, чтобы не появилось второго источника истины по деньгам.
+        </td>
+      </tr>
+      <tr>
+        <td><b>Планировщик</b></td>
+        <td>
+          Ежедневная задача: если сегодняшнее число (по Москве) есть в <code>daysOfMonth</code>
+          и на эту дату документа ещё нет — создать DRAFT и уведомить. Защита от повтора —
+          <code>lastRunOn</code> плюс проверка существующего документа на дату.
+        </td>
+      </tr>
+      <tr>
+        <td><b>Что НЕ трогаем</b></td>
+        <td>
+          Момент создания самих начислений (<code>OperationEntry</code> при закрытии операции,
+          <code>SalaryEntry</code> при закрытии смены), подтверждение при упаковке, проведение
+          документа, выплаты и казну. Расписание — это <b>только правило отбора и календарь</b>,
+          а не новая механика денег.
+        </td>
+      </tr>
+    </table>
+
+    <pre><span class="c">// Псевдокод отбора сдельщины на дату начисления</span>
+<span class="k">const</span> cutoff = endOfDayMoscow(accrualDate);
+
+<span class="k">const</span> piecework = <span class="k">await</span> tx.operationEntry.findMany({ where: {
+  status: <span class="s">'APPROVED'</span>,
+  createdAt: { lte: cutoff },
+  payrollPayoutLines: { none: { payout: { status: { in: [<span class="s">'DRAFT'</span>, <span class="s">'ISSUED'</span>, <span class="s">'ACKNOWLEDGED'</span>] } } } },
+  <span class="c">// ── новое: отсечка по закрытому заказу ──────────────────────</span>
+  OR: [
+    { passport: { order: { status: <span class="s">'DONE'</span>, completedAt: { lte: cutoff } } } },
+    <span class="c">// раскрой выведен из-под правила (галочка «Раскрой» выключена)</span>
+    schedule.appliesToCutting ? {} : { sourceEventType: <span class="s">'PASSPORT_CREATED'</span> },
+  ],
+}});</pre>
+  </section>
+
+  <!-- =================================================================== -->
+  <section class="sect" id="risks">
+    <h2>7. Развилки, которые лучше решить до кода</h2>
+
+    <div class="note note--danger">
+      <b>1. Отменённый заказ никогда не закроется.</b> Работа по нему сделана и начислена, но
+      статус <code>CANCELLED</code> — под правило «заказ DONE» такие деньги не попадут никогда и
+      зависнут в «отложено» навсегда. Предлагаю считать отменённый заказ закрытым по дате отмены:
+      людям за уже сделанную работу платить надо независимо от судьбы заказа.
+    </div>
+
+    <div class="note note--warn">
+      <b>2. Длинный заказ задерживает всех, кто на нём работал.</b> Швея, закрывшая операции 3 августа,
+      получит деньги только после закрытия заказа — может быть, через два начисления. Смягчение:
+      колонка «Отложено» на виду плюс ручная корректировка для аванса. Если задержки окажутся
+      системными — переключатель отсечки на «паспорт упакован» меняет поведение без переписывания кода.
+    </div>
+
+    <div class="note">
+      <b>3. Граница суток.</b> Расчёт отсечки надо вести по Москве. Окладный контур сейчас режет сутки
+      по таймзоне процесса (в контейнерах — UTC, то есть граница 03:00 МСК), и на дне начисления это
+      даёт расхождение в один день у ночных смен. Дату отсечки считаем через существующий
+      <code>common/moscow-date.ts</code>.
+    </div>
+
+    <div class="note">
+      <b>4. Уже проведённые документы неприкосновенны.</b> Смена правил не пересчитывает прошлое:
+      выплаты в статусах ISSUED / ACKNOWLEDGED заморожены, и это поведение сохраняется — новое
+      правило применяется только к черновикам и будущим документам.
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
