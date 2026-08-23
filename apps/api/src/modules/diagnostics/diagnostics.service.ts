@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   OperationCategory,
   OrderStatus,
+  PassportEventType,
   PassportStatus,
 } from '@prisma/client';
 import type {
@@ -10,6 +11,7 @@ import type {
   DiagnosticSeverity,
 } from '@sewing/shared/diagnostics';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { computeRouteDebts } from '../production-board/route-debt.js';
 import { computeRouteDivergences } from '../production-board/route-divergence.js';
 
 /**
@@ -103,6 +105,7 @@ export class DiagnosticsService {
     await this.checkPassportIssues(issues);
     await this.checkRouteIssues(issues);
     await this.checkOffRouteWorkIssues(issues);
+    await this.checkUnclosedWorkIssues(issues);
     await this.checkStalledOrderIssues(issues);
     await this.checkUnpaidWorkIssues(issues);
     await this.checkShiftEquipmentIssues(issues);
@@ -1054,6 +1057,192 @@ export class DiagnosticsService {
           firstAt: g.firstAt.toISOString(),
           lastAt: g.lastAt.toISOString(),
           employees: g.employees,
+        },
+      });
+    }
+  }
+
+  /**
+   * V2. ORDER_WORK_LEFT_UNCLOSED — швейный шаг маршрута остался ПОЗАДИ
+   * паспорта незакрытым.
+   *
+   * Зеркало проверки V. Та ловит закрытие операции, которой НЕТ в
+   * маршруте; эта — операцию, которая в маршруте ЕСТЬ, а закрытия по ней
+   * нет, хотя паспорт уже уехал вперёд. Маршрутный гейт такой случай
+   * пропускает по построению: `sequentialBefore` в `evaluateRouteOrder`
+   * смотрит только шаги СТРОГО МЕЖДУ текущим и целевым, а шаг, на
+   * котором паспорт стоит, не проверяет никогда; `scanOnOperation` при
+   * этом не смотрит, у кого паспорт на руках, — и следующий исполнитель
+   * (чаще всего ОТК) молча уводит его дальше.
+   *
+   * Цена находки — прямая: нет `OPERATION_FINISHED`, значит нет и
+   * `OperationEntry`. Инцидент 17-18.08.2026, заказ 02-00013: 10
+   * паспортов, 146 изделий, 3 743,44 руб. не начислено, и увидеть это
+   * было негде — ни у мастера, ни здесь.
+   *
+   * `ABANDONED` (шаг брали в работу) — CRITICAL: есть автор, есть
+   * сумма, есть кому доделать. `SKIPPED` (никто не брал) — WARNING:
+   * это вопрос к маршруту, а не к смене.
+   */
+  private async checkUnclosedWorkIssues(
+    out: DiagnosticIssueDto[],
+  ): Promise<void> {
+    const passports = await this.prisma.passport.findMany({
+      where: {
+        status: PassportStatus.IN_PROGRESS,
+        currentRouteStepIndex: { not: null },
+        order: {
+          status: { notIn: [OrderStatus.DONE, OrderStatus.CANCELLED] },
+        },
+      },
+      select: {
+        id: true,
+        number: true,
+        orderId: true,
+        qtyGood: true,
+        currentRouteStepIndex: true,
+        order: { select: { number: true } },
+      },
+    });
+    if (passports.length === 0) return;
+
+    const passportIds = passports.map((p) => p.id);
+    const orderIds = Array.from(
+      new Set(passports.flatMap((p) => (p.orderId ? [p.orderId] : []))),
+    );
+    const [steps, finished, issued, substitutions] = await Promise.all([
+      this.prisma.orderRouteStep.findMany({
+        where: { orderId: { in: orderIds } },
+        select: {
+          orderId: true,
+          index: true,
+          operationId: true,
+          parallelGroup: true,
+          operation: { select: { code: true, name: true, category: true } },
+        },
+        orderBy: { index: 'asc' },
+      }),
+      this.prisma.passportEvent.findMany({
+        where: {
+          passportId: { in: passportIds },
+          type: PassportEventType.OPERATION_FINISHED,
+          operationId: { not: null },
+        },
+        select: { passportId: true, operationId: true },
+      }),
+      this.prisma.passportEvent.findMany({
+        where: {
+          passportId: { in: passportIds },
+          type: PassportEventType.ISSUED_TO_EMPLOYEE,
+          operationId: { not: null },
+        },
+        select: {
+          passportId: true,
+          operationId: true,
+          createdAt: true,
+          employee: { select: { fullName: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.operationSubstitution.findMany({
+        select: { satisfiesOpId: true, substituteOpId: true },
+      }),
+    ]);
+
+    const stepsByOrder = new Map<
+      string,
+      {
+        index: number;
+        operationId: string;
+        operationCode: string;
+        operationName: string;
+        parallelGroup: number | null;
+        isSewing: boolean;
+      }[]
+    >();
+    for (const s of steps) {
+      const arr = stepsByOrder.get(s.orderId) ?? [];
+      arr.push({
+        index: s.index,
+        operationId: s.operationId,
+        operationCode: s.operation.code,
+        operationName: s.operation.name,
+        parallelGroup: s.parallelGroup,
+        isSewing: s.operation.category === OperationCategory.SEWING,
+      });
+      stepsByOrder.set(s.orderId, arr);
+    }
+    const finishedByPassport = new Map<string, string[]>();
+    for (const e of finished) {
+      if (!e.operationId) continue;
+      const arr = finishedByPassport.get(e.passportId) ?? [];
+      arr.push(e.operationId);
+      finishedByPassport.set(e.passportId, arr);
+    }
+    const issuedByPassport = new Map<
+      string,
+      Map<string, { employeeName: string | null; at: Date }>
+    >();
+    for (const e of issued) {
+      if (!e.operationId) continue;
+      const map =
+        issuedByPassport.get(e.passportId) ??
+        new Map<string, { employeeName: string | null; at: Date }>();
+      map.set(e.operationId, {
+        employeeName: e.employee?.fullName ?? null,
+        at: e.createdAt,
+      });
+      issuedByPassport.set(e.passportId, map);
+    }
+
+    // Правила «что считать долгом» живут в ОДНОМ месте —
+    // `production-board/route-debt.ts`, — потому что тот же расчёт
+    // питает секцию «Незакрытая работа» в кабинете мастера.
+    const groups = computeRouteDebts(
+      passports.flatMap((p) =>
+        p.orderId
+          ? [
+              {
+                passportId: p.id,
+                passportNumber: p.number,
+                orderId: p.orderId,
+                orderNumber: p.order?.number ?? p.orderId,
+                currentRouteStepIndex: p.currentRouteStepIndex,
+                qty: p.qtyGood,
+                finishedOperationIds: finishedByPassport.get(p.id) ?? [],
+                issuedByOperation:
+                  issuedByPassport.get(p.id) ??
+                  new Map<string, { employeeName: string | null; at: Date }>(),
+              },
+            ]
+          : [],
+      ),
+      stepsByOrder,
+      substitutions,
+    );
+
+    for (const g of groups.slice(0, LIMIT_PER_CHECK)) {
+      const label = `${g.operationCode} ${g.operationName}`.trim();
+      const who = g.employees.length > 0 ? g.employees.join(', ') : null;
+      out.push({
+        code: 'ORDER_WORK_LEFT_UNCLOSED',
+        severity: g.reason === 'ABANDONED' ? 'CRITICAL' : 'WARNING',
+        entityType: 'ORDER',
+        entityId: g.orderId,
+        message:
+          g.reason === 'ABANDONED'
+            ? `По заказу ${g.orderNumber} операцию «${label}» взяли в работу и не закрыли: паспортов — ${g.passportCount}, изделий — ${g.qty}${who ? `, ${who}` : ''}${g.firstAt ? `, с ${formatDay(g.firstAt)}` : ''}. Сделка за эту работу не начислена.`
+            : `По заказу ${g.orderNumber} шаг маршрута «${label}» остался позади незакрытым: паспортов — ${g.passportCount}, изделий — ${g.qty}. Никто не брал его в работу.`,
+        context: {
+          orderNumber: g.orderNumber,
+          operationId: g.operationId,
+          operation: label,
+          reason: g.reason,
+          passportCount: g.passportCount,
+          qty: g.qty,
+          employees: g.employees,
+          firstAt: g.firstAt?.toISOString() ?? null,
+          lastAt: g.lastAt?.toISOString() ?? null,
         },
       });
     }

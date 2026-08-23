@@ -21847,6 +21847,26 @@ select.permit-form__control {
 }
 .permit-row__until { font-size: 0.85rem; font-weight: 600; color: #2f5d33; white-space: nowrap; }
 
+/* Секция «Незакрытая работа». Цвет — янтарный, третий в ряду:
+   красный = работа идёт мимо маршрута, зелёный = разрешено допуском,
+   янтарный = работа сделана, но не закрыта и не оплачена. Мастер
+   различает три состояния по левому канту, не читая текст. */
+.divergences__debts { margin-top: 1rem; }
+.divergences__debts-title { margin: 0 0 0.25rem; font-size: var(--title-5); }
+.divergences__debts-lead { margin: 0 0 0.5rem; }
+.debt-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid #c98a12;
+  border-radius: 8px;
+  background: var(--surface);
+}
+.debt-row__age { font-size: 0.85rem; font-weight: 600; color: #8a5c05; white-space: nowrap; }
+.debt-row__reason { font-weight: 600; }
+
 .divergences__toast {
   margin: 0;
   padding: 0.5rem 0.6rem;

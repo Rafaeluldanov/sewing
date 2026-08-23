@@ -312,3 +312,51 @@ export interface RouteDivergencesDto {
   windowDays: number;
   items: RouteDivergenceDto[];
 }
+
+// ---------------------------------------------------------------------------
+// Секция «Незакрытая работа» вкладки «Расхождения»
+// ---------------------------------------------------------------------------
+
+/** См. `RouteDebtDto.reason`. */
+export type RouteDebtReasonValue = 'ABANDONED' | 'SKIPPED';
+
+/**
+ * Швейный шаг маршрута, оставшийся ПОЗАДИ паспорта незакрытым,
+ * свёрнутый до тройки (заказ, операция, причина).
+ *
+ * Зеркальная половина расхождений. `RouteDivergenceDto` ловит закрытие
+ * операции, которой НЕТ в маршруте; здесь наоборот — операция в
+ * маршруте есть, а закрытия по ней нет, хотя паспорт уже уехал вперёд.
+ * Маршрутный гейт этот случай пропускает по построению: он проверяет
+ * только шаги СТРОГО МЕЖДУ текущим и целевым, а шаг, на котором
+ * паспорт стоит, не проверяет никогда. Нет `OPERATION_FINISHED` — нет
+ * и `OperationEntry`: работа сделана, сделка не начислена никому.
+ *
+ * Расчёт — `computeRouteDebts` (тот же код, что у проверки
+ * `ORDER_WORK_LEFT_UNCLOSED` в отчёте диагностики).
+ */
+export interface RouteDebtDto {
+  orderId: string;
+  orderNumber: string;
+  operationId: string;
+  operationCode: string;
+  operationName: string;
+  /**
+   * `ABANDONED` — шаг брали в работу и не закрыли (есть автор и сумма);
+   * `SKIPPED` — шаг никто не брал, паспорт проехал мимо.
+   */
+  reason: RouteDebtReasonValue;
+  passportCount: number;
+  /** Сумма `qtyGood` — масштаб неначисленной сделки. */
+  qty: number;
+  /** Кто брал; у `SKIPPED` пусто — брать было некому. */
+  employees: string[];
+  /** ISO или `null` у `SKIPPED`: когда шаг взяли в работу. */
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
+export interface RouteDebtsDto {
+  generatedAt: string;
+  items: RouteDebtDto[];
+}

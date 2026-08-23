@@ -9,6 +9,7 @@ import type {
   ProductionBoardDrillDto,
   ProductionBoardDrillQuery,
   ProductionBoardDto,
+  RouteDebtsDto,
   RouteDivergencesDto,
 } from '@sewing/shared';
 import { apiFetch } from './api';
@@ -41,6 +42,18 @@ export function getProductionBoardDrill(
 export function getRouteDivergences(): Promise<RouteDivergencesDto> {
   return apiFetch<RouteDivergencesDto>(
     '/master/production-board/divergences',
+    { cache: 'no-store' },
+  );
+}
+
+/**
+ * Секция «Незакрытая работа»: швейные шаги маршрута, оставшиеся позади
+ * паспорта без закрытия. Отдельный запрос от `divergences` — расчёты
+ * независимы, и падение одного не должно прятать второй.
+ */
+export function getRouteDebts(): Promise<RouteDebtsDto> {
+  return apiFetch<RouteDebtsDto>(
+    '/master/production-board/unclosed-work',
     { cache: 'no-store' },
   );
 }

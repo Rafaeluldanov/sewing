@@ -14,12 +14,14 @@ import type {
   ProductionBoardDrillDto,
   ProductionBoardDrillQuery,
   ProductionBoardDto,
+  RouteDebtsDto,
   RouteDivergencesDto,
 } from '@sewing/shared';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getProductionBoard,
   getProductionBoardDrill,
+  getRouteDebts,
   getRouteDivergences,
 } from '@/lib/production-board-api';
 import {
@@ -75,6 +77,23 @@ export type LoadDivergencesResult =
 export async function loadRouteDivergencesAction(): Promise<LoadDivergencesResult> {
   try {
     return { ok: true, data: await getRouteDivergences() };
+  } catch (e) {
+    return { ok: false, error: explain(e) };
+  }
+}
+
+export type LoadDebtsResult =
+  | { ok: true; data: RouteDebtsDto }
+  | { ok: false; error: string };
+
+/**
+ * Секция «Незакрытая работа» вкладки «Расхождения»: шаги маршрута,
+ * которые паспорт проехал, не закрыв. Грузится параллельно с
+ * расхождениями и независимо от них.
+ */
+export async function loadRouteDebtsAction(): Promise<LoadDebtsResult> {
+  try {
+    return { ok: true, data: await getRouteDebts() };
   } catch (e) {
     return { ok: false, error: explain(e) };
   }

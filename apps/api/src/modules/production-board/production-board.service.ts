@@ -15,11 +15,14 @@ import {
   type ProductionBoardPassportRowDto,
   type ProductionBoardQuery,
   type ProductionBoardStageBucketDto,
+  type RouteDebtDto,
+  type RouteDebtsDto,
   type RouteDivergenceDto,
   type RouteDivergencesDto,
 } from '@sewing/shared';
 import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { computeRouteDebts } from './route-debt.js';
 import { computeRouteDivergences } from './route-divergence.js';
 import { loadActivePermitSubstitutions } from '../routes/route-work-permits.js';
 
@@ -30,6 +33,14 @@ import { loadActivePermitSubstitutions } from '../routes/route-work-permits.js';
  * одно и то же, иначе мастер и администратор увидят разные картины.
  */
 const DIVERGENCE_WINDOW_DAYS = 30;
+
+/**
+ * Потолок паспортов, разбираемых секцией «Незакрытая работа» за один
+ * запрос. Окна по времени у неё нет сознательно: долг не протухает — он
+ * висит, пока его не закроют, и выпадение из окна означало бы «работа
+ * потерялась, забудьте». Ограничиваем не временем, а объёмом.
+ */
+const DEBT_PASSPORT_LIMIT = 2000;
 
 /**
  * «Доска движения тиража» для кабинета мастера.
@@ -1271,5 +1282,206 @@ export class ProductionBoardService {
       windowDays: DIVERGENCE_WINDOW_DAYS,
       items,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // НЕЗАКРЫТАЯ РАБОТА (долг позади паспорта)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Швейные шаги маршрута, оставшиеся ПОЗАДИ паспорта незакрытыми.
+   *
+   * Зеркальная половина расхождений, и слепое пятно всех остальных
+   * экранов. Паспорт уезжает вперёд сканом следующего исполнителя, а
+   * закрытие предыдущей операции — отдельное действие швеи, которого
+   * может и не быть. Маршрутный гейт этот случай пропускает по
+   * построению: `sequentialBefore` смотрит только шаги СТРОГО МЕЖДУ
+   * текущим и целевым, а шаг, на котором паспорт стоит прямо сейчас,
+   * не проверяется никогда. Нет `OPERATION_FINISHED` — нет и
+   * `OperationEntry`: работа сделана, сделка не начислена никому.
+   *
+   * Инцидент 17-18.08.2026, заказ 02-00013: 10 паспортов взяты на
+   * «Ф РАСПОШИВ» 14-17.08 и не закрыты, 18.08 ОТК увела их вперёд
+   * сканом; 146 изделий, 3 743,44 руб. не начислено. Ни вкладка
+   * «Расхождения», ни диагностика этого не показывали.
+   *
+   * Только живые паспорта (`IN_PROGRESS` по незакрытым заказам).
+   * Упакованные сознательно НЕ берём: доделать их уже нельзя, а
+   * правила замены у нас односторонние (закрытие полного распошива
+   * засчитывает сплит, но не наоборот), из-за чего упакованный хвост
+   * дал бы 19 строк шума на 2 настоящие находки. Деньги по упакованным
+   * разбираются точечно, SQL-журналом.
+   *
+   * Правила — в `computeRouteDebts` (общие с проверкой
+   * `ORDER_WORK_LEFT_UNCLOSED` отчёта диагностики), чтобы два экрана не
+   * могли начать противоречить друг другу.
+   */
+  async getRouteDebts(): Promise<RouteDebtsDto> {
+    const passports = await this.prisma.passport.findMany({
+      where: {
+        status: PassportStatus.IN_PROGRESS,
+        currentRouteStepIndex: { not: null },
+        order: {
+          status: { notIn: [OrderStatus.DONE, OrderStatus.CANCELLED] },
+        },
+      },
+      select: {
+        id: true,
+        number: true,
+        orderId: true,
+        qtyGood: true,
+        currentRouteStepIndex: true,
+        order: { select: { number: true } },
+      },
+      take: DEBT_PASSPORT_LIMIT,
+    });
+    if (passports.length === 0) {
+      return { generatedAt: new Date().toISOString(), items: [] };
+    }
+
+    const passportIds = passports.map((p) => p.id);
+    const orderIds = Array.from(
+      new Set(passports.flatMap((p) => (p.orderId ? [p.orderId] : []))),
+    );
+
+    const [steps, finished, issued, substitutions] = await Promise.all([
+      this.prisma.orderRouteStep.findMany({
+        where: { orderId: { in: orderIds } },
+        select: {
+          orderId: true,
+          index: true,
+          operationId: true,
+          parallelGroup: true,
+          operation: { select: { code: true, name: true, category: true } },
+        },
+        orderBy: { index: 'asc' },
+      }),
+      this.prisma.passportEvent.findMany({
+        where: {
+          passportId: { in: passportIds },
+          type: PassportEventType.OPERATION_FINISHED,
+          operationId: { not: null },
+        },
+        select: { passportId: true, operationId: true },
+      }),
+      // Взятия — чтобы отличить «взяли и бросили» (есть автор и сумма)
+      // от «проехали мимо» (вопрос к технологии). Порядок по возрастанию:
+      // последующая запись перетирает предыдущую, остаётся ПОСЛЕДНЕЕ
+      // взятие шага — то, после которого закрытия так и не случилось.
+      this.prisma.passportEvent.findMany({
+        where: {
+          passportId: { in: passportIds },
+          type: PassportEventType.ISSUED_TO_EMPLOYEE,
+          operationId: { not: null },
+        },
+        select: {
+          passportId: true,
+          operationId: true,
+          createdAt: true,
+          employee: { select: { fullName: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.operationSubstitution.findMany({
+        select: { satisfiesOpId: true, substituteOpId: true },
+      }),
+    ]);
+
+    // Наряд-допуск мастера — такое же правило замены, ограниченное
+    // заказом и сроком: работа, разрешённая допуском, закрывает
+    // замещаемый шаг, и долгом он быть перестаёт (см.
+    // `routes/route-work-permits.ts`).
+    const permitSubs = (
+      await Promise.all(
+        orderIds.map((id) => loadActivePermitSubstitutions(this.prisma, id)),
+      )
+    ).flat();
+
+    const stepsByOrder = new Map<
+      string,
+      {
+        index: number;
+        operationId: string;
+        operationCode: string;
+        operationName: string;
+        parallelGroup: number | null;
+        isSewing: boolean;
+      }[]
+    >();
+    for (const s of steps) {
+      const arr = stepsByOrder.get(s.orderId) ?? [];
+      arr.push({
+        index: s.index,
+        operationId: s.operationId,
+        operationCode: s.operation.code,
+        operationName: s.operation.name,
+        parallelGroup: s.parallelGroup,
+        isSewing: s.operation.category === OperationCategory.SEWING,
+      });
+      stepsByOrder.set(s.orderId, arr);
+    }
+
+    const finishedByPassport = new Map<string, string[]>();
+    for (const e of finished) {
+      if (!e.operationId) continue;
+      const arr = finishedByPassport.get(e.passportId) ?? [];
+      arr.push(e.operationId);
+      finishedByPassport.set(e.passportId, arr);
+    }
+
+    const issuedByPassport = new Map<
+      string,
+      Map<string, { employeeName: string | null; at: Date }>
+    >();
+    for (const e of issued) {
+      if (!e.operationId) continue;
+      const map =
+        issuedByPassport.get(e.passportId) ??
+        new Map<string, { employeeName: string | null; at: Date }>();
+      map.set(e.operationId, {
+        employeeName: e.employee?.fullName ?? null,
+        at: e.createdAt,
+      });
+      issuedByPassport.set(e.passportId, map);
+    }
+
+    const groups = computeRouteDebts(
+      passports.flatMap((p) =>
+        p.orderId
+          ? [
+              {
+                passportId: p.id,
+                passportNumber: p.number,
+                orderId: p.orderId,
+                orderNumber: p.order?.number ?? p.orderId,
+                currentRouteStepIndex: p.currentRouteStepIndex,
+                qty: p.qtyGood,
+                finishedOperationIds: finishedByPassport.get(p.id) ?? [],
+                issuedByOperation:
+                  issuedByPassport.get(p.id) ??
+                  new Map<string, { employeeName: string | null; at: Date }>(),
+              },
+            ]
+          : [],
+      ),
+      stepsByOrder,
+      [...substitutions, ...permitSubs],
+    );
+
+    const items: RouteDebtDto[] = groups.map((g) => ({
+      orderId: g.orderId,
+      orderNumber: g.orderNumber,
+      operationId: g.operationId,
+      operationCode: g.operationCode,
+      operationName: g.operationName,
+      reason: g.reason,
+      passportCount: g.passportCount,
+      qty: g.qty,
+      employees: g.employees,
+      firstAt: g.firstAt?.toISOString() ?? null,
+      lastAt: g.lastAt?.toISOString() ?? null,
+    }));
+
+    return { generatedAt: new Date().toISOString(), items };
   }
 }

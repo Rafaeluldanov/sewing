@@ -31,11 +31,14 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type {
+  RouteDebtDto,
+  RouteDebtsDto,
   RouteDivergenceDto,
   RouteDivergencesDto,
   RouteWorkPermitDto,
 } from '@sewing/shared';
 import {
+  loadRouteDebtsAction,
   loadRouteDivergencesAction,
   loadRouteWorkPermitsAction,
   revokeRouteWorkPermitAction,
@@ -147,6 +150,80 @@ function DivergenceRow({
   );
 }
 
+/**
+ * Секция «Незакрытая работа» — зеркальная половина расхождений.
+ *
+ * Расхождение = закрыли операцию, которой нет в маршруте. Долг =
+ * операция в маршруте есть, а закрытия по ней нет, хотя паспорт уже
+ * уехал вперёд. Второе тише и дороже: гейт такой случай пропускает по
+ * построению (проверяются только шаги МЕЖДУ текущим и целевым), экранов
+ * не было вообще, а без `OPERATION_FINISHED` не создаётся и начисление
+ * — работа сделана и не оплачена никому.
+ *
+ * Кнопок здесь нет сознательно, как и в строке расхождения: долг
+ * закрывается у станка, а не в интерфейсе. Любой сотрудник на этой
+ * операции может отсканировать паспорт и завершить его сам —
+ * маршрутный гейт доделку разрешает (`allowCatchUp`).
+ */
+function DebtsSection({ data }: { data: RouteDebtsDto | null }) {
+  const items = data?.items ?? [];
+  if (items.length === 0) return null;
+  return (
+    <div className="divergences__debts">
+      <h3 className="divergences__debts-title">Незакрытая работа</h3>
+      <p className="muted divergences__debts-lead">
+        Паспорт уехал вперёд, а шаг маршрута позади остался без закрытия.
+        Сделка за эту работу не начислена никому: начисление создаётся
+        только при завершении операции.
+      </p>
+      <ul className="divergences__list">
+        {items.map((it) => (
+          <DebtRow key={`${it.orderId}:${it.operationId}:${it.reason}`} item={it} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function DebtRow({ item }: { item: RouteDebtDto }) {
+  const abandoned = item.reason === 'ABANDONED';
+  const age = item.firstAt ? daysSince(item.firstAt) : null;
+  return (
+    <li className="debt-row">
+      <div className="divergence-row__head">
+        <span className="divergence-row__order">{item.orderNumber}</span>
+        {age !== null && (
+          <span className="debt-row__age" title="Сколько дней висит">
+            {age === 0 ? 'сегодня' : `${age} дн.`}
+          </span>
+        )}
+      </div>
+      <div className="divergence-row__op">
+        <span className="debt-row__reason">
+          {abandoned ? 'Взяли и не закрыли' : 'Проехали мимо'}
+        </span>
+        {' — '}
+        <strong>{item.operationCode}</strong> {item.operationName}
+      </div>
+      <div className="divergence-row__meta">
+        <span>
+          Паспортов: <strong>{item.passportCount}</strong>
+        </span>
+        <span>изделий: {item.qty}</span>
+        {item.firstAt && <span>с {formatDay(item.firstAt)}</span>}
+        {item.employees.length > 0 && <span>{item.employees.join(', ')}</span>}
+      </div>
+      <div className="divergence-row__meta">
+        <span>
+          {abandoned
+            ? 'Доделать может любой сотрудник на этой операции: отсканировать паспорт и завершить.'
+            : 'Шаг никто не брал в работу — вопрос к маршруту заказа.'}
+        </span>
+      </div>
+    </li>
+  );
+}
+
 /** Действующие допуски: мастер должен видеть, что сам разрешил. */
 function PermitsSection({
   permits,
@@ -224,15 +301,17 @@ export function DivergencesView({
 } = {}) {
   const [data, setData] = useState<RouteDivergencesDto | null>(null);
   const [permits, setPermits] = useState<RouteWorkPermitDto[]>([]);
+  const [debts, setDebts] = useState<RouteDebtsDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [res, permitsRes] = await Promise.all([
+    const [res, permitsRes, debtsRes] = await Promise.all([
       loadRouteDivergencesAction(),
       loadRouteWorkPermitsAction(),
+      loadRouteDebtsAction(),
     ]);
     if (res.ok) {
       setData(res.data);
@@ -243,6 +322,9 @@ export function DivergencesView({
     // Допуски — вспомогательный блок: их недоступность не должна
     // прятать главное, ради чего мастер открыл вкладку.
     if (permitsRes.ok) setPermits(permitsRes.items);
+    // Долги — независимый расчёт: их недоступность не должна прятать
+    // расхождения, и наоборот.
+    if (debtsRes.ok) setDebts(debtsRes.data);
     setLoading(false);
   }, []);
 
@@ -319,6 +401,8 @@ export function DivergencesView({
           </ul>
         </>
       )}
+
+      <DebtsSection data={debts} />
 
       <PermitsSection permits={permits} onChanged={afterChange} />
     </div>

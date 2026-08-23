@@ -2841,6 +2841,33 @@ export class PassportsService {
         )
       : false;
 
+    // ПЕРЕХВАТ ПАСПОРТА ИЗ ЧУЖИХ РУК.
+    //
+    // `issueToEmployee` на этом месте отказывает — 409
+    // `PASSPORT_ALREADY_ISSUED` (см. ветку route-WIP там же). Скан не
+    // проверяет владельца вообще: «любое сканирование = переход»
+    // (ADR-0003 §6), и это осознанно — иначе паспорт, брошенный швеёй
+    // в конце смены, залипал бы до мастера, а ОТК/ВТО не могли бы его
+    // принять. Но у перехвата есть цена: если прежний владелец не
+    // закрыл свою операцию, она остаётся долгом навсегда — без
+    // `OPERATION_FINISHED`, а значит и без `OperationEntry`. Работа
+    // сделана и не оплачена никому, и до 23.08.2026 этого не было
+    // видно ни на одном экране (инцидент 17-18.08.2026, заказ
+    // 02-00013: ОТК увела 10 паспортов, 146 изделий, 3 743,44 руб.).
+    //
+    // Поэтому: не блокируем, но фиксируем — иначе потерянную работу
+    // невозможно даже посчитать постфактум. Что с долгом делать,
+    // показывают секция «Незакрытая работа» в кабинете мастера и
+    // проверка `ORDER_WORK_LEFT_UNCLOSED` диагностики (правила — в
+    // `production-board/route-debt.ts`).
+    const takenFromEmployeeId =
+      previousEmployeeId && previousEmployeeId !== employeeId
+        ? previousEmployeeId
+        : null;
+    const abandonedOperationId = takenFromEmployeeId
+      ? await this.findOpenAssignmentOperation(passport.id, takenFromEmployeeId)
+      : null;
+
     // Порядок маршрута с учётом параллельных групп (см.
     // `evaluateRouteOrder`). Запрещаем «брать» операцию раньше текущего
     // ранга (внутри одной параллельной группы — можно, это не «назад»);
@@ -2915,6 +2942,30 @@ export class PassportsService {
         },
         tx,
       );
+      // Перехват из чужих рук — отдельным событием, а не полем в
+      // `PASSPORT_SCANNED`: по нему считают потерянную работу, и
+      // фильтровать простыню сканов по «а был ли прежний владелец»
+      // означало бы, что этой статистики нет.
+      if (takenFromEmployeeId) {
+        await this.audit.log(
+          {
+            event: 'PASSPORT_TAKEN_FROM_EMPLOYEE',
+            entityType: 'PASSPORT',
+            entityId: passport.id,
+            employeeId,
+            payload: {
+              previousEmployeeId: takenFromEmployeeId,
+              previousOperationId: previousOperationId,
+              operationId: session.operationId,
+              // Незакрытая операция прежнего владельца — то, за что
+              // никто не получит сделку. `null` = он всё закрыл.
+              abandonedOperationId,
+              qty: passport.qtyGood,
+            },
+          },
+          tx,
+        );
+      }
       // Выпуск готовой продукции при прохождении операции с
       // `producesFinishedGoods = true` (см. ТЗ «выпуск управляется
       // признаком на операции», `prisma/schema.prisma::Operation`,
@@ -2937,6 +2988,12 @@ export class PassportsService {
     this.logger.log(
       `event=passport.scan passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId} fromOperationId=${previousOperationId ?? '-'}`,
     );
+    if (abandonedOperationId) {
+      this.logger.warn(
+        `event=passport.scan.taken_unclosed passportId=${passportId} fromEmployeeId=${takenFromEmployeeId ?? '-'} abandonedOperationId=${abandonedOperationId} toEmployeeId=${employeeId}`,
+      );
+    }
+
     return this.getOne(passportId);
   }
 
