@@ -2199,6 +2199,46 @@ DTO: `packages/shared/src/salary.ts`. ADR: 0021.
 DTO: `packages/shared/src/payroll-calendar.ts`. Домен:
 `docs/domain.md §10.3a–10.3b`.
 
+## 31b. Payroll schedule (расписание начисления)
+
+Источник: `payroll-schedule/payroll-schedule.controller.ts` +
+`payroll-schedule.service.ts`. DTO/zod и чистый календарь —
+`packages/shared/src/payroll-schedule.ts`. Модель —
+`prisma/schema.prisma::PayrollAccrualSchedule` (singleton `id = 'default'`).
+Класс-уровень `@Roles('SHOP_MANAGER', 'ADMIN')`: настройка решает, попадут
+ли деньги человека в ближайшую выплату.
+
+| Метод | Путь                              | RBAC                | Описание |
+| ----- | --------------------------------- | ------------------- | -------- |
+| GET   | `/api/payroll/schedule`           | SHOP_MANAGER, ADMIN | Настройка + `upcoming[]` — три ближайшие даты начисления с периодами и «через N дней». |
+| PUT   | `/api/payroll/schedule`           | SHOP_MANAGER, ADMIN | Body `UpdatePayrollAccrualScheduleDto` (`daysOfMonth[]` 1..31, `cutoffBasis`, `appliesToSewing`, `appliesToCutting`, `autoCreateDraft`, `runAtLocalTime` `ЧЧ:ММ`). Дни нормализуются (дубли убираются, сортировка). Пишет `PAYROLL_SCHEDULE_UPDATED` в `AuditLog`. |
+| GET   | `/api/payroll/schedule/preview`   | SHOP_MANAGER, ADMIN | Query `{ accrualDate? }` (по умолчанию — ближайшая дата начисления). Что войдёт в документ (сдельно / раскрой / оклад / подкрой) и что отложено, с разрезом по заказам и по сотрудникам. |
+| POST  | `/api/payroll/schedule/run-due`   | SHOP_MANAGER, ADMIN | Ленивый триггер автосоздания черновика: `{ documentId }` либо `{ documentId: null }`, если не пора / документ уже есть. Идемпотентен (`lastRunOn`). |
+
+**Правило отсечки** (`cutoffBasis`) действует на сдельные `OperationEntry`:
+
+- `ORDER_COMPLETED` (по умолчанию) — `Order.completedAt ≤ дата начисления`,
+  то есть заказ закрыт. Отменённый заказ считается закрытым по дате
+  отмены: работа по нему сделана и начислена, а `DONE` уже не наступит;
+- `PASSPORT_PACKED` — `OperationEntry.approvedAt ≤ дата` (подтверждение
+  сдельщины = закрытие коробки);
+- `WORK_DATE` — поведение до появления расписания: `createdAt ≤ дата`.
+
+Охват регулируют `appliesToSewing` / `appliesToCutting`. Раскрой по
+умолчанию ВНЕ правила: раскройщик получает деньги при выпуске паспорта,
+задолго до закрытия заказа. Окладные `SalaryEntry` (часы смены, месячный
+оклад, подкрой) к заказу не привязаны и всегда идут по своей дате.
+
+Отбор строк документа (`§30c`) использует тот же helper
+`payroll-schedule/accrual-cutoff.ts`, что и предпросмотр — правило живёт
+в одном месте.
+
+Планировщика (`@nestjs/schedule`) в проекте нет сознательно: черновик
+создаётся при первом заходе в `/admin/payroll` после `runAtLocalTime` в
+день начисления. Домен: `docs/domain.md §10.3c`.
+
+---
+
 ---
 
 <a id="32-shopfloor"></a>

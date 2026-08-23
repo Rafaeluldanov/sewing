@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Building2,
+  CalendarClock,
   CalendarDays,
   Scissors,
   Settings as SettingsIcon,
@@ -41,7 +42,7 @@ export default function AdminPayrollSettingsPage() {
     <AdminPageShell
       icon={<SettingsIcon size={22} strokeWidth={1.6} aria-hidden />}
       title="Настройки зарплаты"
-      subtitle="Ставки и тарифы — в профильных разделах, календарь — здесь"
+      subtitle="Ставки и тарифы — в профильных разделах, календарь и расписание — здесь"
       actions={
         <Link href="/admin/payroll" className="admin-btn admin-btn--ghost">
           <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
@@ -57,6 +58,14 @@ export default function AdminPayrollSettingsPage() {
           ссылки ведут в разделы, где эти значения ведутся.
         </p>
         <ul className="admin-deflist">
+          <li>
+            <SettingsLink
+              icon={<CalendarClock size={18} strokeWidth={1.6} aria-hidden />}
+              href="/admin/payroll/settings/schedule"
+              title="Правила начисления"
+              hint="Дни начисления зарплаты и что попадает в расчёт — отсечка по закрытым заказам"
+            />
+          </li>
           <li>
             <SettingsLink
               icon={<Scissors size={18} strokeWidth={1.6} aria-hidden />}

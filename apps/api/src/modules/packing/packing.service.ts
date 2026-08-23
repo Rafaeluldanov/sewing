@@ -639,7 +639,14 @@ export class PackingService {
 
     await tx.order.update({
       where: { id: orderId },
-      data: { status: OrderStatus.DONE },
+      data: {
+        status: OrderStatus.DONE,
+        // Дата закрытия заказа — та же транзакция, что и статус.
+        // Полная упаковка и есть физическое завершение, и именно от
+        // этой даты зависит, попадёт ли сдельщина по заказу в
+        // ближайшее начисление (`PayrollAccrualSchedule`).
+        completedAt: new Date(),
+      },
     });
     // Аудит: автоматический перевод статуса — из тех, что менеджер
     // потом захочет объяснить («почему заказ стал Готов сам»).

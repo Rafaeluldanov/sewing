@@ -29,6 +29,7 @@
     "./operations": "./src/operations.ts",
     "./salary": "./src/salary.ts",
     "./payroll-calendar": "./src/payroll-calendar.ts",
+    "./payroll-schedule": "./src/payroll-schedule.ts",
     "./employees": "./src/employees.ts",
     "./clients": "./src/clients.ts",
     "./company-settings": "./src/company-settings.ts",

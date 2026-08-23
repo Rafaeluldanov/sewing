@@ -3602,7 +3602,14 @@ export class OrdersService {
     }
     await this.prisma.order.update({
       where: { id },
-      data: { status: OrderStatus.DONE },
+      data: {
+        status: OrderStatus.DONE,
+        // Момент закрытия — вместе со сменой статуса, как
+        // `inProductionAt` у запуска. От него зависит зарплата: правило
+        // отсечки «в расчёт идут заказы, закрытые до дня начисления»
+        // читает именно эту дату (`PayrollAccrualSchedule`).
+        completedAt: new Date(),
+      },
     });
     return this.getOne(id);
   }
@@ -3624,7 +3631,13 @@ export class OrdersService {
     // был отменён». Это согласуется с правилом «не теряем историю».
     await this.prisma.order.update({
       where: { id },
-      data: { status: OrderStatus.CANCELLED },
+      data: {
+        status: OrderStatus.CANCELLED,
+        // Отменённый заказ для зарплаты тоже ЗАКРЫТ: работа по нему
+        // сделана и начислена, и если ждать `DONE`, который уже никогда
+        // не наступит, сдельщина зависла бы отложенной навсегда.
+        completedAt: new Date(),
+      },
     });
     return this.getOne(id);
   }

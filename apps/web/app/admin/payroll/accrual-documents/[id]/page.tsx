@@ -4,6 +4,7 @@ import { ArrowLeft, BadgeRussianRuble } from 'lucide-react';
 import type { PayrollAccrualDocumentLineDto } from '@sewing/shared/payroll-accrual-documents';
 import { ApiRequestError } from '@/lib/api';
 import { getPayrollAccrualDocument } from '@/lib/payroll-accrual-documents-api';
+import { getPayrollAccrualPreviewSafe } from '@/lib/payroll-schedule-api';
 import {
   AdminCard,
   AdminEmptyState,
@@ -56,6 +57,18 @@ export default async function AdminAccrualDocumentDetailPage({
   }
 
   const isDraft = doc.status === 'DRAFT';
+
+  // «Отложено» — сколько сдельщины НЕ прошло отсечку на дату документа
+  // и по каким заказам. Считается тем же helper-ом, что и сам отбор
+  // строк, поэтому колонка не может разойтись с суммами документа.
+  // Только для черновика: в проведённом документе суммы уже
+  // зафиксированы, и справка «что ещё не вошло» сбивала бы с толку.
+  const preview = isDraft
+    ? await getPayrollAccrualPreviewSafe(doc.accrualDate.slice(0, 10))
+    : null;
+  const deferredByEmployee = new Map(
+    (preview?.deferredEmployees ?? []).map((d) => [d.employeeId, d]),
+  );
 
   const boundRecompute = recomputePayrollAccrualDocumentAction.bind(
     null,
@@ -125,6 +138,29 @@ export default async function AdminAccrualDocumentDetailPage({
       header: 'Итого к выплате',
       align: 'right',
       render: (line) => <strong>{formatRub(line.amountToPayRub)}</strong>,
+    },
+    {
+      key: 'deferred',
+      header: 'Отложено',
+      align: 'right',
+      render: (line) => {
+        const d = deferredByEmployee.get(line.employee.id);
+        if (!d || d.amount <= 0) return '—';
+        return (
+          <span
+            title={d.orders
+              .map(
+                (o) =>
+                  `${o.orderNumber} — ${o.orderStatusLabel}, упаковано ${o.packedQty} из ${o.totalQty}: ${formatRub(o.amount)}`,
+              )
+              .join('\n')}
+          >
+            <AdminStatusBadge tone="warning">
+              {formatRub(d.amount)}
+            </AdminStatusBadge>
+          </span>
+        );
+      },
     },
     {
       key: 'payout',

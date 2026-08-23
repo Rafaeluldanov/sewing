@@ -24,6 +24,10 @@ import {
   PayrollAccrualLineAlreadyPaidException,
 } from '../../common/errors.js';
 import { lockEmployeePayrollTx } from '../../common/payroll-lock.js';
+import {
+  pieceworkAccrualWhere,
+  type AccrualCutoffRules,
+} from '../payroll-schedule/accrual-cutoff.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { AuditService } from '../audit/audit.service.js';
 import { TreasuryService } from '../treasury/treasury.service.js';
@@ -716,6 +720,36 @@ export class PayrollAccrualDocumentsService {
    *   - Строка создаётся только если amountPieceworkRub + amountSalaryRub > 0
    *     OR manualAdjustRub != 0 (из manualMap).
    */
+  /**
+   * Правила отсечки из настройки расписания. Строки может не быть
+   * (база, накатанная в обход миграции) — тогда падаем на историческое
+   * поведение `WORK_DATE`, чтобы формирование документа не ломалось.
+   */
+  private async loadCutoffRules(
+    tx: Prisma.TransactionClient,
+  ): Promise<AccrualCutoffRules> {
+    const row = await tx.payrollAccrualSchedule.findUnique({
+      where: { id: 'default' },
+      select: {
+        cutoffBasis: true,
+        appliesToSewing: true,
+        appliesToCutting: true,
+      },
+    });
+    if (!row) {
+      return {
+        cutoffBasis: 'WORK_DATE',
+        appliesToSewing: false,
+        appliesToCutting: false,
+      };
+    }
+    return {
+      cutoffBasis: row.cutoffBasis,
+      appliesToSewing: row.appliesToSewing,
+      appliesToCutting: row.appliesToCutting,
+    };
+  }
+
   private async computeLines(
     tx: Prisma.TransactionClient,
     documentId: string,
@@ -752,10 +786,17 @@ export class PayrollAccrualDocumentsService {
     }
 
     // --- Загрузить OperationEntry ≤ cutoff (APPROVED, не занятые) ---
+    //
+    // Отсечка по расписанию (`PayrollAccrualSchedule`): по умолчанию в
+    // документ идёт только сдельщина по ЗАКРЫТЫМ заказам. Правило живёт
+    // в общем helper-е `accrual-cutoff.ts` — тем же пользуется
+    // предпросмотр «войдёт / отложено», иначе документ и предпросмотр
+    // разъехались бы в день выплаты. Пока настройка не тронута
+    // (`WORK_DATE`), поведение ровно прежнее: всё начисленное до даты.
+    const schedule = await this.loadCutoffRules(tx);
     const opEntries = await tx.operationEntry.findMany({
       where: {
-        status: EntryStatus.APPROVED,
-        createdAt: { lte: cutoff },
+        ...pieceworkAccrualWhere(schedule, cutoff),
         ...(employeeFilterId ? { employeeId: employeeFilterId } : {}),
         ...(usedOpIds.size > 0 ? { id: { notIn: Array.from(usedOpIds) } } : {}),
       },

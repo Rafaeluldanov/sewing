@@ -813,6 +813,19 @@ audit-событий не существует.
   порядка: через `normHours` считается производная ставка ₽/час
   месячного окладника, то есть правка нормы двигает реальные деньги в
   доплате за подкрой и в себестоимости.
+- `PayrollAccrualSchedule` (23.08.2026) — расписание начисления зарплаты
+  (`apps/api/src/modules/payroll-schedule/payroll-schedule.service.ts`,
+  `prisma/schema.prisma::PayrollAccrualSchedule`):
+  - `PAYROLL_SCHEDULE_UPDATED` — менеджер сохранил правила
+    (`PUT /api/payroll/schedule`). Payload — `{ before, after }` с
+    полным набором полей (`daysOfMonth`, `cutoffBasis`,
+    `appliesToSewing`, `appliesToCutting`, `autoCreateDraft`,
+    `runAtLocalTime`).
+
+  `entityId` — всегда `'default'` (singleton). Настройка решает, в какой
+  день человек получит деньги и попадёт ли его работа в ближайшую
+  выплату вообще, поэтому «кто и когда сдвинул правило» — первый вопрос
+  при разборе недоплаты.
 - `CUT_RELEASE_POLICY_CONSUMED` — пишется в транзакции
   `PassportsService.issueToEmployee` (через
   `consumeCutReleasePolicyInTx`, `passports.service.ts:1223`) при

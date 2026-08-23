@@ -62,6 +62,7 @@ import { OrderMaterialArrivalsModule } from './modules/order-material-arrivals/o
 import { OrderExtraCostsModule } from './modules/order-extra-costs/order-extra-costs.module.js';
 import { SizesModule } from './modules/sizes/sizes.module.js';
 import { PayrollAccrualDocumentsModule } from './modules/payroll-accrual-documents/payroll-accrual-documents.module.js';
+import { PayrollScheduleModule } from './modules/payroll-schedule/payroll-schedule.module.js';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module.js';
 import { OrderSamplesModule } from './modules/order-samples/order-samples.module.js';
 import { StockModule } from './modules/stock/stock.module.js';
@@ -142,6 +143,7 @@ import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
     OrderExtraCostsModule,
     SizesModule,
     PayrollAccrualDocumentsModule,
+    PayrollScheduleModule,
     MaterialIssuesModule,
     OrderSamplesModule,
     StockModule,

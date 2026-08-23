@@ -1210,6 +1210,7 @@ model Employee {
   passportsAsCurrent Passport[]       @relation("PassportCurrentEmployee")
   passportsAsCutter  Passport[]       @relation("PassportCutter")
   passportsAsCreator Passport[]       @relation("PassportCreator")
+  payrollSchedulesUpdated PayrollAccrualSchedule[] @relation("PayrollAccrualScheduleUpdatedBy")
   passportDefects    PassportDefect[] @relation("DefectCreator")
 
   closureRequestsCreated  CuttingClosureRequest[] @relation("ClosureRequestRequester")
@@ -1616,6 +1617,21 @@ model Order {
   /// `updatedAt` уже находящихся в IN_PRODUCTION/DONE). Управленческое
   /// поле «Ввод в производство» в карточке заказа.
   inProductionAt DateTime?
+
+  /// Момент, когда заказ ЗАКРЫТ: переход в `DONE` (в том числе
+  /// авто-«Готово» при полной упаковке) или в `CANCELLED`. До этой
+  /// колонки даты закрытия у заказа не было вовсе — был только статус
+  /// и `updatedAt`, который двигает любая правка, поэтому правило
+  /// «в зарплату идут заказы, закрытые до 15-го» посчитать было нечем
+  /// (см. `PayrollAccrualSchedule`).
+  ///
+  /// Отменённый заказ тоже считается закрытым: работа по нему сделана
+  /// и начислена, и если ждать `DONE`, деньги зависли бы навсегда.
+  ///
+  /// Nullable — для заказов, которые ещё в работе, и для исторических
+  /// (миграция бэкфиллит их по `updatedAt`). Проставляется один раз,
+  /// повторный переход статуса дату не сдвигает.
+  completedAt    DateTime?
 
   /// Подразделение заказа — FK на master-справочник `CompanyDivision`
   /// (см. `docs/domain.md §«Подразделения заказа»`,
@@ -8774,4 +8790,68 @@ model TreasurySettings {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+/// Основа отсечки: что считать «заработанным к дню начисления».
+///
+/// - `ORDER_COMPLETED` — сдельщина входит, только если ЗАКАЗ закрыт
+///   (`Order.completedAt <= дата начисления`). Заказ в производстве не
+///   оплачивается, даже если операции по нему давно закрыты.
+/// - `PASSPORT_PACKED` — платим по подтверждённой работе: начисление
+///   подтверждается закрытием коробки (`OperationEntry.approvedAt`).
+/// - `WORK_DATE` — поведение до появления расписания: всё начисленное
+///   до даты (`OperationEntry.createdAt`), независимо от упаковки.
+enum PayrollCutoffBasis {
+  ORDER_COMPLETED
+  PASSPORT_PACKED
+  WORK_DATE
+}
+
+/// Расписание начисления зарплаты — ОДНА строка на базу (singleton,
+/// `id = 'default'`), как настройки компании.
+///
+/// Отвечает на два вопроса, которых в системе не было:
+///   1. КОГДА считаем зарплату — `daysOfMonth` (например `[5, 15, 25]`);
+///   2. ЧТО попадает в расчёт — `cutoffBasis` + два флага охвата.
+///
+/// Настройка НЕ создаёт начислений и не двигает деньги сама: она
+/// определяет отбор строк для `PayrollAccrualDocument` и календарь, по
+/// которому черновик документа создаётся автоматически. Проведение
+/// (и списание из кассы) остаётся ручным действием менеджера.
+model PayrollAccrualSchedule {
+  id String @id @default("default")
+
+  /// Числа месяца, в которые формируется документ. Пустой массив =
+  /// расписание выключено (дата в форме документа не подставляется,
+  /// черновик автоматически не создаётся). Значения 1..31; если в
+  /// месяце нет такого числа (31 в феврале) — берётся последний день.
+  daysOfMonth Int[] @default([])
+
+  /// Правило отсечки для СДЕЛЬНЫХ начислений (`OperationEntry`).
+  /// Окладные `SalaryEntry` к заказу не привязаны в принципе и всегда
+  /// отбираются по своей дате.
+  cutoffBasis PayrollCutoffBasis @default(ORDER_COMPLETED)
+
+  /// Распространять правило на пошив/ОТК/ВТО (операции маршрута).
+  appliesToSewing Boolean @default(true)
+
+  /// Распространять правило на раскрой. По умолчанию ВЫКЛЮЧЕНО:
+  /// раскройщик получает деньги в момент выпуска паспорта, задолго до
+  /// закрытия заказа, и ждать закрытия ему нечем.
+  appliesToCutting Boolean @default(false)
+
+  /// Создавать черновик документа в день начисления автоматически.
+  autoCreateDraft Boolean @default(true)
+
+  /// Локальное (Москва) время, начиная с которого в день начисления
+  /// черновик можно создавать: `HH:mm`.
+  runAtLocalTime String @default("03:00")
+
+  /// Последняя дата (по Москве), на которую черновик уже создавался
+  /// автоматически. Защита от повторного создания в тот же день.
+  lastRunOn DateTime? @db.Date
+
+  updatedAt          DateTime  @updatedAt
+  updatedByEmployeeId String?
+  updatedBy           Employee? @relation("PayrollAccrualScheduleUpdatedBy", fields: [updatedByEmployeeId], references: [id], onDelete: SetNull)
 }

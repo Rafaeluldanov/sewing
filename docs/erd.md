@@ -577,6 +577,19 @@ master-action'ом, удаление, упаковка прямо из ячей�
   FK ни на кого не ставит: справочник самостоятельный, удаление строки
   лишь возвращает расчёт к дефолту `168 ч`. См.
   `docs/domain.md §10.3b`.
+- **`PayrollAccrualSchedule`** *(23.08.2026)* — расписание начисления
+  зарплаты, ОДНА строка на базу (`id = 'default'`): `daysOfMonth: Int[]`
+  (числа месяца; пусто = расписание выключено), `cutoffBasis:
+  PayrollCutoffBasis @default(ORDER_COMPLETED)`, `appliesToSewing
+  @default(true)`, `appliesToCutting @default(false)`, `autoCreateDraft
+  @default(true)`, `runAtLocalTime` (`ЧЧ:ММ`, Москва), `lastRunOn?
+  @db.Date`, `updatedByEmployeeId? → Employee` (SetNull).
+  Настройка не создаёт начислений: она определяет отбор строк
+  `PayrollAccrualDocument` и календарь автосоздания черновика.
+  Правило отсечки читает `Order.completedAt` — дату закрытия заказа,
+  которая проставляется при переходе в `DONE` (в том числе авто-«Готово»
+  при полной упаковке) и в `CANCELLED`. См. `docs/api.md §31b`,
+  `docs/domain.md §10.3c`.
 - **`PayrollPayout`** *(PHASE 3 STEP 1)* — управленческий документ
   «выплата зарплаты сотруднику за период». `employeeId → Employee`,
   `periodFrom: Date`, `periodTo: Date`, `status: PayrollPayoutStatus

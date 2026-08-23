@@ -14,6 +14,11 @@ import type {
 } from '@sewing/shared/payroll';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getPayrollPeriod } from '@/lib/payroll-api';
+import {
+  getPayrollAccrualPreviewSafe,
+  getPayrollScheduleSafe,
+  runDuePayrollAccrual,
+} from '@/lib/payroll-schedule-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
 import { listEmployees } from '@/lib/employees-api';
 import {
@@ -99,6 +104,18 @@ export default async function AdminPayrollPeriodPage({
         : 'Не удалось загрузить ведомость зарплаты';
   }
 
+  // Расписание начисления: подсказка «когда следующая зарплата» и
+  // ленивый триггер автосоздания черновика. Планировщика в проекте нет
+  // сознательно (см. `PayrollScheduleService.ensureDueDraft`), поэтому
+  // проверку дёргает первый заход в раздел после дня начисления.
+  // Обе ручки fail-soft: ведомость не должна падать из-за настройки.
+  await runDuePayrollAccrual();
+  const schedule = await getPayrollScheduleSafe();
+  const nextAccrual = schedule?.upcoming[0] ?? null;
+  const accrualPreview = nextAccrual
+    ? await getPayrollAccrualPreviewSafe(nextAccrual.date)
+    : null;
+
   // Параллельно — справочники для фильтров. Если что-то упадёт, не
   // ломаем страницу: фильтр просто схлопнется в пустой select.
   const [employeesList, divisions] = await Promise.all([
@@ -157,6 +174,46 @@ export default async function AdminPayrollPeriodPage({
         <div className="error-box" role="alert">
           {error}
         </div>
+      )}
+
+      {nextAccrual && (
+        <AdminCard>
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontWeight: 600 }}>
+                Следующее начисление — {formatDate(nextAccrual.date)}
+                {nextAccrual.daysLeft === 0
+                  ? ', сегодня'
+                  : `, через ${nextAccrual.daysLeft} дн.`}
+              </div>
+              <div className="admin-muted" style={{ fontSize: '0.86rem' }}>
+                Период {formatDate(nextAccrual.periodFrom)} —{' '}
+                {formatDate(nextAccrual.date)}
+                {accrualPreview && (
+                  <>
+                    {' '}
+                    · накоплено{' '}
+                    <b>{formatRub(accrualPreview.totalAmount)}</b>
+                    {accrualPreview.deferredAmount > 0 && (
+                      <>
+                        {' '}
+                        · отложено по незакрытым заказам{' '}
+                        <b>{formatRub(accrualPreview.deferredAmount)}</b>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+            <Link
+              href="/admin/payroll/settings/schedule"
+              className="admin-btn admin-btn--ghost"
+              style={{ marginLeft: 'auto' }}
+            >
+              Правила
+            </Link>
+          </div>
+        </AdminCard>
       )}
 
       <PayrollKpiGrid summary={summary} />

@@ -39,6 +39,15 @@ export type AuditEntityType =
    * `CUT_RELEASE_POLICY_UPDATED`, `CUT_RELEASE_POLICY_CONSUMED`.
    * `entityId` — `CutReleasePolicy.id`.
    */
+  /**
+   * Расписание начисления зарплаты (singleton
+   * `prisma/schema.prisma::PayrollAccrualSchedule`). Событие —
+   * `PAYROLL_SCHEDULE_UPDATED`, `entityId` — всегда `'default'`.
+   * Настройка решает, попадут ли деньги человека в ближайшую выплату
+   * (день начисления + отсечка по закрытым заказам), поэтому «кто и
+   * когда сдвинул правило» — первый вопрос при разборе недоплаты.
+   */
+  | 'PayrollAccrualSchedule'
   | 'CUT_RELEASE_POLICY'
   /**
    * Очередь выдачи кроя по размерам (см.

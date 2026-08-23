@@ -20,5 +20,8 @@ import { PayrollAccrualDocumentsService } from './payroll-accrual-documents.serv
   imports: [TreasuryModule],
   controllers: [PayrollAccrualDocumentsController],
   providers: [PayrollAccrualDocumentsService],
+  // Экспортируем сервис: `PayrollScheduleModule` создаёт им черновик
+  // документа в день начисления (см. `PayrollScheduleService.ensureDueDraft`).
+  exports: [PayrollAccrualDocumentsService],
 })
 export class PayrollAccrualDocumentsModule {}

@@ -15,6 +15,11 @@ import type { AccrualDocumentActionState } from '../actions';
 
 const initialState: AccrualDocumentActionState = {};
 
+function ruDate(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  return `${d}.${m}.${y}`;
+}
+
 function todayIso(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -22,8 +27,18 @@ function todayIso(): string {
 
 export function CreateAccrualDocumentForm({
   employees,
+  defaultAccrualDate = null,
+  periodFrom = null,
 }: {
   employees: EmployeeListItemDto[];
+  /**
+   * Ближайший день начисления из расписания
+   * (`PayrollAccrualSchedule`). `null` — расписание выключено, дата по
+   * умолчанию остаётся «сегодня», как было до появления фичи.
+   */
+  defaultAccrualDate?: string | null;
+  /** Начало периода этого начисления — для подписи под полем. */
+  periodFrom?: string | null;
 }) {
   const [state, formAction] = useFormState(
     createPayrollAccrualDocumentAction,
@@ -64,10 +79,18 @@ export function CreateAccrualDocumentForm({
           type="date"
           name="accrualDate"
           required
-          defaultValue={todayIso()}
+          defaultValue={defaultAccrualDate ?? todayIso()}
         />
         <p className="admin-hint">
-          В документ войдут начисления и окладные дни до этой даты включительно.
+          {defaultAccrualDate ? (
+            <>
+              Дата подставлена по расписанию начисления
+              {periodFrom ? ` (период ${ruDate(periodFrom)} — ${ruDate(defaultAccrualDate)})` : ''}.
+              Её можно изменить вручную — правило отсечки при этом сохранится.
+            </>
+          ) : (
+            'В документ войдут начисления и окладные дни до этой даты включительно.'
+          )}
         </p>
       </div>
 
