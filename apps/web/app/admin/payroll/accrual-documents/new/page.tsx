@@ -32,8 +32,15 @@ export default async function AdminNewAccrualDocumentPage() {
   // что останется отложенным. Обе ручки fail-soft: без расписания форма
   // работает ровно как раньше — дата «сегодня», без справки.
   const schedule = await getPayrollScheduleSafe();
-  const nextDate = schedule?.upcoming[0]?.date ?? null;
-  const preview = await getPayrollAccrualPreviewSafe(nextDate ?? undefined);
+  const nextScheduled = schedule?.upcoming[0] ?? null;
+  // Подставляем дату расписания, только если она уже наступила. Иначе
+  // менеджер, формирующий документ ДОСРОЧНО (20-го при начислении 25-го),
+  // получил бы документ с работой по 20-е, но с периодом по 25-е — и
+  // сотрудник увидел бы в расчётке период, часть которого не оплачена.
+  const today = moscowToday();
+  const dateReached = nextScheduled ? nextScheduled.date <= today : false;
+  const defaultDate = dateReached ? nextScheduled!.date : null;
+  const preview = await getPayrollAccrualPreviewSafe(defaultDate ?? today);
 
   return (
     <AdminPageShell
@@ -61,8 +68,11 @@ export default async function AdminNewAccrualDocumentPage() {
         </p>
         <CreateAccrualDocumentForm
           employees={employees}
-          defaultAccrualDate={nextDate}
-          periodFrom={schedule?.upcoming[0]?.periodFrom ?? null}
+          defaultAccrualDate={defaultDate}
+          periodFrom={dateReached ? (nextScheduled?.periodFrom ?? null) : null}
+          nextScheduledDate={
+            nextScheduled && !dateReached ? nextScheduled.date : null
+          }
         />
       </AdminCard>
 
@@ -129,4 +139,14 @@ function money(v: number): string {
 function formatDate(iso: string): string {
   const [y, m, d] = iso.split('-');
   return `${d}.${m}.${y}`;
+}
+
+/** Сегодняшняя дата по Москве — весь домен живёт в московских сутках. */
+function moscowToday(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }

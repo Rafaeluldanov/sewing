@@ -49,8 +49,12 @@ CREATE TABLE "PayrollAccrualSchedule" (
   -- Пустой массив = расписание выключено: дата не подставляется,
   -- черновик автоматически не создаётся.
   "daysOfMonth" INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
-  "cutoffBasis" "PayrollCutoffBasis" NOT NULL DEFAULT 'ORDER_COMPLETED',
-  "appliesToSewing" BOOLEAN NOT NULL DEFAULT true,
+  -- Дефолт = «как было до расписания». Миграция не имеет права менять
+  -- состав зарплатных документов сама по себе: отсечку по закрытым
+  -- заказам включает менеджер на экране «Правила начисления», и это
+  -- решение видно в аудите с автором и датой.
+  "cutoffBasis" "PayrollCutoffBasis" NOT NULL DEFAULT 'WORK_DATE',
+  "appliesToSewing" BOOLEAN NOT NULL DEFAULT false,
   -- Раскрой по умолчанию ВНЕ правила: раскройщик получает деньги при
   -- выпуске паспорта, задолго до закрытия заказа.
   "appliesToCutting" BOOLEAN NOT NULL DEFAULT false,
@@ -67,9 +71,9 @@ ALTER TABLE "PayrollAccrualSchedule"
   FOREIGN KEY ("updatedByEmployeeId") REFERENCES "Employee"("id")
   ON DELETE SET NULL ON UPDATE CASCADE;
 
--- Singleton-строка со «выключенным» расписанием: поведение системы до
--- этой миграции сохраняется ровно до того момента, как менеджер задаст
--- дни начисления.
-INSERT INTO "PayrollAccrualSchedule" ("id", "updatedAt")
-VALUES ('default', NOW())
+-- Singleton-строка в состоянии «расписание выключено, правило прежнее»:
+-- дни не заданы (черновик автоматически не создаётся), отсечка =
+-- WORK_DATE (документ отбирает ровно то же, что отбирал вчера).
+INSERT INTO "PayrollAccrualSchedule" ("id", "cutoffBasis", "appliesToSewing", "appliesToCutting", "updatedAt")
+VALUES ('default', 'WORK_DATE', false, false, NOW())
 ON CONFLICT ("id") DO NOTHING;

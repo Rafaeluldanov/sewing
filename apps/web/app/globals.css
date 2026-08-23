@@ -8403,6 +8403,17 @@ body:has(.admin-layout) .app-header { display: none !important; }
   line-height: 1.5;
 }
 
+/* Подсказка под полем формы: тот же приглушённый цвет, что у
+   `.admin-muted`, но мельче — объяснение правила, а не текст экрана.
+   Класс уже стоял в разметке зарплатных форм, а правила под него не
+   было: подсказки рисовались обычным текстом. */
+.admin-hint {
+  color: var(--color-fg-subtle);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  margin: 0.15rem 0 0;
+}
+
 /* AdminPageShell -------------------------------------------------------- */
 
 .admin-page-shell {

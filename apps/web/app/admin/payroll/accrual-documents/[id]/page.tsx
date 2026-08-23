@@ -141,7 +141,11 @@ export default async function AdminAccrualDocumentDetailPage({
     },
     {
       key: 'deferred',
-      header: 'Отложено',
+      // «На сейчас», а не «в документе»: строки документа — снимок на
+      // момент создания, а эта справка пересчитывается при каждом
+      // открытии. Если заказ закрыли уже после создания черновика,
+      // сумма отсюда уйдёт в документ только после «Пересчитать».
+      header: 'Отложено (на сейчас)',
       align: 'right',
       render: (line) => {
         const d = deferredByEmployee.get(line.employee.id);

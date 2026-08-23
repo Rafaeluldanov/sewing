@@ -20,6 +20,7 @@ import {
 import {
   passesAccrualCutoff,
   pieceworkAccrualWhere,
+  resolveAccrualBounds,
 } from '../../apps/api/src/modules/payroll-schedule/accrual-cutoff';
 
 const DAYS = [5, 15, 25];
@@ -171,5 +172,45 @@ describe('отсечка сдельщины', () => {
     // Две ветки: раскрой (без правила) и пошив (с правилом).
     expect(where.OR).toHaveLength(2);
     expect(JSON.stringify(where.OR)).toContain('completedAt');
+  });
+});
+
+describe('границы дня начисления', () => {
+  test('cutoff — конец МОСКОВСКИХ суток, а не UTC', () => {
+    // Документ и предпросмотр обязаны резать по одной границе. Пока
+    // документ жил на `endOfDayUtc`, ночная смена (00:00–03:00 МСК)
+    // попадала в него, но не показывалась в предпросмотре.
+    const { cutoff } = resolveAccrualBounds('2026-08-25');
+    expect(cutoff.toISOString()).toBe('2026-08-25T20:59:59.999Z');
+  });
+
+  test('граница оклада — полночь UTC дня начисления', () => {
+    // `SalaryEntry.date` — `@db.Date`: Prisma сравнивает его как
+    // полночь UTC. Московское начало суток (21:00 предыдущего дня)
+    // выбрасывало из предпросмотра весь день оклада.
+    const { salaryDate } = resolveAccrualBounds('2026-08-25');
+    expect(salaryDate.toISOString()).toBe('2026-08-25T00:00:00.000Z');
+  });
+
+  test('ночная смена по московским суткам остаётся за отсечкой', () => {
+    const { cutoff } = resolveAccrualBounds('2026-08-25');
+    // 26.08 01:30 МСК = 25.08 22:30Z — это уже следующий день цеха.
+    expect(new Date('2026-08-25T22:30:00.000Z') > cutoff).toBe(true);
+    // 25.08 23:00 МСК = 25.08 20:00Z — тот же день, попадает.
+    expect(new Date('2026-08-25T20:00:00.000Z') <= cutoff).toBe(true);
+  });
+});
+
+describe('догон пропущенного дня начисления', () => {
+  test('после пропущенной даты она остаётся последней прошедшей', () => {
+    // 5-е выпало на воскресенье, никто не открыл раздел. В понедельник
+    // 6-го расписание обязано увидеть незакрытое 5-е, а не молча
+    // пропустить выплату до следующего месяца.
+    expect(isAccrualDate([5], '2026-09-06')).toBe(false);
+    expect(previousAccrualDate([5], '2026-09-06')).toBe('2026-09-05');
+  });
+
+  test('в сам день начисления догонять нечего', () => {
+    expect(isAccrualDate([5], '2026-09-05')).toBe(true);
   });
 });

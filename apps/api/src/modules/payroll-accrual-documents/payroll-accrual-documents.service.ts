@@ -26,6 +26,7 @@ import {
 import { lockEmployeePayrollTx } from '../../common/payroll-lock.js';
 import {
   pieceworkAccrualWhere,
+  resolveAccrualBounds,
   type AccrualCutoffRules,
 } from '../payroll-schedule/accrual-cutoff.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
@@ -757,7 +758,14 @@ export class PayrollAccrualDocumentsService {
     manualMap: Map<string, { manualAdjustRub: Prisma.Decimal; manualComment: string | null }>,
     employeeFilterId: string | null,
   ): Promise<void> {
-    const cutoff = endOfDayUtc(accrualDate);
+    // Границы дня начисления считает общий helper: та же функция, что
+    // у предпросмотра. Раньше здесь стоял `endOfDayUtc`, а предпросмотр
+    // резал по московскому концу суток — три часа разницы, в которые
+    // попадает ночная смена: документ её брал, предпросмотр не
+    // показывал.
+    const { cutoff, salaryDate } = resolveAccrualBounds(
+      accrualDate.toISOString().slice(0, 10),
+    );
 
     // --- Загрузить активные PayrollPayoutLine (занятые id) ---
     const activePayoutLines = await tx.payrollPayoutLine.findMany({
@@ -806,7 +814,7 @@ export class PayrollAccrualDocumentsService {
     // --- Загрузить SalaryEntry ≤ accrualDate (не занятые) ---
     const salEntries = await tx.salaryEntry.findMany({
       where: {
-        date: { lte: accrualDate },
+        date: { lte: salaryDate },
         ...(employeeFilterId ? { employeeId: employeeFilterId } : {}),
         ...(usedSalIds.size > 0 ? { id: { notIn: Array.from(usedSalIds) } } : {}),
       },
@@ -1101,19 +1109,6 @@ function startOfDayUtc(d: Date): Date {
   );
 }
 
-function endOfDayUtc(d: Date): Date {
-  return new Date(
-    Date.UTC(
-      d.getUTCFullYear(),
-      d.getUTCMonth(),
-      d.getUTCDate(),
-      23,
-      59,
-      59,
-      999,
-    ),
-  );
-}
 
 function toDateOnly(d: Date): string {
   return d.toISOString().slice(0, 10);

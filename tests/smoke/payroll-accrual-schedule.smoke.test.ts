@@ -97,6 +97,44 @@ describe('одно правило отсечки на документ и пре
     expect(schedule).toContain('pieceworkCandidateWhere');
   });
 
+  test('обе границы суток считает один helper', () => {
+    // Документ и предпросмотр обязаны спрашивать даты у одной функции:
+    // разошедшиеся границы (endOfDayUtc против московских суток) дают
+    // расхождение ровно в день выплаты.
+    expect(cutoff).toContain('export function resolveAccrualBounds');
+    expect(documents).toContain('resolveAccrualBounds');
+    expect(schedule).toContain('resolveAccrualBounds');
+    expect(documents).not.toContain('endOfDayUtc(');
+  });
+
+  test('миграция приезжает с ВЫКЛЮЧЕННЫМ правилом', () => {
+    // Сама по себе миграция не имеет права менять состав зарплатных
+    // документов: до решения менеджера отбор остаётся прежним
+    // (WORK_DATE), иначе сдельщина по незакрытым заказам молча выпадет
+    // из ближайшей выплаты у всех сразу.
+    const migration = read(
+      'prisma/migrations/20261021100000_payroll_accrual_schedule/migration.sql',
+    );
+    expect(migration).toContain(`DEFAULT 'WORK_DATE'`);
+    expect(migration).toContain('"appliesToSewing" BOOLEAN NOT NULL DEFAULT false');
+    expect(migration).toMatch(/INSERT INTO "PayrollAccrualSchedule"[\s\S]*'WORK_DATE'/);
+    // Дефолт схемы и fallback сервиса обязаны совпадать, иначе база без
+    // строки и база со свежей строкой ведут себя по-разному.
+    const schema = read('prisma/schema.prisma');
+    expect(schema).toContain('cutoffBasis PayrollCutoffBasis @default(WORK_DATE)');
+    expect(schema).toContain('appliesToSewing Boolean @default(false)');
+    expect(documents).toContain(`cutoffBasis: 'WORK_DATE'`);
+  });
+
+  test('автосоздание застолбляет дату до создания документа', () => {
+    // Два параллельных рендера /admin/payroll иначе создавали два
+    // документа на одну дату, конкурирующих за одни начисления.
+    expect(schedule).toContain('updateMany');
+    expect(schedule).toContain('claimed.count === 0');
+    // И догоняет пропущенный день, а не пропускает выплату молча.
+    expect(schedule).toContain('previousAccrualDate');
+  });
+
   test('оклад отбирается по дате, а не по заказу', () => {
     // В `SalaryEntry` нет заказа вовсе; попытка применить к нему
     // отсечку означала бы, что окладник не получит зарплату, пока цех

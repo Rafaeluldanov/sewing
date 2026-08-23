@@ -1,5 +1,6 @@
 import { EarningSource, EntryStatus, Prisma } from '@prisma/client';
 import type { PayrollCutoffBasis } from '@sewing/shared/payroll-schedule';
+import { moscowDayWindow } from '../../common/moscow-date.js';
 
 /**
  * Отсечка сдельных начислений по расписанию зарплаты.
@@ -16,6 +17,34 @@ import type { PayrollCutoffBasis } from '@sewing/shared/payroll-schedule';
  * отсечка по заказу к ним неприменима физически — они всегда идут по
  * своей дате ≤ дня начисления.
  */
+
+/**
+ * Границы дня начисления. Обе даты считает ОДНА функция, потому что их
+ * две штуки и они разной природы:
+ *
+ *   - `cutoff` — верхняя граница по времени (`OperationEntry.createdAt`,
+ *     `approvedAt`, `Order.completedAt`). Считается по МОСКОВСКИМ
+ *     суткам: день начисления — это календарный день цеха, а не UTC.
+ *     Раньше документ резал по `endOfDayUtc`, а предпросмотр — по
+ *     московскому концу суток; разница в 3 часа означала, что ночная
+ *     смена попадала в документ, но не показывалась в предпросмотре.
+ *
+ *   - `salaryDate` — граница для `SalaryEntry.date`, а это `@db.Date`:
+ *     Prisma сравнивает его как полночь UTC, поэтому единственно
+ *     верная граница «включительно по день начисления» — полночь UTC
+ *     ЭТОГО дня. Московское начало суток (21:00 предыдущего дня) молча
+ *     выбрасывало из предпросмотра весь день оклада.
+ */
+export function resolveAccrualBounds(accrualDateIso: string): {
+  cutoff: Date;
+  salaryDate: Date;
+} {
+  const { to } = moscowDayWindow(accrualDateIso);
+  return {
+    cutoff: new Date(to.getTime() - 1),
+    salaryDate: new Date(`${accrualDateIso}T00:00:00.000Z`),
+  };
+}
 
 /** Минимальная проекция настройки, от которой зависит отбор. */
 export interface AccrualCutoffRules {

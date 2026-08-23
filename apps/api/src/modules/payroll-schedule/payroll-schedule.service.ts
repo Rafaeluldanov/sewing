@@ -8,6 +8,7 @@ import {
   accrualPeriodFor,
   daysBetweenIso,
   isAccrualDate,
+  previousAccrualDate,
   upcomingAccrualDates,
   type PayrollAccrualPreviewDto,
   type PayrollAccrualScheduleDto,
@@ -24,6 +25,7 @@ import { PayrollAccrualDocumentsService } from '../payroll-accrual-documents/pay
 import {
   passesAccrualCutoff,
   pieceworkCandidateWhere,
+  resolveAccrualBounds,
   type AccrualCutoffRules,
 } from './accrual-cutoff.js';
 
@@ -170,7 +172,11 @@ export class PayrollScheduleService {
       accrualDateIso ??
       upcomingAccrualDates(schedule.daysOfMonth, today, 1)[0] ??
       today;
-    const cutoff = new Date(moscowDayWindow(date).to.getTime() - 1);
+    // Те же границы, что у документа: общий helper, а не своя пара дат.
+    // `salaryDate` — полночь UTC дня начисления: `SalaryEntry.date` —
+    // `@db.Date`, и московское начало суток (21:00 предыдущего дня)
+    // молча выбрасывало из предпросмотра весь день оклада.
+    const { cutoff, salaryDate } = resolveAccrualBounds(date);
     const { periodFrom } = accrualPeriodFor(schedule.daysOfMonth, date);
 
     const rules: AccrualCutoffRules = {
@@ -232,7 +238,7 @@ export class PayrollScheduleService {
 
     const salaryEntries = await this.prisma.salaryEntry.findMany({
       where: {
-        date: { lte: moscowDayWindow(date).from },
+        date: { lte: salaryDate },
         ...(usedSalIds.size > 0 ? { id: { notIn: [...usedSalIds] } } : {}),
       },
       select: { employeeId: true, amount: true, source: true },
@@ -395,32 +401,58 @@ export class PayrollScheduleService {
       if (schedule.daysOfMonth.length === 0) return null;
 
       const today = moscowDayKey();
-      if (!isAccrualDate(schedule.daysOfMonth, today)) return null;
-      if (schedule.lastRunOn && toIsoDate(schedule.lastRunOn) === today) {
+      // Догоняем пропущенное. Раньше проверялось только «сегодня — день
+      // начисления»: если 5-е выпало на воскресенье и никто не открыл
+      // раздел, черновик не создавался ни 5-го, ни позже — расписание
+      // молча пропускало выплату. Теперь берём последнюю ПРОШЕДШУЮ дату
+      // начисления и работаем с ней.
+      const dueDate = isAccrualDate(schedule.daysOfMonth, today)
+        ? today
+        : previousAccrualDate(schedule.daysOfMonth, today);
+      if (!dueDate) return null;
+      // В сам день начисления ждём назначенного часа; для пропущенной
+      // даты ждать уже нечего — она в прошлом.
+      if (dueDate === today && !this.isAfterRunTime(schedule.runAtLocalTime)) {
         return null;
       }
-      if (!this.isAfterRunTime(schedule.runAtLocalTime)) return null;
+      if (schedule.lastRunOn && toIsoDate(schedule.lastRunOn) >= dueDate) {
+        return null;
+      }
 
-      const { from, to } = moscowDayWindow(today);
+      // Застолбить дату ДО создания документа, одним условным апдейтом.
+      // Два параллельных рендера `/admin/payroll` (две вкладки, F5,
+      // prefetch) иначе проходили проверку одновременно и создавали два
+      // документа на одну дату — с одинаковыми строками, которые потом
+      // конфликтуют за одни и те же начисления. `updateMany` с условием
+      // на `lastRunOn` — CAS: выигрывает ровно один.
+      const claimed = await this.prisma.payrollAccrualSchedule.updateMany({
+        where: {
+          id: SCHEDULE_ID,
+          OR: [{ lastRunOn: null }, { lastRunOn: { lt: dayDateUtc(dueDate) } }],
+        },
+        data: { lastRunOn: dayDateUtc(dueDate) },
+      });
+      if (claimed.count === 0) return null;
+
+      // Документ на эту дату мог быть создан руками. Сравниваем по
+      // точной дате: `accrualDate` — `@db.Date`, и окно из московских
+      // суток попадало бы во вчерашний день.
       const existing = await this.prisma.payrollAccrualDocument.findFirst({
-        where: { accrualDate: { gte: from, lt: to } },
+        where: { accrualDate: dayDateUtc(dueDate) },
         select: { id: true },
       });
-      if (existing) {
-        await this.markRun(today);
-        return null;
-      }
+      if (existing) return null;
 
       const doc = await this.documents.create(
         {
-          accrualDate: today,
+          accrualDate: dueDate,
+          employeeId: null,
           managerComment: 'Черновик сформирован автоматически по расписанию',
         } as never,
         viewer,
       );
-      await this.markRun(today);
       this.logger.log(
-        `event=payroll.schedule.autoDraft date=${today} documentId=${doc.id}`,
+        `event=payroll.schedule.autoDraft date=${dueDate} documentId=${doc.id}`,
       );
       return doc.id;
     } catch (err) {
@@ -442,12 +474,6 @@ export class PayrollScheduleService {
     return nowMsk >= runAtLocalTime;
   }
 
-  private async markRun(dayIso: string): Promise<void> {
-    await this.prisma.payrollAccrualSchedule.update({
-      where: { id: SCHEDULE_ID },
-      data: { lastRunOn: new Date(`${dayIso}T00:00:00.000Z`) },
-    });
-  }
 
   // ===========================================================================
   // INTERNAL
@@ -494,4 +520,13 @@ function money(v: Prisma.Decimal): number {
 /** `YYYY-MM-DD` из `@db.Date` (Prisma отдаёт полночь UTC). */
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * `YYYY-MM-DD` → полночь UTC. Ровно так Prisma хранит и сравнивает
+ * `@db.Date`; любые «московские» границы для таких колонок дают сдвиг
+ * на сутки.
+ */
+function dayDateUtc(dayIso: string): Date {
+  return new Date(`${dayIso}T00:00:00.000Z`);
 }

@@ -111,11 +111,27 @@ export interface PayrollAccrualOccurrenceDto {
 // Предпросмотр «что войдёт / что отложено»
 // ---------------------------------------------------------------------------
 
+/**
+ * `YYYY-MM-DD` СУЩЕСТВУЮЩЕЙ даты. Одного регекса мало: `2026-13-05`
+ * доезжал до Prisma как `Invalid Date` и превращался в 500, а
+ * `2026-02-31` молча считался по 3 марта — с датой начисления в ответе,
+ * которой не бывает.
+ */
+const RealDateOnly = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате YYYY-MM-DD')
+  .refine((v) => {
+    const [y, m, d] = v.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return (
+      dt.getUTCFullYear() === y &&
+      dt.getUTCMonth() === m - 1 &&
+      dt.getUTCDate() === d
+    );
+  }, 'Такой даты не существует');
+
 export const PayrollAccrualPreviewQuerySchema = z.object({
-  accrualDate: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в формате YYYY-MM-DD')
-    .optional(),
+  accrualDate: RealDateOnly.optional(),
 });
 export type PayrollAccrualPreviewQuery = z.infer<
   typeof PayrollAccrualPreviewQuerySchema

@@ -29,6 +29,7 @@ export function CreateAccrualDocumentForm({
   employees,
   defaultAccrualDate = null,
   periodFrom = null,
+  nextScheduledDate = null,
 }: {
   employees: EmployeeListItemDto[];
   /**
@@ -39,6 +40,12 @@ export function CreateAccrualDocumentForm({
   defaultAccrualDate?: string | null;
   /** Начало периода этого начисления — для подписи под полем. */
   periodFrom?: string | null;
+  /**
+   * Ближайший день начисления, если он ЕЩЁ НЕ наступил. Тогда дату не
+   * подставляем (документ собрал бы работу по сегодня, а период показал
+   * бы по будущую дату), но показываем, когда начисление по расписанию.
+   */
+  nextScheduledDate?: string | null;
 }) {
   const [state, formAction] = useFormState(
     createPayrollAccrualDocumentAction,
@@ -87,6 +94,12 @@ export function CreateAccrualDocumentForm({
               Дата подставлена по расписанию начисления
               {periodFrom ? ` (период ${ruDate(periodFrom)} — ${ruDate(defaultAccrualDate)})` : ''}.
               Её можно изменить вручную — правило отсечки при этом сохранится.
+            </>
+          ) : nextScheduledDate ? (
+            <>
+              В документ войдут начисления и окладные дни до этой даты
+              включительно. Ближайшее начисление по расписанию —{' '}
+              {ruDate(nextScheduledDate)}.
             </>
           ) : (
             'В документ войдут начисления и окладные дни до этой даты включительно.'
