@@ -415,6 +415,33 @@ function compareByYearProximity(
   return matchedTime(a, dm, currentYear) - matchedTime(b, dm, currentYear);
 }
 
+/**
+ * Строка снимка материалов в объёме, который нужен пересчёту количеств
+ * (`OrdersService.recomputeSnapshotGroup`). Тип структурный, а не
+ * `Prisma...GetPayload`: строки приходят из select-а вызывающего.
+ */
+type SnapshotRowForRecompute = {
+  id: string;
+  name: string;
+  unit: string;
+  normUnit: string | null;
+  qtyPerUnit: Prisma.Decimal;
+  note: string | null;
+  materialRole: string | null;
+  fabricType: string | null;
+  densityGsm: number | null;
+  plannedWidthCm: number | null;
+  hardwareSizeText: string | null;
+  hardwareMaterialText: string | null;
+  characteristics: Prisma.JsonValue | null;
+  parameterBindings: Prisma.JsonValue | null;
+  colorRule: string | null;
+  fixedColorText: string | null;
+  requiresColorSelection: boolean;
+  selectedColorText: string | null;
+  qtySource: string | null;
+};
+
 @Injectable()
 export class OrdersService {
   /** Статический — в сервисе нет инстанс-логгера, а заводить его сейчас незачем. */
@@ -5073,6 +5100,151 @@ export class OrdersService {
     return autoNormUnit;
   }
 
+  /**
+   * Пересчёт количеств ОДНОЙ группы снимка (заказ / расцветка) БЕЗ похода в
+   * шаблон: норма — если строка получила её из номенклатуры, — подстановка
+   * значений слот-параметров, тираж в закупочной единице и цвет группы.
+   *
+   * Вынесено из `rebuildMaterialRequirementsSnapshot`, потому что зовётся из
+   * ДВУХ мест: обычной пересборки и ветки «материализовывать нечего». Вторая —
+   * это заказ на карточке номенклатуры БЕЗ спецификации материалов (нормы и
+   * погонные метры есть, состав менеджер набирает руками). Там тоже обязан
+   * идти пересчёт: ручная строка создаётся с `totalQty = 0` в расчёте на
+   * ближайшую пересборку (см. `OrderTechCardService.createManualLines`), и
+   * пока эта ветка выходила молча, тираж не считался НИКОГДА — заказ 02-00024
+   * ушёл в расчёт с нулевым расходом по всем 11 строкам, а потребность цеха
+   * повторила нули и увела шесть материалов в закупку по нулю.
+   */
+  private async recomputeSnapshotGroup(
+    tx: Prisma.TransactionClient,
+    input: {
+      rows: ReadonlyArray<SnapshotRowForRecompute>;
+      group: {
+        qty: number;
+        sizePlan: SizePlanEntry[];
+        variantColor: string | null;
+        color: string | null;
+      };
+      /** Значения слот-параметров группы; пусто — ячейки остаются как есть. */
+      paramValues: Map<string, TechCardParameterValue>;
+      normSources: ReadonlyArray<PatternNormSource>;
+    },
+  ): Promise<void> {
+    const { rows, group: g, paramValues, normSources } = input;
+    // Норму из номенклатуры освежаем ТОЛЬКО у строк, которые её оттуда и
+    // получили (`qtySource = NOMENCLATURE`): размерный план мог поменяться,
+    // а средневзвешенная норма от него зависит. Правку в заказе (`ORDER`) и
+    // строки старше признака (`null`) не трогаем — иначе живой заказ тихо
+    // поменял бы норму сам.
+    const nomenclatureRows = rows.filter(
+      (r) => r.qtySource === 'NOMENCLATURE',
+    );
+    const recomputeMatchInput = nomenclatureRows.map((r) => ({
+      key: r.id,
+      materialRole: r.materialRole,
+      name: r.name,
+      fabricType: r.fabricType,
+      unit: r.unit,
+      normUnit: r.normUnit,
+    }));
+    const refreshedNorms =
+      nomenclatureRows.length > 0
+        ? matchPatternNormSources(recomputeMatchInput, normSources)
+        : new Map<string, PatternNormSource>();
+    // ВТОРОЙ ЗАХОД — тот же, что при материализации: NOMENCLATURE-строка,
+    // схлопнутая селектом в закупочную единицу («кг»), не должна терять
+    // связь с поразмерной нормой только из-за единицы — расщепление
+    // возрождается, норма снова живёт в метрах, «кг» остаётся закупкой.
+    const recomputeAutoNormUnit = this.retryLinearNormMatch(
+      recomputeMatchInput,
+      refreshedNorms,
+      normSources,
+    );
+    for (const r of rows) {
+      const bindings = (r.parameterBindings ??
+        null) as TechCardParameterBindings | null;
+      // Норма может быть ячейкой под слот-параметром — тогда её ставит
+      // `applyParametersToCells`, номенклатура в эту ячейку не пишет.
+      const refreshed =
+        bindings?.['core:qtyPerUnit'] == null
+          ? refreshedNorms.get(r.id)
+          : undefined;
+      const derivedNorm = refreshed
+        ? derivePatternNormPerUnit(refreshed, g.sizePlan)
+        : null;
+      // Единица нормы, выданная вторым заходом: строка снова расщеплена,
+      // номенклатурная норма пойдёт в метрах. Без источника (ячейка под
+      // слот-параметром) авто-расщеплению нечего расщеплять.
+      const autoUnit = refreshed
+        ? (recomputeAutoNormUnit.get(r.id) ?? null)
+        : null;
+      const nextNormUnit = autoUnit ?? r.normUnit;
+      const { cells } = applyParametersToCells(
+        {
+          name: r.name,
+          unit: r.unit,
+          qtyPerUnit: (derivedNorm?.qtyPerUnit ?? r.qtyPerUnit).toString(),
+          note: r.note,
+          materialRole: r.materialRole,
+          fabricType: r.fabricType,
+          densityGsm: r.densityGsm,
+          plannedWidthCm: r.plannedWidthCm,
+          hardwareSizeText: r.hardwareSizeText,
+          hardwareMaterialText: r.hardwareMaterialText,
+          characteristics:
+            (r.characteristics as MaterialCharacteristics | null) ?? null,
+        },
+        bindings,
+        paramValues,
+      );
+      const qtyPerUnit = new Prisma.Decimal(cells.qtyPerUnit);
+      await tx.orderMaterialRequirement.update({
+        where: { id: r.id },
+        data: {
+          variantColor: g.variantColor,
+          qtyPerUnit,
+          ...(autoUnit ? { normUnit: autoUnit } : {}),
+          totalQty: this.computeLineTotalQty({
+            qtyPerUnit,
+            normUnit: nextNormUnit,
+            unit: cells.unit,
+            qty: g.qty,
+            plannedWidthCm: cells.plannedWidthCm,
+            densityGsm: cells.densityGsm,
+          }),
+          // Строка потеряла источник в номенклатуре (параметр убрали /
+          // переименовали) — честно переводим её в «из шаблона», иначе UI
+          // обещал бы связь, которой уже нет.
+          ...(r.qtySource === 'NOMENCLATURE'
+            ? {
+                qtySource: refreshed ? 'NOMENCLATURE' : 'TEMPLATE',
+                qtySourceRef: refreshed ? refreshed.sourceId : null,
+              }
+            : {}),
+          // Цвет расцветки мог измениться — правило то же, что при
+          // материализации: `ORDER_SELECTED_COLOR` держит введённый вручную
+          // цвет, остальные правила резолвятся от цвета группы.
+          resolvedColorText: r.requiresColorSelection
+            ? r.selectedColorText
+            : resolveColorText(
+                r.colorRule as TechCardMaterialColorRule | null,
+                r.fixedColorText,
+                g.color,
+              ),
+          name: cells.name,
+          unit: cells.unit,
+          note: cells.note,
+          fabricType: cells.fabricType,
+          densityGsm: cells.densityGsm,
+          plannedWidthCm: cells.plannedWidthCm,
+          hardwareSizeText: cells.hardwareSizeText,
+          hardwareMaterialText: cells.hardwareMaterialText,
+          characteristics: cells.characteristics ?? Prisma.DbNull,
+        },
+      });
+    }
+  }
+
   private async rebuildMaterialRequirementsSnapshot(
     orderId: string,
     tx: Prisma.TransactionClient,
@@ -5373,6 +5545,30 @@ export class OrdersService {
           where: { id: { in: orphanIds } },
         });
       }
+      // Материализовывать нечего — но тираж живых строк обязан догнать план.
+      // Типовой случай: у карточки номенклатуры нет ни одной строки
+      // спецификации (нормы и погонные метры есть), и состав заказа менеджер
+      // набирает руками. Ручная строка создаётся с `totalQty = 0` в расчёте на
+      // ближайшую пересборку, а пересборка выходила отсюда молча — тираж не
+      // считался никогда. Заказ 02-00024: 11 строк с нулевым расходом на
+      // экране, нули в потребности цеха, шесть материалов в закупке по нулю.
+      //
+      // Здесь пересчитываем ВСЕ строки живых групп: сносить в этой ветке
+      // нечего, значит переживут все — и ручные, и legacy-шаблонные.
+      // Слот-параметры не материализуются (спецификации нет), поэтому карта
+      // значений пустая: ячейки под параметром остаются как есть.
+      for (const g of groups) {
+        if (g.qty <= 0) continue;
+        const gk = vk(g.variantId);
+        const rows = existing.filter((r) => vk(r.orderVariantId) === gk);
+        if (rows.length === 0) continue;
+        await this.recomputeSnapshotGroup(tx, {
+          rows,
+          group: g,
+          paramValues: new Map<string, TechCardParameterValue>(),
+          normSources,
+        });
+      }
       return;
     }
 
@@ -5518,121 +5714,13 @@ export class OrdersService {
         (r) => isRecomputeGroup || r.isManual,
       );
       if (rows.length === 0) continue;
-      const baseDecimal = new Prisma.Decimal(g.qty);
-      const paramValues =
-        valuesByGroup.get(gk) ?? new Map<string, TechCardParameterValue>();
-      // Норму из номенклатуры освежаем ТОЛЬКО у строк, которые её оттуда и
-      // получили (`qtySource = NOMENCLATURE`): размерный план мог поменяться,
-      // а средневзвешенная норма от него зависит. Правку в заказе (`ORDER`) и
-      // строки старше признака (`null`) не трогаем — иначе живой заказ тихо
-      // поменял бы норму сам.
-      const nomenclatureRows = rows.filter(
-        (r) => r.qtySource === 'NOMENCLATURE',
-      );
-      const recomputeMatchInput = nomenclatureRows.map((r) => ({
-        key: r.id,
-        materialRole: r.materialRole,
-        name: r.name,
-        fabricType: r.fabricType,
-        unit: r.unit,
-        normUnit: r.normUnit,
-      }));
-      const refreshedNorms =
-        nomenclatureRows.length > 0
-          ? matchPatternNormSources(recomputeMatchInput, normSources)
-          : new Map<string, PatternNormSource>();
-      // ВТОРОЙ ЗАХОД — тот же, что при материализации: NOMENCLATURE-строка,
-      // схлопнутая селектом в закупочную единицу («кг»), не должна терять
-      // связь с поразмерной нормой только из-за единицы — расщепление
-      // возрождается, норма снова живёт в метрах, «кг» остаётся закупкой.
-      const recomputeAutoNormUnit = this.retryLinearNormMatch(
-        recomputeMatchInput,
-        refreshedNorms,
+      await this.recomputeSnapshotGroup(tx, {
+        rows,
+        group: g,
+        paramValues:
+          valuesByGroup.get(gk) ?? new Map<string, TechCardParameterValue>(),
         normSources,
-      );
-      for (const r of rows) {
-        const bindings = (r.parameterBindings ??
-          null) as TechCardParameterBindings | null;
-        // Норма может быть ячейкой под слот-параметром — тогда её ставит
-        // `applyParametersToCells`, номенклатура в эту ячейку не пишет.
-        const refreshed =
-          bindings?.['core:qtyPerUnit'] == null
-            ? refreshedNorms.get(r.id)
-            : undefined;
-        const derivedNorm = refreshed
-          ? derivePatternNormPerUnit(refreshed, g.sizePlan)
-          : null;
-        // Единица нормы, выданная вторым заходом: строка снова расщеплена,
-        // номенклатурная норма пойдёт в метрах. Без источника (ячейка под
-        // слот-параметром) авто-расщеплению нечего расщеплять.
-        const autoUnit = refreshed
-          ? (recomputeAutoNormUnit.get(r.id) ?? null)
-          : null;
-        const nextNormUnit = autoUnit ?? r.normUnit;
-        const { cells } = applyParametersToCells(
-          {
-            name: r.name,
-            unit: r.unit,
-            qtyPerUnit: (derivedNorm?.qtyPerUnit ?? r.qtyPerUnit).toString(),
-            note: r.note,
-            materialRole: r.materialRole,
-            fabricType: r.fabricType,
-            densityGsm: r.densityGsm,
-            plannedWidthCm: r.plannedWidthCm,
-            hardwareSizeText: r.hardwareSizeText,
-            hardwareMaterialText: r.hardwareMaterialText,
-            characteristics:
-              (r.characteristics as MaterialCharacteristics | null) ?? null,
-          },
-          bindings,
-          paramValues,
-        );
-        const qtyPerUnit = new Prisma.Decimal(cells.qtyPerUnit);
-        await tx.orderMaterialRequirement.update({
-          where: { id: r.id },
-          data: {
-            variantColor: g.variantColor,
-            qtyPerUnit,
-            ...(autoUnit ? { normUnit: autoUnit } : {}),
-            totalQty: this.computeLineTotalQty({
-              qtyPerUnit,
-              normUnit: nextNormUnit,
-              unit: cells.unit,
-              qty: g.qty,
-              plannedWidthCm: cells.plannedWidthCm,
-              densityGsm: cells.densityGsm,
-            }),
-            // Строка потеряла источник в номенклатуре (параметр убрали /
-            // переименовали) — честно переводим её в «из шаблона», иначе UI
-            // обещал бы связь, которой уже нет.
-            ...(r.qtySource === 'NOMENCLATURE'
-              ? {
-                  qtySource: refreshed ? 'NOMENCLATURE' : 'TEMPLATE',
-                  qtySourceRef: refreshed ? refreshed.sourceId : null,
-                }
-              : {}),
-            // Цвет расцветки мог измениться — правило то же, что при
-            // материализации: `ORDER_SELECTED_COLOR` держит введённый вручную
-            // цвет, остальные правила резолвятся от цвета группы.
-            resolvedColorText: r.requiresColorSelection
-              ? r.selectedColorText
-              : resolveColorText(
-                  r.colorRule as TechCardMaterialColorRule | null,
-                  r.fixedColorText,
-                  g.color,
-                ),
-            name: cells.name,
-            unit: cells.unit,
-            note: cells.note,
-            fabricType: cells.fabricType,
-            densityGsm: cells.densityGsm,
-            plannedWidthCm: cells.plannedWidthCm,
-            hardwareSizeText: cells.hardwareSizeText,
-            hardwareMaterialText: cells.hardwareMaterialText,
-            characteristics: cells.characteristics ?? Prisma.DbNull,
-          },
-        });
-      }
+      });
     }
 
     const data: Prisma.OrderMaterialRequirementCreateManyInput[] = [];
