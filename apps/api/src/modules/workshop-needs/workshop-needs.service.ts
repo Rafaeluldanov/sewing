@@ -1539,6 +1539,7 @@ export class WorkshopNeedsService {
           g.totalQty,
           matchedLine,
           g.color,
+          warnings,
         );
         methodQtyPerUnit++;
         computed.push(stamp(computedNorm));
@@ -2484,6 +2485,7 @@ export class WorkshopNeedsService {
     totalOrderQty: number,
     matchedLine: SourceLine | null,
     orderColor: string | null,
+    warnings: string[],
   ): ComputedNeed {
     // Норма из заказа главнее номенклатуры (см. `orderEditedNormPerUnit`).
     const editedPerItem = orderEditedNormPerUnit(matchedLine, 'qty', norm.unit);
@@ -2522,6 +2524,21 @@ export class WorkshopNeedsService {
         `Норма правлена в заказе: ${editedPerItem.toString()} ${norm.unit}/шт ` +
           `(в номенклатуре ${norm.qtyPerItem.toString()}).`,
       );
+    } else if (
+      matchedLine?.qtySource === 'ORDER' &&
+      matchedLine.qtyPerUnit != null &&
+      matchedLine.qtyPerUnit.greaterThan(0)
+    ) {
+      // Правку отбросила сверка единиц. Молчать нельзя: на экране заказа стоит
+      // одно число, в закупку уходит другое — ровно та пара чисел про один
+      // материал, ради которой приоритет заказа и заведён. Зеркало нот в
+      // поразмерной и площадной ветках.
+      const w =
+        `Норма строки «${matchedLine.name}» правлена в заказе в ` +
+        `«${normUnitOf(matchedLine)}», а норма «${norm.labelSnapshot}» в ` +
+        `номенклатуре ведётся в «${norm.unit}» — правка в расчёт не вошла.`;
+      noteParts.push(w);
+      warnings.push(w);
     }
     if (colorMissing) noteParts.push('Цвет нужно указать в заказе');
     const calculationNote = noteParts.length > 0 ? noteParts.join(' ') : null;
@@ -3200,8 +3217,22 @@ export class WorkshopNeedsService {
     }
     // Pretty-join: первая часть — «название» / «характеристика», дальше
     // через запятую. Получается «Кулирка 180 г/м², чёрный, ширина 180 см».
-    if (parts.length === 1) return parts[0];
-    return `${parts[0]} ${parts.slice(1).join(', ')}`;
+    const composed =
+      parts.length === 1 ? parts[0] : `${parts[0]} ${parts.slice(1).join(', ')}`;
+
+    // Голова описания — `fabricType` («что покупаем»), и имя строки в нём
+    // теряется. Две разные строки одного типа выглядели в потребности
+    // близнецами: «ПВХ Бирка» и «Жаккардовая Бирка» (обе `fabricType =
+    // Бирка», цвет «Графит») давали две строки «Бирка Графит» — какая из них
+    // какая, по списку не понять. Дописываем имя, но только если оно ещё не
+    // звучит в описании: «Нитки» внутри «Нитки 40/2» повторять незачем.
+    const lineName = (line.name ?? '').trim();
+    if (lineName === '') return composed;
+    const flat = (v: string): string =>
+      v.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
+    return flat(composed).includes(flat(lineName))
+      ? composed
+      : `${composed} (${lineName})`;
   }
 
   // -------------------------------------------------------------------------
@@ -3702,13 +3733,26 @@ function normUnitOf(line: SourceLine): string {
   return norm === '' ? line.unit : norm;
 }
 
-/** Единица для сверки: без точек, пробелов и «²» → «2», в нижнем регистре. */
+/**
+ * Единица для сверки: без точек, пробелов и «²» → «2», в нижнем регистре.
+ *
+ * Хвост «/шт» снимаем: норма ВЕЗДЕ задана на изделие, и «м/шт» — это та же
+ * «м», просто записанная с явным знаменателем. В номенклатуре единицу пишут
+ * коротко («м»), в спецификации заказа технолог набирает «м/шт» — и правка
+ * нормы молча отбрасывалась как «единица не сошлась». Заказ 02-00024: нитки
+ * 80 м/шт в заказе против 50 м в номенклатуре, потребность считалась по
+ * номенклатуре — 5000 м вместо 8000, без ноты и предупреждения.
+ *
+ * Смысл гейта это не ослабляет: «м» против «шт» по-прежнему не сходится, и
+ * шнур под норму люверсов не встанет.
+ */
 function normalizeUnitForCompare(unit: string | null | undefined): string {
   return (unit ?? '')
     .trim()
     .toLowerCase()
     .replace(/[.\s]/g, '')
-    .replace(/²/g, '2');
+    .replace(/²/g, '2')
+    .replace(/\/(шт|изд|ед)$/, '');
 }
 
 function orderEditedNormPerUnit(
