@@ -72,6 +72,7 @@ import {
 } from '@sewing/shared/money';
 import {
   isOrderApplicationsEditable,
+  isOrderApplicationsLateEdit,
   type OrderApplicationDto,
 } from '@sewing/shared/order-applications';
 import type { PatternListItemDto } from '@sewing/shared/patterns';
@@ -179,9 +180,9 @@ interface Props {
   initialColorways: ColorwayDraft[];
   /**
    * Нанесения заказа (из `getOrderApplications`) для карточки
-   * «Нанесение». Правятся, пока расчёт не завершён — DRAFT /
-   * CALCULATION (backend-инвариант
-   * `ORDER_APPLICATION_ORDER_LOCKED`), дальше карточка read-only.
+   * «Нанесение». Правятся на любой стадии, кроме отменённой
+   * (backend-инвариант `ORDER_APPLICATION_ORDER_LOCKED`), у
+   * `CANCELLED` карточка read-only.
    */
   initialApplications: OrderApplicationDto[];
 }
@@ -248,10 +249,17 @@ export function AdminEditOrderForm({
   // На CALCULATION_DONE — read-only, правка через «Вернуть на пересчёт».
   const colorwaysEditable =
     order.status === 'DRAFT' || order.status === 'CALCULATION';
-  // Нанесения правятся в том же окне «пока расчёт не завершён»
-  // (DRAFT/CALCULATION) — список статусов держит shared рядом с
-  // backend-гейтом `ORDER_APPLICATION_ORDER_LOCKED`.
+  // Нанесения, в отличие от расцветок выше, НЕ замирают вместе с
+  // планом: это расход заказа, и клиент просит принт даже когда тираж
+  // уже кроят. Окно — всё, кроме `CANCELLED`; список статусов держит
+  // shared рядом с backend-гейтом `ORDER_APPLICATION_ORDER_LOCKED`.
   const applicationsEditable = isOrderApplicationsEditable(order.status);
+  // После завершения расчёта правка идёт «поздним» путём: потребность
+  // синхронизируется точечно, а удаление строки с начатой закупкой
+  // отбивается 409 `ORDER_APPLICATION_HAS_PURCHASE`. Предупреждаем до
+  // сохранения — тем же текстом, что и карточка во вкладке
+  // «Производство» (`OrderApplicationsCard`).
+  const applicationsLateEdit = isOrderApplicationsLateEdit(order.status);
 
   const [color, setColor] = useState<string>(order.color ?? '');
 
@@ -1456,10 +1464,11 @@ export function AdminEditOrderForm({
               созданный через «Создать изделие», сразу уезжает на эту
               страницу, и другого места ввести нанесение у менеджера нет.
 
-              Правка разрешена, пока расчёт не завершён (DRAFT /
-              CALCULATION — `isOrderApplicationsEditable`, тот же список
-              статусов, что у backend-гейта
-              `ORDER_APPLICATION_ORDER_LOCKED`). Вне окна редактор
+              Правка разрешена на любой стадии, кроме отменённой
+              (`isOrderApplicationsEditable`, тот же список статусов,
+              что у backend-гейта `ORDER_APPLICATION_ORDER_LOCKED`), —
+              страница `/edit` по статусу не закрыта, так что поздняя
+              правка приходит и отсюда. У `CANCELLED` редактор
               оборачиваем `<fieldset disabled>`: он гасит контролы
               нативно, вместе со скрытым `applicationsJson`, поэтому
               server action его не увидит и PUT не пошлёт (тот же приём,
@@ -1477,8 +1486,20 @@ export function AdminEditOrderForm({
             >
               {applicationsEditable
                 ? 'Параметры нанесения хранятся в заказе и сохраняются вместе с формой. На крое блокируется раскладка, пока параметры не заполнены.'
-                : 'Нанесение правится, пока расчёт не завершён. Сейчас список заморожен — чтобы изменить, верните заказ на пересчёт.'}
+                : 'Заказ отменён — список нанесений заморожен и правке не подлежит.'}
             </p>
+            {applicationsLateEdit && (
+              <p
+                className="admin-order-applications__late-note"
+                style={{ marginTop: 0, marginBottom: 12 }}
+              >
+                Расчёт заказа уже завершён. Добавленное нанесение попадёт в
+                потребность цеха и себестоимость отдельной строкой; строки,
+                которые закупщик уже проверил, останутся как есть. Удалить
+                нанесение, по которому пошла закупка, нельзя — снимите строку
+                на экране «Потребности».
+              </p>
+            )}
             <fieldset
               disabled={!applicationsEditable}
               style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}

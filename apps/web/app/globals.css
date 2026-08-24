@@ -12082,6 +12082,19 @@ body:has(.admin-layout) .app-header { display: none !important; }
   padding: 0;
 }
 
+/* Правка нанесений после завершения расчёта: плашка над формой
+   (`OrderApplicationsCard`, признак `isOrderApplicationsLateEdit`).
+   Тон предупреждения — токены `--admin-warning-*`, как у бейджа
+   `.admin-status-badge--warning`. */
+.admin-order-applications__late-note {
+  background: var(--admin-warning-soft);
+  color: var(--admin-warning-fg);
+  border-radius: var(--radius-md);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 /* Этап «Нанесение на заказе покупателя»: read-only список нанесений
    в блоке «Изделие» (компонент `OrderApplicationsCard`). Form-mode
    (DRAFT) использует inline-стили в самой форме; здесь — только стиль

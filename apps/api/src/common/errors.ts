@@ -439,12 +439,38 @@ export class OrderCalculationUsdRateRequiredException extends BusinessException 
  */
 export class OrderApplicationOrderLockedException extends ConflictException {
   constructor(
-    message = 'Изменить нанесения можно, пока расчёт не завершён — в статусе «Черновик» или «Расчёт». Чтобы отредактировать после расчёта, верните заказ на пересчёт.',
+    message = 'Изменить нанесения можно на любой стадии заказа, кроме отменённой.',
   ) {
     super({
       statusCode: 409,
       message,
       code: 'ORDER_APPLICATION_ORDER_LOCKED',
+    });
+  }
+}
+
+/**
+ * Менеджер пытается УДАЛИТЬ нанесение из заказа, по которому закупка
+ * уже пошла: строка потребности (`WorkshopNeed` с
+ * `sourceType = ORDER_APPLICATION`) проверена закупщиком, правлена
+ * руками или по ней есть движения склада.
+ *
+ * Правка нанесений открыта после расчёта (см.
+ * `ORDER_APPLICATION_EDITABLE_ORDER_STATUSES`) ради ДОБАВЛЕНИЯ:
+ * клиент просит принт, когда тираж уже в работе. Удаление же задним
+ * числом стёрло бы основание уже понесённого расхода — плёнку купили,
+ * а нанесения в заказе «не было». Гасить такую строку нужно осознанно,
+ * на экране «Потребности» (там есть «Отменить строку»).
+ *
+ * До завершения расчёта (`DRAFT` / `CALCULATION`) проверка не
+ * применяется — там удаление нанесения нормальная часть работы.
+ */
+export class OrderApplicationHasPurchaseException extends ConflictException {
+  constructor(message: string) {
+    super({
+      statusCode: 409,
+      message,
+      code: 'ORDER_APPLICATION_HAS_PURCHASE',
     });
   }
 }

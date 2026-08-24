@@ -18,10 +18,13 @@
  *   7. WorkshopNeed: после `start-calculation` создаётся строка
  *      с `sourceType = ORDER_APPLICATION` и
  *      `materialRole = APPLICATION`;
- *   8. Окно правки «пока расчёт не завершён»: на CALCULATION PUT
- *      /applications ещё проходит (и пересобирает потребность цеха), а
- *      после `complete-calculation` отбивается 409
- *      `ORDER_APPLICATION_ORDER_LOCKED`;
+ *   8. Окно правки — весь жизненный цикл, кроме отменённого заказа: на
+ *      CALCULATION PUT /applications пересобирает потребность цеха
+ *      целиком, а после `complete-calculation` синхронизирует её
+ *      точечно (добавленное нанесение доходит до потребности, работа
+ *      закупщика по соседним строкам не теряется). Удаление нанесения,
+ *      по которому пошла закупка, отбивается 409
+ *      `ORDER_APPLICATION_HAS_PURCHASE`;
  *   9. RBAC: рабочая роль (QC) → 403 на PUT.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
@@ -393,7 +396,8 @@ describeWithDb('integration — order applications', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 7. Окно правки: CALCULATION — можно, CALCULATION_DONE — 409
+  // 7. Окно правки: на CALCULATION — полный пересчёт потребности,
+  //    после завершения расчёта — точечная синхронизация
   // ---------------------------------------------------------------------------
 
   test('На CALCULATION PUT /applications проходит и пересобирает потребность', async () => {
@@ -433,7 +437,14 @@ describeWithDb('integration — order applications', () => {
     expect(needs[0].description).toMatch(/DTF/);
   });
 
-  test('После завершения расчёта PUT /applications → 409 ORDER_APPLICATION_ORDER_LOCKED', async () => {
+  /**
+   * Доводит заказ до `CALCULATION_DONE` с одним нанесением «OTHER» и
+   * отдаёт id заказа. Общая присказка для тестов «поздней» правки:
+   * завершить расчёт можно, только когда у КАЖДОЙ строки потребности
+   * есть закупочное количество, цена и валюта — иначе 422
+   * `ORDER_CALCULATION_INCOMPLETE` (см. `order-cost-estimates.test.ts`).
+   */
+  async function prepareCalculatedOrderWithApplication(): Promise<string> {
     const orderId = await prepareReadyOrder(t, seed, cookies.manager);
     await request(t.app.getHttpServer())
       .put(`/api/orders/${orderId}/applications`)
@@ -448,9 +459,6 @@ describeWithDb('integration — order applications', () => {
       .set('Cookie', cookies.manager)
       .send({})
       .expect(201);
-    // Завершить расчёт можно только когда у КАЖДОЙ строки потребности
-    // есть закупочное количество, цена и валюта — иначе 422
-    // `ORDER_CALCULATION_INCOMPLETE` (см. `order-cost-estimates.test.ts`).
     const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });
     for (const n of needs) {
       await request(t.app.getHttpServer())
@@ -464,15 +472,132 @@ describeWithDb('integration — order applications', () => {
       .set('Cookie', cookies.manager)
       .send({ usdRateRub: '95' })
       .expect(201);
+    return orderId;
+  }
 
+  test('После завершения расчёта нанесение можно ДОБАВИТЬ: строка потребности появляется, старая живёт своим id', async () => {
+    const orderId = await prepareCalculatedOrderWithApplication();
+
+    const before = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    expect(before.body).toHaveLength(1);
+    const keptId: string = before.body[0].id;
+    const keptNeedBefore = await t.prisma.workshopNeed.findFirst({
+      where: { orderId, sourceType: 'ORDER_APPLICATION', sourceId: keptId },
+    });
+    expect(keptNeedBefore).not.toBeNull();
+
+    // Клиент вспомнил про принт, когда расчёт уже закрыт: шлём
+    // существующую строку с её id + новую без id.
     const r = await request(t.app.getHttpServer())
       .put(`/api/orders/${orderId}/applications`)
       .set('Cookie', cookies.manager)
       .send({
-        applications: [{ type: 'DTF', stage: 'CUT_PARTS', placement: 'грудь' }],
+        applications: [
+          { id: keptId, type: 'OTHER', stage: 'CUT_PARTS', placement: 'спина' },
+          { type: 'DTF', stage: 'CUT_PARTS', placement: 'грудь' },
+        ],
       });
+    expect(r.status).toBe(200);
+    expect(r.body).toHaveLength(2);
+    // Существующее нанесение сохранило id — на него ссылается снимок
+    // потребности вместе с ценой и поставщиком.
+    expect(r.body.map((a: { id: string }) => a.id)).toContain(keptId);
+
+    const appNeeds = await t.prisma.workshopNeed.findMany({
+      where: { orderId, sourceType: 'ORDER_APPLICATION' },
+    });
+    expect(appNeeds).toHaveLength(2);
+    // Строка старого нанесения — та же самая (не пересоздана).
+    const keptNeedAfter = appNeeds.find((n) => n.sourceId === keptId);
+    expect(keptNeedAfter?.id).toBe(keptNeedBefore!.id);
+    expect(keptNeedAfter?.quotedPrice?.toString()).toBe(
+      keptNeedBefore!.quotedPrice?.toString(),
+    );
+    // Добавленное нанесение дошло до потребности отдельной строкой.
+    const addedNeed = appNeeds.find((n) => n.sourceId !== keptId);
+    expect(addedNeed?.description).toMatch(/DTF/);
+    expect(addedNeed?.materialRole).toBe('APPLICATION');
+  });
+
+  test('Нанесение, по которому пошла закупка, удалить после расчёта нельзя → 409 ORDER_APPLICATION_HAS_PURCHASE', async () => {
+    const orderId = await prepareCalculatedOrderWithApplication();
+
+    const list = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    const appId: string = list.body[0].id;
+
+    // Закупщик проверил строку — статус ушёл с CALCULATED.
+    await t.prisma.workshopNeed.updateMany({
+      where: { orderId, sourceType: 'ORDER_APPLICATION', sourceId: appId },
+      data: { status: 'REVIEWED' },
+    });
+
+    const r = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({ applications: [] });
     expect(r.status).toBe(409);
-    expect(r.body.code).toBe('ORDER_APPLICATION_ORDER_LOCKED');
+    expect(r.body.code).toBe('ORDER_APPLICATION_HAS_PURCHASE');
+
+    // Нанесение на месте — правка не применилась частично.
+    const after = await t.prisma.orderApplication.findMany({
+      where: { orderId },
+    });
+    expect(after).toHaveLength(1);
+  });
+
+  test('Проверенную закупщиком строку потребности поздняя правка не переписывает', async () => {
+    const orderId = await prepareCalculatedOrderWithApplication();
+
+    const list = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    const appId: string = list.body[0].id;
+    await t.prisma.workshopNeed.updateMany({
+      where: { orderId, sourceType: 'ORDER_APPLICATION', sourceId: appId },
+      data: { status: 'REVIEWED' },
+    });
+    const needBefore = await t.prisma.workshopNeed.findFirst({
+      where: { orderId, sourceType: 'ORDER_APPLICATION', sourceId: appId },
+    });
+
+    // Меняем количество у нанесения, строка потребности которого уже в
+    // работе: само нанесение обновляется, а строка остаётся нетронутой
+    // (иначе молча затёрли бы работу закупщика).
+    await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({
+        applications: [
+          {
+            id: appId,
+            type: 'OTHER',
+            stage: 'CUT_PARTS',
+            placement: 'спина',
+            quantity: '99',
+          },
+        ],
+      })
+      .expect(200);
+
+    const needAfter = await t.prisma.workshopNeed.findFirst({
+      where: { orderId, sourceType: 'ORDER_APPLICATION', sourceId: appId },
+    });
+    expect(needAfter?.id).toBe(needBefore!.id);
+    expect(needAfter?.status).toBe('REVIEWED');
+    expect(needAfter?.calculatedQty.toString()).toBe(
+      needBefore!.calculatedQty.toString(),
+    );
+    const app = await t.prisma.orderApplication.findUnique({
+      where: { id: appId },
+    });
+    expect(Number(app!.quantity)).toBe(99);
   });
 
   // ---------------------------------------------------------------------------

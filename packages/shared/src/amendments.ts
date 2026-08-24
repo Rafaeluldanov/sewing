@@ -578,8 +578,8 @@ export function planRouteAmendment(
 
 // ---------------------------------------------------------------------------
 // Журнал правок в производстве (аудит ORDER_QTY_AMENDED / ORDER_SIZE_AMENDED
-// / ORDER_OPERATION_ADDED / ORDER_TECH_CARD_AMENDED). Read-only, для карточки
-// заказа.
+// / ORDER_OPERATION_ADDED / ORDER_TECH_CARD_AMENDED /
+// ORDER_APPLICATIONS_REPLACED). Read-only, для карточки заказа.
 // ---------------------------------------------------------------------------
 
 /** Одна запись журнала правок. `summary` уже человекочитаемый (собран на backend). */
@@ -593,8 +593,13 @@ export interface AmendmentHistoryEntryDto {
    * `materials` — правка спецификации техкарты заказа (норма, единица, цвет,
    * значение параметра, добавленный/убранный материал). Пишется, когда
    * технолог правит материалы уже после расчёта / в производстве.
+   *
+   * `application` — правка списка нанесений после завершения расчёта
+   * (`ORDER_APPLICATIONS_REPLACED` с `lateEdit = true`). Для менеджера
+   * это такая же правка заказа в производстве: принт, добавленный к уже
+   * запущенному тиражу, обязан быть виден в журнале.
    */
-  kind: 'quantity' | 'size' | 'operation' | 'materials';
+  kind: 'quantity' | 'size' | 'operation' | 'materials' | 'application';
   /** Причина, указанная менеджером. */
   reason: string | null;
   /** Готовая строка «что изменилось» (коды размеров/имя операции уже подставлены). */

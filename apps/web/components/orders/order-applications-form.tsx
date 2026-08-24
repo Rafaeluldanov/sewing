@@ -4,10 +4,11 @@
  * `OrderApplicationsForm` — форма редактирования списка нанесений
  * в карточке заказа (`/admin/orders/[id]`, вкладка «Производство»).
  *
- * Используется, пока расчёт заказа не завершён — `DRAFT` /
- * `CALCULATION` (см. `isOrderApplicationsEditable` и backend-инвариант
- * `ORDER_APPLICATION_ORDER_LOCKED`). Семантика — full replace списка
- * через `PUT /api/orders/:id/applications`.
+ * Используется на любой стадии заказа, кроме отменённой (см.
+ * `isOrderApplicationsEditable` и backend-инвариант
+ * `ORDER_APPLICATION_ORDER_LOCKED`). Семантика — replace списка по
+ * `id` через `PUT /api/orders/:id/applications`: строки, пришедшие с
+ * сервера, правятся на месте, новые создаются, пропавшие удаляются.
  *
  * Архитектура:
  *   - сама форма — это лёгкая обёртка над общим клиентским

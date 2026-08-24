@@ -11,11 +11,14 @@
  * `WorkshopNeedsCard` / `CutReadinessCard`).
  *
  * UX по статусу заказа:
- *   - `DRAFT` / `CALCULATION` (пока расчёт не завершён) — рендерим
- *     интерактивную форму редактирования (`OrderApplicationsForm`).
- *     Менеджер может добавить/удалить строки и сохранить; на
- *     `CALCULATION` backend сам пересобирает потребность цеха.
- *   - все остальные  — read-only список карточек нанесения.
+ *   - любой статус, кроме `CANCELLED` — интерактивная форма
+ *     редактирования (`OrderApplicationsForm`): клиент просит принт и
+ *     тогда, когда тираж уже кроят.
+ *   - `CANCELLED` — read-only список карточек нанесения.
+ *   - после завершения расчёта (`isOrderApplicationsLateEdit`) над
+ *     формой висит плашка: потребность синхронизируется точечно, а
+ *     удалить нанесение, по которому уже пошла закупка, нельзя (409
+ *     `ORDER_APPLICATION_HAS_PURCHASE`).
  *
  * Backend / DTO / API не меняем — это чистая presentation-обёртка.
  */
@@ -23,6 +26,7 @@ import { ChevronDown, Stamp } from 'lucide-react';
 import {
   describeApplicationScope,
   isOrderApplicationsEditable,
+  isOrderApplicationsLateEdit,
   type OrderApplicationDto,
 } from '@sewing/shared/order-applications';
 import type { OrderStatus } from '@sewing/shared/orders';
@@ -41,17 +45,16 @@ interface Props {
   orderId: string;
   /**
    * Статус родительского заказа управляет режимом блока:
-   *   - `DRAFT` / `CALCULATION` — форма редактирования (full-replace
-   *     через PUT), см. `isOrderApplicationsEditable`.
-   *   - всё остальное   — read-only список (см. backend-инвариант
+   *   - любой, кроме `CANCELLED` — форма редактирования (replace по
+   *     `id` через PUT), см. `isOrderApplicationsEditable`;
+   *   - `CANCELLED` — read-only список (backend-инвариант
    *     `ORDER_APPLICATION_ORDER_LOCKED`).
    */
   orderStatus: OrderStatus;
   /**
    * Размеры заказа для адресации нанесения «на выбранные размеры»
-   * (этап «Нанесение по размерам»). Нужны только в DRAFT-режиме
-   * (форма). Если не переданы — режим «выбранные размеры» в форме
-   * будет недоступен.
+   * (этап «Нанесение по размерам»). Нужны только в режиме формы. Если
+   * не переданы — режим «выбранные размеры» в форме будет недоступен.
    */
   sizes?: { id: string; code: string }[];
 }
@@ -87,9 +90,12 @@ export async function OrderApplicationsCard({
         : 'Не удалось загрузить нанесения';
   }
 
-  // Окно правки — «пока расчёт не завершён» (DRAFT / CALCULATION),
+  // Окно правки — весь жизненный цикл, кроме отменённого заказа;
   // единый список статусов живёт в shared рядом с backend-гейтом.
   const editable = isOrderApplicationsEditable(orderStatus);
+  // Правка после завершения расчёта: потребность и себестоимость уже
+  // зафиксированы, поэтому предупреждаем о правилах до сохранения.
+  const lateEdit = isOrderApplicationsLateEdit(orderStatus);
 
   return (
     <div className="admin-order-item-card__section admin-order-applications">
@@ -113,6 +119,16 @@ export async function OrderApplicationsCard({
       {loadError && (
         <div className="error-box" role="alert" style={{ marginBottom: 8 }}>
           {loadError}
+        </div>
+      )}
+
+      {editable && lateEdit && (
+        <div className="admin-order-applications__late-note" style={{ marginBottom: 8 }}>
+          Расчёт заказа уже завершён. Добавленное нанесение попадёт в
+          потребность цеха и себестоимость отдельной строкой; строки,
+          которые закупщик уже проверил, останутся как есть. Удалить
+          нанесение, по которому пошла закупка, нельзя — снимите строку на
+          экране «Потребности».
         </div>
       )}
 

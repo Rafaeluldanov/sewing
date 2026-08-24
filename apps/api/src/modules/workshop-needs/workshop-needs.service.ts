@@ -2136,6 +2136,196 @@ export class WorkshopNeedsService {
   }
 
   // -------------------------------------------------------------------------
+  // ТОЧЕЧНАЯ СИНХРОНИЗАЦИЯ СТРОК НАНЕСЕНИЙ
+  // -------------------------------------------------------------------------
+
+  /**
+   * Фича «Правка нанесений после расчёта»: приводит строки
+   * `WorkshopNeed` с `sourceType = ORDER_APPLICATION` в соответствие с
+   * текущим списком `OrderApplication` заказа — БЕЗ полного пересчёта.
+   *
+   * Зачем отдельный путь, а не `calculateForOrder`:
+   *   - полный пересчёт пересобирает ВСЮ потребность из спецификации и
+   *     на запущенном заказе почти всегда отбивается
+   *     `WORKSHOP_NEEDS_ALREADY_REVIEWED` (закупщик уже проверил
+   *     строки) или `WORKSHOP_NEEDS_HAVE_STOCK` (есть движения склада).
+   *     То есть в производстве он не сработал бы вообще;
+   *   - даже с `force` он снёс бы и пересоздал соседние строки, потеряв
+   *     их статусы. Нанесение — узкий источник: правим только его
+   *     строки, всё остальное не трогаем.
+   *
+   * Правила синхронизации (по паре `sourceType` + `sourceId`, скоуп —
+   * активная калькуляция, как и у полного пересчёта):
+   *   - нанесения нет в потребности        → создаём строку;
+   *   - строка есть и НЕ тронута человеком (`status = CALCULATED`,
+   *     `manualEditAt = null`)             → обновляем расчётные поля;
+   *   - строка есть, но тронута (проверена / в закупке / правлена
+   *     руками)                            → НЕ трогаем, возвращаем
+   *     предупреждение: молча переписать работу закупщика нельзя;
+   *   - строка осталась без нанесения (нанесение удалили) → удаляем,
+   *     если она нетронута и по ней нет движений склада; иначе —
+   *     предупреждение.
+   *
+   * `CANCELLED`-нанесения намеренно считаются отсутствующими — ровно
+   * как в `calculateForOrder`.
+   *
+   * Себестоимость догоняем через `syncAfterNeedsChange` — тем же
+   * best-effort вызовом, что и все точечные правки потребности.
+   */
+  async syncApplicationNeeds(
+    orderId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<{
+    created: number;
+    updated: number;
+    removed: number;
+    warnings: string[];
+  }> {
+    const warnings: string[] = [];
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        items: { select: { sizeId: true, qtyPlan: true } },
+        applications: {
+          include: {
+            sizes: {
+              include: { size: { select: { code: true } } },
+              orderBy: { size: { sortOrder: 'asc' } },
+            },
+          },
+        },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+
+    // Скоуп — активная калькуляция (см. шаг 2.5 `calculateForOrder`):
+    // строки чужих вариантов не наши.
+    const activeCalculation = await this.prisma.orderCalculation.findFirst({
+      where: { orderId, isActive: true },
+      select: { id: true },
+    });
+    const activeCalculationId = activeCalculation?.id ?? null;
+
+    const totalOrderQty = order.items.reduce((acc, it) => acc + it.qtyPlan, 0);
+    const sizeQtyById = new Map(
+      order.items.map((it) => [it.sizeId, it.qtyPlan]),
+    );
+
+    const existing = await this.prisma.workshopNeed.findMany({
+      where: {
+        orderId,
+        orderCalculationId: activeCalculationId,
+        sourceType: 'ORDER_APPLICATION',
+      },
+      select: {
+        id: true,
+        sourceId: true,
+        status: true,
+        manualEditAt: true,
+        description: true,
+        _count: { select: { stockMovements: true } },
+      },
+    });
+    const rowBySourceId = new Map(
+      existing.filter((r) => r.sourceId).map((r) => [r.sourceId!, r]),
+    );
+
+    let created = 0;
+    let updated = 0;
+    let removed = 0;
+
+    const liveIds = new Set<string>();
+    for (const app of order.applications) {
+      if (app.status === 'CANCELLED') continue;
+      liveIds.add(app.id);
+
+      const computed = this.computeApplication(app, totalOrderQty, sizeQtyById);
+      const row = rowBySourceId.get(app.id);
+
+      if (!row) {
+        await this.prisma.workshopNeed.create({
+          data: {
+            orderId,
+            orderCalculationId: activeCalculationId,
+            // Нанесение не варьируется по расцветке — строка order-level.
+            orderVariantId: null,
+            variantColor: null,
+            sourceType: computed.sourceType,
+            sourceId: computed.sourceId,
+            materialRole: computed.materialRole,
+            sourceName: computed.sourceName,
+            description: computed.description,
+            resolvedColorText: computed.resolvedColorText,
+            calculatedQty: computed.calculatedQty,
+            unit: computed.unit,
+            calculationMethod: computed.calculationMethod,
+            calculationNote: computed.calculationNote,
+          },
+        });
+        created += 1;
+        continue;
+      }
+
+      const touched = row.status !== 'CALCULATED' || row.manualEditAt != null;
+      if (touched) {
+        warnings.push(
+          `Строка потребности «${row.description}» уже в работе у закупщика — количество по нанесению не переписано. Проверьте её вручную на экране «Потребности».`,
+        );
+        continue;
+      }
+
+      await this.prisma.workshopNeed.update({
+        where: { id: row.id },
+        data: {
+          sourceName: computed.sourceName,
+          description: computed.description,
+          resolvedColorText: computed.resolvedColorText,
+          calculatedQty: computed.calculatedQty,
+          unit: computed.unit,
+          calculationMethod: computed.calculationMethod,
+          calculationNote: computed.calculationNote,
+        },
+      });
+      updated += 1;
+    }
+
+    for (const row of existing) {
+      if (row.sourceId && liveIds.has(row.sourceId)) continue;
+      const touched = row.status !== 'CALCULATED' || row.manualEditAt != null;
+      if (touched || row._count.stockMovements > 0) {
+        warnings.push(
+          `Строка потребности «${row.description}» осталась от удалённого нанесения, но по ней уже есть закупка или движения склада — снимите её вручную на экране «Потребности».`,
+        );
+        continue;
+      }
+      await this.prisma.workshopNeed.delete({ where: { id: row.id } });
+      removed += 1;
+    }
+
+    if (created > 0 || updated > 0 || removed > 0) {
+      // Себестоимость обязана догнать правку потребности — тот же
+      // best-effort вызов, что у `update` / `cancel` / `createManual`.
+      await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
+    }
+
+    this.logger.log(
+      `event=workshop_needs.sync_applications orderId=${orderId} ` +
+        `created=${created} updated=${updated} removed=${removed} ` +
+        `warnings=${warnings.length}`,
+    );
+
+    return { created, updated, removed, warnings };
+  }
+
+  // -------------------------------------------------------------------------
   // INTERNAL: per-line computation
   // -------------------------------------------------------------------------
 

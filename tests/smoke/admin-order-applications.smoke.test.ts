@@ -198,34 +198,74 @@ describe('Backend module order-applications', () => {
     expect(src).toMatch(/replaceForOrder/);
     expect(src).toMatch(/this\.prisma\.\$transaction/);
     expect(src).toMatch(/orderApplication\.deleteMany/);
+    // Replace идёт по `id`: пришедшие с сервера строки обновляются на
+    // месте, а не пересоздаются (иначе рвётся `WorkshopNeed.sourceId`).
+    expect(src).toMatch(/orderApplication\.update\(/);
     // Этап «Нанесение по размерам»: вложенный create на каждое
     // нанесение (а не createMany), чтобы в той же транзакции создать
     // адресацию по размерам (`OrderApplicationSize`).
     expect(src).toMatch(/orderApplication\.create\(/);
     expect(src).toMatch(/ORDER_APPLICATIONS_REPLACED/);
-    // Окно правки — «пока расчёт не завершён» (DRAFT/CALCULATION):
-    // единый список статусов в shared, дальше 409.
+    // Окно правки — любая стадия, кроме отменённой: единый список
+    // статусов в shared, у `CANCELLED` — 409.
     expect(src).toMatch(/isOrderApplicationsEditable\(order\.status\)/);
     expect(src).toMatch(/OrderApplicationOrderLockedException/);
     // Правка на CALCULATION пересобирает строки WorkshopNeed с
     // sourceType = ORDER_APPLICATION — иначе потребность цеха осталась
     // бы от старого списка нанесений.
     expect(src).toMatch(/workshopNeeds\.calculateForOrder/);
+    // А после завершения расчёта — точечная синхронизация: полный
+    // пересчёт в производстве упрётся в ALREADY_REVIEWED / HAVE_STOCK.
+    expect(src).toMatch(/workshopNeeds\.syncApplicationNeeds/);
+    // Удалить нанесение, по которому пошла закупка, нельзя.
+    expect(src).toMatch(/OrderApplicationHasPurchaseException/);
+  });
+
+  test('WorkshopNeedsService умеет точечно синхронизировать нанесения', () => {
+    const src = read(
+      'apps/api/src/modules/workshop-needs/workshop-needs.service.ts',
+    );
+    expect(src).toMatch(/async syncApplicationNeeds\(/);
+    // Скоуп — строки нанесений активной калькуляции; чужие источники
+    // метод не трогает.
+    expect(src).toMatch(/sourceType: 'ORDER_APPLICATION'/);
+    // Тронутую закупщиком строку не переписываем молча.
+    expect(src).toMatch(/manualEditAt/);
+    // Себестоимость догоняет правку потребности.
+    expect(src).toMatch(/syncAfterNeedsChange/);
   });
 
   test('shared держит окно правки нанесений одним списком статусов', () => {
     const src = read('packages/shared/src/order-applications.ts');
     expect(src).toMatch(/ORDER_APPLICATION_EDITABLE_ORDER_STATUSES/);
     expect(src).toMatch(/export function isOrderApplicationsEditable/);
-    // Окно — до завершения расчёта: черновик + идущий расчёт.
+    // Фича «Нанесение в производстве»: окно — весь жизненный цикл,
+    // кроме отменённого заказа. Клиент просит принт и тогда, когда
+    // тираж уже кроят; запрет не отменял расход, а уводил его мимо
+    // системы.
     const block = src.match(
       /ORDER_APPLICATION_EDITABLE_ORDER_STATUSES = \[[\s\S]*?\]/,
     );
     expect(block).not.toBeNull();
     expect(block![0]).toMatch(/'DRAFT'/);
     expect(block![0]).toMatch(/'CALCULATION'/);
-    expect(block![0]).not.toMatch(/CALCULATION_DONE/);
-    expect(block![0]).not.toMatch(/IN_PRODUCTION/);
+    expect(block![0]).toMatch(/'CALCULATION_DONE'/);
+    expect(block![0]).toMatch(/'IN_PRODUCTION'/);
+    expect(block![0]).toMatch(/'DONE'/);
+    // CANCELLED — единственный запрет.
+    expect(block![0]).not.toMatch(/CANCELLED/);
+  });
+
+  test('shared отделяет «позднюю» правку нанесений от правки на расчёте', () => {
+    const src = read('packages/shared/src/order-applications.ts');
+    // По этому признаку backend выбирает точечную синхронизацию
+    // потребности вместо полного пересчёта, а UI рисует плашку.
+    expect(src).toMatch(/export function isOrderApplicationsLateEdit/);
+    // Строка списка правится на месте — иначе снимок потребности
+    // (`WorkshopNeed.sourceId`) осиротеет вместе с ценой и поставщиком.
+    expect(src).toMatch(
+      /OrderApplicationInputSchema = z\.object\(\{[\s\S]*?id: z\.string\(\)/,
+    );
   });
 
   test('Module зарегистрирован в AppModule', () => {
@@ -240,6 +280,12 @@ describe('Backend module order-applications', () => {
     const errs = read('apps/api/src/common/errors.ts');
     expect(errs).toMatch(/class OrderApplicationOrderLockedException\b/);
     expect(errs).toMatch(/code:\s*['"]ORDER_APPLICATION_ORDER_LOCKED['"]/);
+  });
+
+  test('exception OrderApplicationHasPurchaseException определён', () => {
+    const errs = read('apps/api/src/common/errors.ts');
+    expect(errs).toMatch(/class OrderApplicationHasPurchaseException\b/);
+    expect(errs).toMatch(/code:\s*['"]ORDER_APPLICATION_HAS_PURCHASE['"]/);
   });
 });
 
@@ -360,6 +406,24 @@ describe('/admin/orders/[id] — блок «Нанесение»', () => {
     );
     // Revalidate для server-component RSC карточки заказа.
     expect(src).toMatch(/revalidatePath\(`\/admin\/orders\/\$\{orderId\}`\)/);
+  });
+
+  test('форма /edit гейтит нанесения по shared и предупреждает о поздней правке', () => {
+    const src = read(
+      'apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx',
+    );
+    // Страница `/edit` по статусу не закрыта, поэтому поздняя правка
+    // приходит и отсюда: гейт — тот же shared-предикат, а не свой
+    // список статусов рядом с расцветками.
+    expect(src).toMatch(/isOrderApplicationsEditable\(order\.status\)/);
+    expect(src).toMatch(/isOrderApplicationsLateEdit\(order\.status\)/);
+    // И то же предупреждение, что во вкладке «Производство»: правила
+    // поздней правки менеджер должен увидеть ДО сохранения.
+    expect(src).toMatch(/admin-order-applications__late-note/);
+    expect(src).toMatch(/по которому пошла закупка/);
+    // Read-only остаётся только у отменённого заказа — старый текст
+    // «верните заказ на пересчёт» там бессмыслен.
+    expect(src).not.toMatch(/Нанесение правится, пока расчёт не завершён/);
   });
 });
 

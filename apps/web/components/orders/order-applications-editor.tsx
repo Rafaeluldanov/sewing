@@ -82,6 +82,17 @@ export type ApplicationScope = 'ORDER' | 'SIZES';
 export interface ApplicationRow {
   /** Локальный ключ React (id из DTO для существующих, random для новых). */
   key: string;
+  /**
+   * Id строки на сервере (`OrderApplication.id`) — только у нанесений,
+   * пришедших с бэка. `null` у новых и у копий.
+   *
+   * Уходит в payload как `id` и говорит бэку «обнови эту строку, не
+   * пересоздавай»: на id нанесения ссылается снимок потребности
+   * (`WorkshopNeed.sourceId`) вместе с ценой и поставщиком. Отдельно от
+   * `key` — потому что `key` у копий подменяется, а спутать копию с
+   * оригиналом означало бы молча переписать чужую строку.
+   */
+  serverId: string | null;
   type: OrderApplicationType;
   stage: OrderApplicationStage;
   placement: string;
@@ -117,6 +128,7 @@ function genGroupKey(): string {
 export function blankApplicationRow(): ApplicationRow {
   return {
     key: `new-${Math.random().toString(36).slice(2)}`,
+    serverId: null,
     type: 'SCREEN_PRINT',
     stage: 'CUT_PARTS',
     placement: '',
@@ -142,6 +154,7 @@ export function applicationRowFromDto(
 ): ApplicationRow {
   return {
     key: app.id,
+    serverId: app.id,
     type: app.type,
     stage: app.stage,
     placement: app.placement ?? '',
@@ -204,6 +217,9 @@ function rowToInput(row: ApplicationRow): Record<string, unknown> {
         }))
     : [];
   return {
+    // Существующая строка правится на месте (см. `serverId`); у новых
+    // ключ не отправляем вовсе — бэк создаст строку и выдаст свой id.
+    ...(row.serverId ? { id: row.serverId } : {}),
     type: row.type,
     stage: row.stage,
     placement: trim(row.placement),
@@ -420,6 +436,8 @@ export function OrderApplicationsEditor({
       const copies = members.map((m) => ({
         ...m,
         key: `new-${Math.random().toString(36).slice(2)}`,
+        // Копия — новая строка заказа, а не правка исходной.
+        serverId: null,
         groupKey: newKey,
         groupLabel: label,
         sizes: m.sizes.map((s) => ({ ...s })),

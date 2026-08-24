@@ -581,7 +581,7 @@ DTO: `packages/shared/src/orders.ts`,
 | Метод | Путь                              | RBAC               | Описание |
 | ----- | --------------------------------- | ------------------ | -------- |
 | GET   | `/api/orders/:id/applications`    | ADMIN, SHOP_MANAGER | Список `OrderApplication[]` по заказу. |
-| PUT   | `/api/orders/:id/applications`    | ADMIN, SHOP_MANAGER | Body `ReplaceOrderApplicationsDto`. Full-replace (delete + createMany в транзакции). Только в `DRAFT`. |
+| PUT   | `/api/orders/:id/applications`    | ADMIN, SHOP_MANAGER | Body `ReplaceOrderApplicationsDto`. Replace по `id` в транзакции: строки с `id` обновляются на месте, без `id` — создаются, отсутствующие — удаляются. Разрешено на любой стадии заказа, кроме `CANCELLED` (409 `ORDER_APPLICATION_ORDER_LOCKED`). После завершения расчёта: потребность синхронизируется точечно (`WorkshopNeedsService.syncApplicationNeeds`), а удаление нанесения с начатой закупкой — 409 `ORDER_APPLICATION_HAS_PURCHASE`. |
 
 DTO: `packages/shared/src/order-applications.ts`.
 

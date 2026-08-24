@@ -248,6 +248,23 @@ export type OrderApplicationSizeInput = z.infer<
  *   - `status` опционален, дефолт `PLANNED` на бэке.
  */
 export const OrderApplicationInputSchema = z.object({
+  /**
+   * Id существующего нанесения (`OrderApplication.id`). Опционален:
+   *   - передан → строка ОБНОВЛЯЕТСЯ на месте, id сохраняется;
+   *   - не передан → строка создаётся заново.
+   *
+   * Зачем: потребность цеха ссылается на нанесение снимком
+   * (`WorkshopNeed.sourceType = ORDER_APPLICATION`, `sourceId =
+   * application.id`), и full-replace через delete+create осиротил бы
+   * эту связь вместе с работой закупщика (цена, поставщик, статус). UI
+   * шлёт id для строк, пришедших с сервера, — см. `serverId` в
+   * `apps/web/components/orders/order-applications-editor.tsx`.
+   *
+   * Id, которого нет у заказа, игнорируется как «новая строка», а не
+   * роняет запрос: старые клиенты и интеграции не обязаны про него
+   * знать.
+   */
+  id: z.string().trim().min(1).max(60).optional(),
   type: OrderApplicationTypeSchema,
   stage: OrderApplicationStageSchema,
   placement: optionalNullableString(200, 'Место'),
@@ -281,11 +298,15 @@ export const OrderApplicationInputSchema = z.object({
 export type OrderApplicationInput = z.infer<typeof OrderApplicationInputSchema>;
 
 /**
- * Тело запроса `PUT /api/orders/:id/applications`. Семантика — full
- * replace списка нанесений по заказу: backend в одной транзакции
- * удаляет существующие и создаёт переданные. Это сознательная
- * простота на MVP — те же кейсы, что у `replaceMaterialLines` /
- * `replaceMaterialAreas`.
+ * Тело запроса `PUT /api/orders/:id/applications`. Семантика — replace
+ * списка нанесений заказа: что не пришло в теле, то удаляется.
+ *
+ * Сверка идёт ПО `id` (см. `OrderApplicationInputSchema.id`): строки с
+ * известным id обновляются на месте, без id — создаются, отсутствующие
+ * в теле — удаляются. Раньше это был безусловный delete+createMany;
+ * от него отказались, когда правку открыли после расчёта: пересоздание
+ * меняло id и рвало связь со строкой потребности
+ * (`WorkshopNeed.sourceId`), а вместе с ней — цену и поставщика.
  */
 export const ReplaceOrderApplicationsSchema = z.object({
   applications: z.array(OrderApplicationInputSchema),
@@ -364,20 +385,32 @@ export interface OrderApplicationDto {
  * `ORDER_APPLICATION_ORDER_LOCKED`) и для UI (карточка «Нанесение» в
  * форме правки заказа и во вкладке «Производство»).
  *
- * Окно — «пока расчёт не завершён»: черновик и идущий расчёт. На
- * `CALCULATION` правка нанесений тянет за собой пересчёт потребности
- * цеха (строки `WorkshopNeed` с `sourceType = ORDER_APPLICATION`),
- * поэтому сервис после сохранения сам зовёт пересчёт — ровно то же
- * окно и та же механика, что у расцветок (`ORDER_COLORWAYS_LOCKED` +
- * `resyncColorwayDerived`).
+ * Окно — ВЕСЬ жизненный цикл заказа, кроме отменённого. Нанесение —
+ * такой же расход заказа, как материалы и «прочие расходы»: клиент
+ * просит добавить принт, когда тираж уже кроят, и запрет здесь не
+ * отменял потребность, а лишь заставлял вести её мимо системы. То же
+ * окно, что у корректировки материалов/расходов
+ * (`ORDER_MATERIAL_CORRECTION_STATUSES` в
+ * `apps/api/src/common/order-material-correction.ts`), плюс `DRAFT`,
+ * где нанесения ведутся в форме заказа.
  *
- * С `CALCULATION_DONE` и дальше себестоимость и потребность
- * зафиксированы — список read-only, менять через «Вернуть на
- * пересчёт».
+ * Чем правка «после расчёта» отличается от правки на расчёте — см.
+ * `isOrderApplicationsLateEdit`: до `CALCULATION_DONE` сохранение
+ * пересобирает потребность цеха целиком, после — синхронизирует
+ * ТОЧЕЧНО только строки нанесений (`WorkshopNeedsService
+ * .syncApplicationNeeds`), не трогая работу закупщика по соседним
+ * строкам.
+ *
+ * `CANCELLED` — единственный запрет: у отменённого заказа правка
+ * состава бессмысленна (так же рассуждает и корректировка материалов).
  */
 export const ORDER_APPLICATION_EDITABLE_ORDER_STATUSES = [
   'DRAFT',
   'CALCULATION',
+  'CALCULATION_DONE',
+  'SAMPLE_PRODUCTION',
+  'IN_PRODUCTION',
+  'DONE',
 ] as const;
 
 /**
@@ -389,6 +422,26 @@ export function isOrderApplicationsEditable(status: string): boolean {
   return (ORDER_APPLICATION_EDITABLE_ORDER_STATUSES as readonly string[]).includes(
     status,
   );
+}
+
+/**
+ * Статусы, в которых правка нанесений идёт «поздним» путём: расчёт уже
+ * завершён (или заказ запущен/выпущен), по строкам потребности могла
+ * начаться закупка.
+ *
+ * Backend по этому признаку:
+ *   - синхронизирует потребность ТОЧЕЧНО
+ *     (`WorkshopNeedsService.syncApplicationNeeds`) вместо полного
+ *     пересчёта, который в производстве всё равно упирается в
+ *     `WORKSHOP_NEEDS_ALREADY_REVIEWED` / `WORKSHOP_NEEDS_HAVE_STOCK`;
+ *   - запрещает УДАЛЯТЬ нанесение, по которому потребность уже ушла в
+ *     работу (409 `ORDER_APPLICATION_HAS_PURCHASE`) — закупленную
+ *     плёнку задним числом не развидеть.
+ *
+ * UI по нему же рисует предупреждение над формой.
+ */
+export function isOrderApplicationsLateEdit(status: string): boolean {
+  return isOrderApplicationsEditable(status) && status !== 'DRAFT' && status !== 'CALCULATION';
 }
 
 /**

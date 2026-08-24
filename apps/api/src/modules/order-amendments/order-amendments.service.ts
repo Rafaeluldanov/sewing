@@ -1064,7 +1064,8 @@ export class OrderAmendmentsService {
   /**
    * Журнал правок заказа в производстве: события `ORDER_QTY_AMENDED` /
    * `ORDER_SIZE_AMENDED` / `ORDER_OPERATION_ADDED` /
-   * `ORDER_TECH_CARD_AMENDED` из `AuditLog`, с уже собранным
+   * `ORDER_TECH_CARD_AMENDED` / `ORDER_APPLICATIONS_REPLACED` из
+   * `AuditLog`, с уже собранным
    * человекочитаемым `summary` (коды размеров и имя операции подставлены) и
    * именем автора. Сортировка — свежие сверху.
    *
@@ -1076,17 +1077,33 @@ export class OrderAmendmentsService {
   async getHistory(orderId: string): Promise<AmendmentHistoryEntryDto[]> {
     const logs = await this.prisma.auditLog.findMany({
       where: {
-        entityType: 'ORDER',
-        entityId: orderId,
-        event: {
-          in: [
-            'ORDER_QTY_AMENDED',
-            'ORDER_SIZE_AMENDED',
-            'ORDER_OPERATION_ADDED',
-            'ORDER_ROUTE_AMENDED',
-            'ORDER_TECH_CARD_AMENDED',
-          ],
-        },
+        OR: [
+          {
+            entityType: 'ORDER',
+            entityId: orderId,
+            event: {
+              in: [
+                'ORDER_QTY_AMENDED',
+                'ORDER_SIZE_AMENDED',
+                'ORDER_OPERATION_ADDED',
+                'ORDER_ROUTE_AMENDED',
+                'ORDER_TECH_CARD_AMENDED',
+              ],
+            },
+          },
+          {
+            // Нанесения пишут аудит на свой `entityType` и правятся
+            // своим эндпоинтом, но правка ПОСЛЕ расчёта — это правка
+            // заказа в производстве, и место ей в общем журнале.
+            // Черновиковые правки (`lateEdit = false`) сюда не берём:
+            // журнал показывают с «Расчёт завершён», а до него список
+            // нанесений менялся десятки раз по ходу оформления.
+            entityType: 'ORDER_APPLICATION',
+            entityId: orderId,
+            event: 'ORDER_APPLICATIONS_REPLACED',
+            payload: { path: ['lateEdit'], equals: true },
+          },
+        ],
       },
       orderBy: { createdAt: 'desc' },
       select: {
@@ -1174,6 +1191,20 @@ export class OrderAmendmentsService {
         // `summary` собран на месте правки (там известны имена материалов
         // и параметров) — здесь только префикс раздела.
         summary = 'Материалы: ' + ((p.summary as string) ?? 'правка спецификации');
+      } else if (l.event === 'ORDER_APPLICATIONS_REPLACED') {
+        kind = 'application';
+        const added = (p.createdCount as number) ?? 0;
+        const changed = (p.updatedCount as number) ?? 0;
+        const removedCnt = (p.removedCount as number) ?? 0;
+        const parts: string[] = [];
+        if (added > 0) parts.push(`добавлено ${added}`);
+        if (changed > 0) parts.push(`изменено ${changed}`);
+        if (removedCnt > 0) parts.push(`удалено ${removedCnt}`);
+        summary =
+          'Нанесение: ' +
+          (parts.length > 0
+            ? `${parts.join(', ')} (всего ${(p.nextCount as number) ?? 0})`
+            : 'список сохранён без изменений');
       } else {
         kind = 'operation';
         const opName = (p.operationName as string) ?? '?';

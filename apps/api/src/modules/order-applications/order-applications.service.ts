@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
 import {
   isOrderApplicationsEditable,
+  isOrderApplicationsLateEdit,
   ORDER_APPLICATION_STAGE_LABELS,
   ORDER_APPLICATION_STATUS_LABELS,
   ORDER_APPLICATION_TYPE_LABELS,
@@ -15,7 +16,10 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { WorkshopNeedsService } from '../workshop-needs/workshop-needs.service.js';
-import { OrderApplicationOrderLockedException } from '../../common/errors.js';
+import {
+  OrderApplicationHasPurchaseException,
+  OrderApplicationOrderLockedException,
+} from '../../common/errors.js';
 
 /**
  * Сервис «Нанесение на заказе покупателя» (см.
@@ -30,18 +34,29 @@ import { OrderApplicationOrderLockedException } from '../../common/errors.js';
  *     одна строка `ORDER_APPLICATIONS_REPLACED` в `AuditLog`.
  *
  * Замок по статусу (`ORDER_APPLICATION_ORDER_LOCKED`):
- *   - менять можно, ПОКА РАСЧЁТ НЕ ЗАВЕРШЁН: `DRAFT` и `CALCULATION`
- *     (единый список — `ORDER_APPLICATION_EDITABLE_ORDER_STATUSES` в
- *     shared). На `CALCULATION_DONE` / `SAMPLE_PRODUCTION` /
- *     `IN_PRODUCTION` / `DONE` / `CANCELLED` — 409: там уже
- *     зафиксированы себестоимость и потребность, правка идёт через
- *     «Вернуть на пересчёт». Чтение разрешено всегда — UI показывает
- *     read-only список.
- *   - правка на `CALCULATION` пересобирает потребность цеха: строки
- *     `WorkshopNeed` с `sourceType = ORDER_APPLICATION` считаются из
- *     нанесений, поэтому после успешного replace сервис зовёт
- *     `WorkshopNeedsService.calculateForOrder`. Ровно тот же приём,
- *     что у расцветок (`resyncColorwayDerived`).
+ *   - менять можно на ЛЮБОЙ стадии, кроме `CANCELLED` (единый список —
+ *     `ORDER_APPLICATION_EDITABLE_ORDER_STATUSES` в shared). Раньше
+ *     окно кончалось на `CALCULATION`, но клиент просит добавить принт
+ *     и тогда, когда тираж уже кроят: запрет не отменял расход, а
+ *     заставлял вести его мимо системы.
+ *   - `DRAFT` / `CALCULATION` — как и было: на `CALCULATION` правка
+ *     пересобирает потребность цеха целиком
+ *     (`WorkshopNeedsService.calculateForOrder`), тот же приём, что у
+ *     расцветок (`resyncColorwayDerived`).
+ *   - `CALCULATION_DONE` и дальше (`isOrderApplicationsLateEdit`) —
+ *     «поздняя» правка: потребность синхронизируется ТОЧЕЧНО
+ *     (`WorkshopNeedsService.syncApplicationNeeds`), полный пересчёт
+ *     там всё равно отбился бы `WORKSHOP_NEEDS_ALREADY_REVIEWED`, а с
+ *     `force` снёс бы работу закупщика по соседним строкам.
+ *   - удаление в поздних статусах ограничено: нанесение, по которому
+ *     потребность уже ушла в закупку, не удаляется (409
+ *     `ORDER_APPLICATION_HAS_PURCHASE`) — гасить строку нужно осознанно
+ *     на экране «Потребности».
+ *
+ * Сверка списка идёт ПО `id` (`OrderApplicationInputSchema.id`):
+ * пришедшие с id строки обновляются на месте, без id — создаются,
+ * отсутствующие — удаляются. Безусловный delete+create ломал бы
+ * `WorkshopNeed.sourceId` (снимок ссылается на id нанесения).
  *
  * Аудит:
  *   - `ORDER_APPLICATIONS_REPLACED` — событие на каждый успешный
@@ -130,6 +145,10 @@ export class OrderApplicationsService {
     if (!isOrderApplicationsEditable(order.status)) {
       throw new OrderApplicationOrderLockedException();
     }
+    // «Поздняя» правка — расчёт уже завершён (CALCULATION_DONE и
+    // дальше). Отличается двумя вещами: удаление ограничено (см. ниже)
+    // и потребность синхронизируется точечно, а не пересчётом.
+    const lateEdit = isOrderApplicationsLateEdit(order.status);
 
     const orderSizeIds = new Set(order.items.map((it) => it.sizeId));
 
@@ -137,11 +156,65 @@ export class OrderApplicationsService {
       where: { orderId },
       select: { id: true, type: true, stage: true },
     });
+    const existingIds = new Set(existing.map((e) => e.id));
+
+    // Сверка по `id`: строка с известным id обновляется НА МЕСТЕ.
+    // Пересоздание меняло бы id, а на него ссылается снимок потребности
+    // (`WorkshopNeed.sourceId`) вместе с ценой и поставщиком.
+    // Неизвестный id (старый клиент, чужая строка) трактуем как новую
+    // строку — запрос не роняем.
+    const keepIds = new Set(
+      dto.applications
+        .map((a) => a.id)
+        .filter((id): id is string => !!id && existingIds.has(id)),
+    );
+    const doomedIds = [...existingIds].filter((id) => !keepIds.has(id));
+
+    // Удаление после расчёта разрешено, только пока по нанесению не
+    // пошла закупка: строка потребности нетронута и без движений
+    // склада. Иначе — 409 с перечнем позиций (гасить их нужно осознанно
+    // на экране «Потребности»).
+    if (lateEdit && doomedIds.length > 0) {
+      const blocking = await this.prisma.workshopNeed.findMany({
+        where: {
+          orderId,
+          sourceType: 'ORDER_APPLICATION',
+          sourceId: { in: doomedIds },
+          OR: [
+            { status: { not: 'CALCULATED' } },
+            { manualEditAt: { not: null } },
+            { stockMovements: { some: {} } },
+          ],
+        },
+        select: { description: true },
+      });
+      if (blocking.length > 0) {
+        const names = blocking
+          .map((b) => `«${b.description}»`)
+          .slice(0, 5)
+          .join(', ');
+        throw new OrderApplicationHasPurchaseException(
+          `Нельзя удалить нанесение после завершения расчёта: по нему уже идёт закупка (${names}). ` +
+            'Снимите строку на экране «Потребности», затем повторите правку.',
+        );
+      }
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+    // Один id — одна строка. Если клиент прислал его дважды (например,
+    // скопировал нанесение, не сбросив ключ), второй раз трактуем как
+    // новую строку: иначе копия молча схлопнулась бы в оригинал.
+    const usedIds = new Set<string>();
 
     await this.prisma.$transaction(async (tx) => {
-      // Удаление нанесений каскадом сносит их `OrderApplicationSize`
-      // (onDelete: Cascade), отдельный deleteMany не нужен.
-      await tx.orderApplication.deleteMany({ where: { orderId } });
+      // Удаляем только то, что не пришло в теле. Каскад сносит
+      // `OrderApplicationSize` (onDelete: Cascade).
+      if (doomedIds.length > 0) {
+        await tx.orderApplication.deleteMany({
+          where: { id: { in: doomedIds } },
+        });
+      }
       // Вложенный create на каждое нанесение (а не createMany), чтобы
       // в одной транзакции создать и адресацию по размерам
       // (`OrderApplicationSize`). Размеры фильтруем по фактическим
@@ -150,42 +223,72 @@ export class OrderApplicationsService {
         const sizeRows = dedupeBySizeId(app.sizes ?? []).filter((s) =>
           orderSizeIds.has(s.sizeId),
         );
+        const sizeCreate = sizeRows.map((s) => ({
+          sizeId: s.sizeId,
+          quantity:
+            s.quantity == null ? null : new Prisma.Decimal(s.quantity),
+        }));
+        const data = {
+          type: app.type,
+          stage: app.stage,
+          placement: app.placement ?? null,
+          widthMm: app.widthMm ?? null,
+          heightMm: app.heightMm ?? null,
+          colorsCount: app.colorsCount ?? null,
+          // Адресация по размерам старше order-level количества: при
+          // непустых `sizes` тираж считается по каждому размеру, а
+          // `quantity` игнорируется (контракт
+          // `OrderApplicationInputSchema`). Сохранять его «на всякий
+          // случай» нельзя: расчёт потребности его не видит
+          // (`WorkshopNeedsService.computeApplication` при наличии
+          // размеров суммирует размеры), а карточка заказа показывала
+          // бы число, которое ни на что не влияет.
+          quantity:
+            sizeCreate.length > 0 || app.quantity == null
+              ? null
+              : new Prisma.Decimal(app.quantity),
+          // Дефолт «шт» — на уровне БД, но передаём явно, если
+          // менеджер указал свою единицу. Пустую строку Zod уже
+          // нормализовал в undefined.
+          unit: app.unit ?? 'шт',
+          colorText: app.colorText ?? null,
+          description: app.description ?? null,
+          comment: app.comment ?? null,
+          fileUrl: app.fileUrl ?? null,
+          groupKey: app.groupKey ?? null,
+          groupLabel: app.groupLabel ?? null,
+        };
+
+        if (app.id && keepIds.has(app.id) && !usedIds.has(app.id)) {
+          usedIds.add(app.id);
+          await tx.orderApplication.update({
+            where: { id: app.id },
+            data: {
+              ...data,
+              // Статус строки менеджер ведёт сам; если клиент его не
+              // прислал — оставляем как есть, а не сбрасываем в PLANNED.
+              ...(app.status ? { status: app.status } : {}),
+              // Адресацию по размерам проще пересобрать: строк единицы,
+              // а diff по (applicationId, sizeId) ничего не экономит.
+              sizes: {
+                deleteMany: {},
+                ...(sizeCreate.length > 0 ? { create: sizeCreate } : {}),
+              },
+            },
+          });
+          updatedCount += 1;
+          continue;
+        }
+
         await tx.orderApplication.create({
           data: {
             orderId,
-            type: app.type,
-            stage: app.stage,
-            placement: app.placement ?? null,
-            widthMm: app.widthMm ?? null,
-            heightMm: app.heightMm ?? null,
-            colorsCount: app.colorsCount ?? null,
-            quantity:
-              app.quantity == null ? null : new Prisma.Decimal(app.quantity),
-            // Дефолт «шт» — на уровне БД, но передаём явно, если
-            // менеджер указал свою единицу. Пустую строку Zod уже
-            // нормализовал в undefined.
-            unit: app.unit ?? 'шт',
-            colorText: app.colorText ?? null,
-            description: app.description ?? null,
-            comment: app.comment ?? null,
-            fileUrl: app.fileUrl ?? null,
+            ...data,
             status: app.status ?? 'PLANNED',
-            groupKey: app.groupKey ?? null,
-            groupLabel: app.groupLabel ?? null,
-            sizes:
-              sizeRows.length > 0
-                ? {
-                    create: sizeRows.map((s) => ({
-                      sizeId: s.sizeId,
-                      quantity:
-                        s.quantity == null
-                          ? null
-                          : new Prisma.Decimal(s.quantity),
-                    })),
-                  }
-                : undefined,
+            sizes: sizeCreate.length > 0 ? { create: sizeCreate } : undefined,
           },
         });
+        createdCount += 1;
       }
 
       await this.audit.log(
@@ -196,8 +299,15 @@ export class OrderApplicationsService {
           employeeId: actorEmployeeId ?? null,
           payload: {
             orderId,
+            // Статус на момент правки — по журналу видно, что нанесение
+            // добавили уже в производстве.
+            orderStatus: order.status,
+            lateEdit,
             previousCount: existing.length,
             nextCount: dto.applications.length,
+            createdCount,
+            updatedCount,
+            removedCount: doomedIds.length,
             stages: this.countByKey(
               dto.applications.map((a) => a.stage),
             ),
@@ -236,6 +346,34 @@ export class OrderApplicationsService {
       } catch (e) {
         OrderApplicationsService.log.warn(
           `event=order_applications.needs_recalc_skipped order=${orderId} ` +
+            `reason=${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    } else if (lateEdit) {
+      // После завершения расчёта полный пересчёт не годится: он
+      // пересобирает ВСЮ потребность и на запущенном заказе упрётся в
+      // `WORKSHOP_NEEDS_ALREADY_REVIEWED` / `WORKSHOP_NEEDS_HAVE_STOCK`,
+      // а с `force` снёс бы работу закупщика по соседним строкам.
+      // Синхронизируем точечно только строки нанесений — добавленное
+      // нанесение сразу доходит до потребности и себестоимости.
+      //
+      // Best-effort по тем же соображениям, что и выше: сами нанесения
+      // (источник истины) уже сохранены, ронять их из-за неудачной
+      // синхронизации нельзя.
+      try {
+        const res = await this.workshopNeeds.syncApplicationNeeds(
+          orderId,
+          actorEmployeeId ?? null,
+        );
+        if (res.warnings.length > 0) {
+          OrderApplicationsService.log.warn(
+            `event=order_applications.needs_sync_warnings order=${orderId} ` +
+              `warnings=${res.warnings.join(' | ')}`,
+          );
+        }
+      } catch (e) {
+        OrderApplicationsService.log.warn(
+          `event=order_applications.needs_sync_skipped order=${orderId} ` +
             `reason=${e instanceof Error ? e.message : String(e)}`,
         );
       }

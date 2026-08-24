@@ -25,6 +25,7 @@ const KIND_LABEL: Record<AmendmentHistoryEntryDto['kind'], string> = {
   size: 'Размерность',
   operation: 'Операция',
   materials: 'Материалы',
+  application: 'Нанесение',
 };
 
 function formatMoscow(iso: string): string {

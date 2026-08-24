@@ -30,13 +30,24 @@ export function getOrderApplications(
 }
 
 /**
- * Полная замена списка нанесений по заказу. Backend в одной
- * транзакции удаляет существующие и создаёт переданные. Менять можно,
- * пока расчёт не завершён — `DRAFT` / `CALCULATION` (см.
+ * Замена списка нанесений по заказу. Backend в одной транзакции
+ * сверяет присланное с сохранённым ПО `id`: строка с известным id
+ * обновляется на месте, без id — создаётся, отсутствующая в теле —
+ * удаляется. Пересоздание с новым id рвало бы снимок потребности
+ * (`WorkshopNeed.sourceId`) вместе с ценой и поставщиком, поэтому UI
+ * обязан слать `id` для строк, пришедших с сервера (см. `serverId` в
+ * `components/orders/order-applications-editor.tsx`).
+ *
+ * Менять можно на любой стадии заказа, кроме `CANCELLED` (см.
  * `isOrderApplicationsEditable`,
- * `OrderApplicationsService.replaceForOrder`); дальше приходит 409
- * `ORDER_APPLICATION_ORDER_LOCKED`. На `CALCULATION` backend после
- * сохранения сам пересобирает потребность цеха.
+ * `OrderApplicationsService.replaceForOrder`); у отменённого приходит
+ * 409 `ORDER_APPLICATION_ORDER_LOCKED`.
+ *
+ * Потребность цеха backend догоняет сам: на `CALCULATION` — полным
+ * пересчётом, после завершения расчёта (`isOrderApplicationsLateEdit`)
+ * — точечной синхронизацией строк нанесений. Там же жёстче удаление:
+ * нанесение, по которому уже пошла закупка, отбивается 409
+ * `ORDER_APPLICATION_HAS_PURCHASE`.
  */
 export function replaceOrderApplications(
   orderId: string,
