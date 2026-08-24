@@ -100,6 +100,9 @@ import {
   OrderWorkspaceLayout,
 } from '@/components/orders/order-workspace-layout';
 import { OrderManagementHeader } from '@/components/orders/view/order-management-header';
+import { OrderEditBlocksProvider } from '@/components/orders/blocks/order-edit-block';
+import type { ClientDto } from '@sewing/shared/clients';
+import { listClients } from '@/lib/clients-api';
 import { OrderViewTabs } from '@/components/orders/view/order-view-tabs';
 import {
   parseOrderViewTab,
@@ -138,8 +141,14 @@ export default async function AdminOrderDetailPage({
   // Раньше это были пять последовательных `await` — на переключении
   // вкладки (это обычная навигация по `?tab=…`) их задержки
   // складывались, и шапка появлялась заметно позже клика.
-  const [passports, me, cutIssueRulesSummary, colorwayData, calculations] =
-    await Promise.all([
+  const [
+    passports,
+    me,
+    cutIssueRulesSummary,
+    colorwayData,
+    calculations,
+    clients,
+  ] = await Promise.all([
       // Не валим карточку, если по какой-то причине запрос паспортов
       // упал (например, временный 5xx). Шапка / алерты по факту 0
       // паспортов всё равно работают.
@@ -179,6 +188,10 @@ export default async function AdminOrderDetailPage({
             () => null as OrderCalculationsDto | null,
           )
         : Promise.resolve(null as OrderCalculationsDto | null),
+      // Справочник клиентов — для селекта в блоке «Основное» (правка на
+      // месте, шаг 2 плана). Ошибку глушим: без справочника блок покажет
+      // текущего клиента и даст править срок / цену / комментарий.
+      listClients().catch(() => [] as ClientDto[]),
     ]);
 
   const [colorways, techCardParams] = colorwayData;
@@ -223,6 +236,13 @@ export default async function AdminOrderDetailPage({
       {calculations && (
         <OrderCalcTabs orderId={order.id} initial={calculations} />
       )}
+      {/*
+        «Правка на месте» (вторая половина варианта C аудита): провайдер
+        держит id блока, который сейчас правится, — соседние блоки внутри
+        окна становятся read-only. Это заменяет dirty-tracking и не даёт
+        двум несогласованным правкам уехать вместе (§1.2 аудита).
+      */}
+      <OrderEditBlocksProvider>
       <OrderWorkspaceLayout
         key={workspaceKey}
         mode="view"
@@ -239,6 +259,7 @@ export default async function AdminOrderDetailPage({
             order={order}
             passports={passports}
             activeCalculationDraft={activeCalculationDraft}
+            clients={clients}
           />
         }
         tabs={<OrderViewTabs orderId={order.id} activeTab={activeTab} />}
@@ -368,6 +389,7 @@ export default async function AdminOrderDetailPage({
             )}
         </Suspense>
       </OrderWorkspaceLayout>
+      </OrderEditBlocksProvider>
     </AdminPageShell>
   );
 }

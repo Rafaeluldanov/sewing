@@ -66,6 +66,9 @@ import { DeleteOrderButton } from './delete-order-button';
 import { RecalculateOperationPlanButton } from '@/components/orders/recalculate-operation-plan-button';
 import { StartCalculationButton } from '@/components/orders/start-calculation-button';
 import { OrderStatusSelect } from './order-status-select';
+import type { ClientDto } from '@sewing/shared/clients';
+import { OrderBasicsForm } from '@/components/orders/order-basics-form';
+import { OrderEditBlock } from '@/components/orders/blocks/order-edit-block';
 
 interface Props {
   order: OrderDetailDto;
@@ -77,6 +80,33 @@ interface Props {
    * `start-calculation`, ветка isVariantCalc — статус заказа не меняется).
    */
   activeCalculationDraft?: boolean;
+  /**
+   * Активные клиенты для селекта в блоке «Основное» (правка на месте).
+   * Пустой список = блок покажет только текущего клиента: правка клиента
+   * без справочника бессмысленна, но срок / цену / комментарий это не
+   * блокирует.
+   */
+  clients?: ClientDto[];
+}
+
+/**
+ * Цена продажи за единицу в блоке «Основное». `customerUnitPrice`
+ * приходит `string | number | null` (Decimal сериализуется строкой),
+ * поэтому приводим сами; нечисловое значение показываем как есть,
+ * а не «NaN».
+ */
+function formatMoneyRu(value: string | number, currency: string): string {
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  try {
+    return new Intl.NumberFormat('ru-RU', {
+      style: 'currency',
+      currency,
+      maximumFractionDigits: 2,
+    }).format(num);
+  } catch {
+    return `${num.toLocaleString('ru-RU')} ${currency}`;
+  }
 }
 
 /**
@@ -114,8 +144,10 @@ export function OrderManagementHeader({
   order,
   passports,
   activeCalculationDraft,
+  clients = [],
 }: Props) {
   const status = order.status;
+  const isTerminal = status === 'DONE' || status === 'CANCELLED';
   const nomenclature = resolveOrderNomenclature(order);
   const patternHref = resolveOrderPatternHref(order);
   const clientName = order.client?.name ?? order.customer ?? null;
@@ -206,21 +238,107 @@ export function OrderManagementHeader({
         </div>
       </header>
 
+      {/*
+        Блок «Основное» — правка на месте (шаг 2 плана, см.
+        `docs/mockups/order-page-inline-edit-mockup.html`). Клиент, срок,
+        цена и комментарий правятся ЗДЕСЬ, не уходя на `/edit`: у них
+        «безопасное» окно — backend не блокирует эти поля ни на одном
+        статусе (`OrdersService.update`, класс безопасных полей).
+        Терминальные статусы закрываем в UI: у завершённого / отменённого
+        заказа управленческие действия закрыты — как и в action-row ниже.
+      */}
+      <OrderEditBlock
+        id="basics"
+        title="Основное"
+        icon={<User size={15} strokeWidth={1.7} aria-hidden />}
+        gate={
+          isTerminal
+            ? {
+                editable: false,
+                reason: `Заказ ${
+                  status === 'DONE' ? 'завершён' : 'отменён'
+                } — управленческие поля закрыты.`,
+              }
+            : { editable: true }
+        }
+        summary={
+          <div className="order-mgmt-header__grid order-mgmt-header__grid--basics">
+            <HeaderField
+              icon={<User size={14} strokeWidth={1.7} aria-hidden />}
+              label="Клиент"
+            >
+              {clientName ? (
+                <strong>{clientName}</strong>
+              ) : (
+                <span className="admin-muted">не указан</span>
+              )}
+            </HeaderField>
+
+            <HeaderField
+              icon={<Calendar size={14} strokeWidth={1.7} aria-hidden />}
+              label="Срок сдачи"
+              hint={
+                deadline?.daysLeft != null
+                  ? formatDaysLeft(deadline.daysLeft)
+                  : null
+              }
+            >
+              {order.dueDate ? (
+                <span className="order-mgmt-header__deadline">
+                  <strong>{formatDateRu(order.dueDate)}</strong>
+                  {deadline && deadlineTone && (
+                    <AdminStatusBadge tone={deadlineTone}>
+                      {deadline.label}
+                    </AdminStatusBadge>
+                  )}
+                </span>
+              ) : (
+                <span className="admin-muted">не задан</span>
+              )}
+            </HeaderField>
+
+            <HeaderField label="Цена за 1 шт">
+              {order.customerUnitPrice != null &&
+              order.customerUnitPrice !== '' ? (
+                <strong>
+                  {formatMoneyRu(
+                    order.customerUnitPrice,
+                    order.customerCurrency ?? 'RUB',
+                  )}
+                </strong>
+              ) : (
+                <span className="admin-muted">не указана</span>
+              )}
+            </HeaderField>
+
+            <HeaderField label="Комментарий менеджера">
+              {order.comment ? (
+                <span>{order.comment}</span>
+              ) : (
+                <span className="admin-muted">—</span>
+              )}
+            </HeaderField>
+          </div>
+        }
+      >
+        <OrderBasicsForm
+          orderId={order.id}
+          initial={{
+            dueDate: order.dueDate ?? null,
+            clientId: order.client?.id ?? null,
+            customer: order.customer ?? null,
+            customerUnitPrice: order.customerUnitPrice ?? null,
+            customerCurrency: order.customerCurrency ?? null,
+            comment: order.comment ?? null,
+          }}
+          clients={clients}
+        />
+      </OrderEditBlock>
+
       {/* Компактная сводка полей. Не делаем «больших» KPI-чипов, чтобы
           не повторять то, что показывают вкладки «Производство» и
           «Потребности» подробно. */}
       <div className="order-mgmt-header__grid">
-        <HeaderField
-          icon={<User size={14} strokeWidth={1.7} aria-hidden />}
-          label="Клиент"
-        >
-          {clientName ? (
-            <strong>{clientName}</strong>
-          ) : (
-            <span className="admin-muted">не указан</span>
-          )}
-        </HeaderField>
-
         <HeaderField
           icon={<Calendar size={14} strokeWidth={1.7} aria-hidden />}
           label="Дата заказа"
@@ -229,29 +347,6 @@ export function OrderManagementHeader({
             <strong>{formatDateRu(order.orderDate)}</strong>
           ) : (
             <span className="admin-muted">не задана</span>
-          )}
-        </HeaderField>
-
-        <HeaderField
-          icon={<Calendar size={14} strokeWidth={1.7} aria-hidden />}
-          label="Срок сдачи"
-          hint={
-            deadline?.daysLeft != null
-              ? formatDaysLeft(deadline.daysLeft)
-              : null
-          }
-        >
-          {order.dueDate ? (
-            <span className="order-mgmt-header__deadline">
-              <strong>{formatDateRu(order.dueDate)}</strong>
-              {deadline && deadlineTone && (
-                <AdminStatusBadge tone={deadlineTone}>
-                  {deadline.label}
-                </AdminStatusBadge>
-              )}
-            </span>
-          ) : (
-            <span className="admin-muted">не задан</span>
           )}
         </HeaderField>
 
@@ -413,11 +508,6 @@ export function OrderManagementHeader({
           )}
         </HeaderField>
 
-        {order.comment && (
-          <HeaderField label="Комментарий менеджера">
-            <span>{order.comment}</span>
-          </HeaderField>
-        )}
       </div>
 
       {/* Stale-warning плана операций отдельной плашкой больше не

@@ -1,45 +1,42 @@
 'use client';
 
 /**
- * `OrderBasicsForm` — inline-форма «Сохранить основное» в hero
- * карточки заказа `/admin/orders/[id]`.
+ * `OrderBasicsForm` — форма блока «Основное» карточки заказа
+ * `/admin/orders/[id]` (шаг 2 плана «правка на месте», см.
+ * `docs/mockups/order-page-inline-edit-mockup.html`).
  *
- * Содержит редактируемые управленческие поля заказа:
- *   - подразделение (`companyDivisionId` → `CompanyDivision`);
+ * Живёт ВНУТРИ `OrderEditBlock`: блок отвечает за состояния (просмотр /
+ * правка / сохранено / не сохранено) и за сообщения, форма — только за
+ * поля и сабмит. Результат сохранения форма докладывает блоку через
+ * `onSaved` / `onFailed`.
+ *
+ * Поля (см. `updateOrderBasicsAction`):
+ *   - клиент (`clientId`) — ОБЯЗАТЕЛЬНОЕ (этап «Клиент — обязательный
+ *     атрибут заказа»): `required`-селект без варианта «без клиента».
+ *     Исторический заказ без клиента дозаполняется здесь при первой правке;
  *   - срок сдачи (`dueDate`);
- *   - клиент (`clientId`) — ОБЯЗАТЕЛЬНОЕ поле (этап «Клиент —
- *     обязательный атрибут заказа»): `required`-селект без варианта «без
- *     клиента». Исторический заказ без клиента дозаполняется здесь при
- *     первой же правке «Основного»;
- *   - заказчик free-text (`customer`) — для совместимости со старым flow;
- *   - цена за 1 изделие (`customerUnitPrice`);
- *   - валюта продажи (`customerCurrency`);
- *   - комментарий (`comment`).
+ *   - цена за 1 изделие + валюта (`customerUnitPrice` / `customerCurrency`);
+ *   - комментарий (`comment`);
+ *   - заказчик free-text (`customer`) — скрытым полем, для совместимости
+ *     со старым flow.
  *
- * Сабмит уходит в `updateOrderBasicsAction`, который через
- * существующий `updateOrder` шлёт PATCH `/api/orders/:id` с
- * подмножеством полей `UpdateOrderDto`. «Опасные» поля
- * (items/route/techCard/pattern/status) сюда не входят — их
- * редактирует отдельная форма `/admin/orders/[id]/edit`.
+ * Чего здесь СОЗНАТЕЛЬНО нет: подразделение (`companyDivisionId`). Раньше
+ * оно лежало в этой форме, но у него другое окно правки —
+ * `isOrderPlanEditable` (до запуска производства), а «Основное» правится
+ * на любом статусе. Поле, видимое в производстве, но отбиваемое backend-ом
+ * 409-й `ORDER_LOCKED`, — ровно то враньё, ради которого затевалась правка
+ * на месте («общего окна правки не существует»). Подразделение переезжает
+ * в блок «Настройки заказа» (шаг 3), до тех пор правится на `/edit`.
+ * `updateOrderBasicsAction` трактует отсутствие ключа как «не трогать»
+ * (см. `parseNullableString`), поэтому убрать поле безопасно.
  *
- * UX:
- *   - terminal-статусы (DONE/CANCELLED) → форма disabled, но
- *     поля остаются видимыми и значения подставлены;
- *   - на остальных статусах поля доступны (backend не блокирует
- *     basics-поля независимо от статуса);
- *   - после успешного сабмита показываем `successMessage` рядом
- *     с кнопкой; ошибки backend-а — в общий error-box над формой.
- *
- * Никакого autosave: пользователь явно нажимает «Сохранить
- * основное».
+ * Backend / DTO / Prisma не меняли.
  */
 
 import { useFormState, useFormStatus } from 'react-dom';
-import { useEffect, useState } from 'react';
-import { Save } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Save, X } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
-import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
-import type { OrderStatus } from '@sewing/shared/orders';
 import {
   MONEY_CURRENCIES,
   MONEY_CURRENCY_LABELS,
@@ -50,21 +47,11 @@ import {
   type UpdateOrderBasicsActionState,
 } from '@/app/admin/orders/[id]/basic-actions';
 import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
+import { useOrderEditBlockApi } from '@/components/orders/blocks/order-edit-block';
 
 interface Props {
   orderId: string;
-  status: OrderStatus;
   initial: {
-    /**
-     * Текущая привязка заказа к `CompanyDivision`. `null` — заказ
-     * без подразделения.
-     */
-    companyDivisionId: string | null;
-    /**
-     * Чтобы UI мог отрисовать архивную / уже невидимую в активном
-     * списке карточку, передаём её краткие реквизиты сюда.
-     */
-    companyDivision: { id: string; code: string; name: string } | null;
     dueDate: string | null;
     clientId: string | null;
     customer: string | null;
@@ -73,47 +60,44 @@ interface Props {
     comment: string | null;
   };
   clients: ClientDto[];
-  /**
-   * Активные карточки `CompanyDivision` для select-а. Если у заказа
-   * уже привязана архивная карточка (нет в активном списке), UI
-   * добавит её отдельной опцией ниже — иначе при сохранении
-   * привязка пропала бы без явного действия пользователя.
-   */
-  companyDivisions: CompanyDivisionDto[];
 }
 
 const initialState: UpdateOrderBasicsActionState = {};
 
-function SubmitButton({ disabled }: { disabled: boolean }) {
+function FormActions({ onCancel }: { onCancel: () => void }) {
   const { pending } = useFormStatus();
   return (
-    <button
-      type="submit"
-      className="admin-btn admin-btn--primary"
-      disabled={disabled || pending}
-    >
-      <Save size={14} strokeWidth={1.7} aria-hidden />
-      {pending ? 'Сохранение…' : 'Сохранить основное'}
-    </button>
+    <div className="order-edit-block__actions">
+      <button
+        type="button"
+        className="admin-btn admin-btn--ghost"
+        onClick={onCancel}
+        disabled={pending}
+      >
+        <X size={14} strokeWidth={1.7} aria-hidden />
+        Отмена
+      </button>
+      <button
+        type="submit"
+        className="admin-btn admin-btn--primary"
+        disabled={pending}
+      >
+        <Save size={14} strokeWidth={1.7} aria-hidden />
+        {pending ? 'Сохранение…' : 'Сохранить'}
+      </button>
+    </div>
   );
 }
 
-export function OrderBasicsForm({
-  orderId,
-  status,
-  initial,
-  clients,
-  companyDivisions,
-}: Props) {
+export function OrderBasicsForm({ orderId, initial, clients }: Props) {
+  // Состояниями блока («сохранено» / «не сохранено» / закрыть правку)
+  // управляет `OrderEditBlock` — форма только докладывает результат.
+  const block = useOrderEditBlockApi();
   const action = updateOrderBasicsAction.bind(null, orderId);
   const [state, formAction] = useFormState(action, initialState);
-
-  const isTerminal = status === 'DONE' || status === 'CANCELLED';
+  const formRef = useRef<HTMLFormElement>(null);
 
   const dueDateInitial = initial.dueDate ? initial.dueDate.slice(0, 10) : '';
-  const [companyDivisionId, setCompanyDivisionId] = useState<string>(
-    initial.companyDivisionId ?? '',
-  );
   const [dueDate, setDueDate] = useState<string>(dueDateInitial);
   const [clientId, setClientId] = useState<string>(initial.clientId ?? '');
   const [customerUnitPrice, setCustomerUnitPrice] = useState<string>(
@@ -123,92 +107,42 @@ export function OrderBasicsForm({
     initial.customerCurrency ?? '',
   );
   const [comment, setComment] = useState<string>(initial.comment ?? '');
-  const [savedToast, setSavedToast] = useState<string | null>(null);
 
+  // Результат сабмита докладываем блоку. `onSaved` уводит блок в просмотр,
+  // `onFailed` оставляет форму с введённым — правки при ошибке не теряются.
   useEffect(() => {
-    if (state.ok && state.successMessage) {
-      setSavedToast(state.successMessage);
-      const timer = setTimeout(() => setSavedToast(null), 3000);
-      return () => clearTimeout(timer);
+    if (state.ok) {
+      block.saved();
+      return;
     }
-    return undefined;
-  }, [state.ok, state.successMessage]);
+    if (state.error) {
+      block.failed(state.error, {
+        retry: () => formRef.current?.requestSubmit(),
+      });
+    }
+    // Реагируем именно на смену результата, а не на каждый рендер:
+    // `block` пересоздаётся при каждом рендере блока, в зависимости
+    // его не берём — иначе эффект зациклится.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
 
   const showCurrentClientArchivedOption =
-    initial.clientId &&
-    !clients.some((c) => c.id === initial.clientId);
-
-  const showCurrentDivisionArchivedOption =
-    initial.companyDivisionId &&
-    !companyDivisions.some((d) => d.id === initial.companyDivisionId);
+    initial.clientId && !clients.some((c) => c.id === initial.clientId);
 
   const fieldError = (key: string): string | undefined =>
     state.fieldErrors?.[key];
 
   return (
     <form
+      ref={formRef}
       action={formAction}
-      className="order-hero-card__basic-form-inner"
+      className="order-edit-block__form"
       aria-label="Основные поля заказа"
     >
-      {state.error && (
-        <div className="error-box" role="alert">
-          {state.error}
-        </div>
-      )}
-
       <div className="order-hero-card__basic-grid">
-        <div className="order-hero-card__field">
-          <label htmlFor="basics-companyDivisionId">Подразделение</label>
-          <CreatableSelect
-            entity="companyDivision"
-            id="basics-companyDivisionId"
-            name="companyDivisionId"
-            value={companyDivisionId}
-            onValueChange={setCompanyDivisionId}
-            disabled={isTerminal}
-            disableCreate={isTerminal}
-            existingValues={companyDivisions.map((d) => d.id)}
-          >
-            <option value="">— без подразделения —</option>
-            {/*
-              Если у заказа уже привязана архивная (или не входящая в
-              активный список) карточка — показываем её отдельной
-              опцией, иначе при сохранении формы FK обнулится без
-              явного действия пользователя.
-            */}
-            {showCurrentDivisionArchivedOption &&
-              initial.companyDivision && (
-                <option value={initial.companyDivision.id}>
-                  {initial.companyDivision.name} — архивный
-                </option>
-              )}
-            {companyDivisions.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-                {d.isActive ? '' : ' — архив'}
-              </option>
-            ))}
-          </CreatableSelect>
-        </div>
-
-        <div className="order-hero-card__field">
-          <label htmlFor="basics-dueDate">Срок сдачи</label>
-          <input
-            id="basics-dueDate"
-            name="dueDate"
-            type="date"
-            value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
-            disabled={isTerminal}
-          />
-        </div>
-
-        {/* Этап «Клиент — обязательный атрибут заказа»: селект `required`,
-            варианта «без клиента» нет. Историческому заказу с
-            `clientId = null` селект открывается пустым — сохранить блок
-            «Основное», не выбрав клиента, нельзя (гейт
-            `updateOrderBasicsAction` + backend `ORDER_CLIENT_REQUIRED`). */}
+        {/* Этап «Клиент — обязательный атрибут заказа»: снять клиента нельзя,
+            гейт стоит и в `updateOrderBasicsAction`, и в backend
+            (`ORDER_CLIENT_REQUIRED`). */}
         <div className="order-hero-card__field">
           <label htmlFor="basics-clientId">
             Клиент{' '}
@@ -226,8 +160,6 @@ export function OrderBasicsForm({
             name="clientId"
             value={clientId}
             onValueChange={setClientId}
-            disabled={isTerminal}
-            disableCreate={isTerminal}
             required
             aria-required="true"
             existingValues={clients.map((c) => c.id)}
@@ -250,6 +182,17 @@ export function OrderBasicsForm({
           )}
         </div>
 
+        <div className="order-hero-card__field">
+          <label htmlFor="basics-dueDate">Срок сдачи</label>
+          <input
+            id="basics-dueDate"
+            name="dueDate"
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
+          />
+        </div>
+
         <div className="order-hero-card__field order-hero-card__field--price">
           <label htmlFor="basics-customerUnitPrice">Цена за 1 шт</label>
           <div className="order-hero-card__price-row">
@@ -261,7 +204,6 @@ export function OrderBasicsForm({
               value={customerUnitPrice}
               onChange={(e) => setCustomerUnitPrice(e.target.value)}
               placeholder="0.00"
-              disabled={isTerminal}
             />
             <select
               name="customerCurrency"
@@ -270,7 +212,6 @@ export function OrderBasicsForm({
                 setCustomerCurrency(e.target.value as MoneyCurrency | '')
               }
               aria-label="Валюта"
-              disabled={isTerminal}
             >
               <option value="">—</option>
               {MONEY_CURRENCIES.map((c) => (
@@ -297,27 +238,13 @@ export function OrderBasicsForm({
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             placeholder="Краткое описание заказа"
-            disabled={isTerminal}
           />
         </div>
 
         <input type="hidden" name="customer" value={initial.customer ?? ''} />
       </div>
 
-      <div className="order-hero-card__basic-form-actions">
-        <SubmitButton disabled={isTerminal} />
-        {savedToast && (
-          <span className="order-hero-card__basic-form-toast" role="status">
-            {savedToast}
-          </span>
-        )}
-        {isTerminal && (
-          <span className="admin-muted" style={{ fontSize: '0.78rem' }}>
-            Заказ {status === 'DONE' ? 'завершён' : 'отменён'} — поля
-            недоступны для редактирования.
-          </span>
-        )}
-      </div>
+      <FormActions onCancel={block.cancel} />
     </form>
   );
 }

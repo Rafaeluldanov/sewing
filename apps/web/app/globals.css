@@ -17308,6 +17308,183 @@ body:has(.admin-layout) .app-header { display: none !important; }
   gap: 0.7rem 1.1rem;
 }
 
+/* ---------------------------------------------------------------------------
+   Правка на месте — общий паттерн блока карточки заказа
+   (`components/orders/blocks/order-edit-block.tsx`, шаг 1 плана из
+   `docs/mockups/order-page-inline-edit-mockup.html`).
+
+   Один паттерн на все блоки: шапка «заголовок + карандаш», четыре
+   состояния (`data-state`), сообщение об отказе — НА блоке, а не общим
+   баннером сверху страницы. Геометрия и цвета — токены админки, чтобы
+   блок не выглядел чужим внутри шапки заказа.
+   --------------------------------------------------------------------------- */
+
+.order-edit-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-card);
+  background: var(--admin-surface);
+}
+
+/* В правке блок подсвечен — видно, что именно сейчас редактируется
+   (соседние в это время только для чтения). */
+.order-edit-block--editing {
+  border-color: var(--btn-primary-edge);
+  box-shadow: 0 0 0 2px rgba(255, 210, 63, 0.28);
+}
+
+.order-edit-block--failed {
+  border-color: var(--admin-danger-border, #f3c9c6);
+  box-shadow: 0 0 0 2px rgba(210, 59, 59, 0.12);
+}
+
+.order-edit-block__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.order-edit-block__title {
+  margin: 0;
+  font-size: var(--title-subsection);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.order-edit-block__icon {
+  display: inline-flex;
+  color: var(--admin-muted);
+}
+
+.order-edit-block__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
+
+.order-edit-block__edit {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.order-edit-block__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: var(--admin-radius-pill);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.order-edit-block__chip--editing {
+  background: var(--color-bg-tint);
+  color: var(--admin-warning-fg);
+}
+
+.order-edit-block__chip--saved {
+  background: var(--admin-success-soft);
+  color: var(--admin-success-fg);
+}
+
+.order-edit-block__chip--failed {
+  background: var(--admin-danger-soft);
+  color: var(--admin-danger-fg);
+}
+
+.order-edit-block__summary {
+  min-width: 0;
+}
+
+/* Строка следствия правки («потребность пересчитана — 12 строк»):
+   макет требует показывать последствие сразу, а не оставлять его
+   на другой вкладке. */
+.order-edit-block__consequence {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--admin-success-fg);
+}
+
+/* Почему нельзя править / почему сейчас read-only. */
+.order-edit-block__gate {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--admin-muted);
+}
+
+.order-edit-block__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.order-edit-block__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.order-edit-block__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* Отказ сохранения: текст + выход («правьте другим путём») + «Повторить».
+   Введённые значения остаются в форме — выбросить их можно только
+   кнопкой «Отменить правку». */
+.order-edit-block__failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--admin-danger-border, #f3c9c6);
+  background: var(--admin-danger-soft);
+  color: var(--admin-danger-fg);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+.order-edit-block__failure-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1 1 240px;
+  font-size: 0.88rem;
+}
+
+.order-edit-block__failure-link {
+  color: var(--admin-primary-fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.order-edit-block__failure-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
+
+/* Сводка блока «Основное» живёт в той же сетке, что и read-only поля
+   шапки, — но своей строкой, поэтому колонки чуть уже. */
+.order-mgmt-header__grid--basics {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
 .order-mgmt-header__field {
   display: flex;
   flex-direction: column;

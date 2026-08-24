@@ -658,12 +658,13 @@ describe('order-workspace unification — UI-only refactor', () => {
 // 8. OrderBasicsForm — inline edit «Основное» в hero view-режима
 // ---------------------------------------------------------------------------
 
-describe('OrderBasicsForm — inline-форма «Сохранить основное» в hero', () => {
+describe('OrderBasicsForm — форма блока «Основное» (правка на месте)', () => {
   const src = read('apps/web/components/orders/order-basics-form.tsx');
+  const headerSrc = read(
+    'apps/web/components/orders/view/order-management-header.tsx',
+  );
 
-  test('форма содержит все управленческие поля', () => {
-    // Подразделение — FK на master-справочник `CompanyDivision`.
-    expect(src).toMatch(/name="companyDivisionId"/);
+  test('форма содержит управленческие поля блока', () => {
     expect(src).toMatch(/name="dueDate"/);
     expect(src).toMatch(/name="clientId"/);
     expect(src).toMatch(/name="customerUnitPrice"/);
@@ -673,14 +674,88 @@ describe('OrderBasicsForm — inline-форма «Сохранить основ�
     expect(src).toMatch(/name="customer"/);
   });
 
-  test('форма submit-ит updateOrderBasicsAction', () => {
-    expect(src).toMatch(/updateOrderBasicsAction/);
-    expect(src).toMatch(/Сохранить основное/);
+  test('подразделения в блоке «Основное» НЕТ — у него другое окно правки', () => {
+    // `companyDivisionId` — «безопасное плановое» поле: backend разрешает
+    // менять его только до запуска производства (`isOrderPlanEditable`), а
+    // «Основное» правится на любом статусе. Видимое поле, которое backend
+    // отбивает 409 ORDER_LOCKED, — то самое враньё, ради которого затевалась
+    // правка на месте. Поле переезжает в блок «Настройки заказа» (шаг 3).
+    expect(src).not.toMatch(/name="companyDivisionId"/);
   });
 
-  test('терминальные статусы делают форму disabled', () => {
-    expect(src).toMatch(/'DONE' \|\| status === 'CANCELLED'/);
-    expect(src).toMatch(/disabled=\{isTerminal\}/);
+  test('форма submit-ит updateOrderBasicsAction', () => {
+    expect(src).toMatch(/updateOrderBasicsAction/);
+    expect(src).toMatch(/Сохранить/);
+  });
+
+  test('результат сохранения форма докладывает блоку, а не рисует сама', () => {
+    // Состояния «сохранено» / «не сохранено» принадлежат `OrderEditBlock`
+    // (общий паттерн блока), поэтому форма зовёт api блока, а собственных
+    // тостов и баннеров не держит.
+    expect(src).toMatch(/useOrderEditBlockApi/);
+    expect(src).toMatch(/block\.saved\(\)/);
+    expect(src).toMatch(/block\.failed\(/);
+    // «Повторить» на блоке шлёт тот же запрос — форма отдаёт retry.
+    expect(src).toMatch(/requestSubmit\(\)/);
+  });
+
+  test('терминальные статусы закрывает гейт блока в шапке', () => {
+    expect(headerSrc).toMatch(
+      /const isTerminal = status === 'DONE' \|\| status === 'CANCELLED';/,
+    );
+    expect(headerSrc).toMatch(/isTerminal[\s\S]*?editable: false/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8a. OrderEditBlock — общий паттерн «правка на месте»
+// ---------------------------------------------------------------------------
+
+describe('OrderEditBlock — общий паттерн блока карточки заказа', () => {
+  const src = read('apps/web/components/orders/blocks/order-edit-block.tsx');
+  const headerSrc = read(
+    'apps/web/components/orders/view/order-management-header.tsx',
+  );
+  const pageSrc = read('apps/web/app/admin/orders/[id]/page.tsx');
+
+  test('четыре состояния блока размечены в DOM (data-state)', () => {
+    expect(src).toMatch(/data-state=\{state\}/);
+    expect(src).toMatch(/order-edit-block__chip--saved/);
+    expect(src).toMatch(/order-edit-block__chip--failed/);
+    expect(src).toMatch(/order-edit-block__chip--editing/);
+  });
+
+  test('«один блок за раз»: соседние блоки только для чтения', () => {
+    expect(src).toMatch(/OrderEditBlocksProvider/);
+    expect(src).toMatch(/blockedByNeighbour/);
+    expect(src).toMatch(
+      /Пока правится соседний блок, остальные только для чтения/,
+    );
+  });
+
+  test('правки не теряются при ошибке: блок остаётся в правке', () => {
+    // В состоянии «не сохранено» форма продолжает рендериться, а выбросить
+    // введённое можно только явной кнопкой.
+    expect(src).toMatch(/Отменить правку/);
+    expect(src).toMatch(/Повторить/);
+  });
+
+  test('гейт объясняет не только «нельзя», но и «как можно»', () => {
+    expect(src).toMatch(/reason\?: string/);
+    expect(src).toMatch(/action\?: OrderEditBlockAction/);
+  });
+
+  test('api приходит формам контекстом, а не render-prop-ом', () => {
+    // Блоки живут внутри серверных компонентов: функцию нельзя передать
+    // пропом из server в client.
+    expect(src).toMatch(/export function useOrderEditBlockApi/);
+    expect(src).toMatch(/children: ReactNode/);
+  });
+
+  test('карточка заказа обёрнута провайдером и рендерит блок «Основное»', () => {
+    expect(pageSrc).toMatch(/<OrderEditBlocksProvider>/);
+    expect(headerSrc).toMatch(/<OrderEditBlock\s/);
+    expect(headerSrc).toMatch(/id="basics"/);
   });
 });
 
