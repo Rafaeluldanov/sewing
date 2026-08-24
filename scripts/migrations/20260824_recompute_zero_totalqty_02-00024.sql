@@ -1,0 +1,92 @@
+-- 2026-08-24 data-fix (prod). НЕ ПРИМЕНЕНО.
+--
+-- Заказ 02-00024 (id cmt4zc5q20ruzzd63zn0djr0t, «Бомбер basic», 100 шт,
+-- статус CALCULATION_DONE): все 11 строк состава стоят с `totalQty = 0`,
+-- шесть материалов ушли в потребность цеха нулём.
+--
+-- ЧТО ПРОИЗОШЛО.
+-- У карточки номенклатуры «Бомбер basic» (id cmt4xnxqp0qw9zd63skzyvrk4) нет
+-- НИ ОДНОЙ строки спецификации (`PatternItemMaterialLine` = 0): нормы
+-- фурнитуры и погонные метры заполнены, а состав менеджер набирает прямо в
+-- заказе. Ручная строка создаётся с `totalQty = 0` в расчёте на ближайшую
+-- пересборку снимка (`OrderTechCardService.createManualLines`), а пересборка
+-- (`OrdersService.rebuildMaterialRequirementsSnapshot`) выходила молча, если
+-- материализовывать нечего: `effectiveGroups` пуст → `return` ДО блока
+-- пересчёта количеств. Тираж не считался никогда.
+--
+-- Дальше ноль ехал сам: `WorkshopNeedsService.computeLine` для строки снимка
+-- берёт `calculatedQty = totalQty` как есть. В потребности нулями встали
+-- «Подклад Мембрана», «Сублимация», «Молния на карман», «Дублерин», «ПВХ
+-- Бирка» и «Жаккардовая Бирка».
+--
+-- Код исправлен коммитом 868f88c (пересчёт вынесен в
+-- `recomputeSnapshotGroup` и зовётся из обеих веток пересборки) +
+-- регрессия tests/integration/order-manual-spec-no-pattern-spec.test.ts.
+-- Этот журнал чинит УЖЕ ЗАПИСАННЫЕ данные заказа.
+--
+-- ЧТО ДЕЛАЕТ СКРИПТ.
+--   1. Пересчитывает `totalQty` = норма × тираж по той же формуле, что и
+--      `OrdersService.computeLineTotalQty`: без расщепления — «норма × 100»,
+--      у расщеплённой строки («м пог.» ↔ «кг») — через ширину и плотность.
+--      Единственная расщеплённая строка заказа — «Кашкорсе»:
+--      0.3 × 100 = 30 м пог. → 30 × 110/100 × 350/1000 = 11.55 кг
+--      (то же число уже стоит в потребности по поразмерному параметру —
+--      сверка сошлась).
+--   2. Ставит заказу отметку «потребность устарела», чтобы менеджер увидел
+--      плашку и нажал «Пересчитать потребность»: сами строки `WorkshopNeed`
+--      скрипт НЕ трогает — их обязан пересобрать сервис (там же применится
+--      приоритет нормы заказа и новые описания, коммит 07ba4c4).
+--
+-- ОЖИДАЕМЫЙ РЕЗУЛЬТАТ (11 строк):
+--   Основа Президент 160, Подклад Мембрана 160, Сублимация 160,
+--   Синтепон 160, Нитки 8000, Молния для основы 100, Молния на карман 100,
+--   ПВХ Бирка 100, Жаккардовая Бирка 100, Кашкорсе 11.55, Дублерин 30.
+--
+-- АЛЬТЕРНАТИВА БЕЗ SQL: после деплоя открыть заказ и пересохранить любую
+-- строку материалов — `resyncTechCardDerived` пересоберёт снимок и сам
+-- пересчитает потребность. Скрипт нужен, если трогать заказ руками нельзя.
+
+BEGIN;
+
+-- Контроль ДО: 11 строк, totalQty = 0.
+SELECT r.name, r."qtyPerUnit", r."normUnit", r.unit, r."totalQty"
+FROM "OrderMaterialRequirement" r
+WHERE r."orderId" = 'cmt4zc5q20ruzzd63zn0djr0t'
+ORDER BY r."sortOrder";
+
+UPDATE "OrderMaterialRequirement" r
+SET "totalQty" = CASE
+    -- Расщеплённая строка: норма в погонных метрах, закупка на вес.
+    WHEN btrim(coalesce(r."normUnit", '')) = 'м пог.'
+     AND r.unit = 'кг'
+     AND r."plannedWidthCm" IS NOT NULL
+     AND r."densityGsm" IS NOT NULL
+      THEN round(
+        r."qtyPerUnit" * q.qty * r."plannedWidthCm" / 100.0 * r."densityGsm" / 1000.0,
+        4)
+    -- Обычная строка (и та, у которой пересчёт невозможен: расход как есть).
+    ELSE round(r."qtyPerUnit" * q.qty, 4)
+  END
+FROM (
+  SELECT "orderId", sum("qtyPlan")::numeric AS qty
+  FROM "OrderItem"
+  WHERE "orderId" = 'cmt4zc5q20ruzzd63zn0djr0t'
+  GROUP BY "orderId"
+) q
+WHERE r."orderId" = q."orderId"
+  AND r."orderId" = 'cmt4zc5q20ruzzd63zn0djr0t';
+
+-- Потребность считалась по нулям — просим пересчёт через сервис.
+UPDATE "Order"
+SET "needsStaleAt" = now(),
+    "needsStaleReason" = 'Расход по строкам состава пересчитан data-fix-ом 20260824 — потребность считалась по нулям.'
+WHERE id = 'cmt4zc5q20ruzzd63zn0djr0t';
+
+-- Контроль ПОСЛЕ: ни одной строки с нулевым расходом при ненулевой норме.
+SELECT count(*) AS zero_rows_must_be_0
+FROM "OrderMaterialRequirement"
+WHERE "orderId" = 'cmt4zc5q20ruzzd63zn0djr0t'
+  AND "totalQty" = 0
+  AND "qtyPerUnit" > 0;
+
+COMMIT;
