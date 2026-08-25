@@ -225,7 +225,14 @@ async function loadData(order: OrderDetailDto): Promise<LoadedData> {
     purchaseReceipts,
     materialIssues,
   ] = await Promise.all([
-    safe(() => getOrderWorkshopNeeds(order.id), [], 'Потребность цеха'),
+    // Скоуп TIRAGE: без строк сигнального образца. Образец считается на
+    // 1 изделие теми же материалами, и в сводке он выглядел вторым
+    // комплектом строк — «дубликаты» на 02-00024.
+    safe(
+      () => getOrderWorkshopNeeds(order.id, { calculationScope: 'TIRAGE' }),
+      [],
+      'Потребность цеха',
+    ),
     safe<CutReadinessDto | null>(
       () => getOrderCutReadiness(order.id),
       null,

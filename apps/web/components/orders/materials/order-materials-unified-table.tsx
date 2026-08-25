@@ -484,7 +484,13 @@ async function loadData(orderId: string): Promise<LoadedData> {
   };
 
   const [needs, cutReadiness, purchaseOrders, purchaseReceipts] = await Promise.all([
-    safe(() => getOrderWorkshopNeeds(orderId), [], 'Потребность цеха'),
+    // Скоуп TIRAGE: план/факт по материалам — про тираж, строки
+    // сигнального образца (расход на 1 изделие) удваивали бы список.
+    safe(
+      () => getOrderWorkshopNeeds(orderId, { calculationScope: 'TIRAGE' }),
+      [],
+      'Потребность цеха',
+    ),
     safe<CutReadinessDto | null>(
       () => getOrderCutReadiness(orderId),
       null,

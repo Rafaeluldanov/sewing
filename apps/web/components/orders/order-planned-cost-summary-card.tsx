@@ -252,7 +252,11 @@ export async function OrderPlannedCostSummaryCard({
     let needs: WorkshopNeedListItemDto[] | null = workshopNeeds ?? null;
     if (!needs) {
       try {
-        needs = await getOrderWorkshopNeeds(order.id);
+        // Скоуп TIRAGE: плановая себестоимость — про тираж, образец
+        // в неё не входит (так же считает и смета на бэке).
+        needs = await getOrderWorkshopNeeds(order.id, {
+          calculationScope: 'TIRAGE',
+        });
       } catch (e) {
         needs = [];
         needsLoadError =

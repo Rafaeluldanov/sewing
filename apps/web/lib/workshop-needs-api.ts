@@ -124,16 +124,19 @@ export function getOrderWorkshopNeeds(
   orderId: string,
   opts?: {
     /**
-     * Фича «Варианты просчёта»: скоуп по вариантам. Default backend —
-     * `ACTIVE` (только активный вариант; так ходят производственно-
-     * финансовые таблицы карточки — «Материалы», «Сводно», выдачи).
-     * `ALL` — все варианты с меткой (вкладка «Потребности»).
+     * Скоуп строк. Default backend — `ACTIVE` (активный вариант просчёта,
+     * образец включён; так ходят выдачи и блок «Потребность цеха»).
+     * `TIRAGE` — активный вариант БЕЗ сигнального образца: скоуп таблиц
+     * денег и материалов тиража («Сводно», «Материалы», плановая
+     * себестоимость). `ALL` — все варианты с меткой (вкладка «Потребности»).
      */
-    calculationScope?: 'ACTIVE' | 'ALL';
+    calculationScope?: 'ACTIVE' | 'TIRAGE' | 'ALL';
   },
 ): Promise<WorkshopNeedListItemDto[]> {
   const query =
-    opts?.calculationScope === 'ALL' ? '?calculationScope=ALL' : '';
+    opts?.calculationScope && opts.calculationScope !== 'ACTIVE'
+      ? `?calculationScope=${opts.calculationScope}`
+      : '';
   return apiFetch<WorkshopNeedListItemDto[]>(
     `/orders/${encodeURIComponent(orderId)}/workshop-needs${query}`,
     { cache: 'no-store' },

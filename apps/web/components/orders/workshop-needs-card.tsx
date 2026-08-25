@@ -224,6 +224,22 @@ export async function WorkshopNeedsCard({ orderId, orderStatus }: Props) {
                   >
                     {n.description}
                   </Link>
+                  {/*
+                    Строка сигнального образца — расход на 1 изделие, а не на
+                    тираж. Без метки она читается как дубль тиражной строки
+                    того же материала (02-00024: 18 строк тиража и 11 строк
+                    образца подряд). Деньги и материалы тиража её и не видят —
+                    там скоуп `TIRAGE`, — а этот блок показывает: закупщику
+                    материал образца купить надо.
+                  */}
+                  {n.orderSampleId != null && (
+                    <span
+                      className="admin-muted"
+                      style={{ fontSize: '0.72rem', marginLeft: 6 }}
+                    >
+                      · образец
+                    </span>
+                  )}
                 </div>
                 <div
                   className="admin-muted"

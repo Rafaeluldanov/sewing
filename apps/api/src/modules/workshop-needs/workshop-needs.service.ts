@@ -50,7 +50,10 @@ import {
 } from '../../common/errors.js';
 import { assertOrderMaterialCorrectionAllowed } from '../../common/order-material-correction.js';
 import { OrderCostEstimatesService } from '../orders/order-cost-estimates.service.js';
-import { ACTIVE_CALCULATION_NEED_WHERE } from './workshop-need-scope.js';
+import {
+  ACTIVE_CALCULATION_NEED_WHERE,
+  TIRAGE_NEED_WHERE,
+} from './workshop-need-scope.js';
 
 /**
  * Реализация модуля «Потребность цеха» (Этап 4А, см.
@@ -110,7 +113,14 @@ export class WorkshopNeedsService {
     // так ходят производственно-финансовые читатели карточки заказа.
     // Default (ALL) — закупочные экраны видят все варианты с меткой.
     // Подмешиваем через AND: у фрагмента свой OR (см. workshop-need-scope).
-    if (query.calculationScope === 'ACTIVE') {
+    if (query.calculationScope === 'TIRAGE') {
+      // Читатели ДЕНЕГ и МАТЕРИАЛОВ тиража («Сводно», «Материалы», карточка
+      // плановой себестоимости): активный вариант И без сигнального образца.
+      // Образец шьют отдельно, его строки идут на 1 изделие — в тиражной
+      // таблице они выглядели вторым комплектом тех же материалов. На
+      // 02-00024 так и получилось: 18 тиражных строк + 11 строк образца.
+      where.AND = [TIRAGE_NEED_WHERE];
+    } else if (query.calculationScope === 'ACTIVE') {
       where.AND = [ACTIVE_CALCULATION_NEED_WHERE];
     }
 
