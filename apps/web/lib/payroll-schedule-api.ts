@@ -9,6 +9,7 @@
 import type {
   PayrollAccrualPreviewDto,
   PayrollAccrualScheduleDto,
+  PayrollCutoffBasis,
   UpdatePayrollAccrualScheduleDto,
 } from '@sewing/shared/payroll-schedule';
 import { apiFetch } from './api';
@@ -39,19 +40,42 @@ export function updatePayrollSchedule(
   });
 }
 
+/**
+ * Несохранённое правило для предпросмотра: экран настроек считает
+ * суммы по переключателю до нажатия «Сохранить». Не передано — сервер
+ * берёт правило из настройки.
+ */
+export interface PayrollPreviewRuleOverride {
+  cutoffBasis?: PayrollCutoffBasis;
+  appliesToSewing?: boolean;
+  appliesToCutting?: boolean;
+}
+
+/** Флаги уходят как `0`/`1`: пустая строка на бэке значила бы «не передано». */
+function flag(v: boolean | undefined): string | undefined {
+  return v === undefined ? undefined : v ? '1' : '0';
+}
+
 export function getPayrollAccrualPreview(
   accrualDate?: string,
+  rule?: PayrollPreviewRuleOverride,
 ): Promise<PayrollAccrualPreviewDto> {
   return apiFetch<PayrollAccrualPreviewDto>('/payroll/schedule/preview', {
-    searchParams: { accrualDate },
+    searchParams: {
+      accrualDate,
+      cutoffBasis: rule?.cutoffBasis,
+      appliesToSewing: flag(rule?.appliesToSewing),
+      appliesToCutting: flag(rule?.appliesToCutting),
+    },
   });
 }
 
 export async function getPayrollAccrualPreviewSafe(
   accrualDate?: string,
+  rule?: PayrollPreviewRuleOverride,
 ): Promise<PayrollAccrualPreviewDto | null> {
   try {
-    return await getPayrollAccrualPreview(accrualDate);
+    return await getPayrollAccrualPreview(accrualDate, rule);
   } catch {
     return null;
   }

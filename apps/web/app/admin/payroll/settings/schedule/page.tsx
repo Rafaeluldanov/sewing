@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import { ArrowLeft, CalendarClock } from 'lucide-react';
 import {
+  PAYROLL_CUTOFF_BASES,
   PAYROLL_CUTOFF_BASIS_LABELS,
+  type PayrollCutoffBasis,
 } from '@sewing/shared/payroll-schedule';
 import {
   AdminCard,
@@ -12,6 +14,7 @@ import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getPayrollAccrualPreviewSafe,
   getPayrollSchedule,
+  type PayrollPreviewRuleOverride,
 } from '@/lib/payroll-schedule-api';
 import { PayrollScheduleForm } from './schedule-form';
 
@@ -30,7 +33,11 @@ export const dynamic = 'force-dynamic';
  * правила: менеджер видит последствие переключателя до того, как
  * сформирует документ.
  */
-export default async function AdminPayrollSchedulePage() {
+export default async function AdminPayrollSchedulePage({
+  searchParams,
+}: {
+  searchParams?: Record<string, string | string[] | undefined>;
+}) {
   let schedule = null;
   let error: string | null = null;
   try {
@@ -42,7 +49,20 @@ export default async function AdminPayrollSchedulePage() {
         : 'Не удалось загрузить правила начисления';
   }
 
-  const preview = schedule ? await getPayrollAccrualPreviewSafe() : null;
+  // Правило из query — то, что менеджер выбрал в форме, но ещё не
+  // сохранил: предпросмотр обязан считать по нему, иначе переключатель
+  // не двигает сумму и проверить последствие можно только применив его
+  // к деньгам.
+  const draftRule = readDraftRule(searchParams);
+  const preview = schedule
+    ? await getPayrollAccrualPreviewSafe(undefined, draftRule)
+    : null;
+  const previewIsDraft =
+    schedule !== null &&
+    preview !== null &&
+    (preview.cutoffBasis !== schedule.cutoffBasis ||
+      preview.appliesToSewing !== schedule.appliesToSewing ||
+      preview.appliesToCutting !== schedule.appliesToCutting);
 
   return (
     <AdminPageShell
@@ -110,8 +130,17 @@ export default async function AdminPayrollSchedulePage() {
               <AdminCard>
                 <AdminSectionHeader
                   title={`Предпросмотр на ${formatDate(preview.accrualDate)}`}
-                  hint={`Правило отсечки: ${PAYROLL_CUTOFF_BASIS_LABELS[preview.cutoffBasis]}`}
+                  hint={`Правило отсечки: ${PAYROLL_CUTOFF_BASIS_LABELS[preview.cutoffBasis]}${
+                    previewIsDraft ? ' (выбрано в форме, не сохранено)' : ''
+                  }`}
                 />
+                {!preview.appliesToSewing && !preview.appliesToCutting && (
+                  <p className="admin-hint" style={{ marginBottom: '0.5rem' }}>
+                    Охват снят: правило отсечки сейчас ни на что не
+                    распространяется, поэтому сумма одинакова для всех трёх
+                    вариантов. Включите «Пошив» и/или «Раскрой» ниже в форме.
+                  </p>
+                )}
                 <ul className="admin-deflist">
                   <li>
                     Войдёт в расчёт: <b>{money(preview.totalAmount)}</b>{' '}
@@ -151,6 +180,31 @@ export default async function AdminPayrollSchedulePage() {
       )}
     </AdminPageShell>
   );
+}
+
+/**
+ * Разбор несохранённого правила из query. Значения проверяются здесь, а
+ * не отдаются бэку как есть: мусор в адресной строке дал бы 400, а
+ * `...Safe` превратил бы его в пропавшую карточку предпросмотра.
+ */
+function readDraftRule(
+  sp?: Record<string, string | string[] | undefined>,
+): PayrollPreviewRuleOverride | undefined {
+  if (!sp) return undefined;
+  const rule: PayrollPreviewRuleOverride = {};
+  const basis = first(sp.cutoffBasis);
+  if (basis && (PAYROLL_CUTOFF_BASES as readonly string[]).includes(basis)) {
+    rule.cutoffBasis = basis as PayrollCutoffBasis;
+  }
+  const sewing = first(sp.appliesToSewing);
+  if (sewing === '0' || sewing === '1') rule.appliesToSewing = sewing === '1';
+  const cutting = first(sp.appliesToCutting);
+  if (cutting === '0' || cutting === '1') rule.appliesToCutting = cutting === '1';
+  return Object.keys(rule).length > 0 ? rule : undefined;
+}
+
+function first(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
 }
 
 function money(v: number): string {

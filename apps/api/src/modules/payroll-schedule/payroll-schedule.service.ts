@@ -165,7 +165,10 @@ export class PayrollScheduleService {
    * правке правила, и «войдёт + отложено» перестаёт сходиться с
    * реальностью.
    */
-  async preview(accrualDateIso?: string): Promise<PayrollAccrualPreviewDto> {
+  async preview(
+    accrualDateIso?: string,
+    ruleOverrides?: Partial<AccrualCutoffRules>,
+  ): Promise<PayrollAccrualPreviewDto> {
     const schedule = await this.load();
     const today = moscowDayKey();
     const date =
@@ -179,10 +182,16 @@ export class PayrollScheduleService {
     const { cutoff, salaryDate } = resolveAccrualBounds(date);
     const { periodFrom } = accrualPeriodFor(schedule.daysOfMonth, date);
 
+    // Переданное правило перекрывает сохранённое ПОЛЕ ЗА ПОЛЕМ: экран
+    // настроек считает по несохранённому переключателю, а все прочие
+    // вызовы (ведомость, форма документа) ничего не шлют и получают
+    // ровно то, что в базе.
     const rules: AccrualCutoffRules = {
-      cutoffBasis: schedule.cutoffBasis as PayrollCutoffBasis,
-      appliesToSewing: schedule.appliesToSewing,
-      appliesToCutting: schedule.appliesToCutting,
+      cutoffBasis:
+        ruleOverrides?.cutoffBasis ?? (schedule.cutoffBasis as PayrollCutoffBasis),
+      appliesToSewing: ruleOverrides?.appliesToSewing ?? schedule.appliesToSewing,
+      appliesToCutting:
+        ruleOverrides?.appliesToCutting ?? schedule.appliesToCutting,
     };
 
     // Строки, уже занятые активной выплатой, в расчёт не идут — так же,
@@ -335,6 +344,8 @@ export class PayrollScheduleService {
       accrualDate: date,
       periodFrom,
       cutoffBasis: rules.cutoffBasis,
+      appliesToSewing: rules.appliesToSewing,
+      appliesToCutting: rules.appliesToCutting,
       pieceworkAmount: money(piecework),
       cuttingAmount: money(cutting),
       salaryAmount: money(salary),

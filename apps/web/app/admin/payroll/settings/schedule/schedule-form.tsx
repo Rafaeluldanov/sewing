@@ -7,7 +7,8 @@
  */
 
 import type React from 'react';
-import { useState } from 'react';
+import { useState, useTransition } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { useFormState, useFormStatus } from 'react-dom';
 import {
   PAYROLL_CUTOFF_BASES,
@@ -44,6 +45,32 @@ export function PayrollScheduleForm({
   const [days, setDays] = useState<number[]>(schedule.daysOfMonth);
   const [draftDay, setDraftDay] = useState('');
   const [basis, setBasis] = useState<PayrollCutoffBasis>(schedule.cutoffBasis);
+  const [sewing, setSewing] = useState(schedule.appliesToSewing);
+  const [cutting, setCutting] = useState(schedule.appliesToCutting);
+  const router = useRouter();
+  const pathname = usePathname();
+  const [recalculating, startRecalc] = useTransition();
+
+  /**
+   * Пересчитать предпросмотр по ТЕКУЩЕМУ выбору, не сохраняя его.
+   * Правило уезжает в query, страница-RSC перезапрашивает
+   * `/payroll/schedule/preview` с ним — иначе карточка справа считала
+   * бы по строке из БД и не реагировала на переключатель.
+   */
+  function syncPreview(next: {
+    basis?: PayrollCutoffBasis;
+    sewing?: boolean;
+    cutting?: boolean;
+  }) {
+    const query = new URLSearchParams({
+      cutoffBasis: next.basis ?? basis,
+      appliesToSewing: (next.sewing ?? sewing) ? '1' : '0',
+      appliesToCutting: (next.cutting ?? cutting) ? '1' : '0',
+    });
+    startRecalc(() => {
+      router.replace(`${pathname}?${query.toString()}`, { scroll: false });
+    });
+  }
 
   function addDay() {
     const n = Number(draftDay);
@@ -162,7 +189,10 @@ export function PayrollScheduleForm({
               name="cutoffBasis"
               value={code}
               checked={basis === code}
-              onChange={() => setBasis(code)}
+              onChange={() => {
+                setBasis(code);
+                syncPreview({ basis: code });
+              }}
               style={{ marginTop: '0.25rem' }}
             />
             <span>
@@ -185,6 +215,11 @@ export function PayrollScheduleForm({
           Правило действует на сдельщину. Оклад, часы смены и подкрой к заказу не
           привязаны и всегда входят по своей дате.
         </p>
+        <p className="admin-hint">
+          Во всех трёх вариантах в расчёт идёт только ПОДТВЕРЖДЁННАЯ сдельщина:
+          подтверждение ставится закрытием коробки на упаковке. Незакрытая
+          коробка не попадёт в документ ни при каком правиле.
+        </p>
       </fieldset>
 
       <div className="admin-field">
@@ -193,7 +228,11 @@ export function PayrollScheduleForm({
           <input
             type="checkbox"
             name="appliesToSewing"
-            defaultChecked={schedule.appliesToSewing}
+            checked={sewing}
+            onChange={(e) => {
+              setSewing(e.target.checked);
+              syncPreview({ sewing: e.target.checked });
+            }}
           />
           <span>
             Пошив, ОТК, ВТО (сдельно)
@@ -206,7 +245,11 @@ export function PayrollScheduleForm({
           <input
             type="checkbox"
             name="appliesToCutting"
-            defaultChecked={schedule.appliesToCutting}
+            checked={cutting}
+            onChange={(e) => {
+              setCutting(e.target.checked);
+              syncPreview({ cutting: e.target.checked });
+            }}
           />
           <span>
             Раскрой
@@ -216,6 +259,13 @@ export function PayrollScheduleForm({
             </span>
           </span>
         </label>
+        {!sewing && !cutting && (
+          <p className="admin-hint" style={{ marginTop: '0.4rem' }}>
+            Обе галки сняты — правило отсечки ни на что не влияет: в расчёт
+            входит вся подтверждённая сдельщина, какой бы вариант выше ни был
+            выбран.
+          </p>
+        )}
       </div>
 
       <div className="admin-field">
@@ -235,8 +285,18 @@ export function PayrollScheduleForm({
         </label>
       </div>
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: '0.5rem',
+          marginTop: '1rem',
+          alignItems: 'center',
+        }}
+      >
         <SubmitButton />
+        {recalculating && (
+          <span className="admin-hint">Пересчитываем предпросмотр…</span>
+        )}
       </div>
     </form>
   );

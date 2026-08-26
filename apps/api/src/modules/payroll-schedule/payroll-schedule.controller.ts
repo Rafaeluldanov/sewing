@@ -41,12 +41,23 @@ export class PayrollScheduleController {
     return this.schedule.update(body, user);
   }
 
+  /**
+   * Предпросмотр. Кроме даты принимает несохранённое правило
+   * (`cutoffBasis`, `appliesToSewing`, `appliesToCutting`) — экран
+   * «Правила начисления» считает по переключателю до сохранения.
+   * Ничего не пишет, поэтому переданное правило живёт только в этом
+   * ответе.
+   */
   @Get('preview')
   preview(
     @Query(new ZodValidationPipe(PayrollAccrualPreviewQuerySchema))
     query: PayrollAccrualPreviewQuery,
   ) {
-    return this.schedule.preview(query.accrualDate);
+    return this.schedule.preview(query.accrualDate, {
+      cutoffBasis: query.cutoffBasis,
+      appliesToSewing: query.appliesToSewing,
+      appliesToCutting: query.appliesToCutting,
+    });
   }
 
   /**

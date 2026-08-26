@@ -9,6 +9,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import {
+  PayrollAccrualPreviewQuerySchema,
   accrualDatesInMonth,
   accrualPeriodFor,
   clampDayToMonth,
@@ -212,5 +213,44 @@ describe('догон пропущенного дня начисления', () =
 
   test('в сам день начисления догонять нечего', () => {
     expect(isAccrualDate([5], '2026-09-05')).toBe(true);
+  });
+});
+
+describe('правило в query предпросмотра', () => {
+  test('флаги приходят строкой и разбираются как булевы', () => {
+    const parsed = PayrollAccrualPreviewQuerySchema.parse({
+      cutoffBasis: 'WORK_DATE',
+      appliesToSewing: '1',
+      appliesToCutting: '0',
+    });
+    expect(parsed).toEqual({
+      accrualDate: undefined,
+      cutoffBasis: 'WORK_DATE',
+      appliesToSewing: true,
+      appliesToCutting: false,
+    });
+  });
+
+  test('«0» — это выключено, а не «непустая строка = true»', () => {
+    // Ровно та ловушка, ради которой в схеме не `z.coerce.boolean()`:
+    // он включил бы правило от строки «0» и молча придержал деньги.
+    expect(
+      PayrollAccrualPreviewQuerySchema.parse({ appliesToSewing: '0' })
+        .appliesToSewing,
+    ).toBe(false);
+  });
+
+  test('ничего не передано — правило берётся из настройки (undefined)', () => {
+    const parsed = PayrollAccrualPreviewQuerySchema.parse({});
+    expect(parsed.cutoffBasis).toBeUndefined();
+    expect(parsed.appliesToSewing).toBeUndefined();
+    expect(parsed.appliesToCutting).toBeUndefined();
+  });
+
+  test('мусорный флаг отбивается валидацией, а не проходит молча', () => {
+    expect(
+      PayrollAccrualPreviewQuerySchema.safeParse({ appliesToSewing: 'yes' })
+        .success,
+    ).toBe(false);
   });
 });

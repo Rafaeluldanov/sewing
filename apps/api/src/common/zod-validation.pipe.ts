@@ -1,5 +1,5 @@
 import { BadRequestException, PipeTransform } from '@nestjs/common';
-import type { ZodIssue, ZodSchema } from 'zod';
+import type { ZodIssue, ZodType, ZodTypeDef } from 'zod';
 
 /**
  * Валидация body/query по Zod-схеме из `@sewing/shared`.
@@ -18,7 +18,13 @@ import type { ZodIssue, ZodSchema } from 'zod';
  *   заполнить / какой формат ожидается.
  */
 export class ZodValidationPipe<T> implements PipeTransform<unknown, T> {
-  constructor(private readonly schema: ZodSchema<T>) {}
+  /**
+   * Вход схемы — `unknown`, а не `T`: `ZodSchema<T>` требует, чтобы
+   * входной тип совпадал с выходным, и любая схема с `transform`
+   * (query-флаг `'1' → true`) переставала подходить. Валидация от этого
+   * не слабеет — на входе и так `unknown` из тела/query.
+   */
+  constructor(private readonly schema: ZodType<T, ZodTypeDef, unknown>) {}
 
   transform(value: unknown): T {
     const parsed = this.schema.safeParse(value);

@@ -2212,7 +2212,7 @@ DTO: `packages/shared/src/payroll-calendar.ts`. Домен:
 | ----- | --------------------------------- | ------------------- | -------- |
 | GET   | `/api/payroll/schedule`           | SHOP_MANAGER, ADMIN | Настройка + `upcoming[]` — три ближайшие даты начисления с периодами и «через N дней». |
 | PUT   | `/api/payroll/schedule`           | SHOP_MANAGER, ADMIN | Body `UpdatePayrollAccrualScheduleDto` (`daysOfMonth[]` 1..31, `cutoffBasis`, `appliesToSewing`, `appliesToCutting`, `autoCreateDraft`, `runAtLocalTime` `ЧЧ:ММ`). Дни нормализуются (дубли убираются, сортировка). Пишет `PAYROLL_SCHEDULE_UPDATED` в `AuditLog`. |
-| GET   | `/api/payroll/schedule/preview`   | SHOP_MANAGER, ADMIN | Query `{ accrualDate? }` (по умолчанию — ближайшая дата начисления). Что войдёт в документ (сдельно / раскрой / оклад / подкрой) и что отложено, с разрезом по заказам и по сотрудникам. |
+| GET   | `/api/payroll/schedule/preview`   | SHOP_MANAGER, ADMIN | Query `{ accrualDate?, cutoffBasis?, appliesToSewing?, appliesToCutting? }` (дата по умолчанию — ближайшая дата начисления; правило по умолчанию — сохранённое, переданное перекрывает его поле за полем и никуда не пишется — так экран настроек считает по несохранённому переключателю; флаги — `0`/`1`). Что войдёт в документ (сдельно / раскрой / оклад / подкрой) и что отложено, с разрезом по заказам и по сотрудникам. |
 | POST  | `/api/payroll/schedule/run-due`   | SHOP_MANAGER, ADMIN | Ленивый триггер автосоздания черновика: `{ documentId }` либо `{ documentId: null }`, если не пора / документ уже есть. Идемпотентен (`lastRunOn`). |
 
 **Правило отсечки** (`cutoffBasis`) действует на сдельные `OperationEntry`:
