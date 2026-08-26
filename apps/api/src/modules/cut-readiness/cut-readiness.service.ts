@@ -300,7 +300,7 @@ export class CutReadinessService {
             status: 'WARNING',
             title: `Площади лекала по роли ${role} не заданы`,
             message:
-              'Расчёт потребности по площади и плотности невозможен — будет использован fallback по норме техкарты.',
+              'Расчёт потребности по площади и плотности невозможен — будет использован fallback по норме из состава материалов.',
             entityType: 'PATTERN_ITEM',
             entityId: order.patternItem.id,
           });
@@ -360,7 +360,7 @@ export class CutReadinessService {
       receiptChecks.push({
         key: 'materials.techCard.unrolled',
         status: 'WARNING',
-        title: 'В техкарте есть строки без роли',
+        title: 'В составе материалов есть строки без роли',
         message: `Найдено строк без materialRole: ${unrolledTechCardLines}. Они не участвуют в проверке готовности к крою.`,
       });
     }

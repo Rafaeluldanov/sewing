@@ -195,15 +195,23 @@ export class OrderPatternRequiredException extends BusinessException {
 }
 
 /**
- * Заказ в `DRAFT` без выбранного `techCardId`: перевести в расчёт
- * нельзя — техкарта поставляет строки материалов и подрядных
- * размещений для расчёта (см. `WorkshopNeedsService.calculateForOrder`).
+ * Заказ в `DRAFT`, у которого состав материалов брать неоткуда:
+ * у карточки номенклатуры нет ни одной строки спецификации
+ * (`PatternItemMaterialLine`) и в заказе нет снимка
+ * `OrderMaterialRequirement`. Перевести в расчёт нельзя — именно
+ * спецификация поставляет строки материалов и подрядных размещений
+ * для расчёта (см. `WorkshopNeedsService.calculateForOrder`).
+ *
+ * Код ошибки остался историческим (`ORDER_TECH_CARD_REQUIRED`) —
+ * это проводной контракт, на него завязаны клиенты и тесты; техкарт
+ * как сущности с этапа 5 «техкарты → номенклатура» больше нет.
  */
 export class OrderTechCardRequiredException extends BusinessException {
   constructor() {
     super(
       'ORDER_TECH_CARD_REQUIRED',
-      'Чтобы перевести заказ в расчёт, нужно выбрать техкарту.',
+      'Чтобы перевести заказ в расчёт, заполните состав материалов ' +
+        'в карточке номенклатуры.',
       HttpStatus.BAD_REQUEST,
     );
   }
@@ -1878,115 +1886,6 @@ export class OrderRouteAlreadyStartedException extends BusinessException {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Tech cards (MVP, ADR-0022)
-// ---------------------------------------------------------------------------
-
-/**
- * Шаблон техкарты не найден — отдаётся `/admin/tech-cards/:id`,
- * `OrdersService` (при выборе несуществующего `techCardId`),
- * админскими PATCH/DELETE.
- */
-export class TechCardNotFoundException extends BusinessException {
-  constructor() {
-    super(
-      'TECH_CARD_NOT_FOUND',
-      'Техкарта не найдена',
-      HttpStatus.NOT_FOUND,
-    );
-  }
-}
-
-/**
- * Дубликат `TechCardTemplate.code`. Уникальность гарантирована БД, но
- * перехватываем P2002 в `TechCardsService` и отдаём бизнес-ошибку с
- * понятным текстом — UI подсветит поле «Код».
- */
-export class TechCardCodeTakenException extends BusinessException {
-  constructor() {
-    super(
-      'TECH_CARD_CODE_TAKEN',
-      'Техкарта с таким кодом уже существует',
-      HttpStatus.CONFLICT,
-    );
-  }
-}
-
-/**
- * Менеджер пытается выбрать неактивную техкарту при создании/обновлении
- * заказа. На MVP это soft-error на API-уровне (UI не показывает
- * неактивные в селекте), но мы блокируем явный bypass через прямой
- * POST/PATCH с произвольным `techCardId`.
- */
-export class TechCardInactiveException extends BusinessException {
-  constructor() {
-    super(
-      'TECH_CARD_INACTIVE',
-      'Техкарта деактивирована — выбрать её нельзя.',
-      HttpStatus.CONFLICT,
-    );
-  }
-}
-
-/**
- * Inline-создание изделия из формы заказа (см.
- * `OrdersService.create::CREATE_FOR_CALCULATION`,
- * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`).
- *
- * Техкарта несовместима с выбранной группой номенклатуры: хотя бы
- * один активный `PatternCategoryParameter(inputType=AREA_M2_BY_SIZE)`
- * не имеет соответствующей строки `TechCardMaterialLine.materialRole`.
- * UI получает `missingRoleKeys` через payload и подсвечивает
- * недостающие роли.
- */
-export class TechCardNotCompatibleWithCategoryException extends HttpException {
-  constructor(missingRoleKeys: string[]) {
-    super(
-      {
-        statusCode: HttpStatus.CONFLICT,
-        code: 'TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY',
-        message:
-          missingRoleKeys.length > 0
-            ? `Техкарта не покрывает обязательные материалы группы: ${missingRoleKeys.join(', ')}.`
-            : 'Техкарта не совместима с группой номенклатуры.',
-        missingRoleKeys,
-      },
-      HttpStatus.CONFLICT,
-    );
-  }
-}
-
-/**
- * Строка материала техкарты (`TechCardMaterialLine`) не найдена.
- * Используется upload-эндпоинтом изображения строки материала
- * (см. `TechCardsService.uploadMaterialImage`, ТЗ §5).
- */
-export class TechCardMaterialLineNotFoundException extends BusinessException {
-  constructor() {
-    super(
-      'TECH_CARD_MATERIAL_LINE_NOT_FOUND',
-      'Строка материала не найдена',
-      HttpStatus.NOT_FOUND,
-    );
-  }
-}
-
-/**
- * Загруженный файл изображения строки материала техкарты не прошёл
- * валидацию (расширение / размер / попытка path-traversal в
- * `originalname`). Сообщение формируется сервисом — UI показывает
- * его как inline-error на форме загрузки. См.
- * `TechCardsStorageService.saveMaterialImage`, ТЗ §5, §9.
- */
-export class TechCardImageUploadInvalidException extends BusinessException {
-  constructor(message: string) {
-    super(
-      'TECH_CARD_IMAGE_UPLOAD_INVALID',
-      message,
-      HttpStatus.BAD_REQUEST,
-    );
-  }
-}
 
 /**
  * Загруженный файл вложения задачи конструктору не прошёл валидацию
@@ -2143,34 +2042,6 @@ export class ConstructorTaskAlreadyExistsException extends BusinessException {
   }
 }
 
-/**
- * Multipart-запрос upload-а изображения строки материала техкарты
- * пришёл без файла (`file` пустое или отсутствует).
- */
-export class TechCardImageUploadMissingFileException extends BusinessException {
-  constructor() {
-    super(
-      'TECH_CARD_IMAGE_UPLOAD_MISSING_FILE',
-      'Файл не загружен — добавьте JPG/PNG в форме перед отправкой.',
-      HttpStatus.BAD_REQUEST,
-    );
-  }
-}
-
-/**
- * `techCardId` уже зафиксирован в snapshot-ах (`materialRequirements` /
- * `outsourceRequirements`): заказ запущен, техкарта «застыла», менять
- * привязку нельзя. Аналог `OrderRouteAlreadyStartedException`.
- */
-export class OrderTechCardAlreadyStartedException extends BusinessException {
-  constructor() {
-    super(
-      'ORDER_TECH_CARD_ALREADY_STARTED',
-      'У заказа уже зафиксирован snapshot техкарты — переназначить шаблон нельзя.',
-      HttpStatus.CONFLICT,
-    );
-  }
-}
 
 /**
  * Этап «Указать в заказе» (ТЗ §4): менеджер пытается сохранить цвет
@@ -3597,7 +3468,7 @@ export class WorkshopNeedsHaveStockException extends BusinessException {
  */
 export class WorkshopNeedCalculationSourceException extends BusinessException {
   constructor(
-    message: string = 'Для расчёта потребности нужна техкарта или snapshot материалов.',
+    message: string = 'Для расчёта потребности нужен состав материалов или его снимок.',
   ) {
     super(
       'WORKSHOP_NEED_SOURCE_REQUIRED',
@@ -4714,7 +4585,7 @@ export class OrderSpecIncompleteException extends HttpException {
     super(
       {
         statusCode: HttpStatus.BAD_REQUEST,
-        message: `Заполните параметры техкарты — ${summary}.`,
+        message: `Заполните параметры состава — ${summary}.`,
         code: 'ORDER_SPEC_INCOMPLETE',
         details,
       },
@@ -5053,11 +4924,6 @@ export class PatternCategoryDeleteForbiddenException extends BusinessException {
   }
 }
 
-export class TechCardDeleteForbiddenException extends BusinessException {
-  constructor(message: string) {
-    super('TECH_CARD_DELETE_FORBIDDEN', message, HttpStatus.CONFLICT);
-  }
-}
 
 /**
  * Этап «Архив справочников»: безвозвратно удалить шаблон маршрута

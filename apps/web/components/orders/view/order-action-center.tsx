@@ -116,9 +116,9 @@ export function buildAlerts(
       id: 'material-color-missing',
       tone: status === 'IN_PRODUCTION' ? 'danger' : 'warning',
       icon: <Palette size={16} strokeWidth={1.7} aria-hidden />,
-      title: 'По строкам техкарты нужно указать цвет для заказа',
+      title: 'По строкам состава нужно указать цвет для заказа',
       hint:
-        'Откройте вкладку «Производство» и заполните цвет для строк техкарты с правилом «Указать в заказе».',
+        'Откройте вкладку «Производство» и заполните цвет для строк состава с правилом «Указать в заказе».',
       cta: {
         label: 'Указать цвет',
         href: `${orderTabHref('production')}#order-material-colors`,
@@ -285,7 +285,7 @@ export function buildAlerts(
       id: 'no-snapshot',
       tone: 'warning',
       icon: <Layers size={16} strokeWidth={1.7} aria-hidden />,
-      title: 'Не зафиксирован snapshot техкарты',
+      title: 'Не зафиксирован снимок состава материалов',
       hint: 'Snapshot материалов и внешних потребностей пуст — потребности не посчитаются.',
       cta: { label: 'Открыть потребности', href: orderTabHref('needs') },
     });

@@ -706,7 +706,7 @@ export async function OrderMaterialsUnifiedTable({
       {rows.length === 0 ? (
         <AdminEmptyState
           title="Материалов пока нет"
-          hint="Расчёт потребности появится после перевода заказа в статус «Расчёт» — система соберёт строки по лекалу и техкарте."
+          hint="Расчёт потребности появится после перевода заказа в статус «Расчёт» — система соберёт строки по лекалу и составу материалов."
         />
       ) : (
         <div className="order-materials-table-wrap">

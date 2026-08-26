@@ -14,7 +14,7 @@
  *   - `WorkshopNeed` намеренно НЕ становится source of truth, он
  *     остаётся derived view + warning.
  *   - Primary-edit для `selectedColorText` живёт в блоке «Цвета по
- *     строкам техкарты» (`OrderMaterialColorsCard`) во вкладке
+ *     строкам состава» (`OrderMaterialColorsCard`) во вкладке
  *     «Производство».
  *   - В вкладке «Потребности» (`OrderMaterialsUnifiedTable`)
  *     остаётся только warning + CTA-ссылка в «Производство».
@@ -106,7 +106,7 @@ describe('legacy material-color-form.tsx — только re-export', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. OrderMaterialColorsCard имеет блок «Цвета по строкам техкарты»
+// 3. OrderMaterialColorsCard имеет блок «Цвета по строкам состава»
 // ---------------------------------------------------------------------------
 
 describe('OrderMaterialColorsCard — primary input для selectedColorText', () => {
@@ -121,8 +121,8 @@ describe('OrderMaterialColorsCard — primary input для selectedColorText', (
     );
   });
 
-  test('заголовок блока — «Цвета по строкам техкарты»', () => {
-    expect(src).toMatch(/Цвета по строкам техкарты/);
+  test('заголовок блока — «Цвета по строкам состава»', () => {
+    expect(src).toMatch(/Цвета по строкам состава/);
   });
 
   test('фильтрует order.materialRequirements по requiresColorSelection === true', () => {
@@ -155,8 +155,8 @@ describe('OrderMaterialColorsCard — primary input для selectedColorText', (
     expect(src).toMatch(/Нужно указать цвет/);
   });
 
-  test('empty-state: «Для этой техкарты нет цветов, выбираемых в заказе»', () => {
-    expect(src).toMatch(/Для этой техкарты нет цветов, выбираемых в заказе/);
+  test('empty-state: «В составе материалов нет цветов, выбираемых в заказе»', () => {
+    expect(src).toMatch(/В составе материалов нет цветов, выбираемых в заказе/);
   });
 
   test('editable-гейт — DRAFT / CALCULATION / CALCULATION_DONE', () => {

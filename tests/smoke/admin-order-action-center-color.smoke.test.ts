@@ -30,7 +30,7 @@ function read(rel: string): string {
 
 const src = read('apps/web/components/orders/view/order-action-center.tsx');
 
-describe('OrderActionCenter — алерт «По строкам техкарты нужно указать цвет»', () => {
+describe('OrderActionCenter — алерт «По строкам состава нужно указать цвет»', () => {
   test('читает source of truth — order.materialRequirements (а не WorkshopNeed)', () => {
     expect(src).toMatch(/order\.materialRequirements\.some\(/);
     expect(src).toMatch(/requiresColorSelection\s*===\s*true/);
@@ -48,7 +48,7 @@ describe('OrderActionCenter — алерт «По строкам техкарт�
   test('алерт имеет id `material-color-missing` и заголовок про цвет', () => {
     expect(src).toMatch(/id:\s*'material-color-missing'/);
     expect(src).toMatch(
-      /title:\s*'По строкам техкарты нужно указать цвет для заказа'/,
+      /title:\s*'По строкам состава нужно указать цвет для заказа'/,
     );
   });
 

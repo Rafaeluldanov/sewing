@@ -68,7 +68,7 @@ export function OrderMaterialColorsCard({ order }: { order: OrderDetailDto }) {
       <div id="order-material-colors">
         <AdminSectionHeader
           icon={<Palette size={18} strokeWidth={1.7} aria-hidden />}
-          title="Цвета по строкам техкарты"
+          title="Цвета по строкам состава"
           hint={
             rows.length > 0
               ? `${filledCount} из ${rows.length} указано`
@@ -85,8 +85,8 @@ export function OrderMaterialColorsCard({ order }: { order: OrderDetailDto }) {
         {rows.length === 0 ? (
           <AdminEmptyState
             icon={<Palette size={26} strokeWidth={1.6} aria-hidden />}
-            title="Для этой техкарты нет цветов, выбираемых в заказе"
-            hint="Если в техкарте появятся строки с правилом «Указать в заказе», они появятся здесь."
+            title="В составе материалов нет цветов, выбираемых в заказе"
+            hint="Если в составе материалов появятся строки с правилом «Указать в заказе», они появятся здесь."
           />
         ) : (
           <ul
@@ -200,7 +200,7 @@ function OrderMaterialColorRow({
       )}
       {!colorValue && colorRuleHint && (
         <div className="admin-muted" style={{ fontSize: '0.85rem' }}>
-          Правило техкарты: {colorRuleHint}
+          Правило состава: {colorRuleHint}
         </div>
       )}
       {editable ? (

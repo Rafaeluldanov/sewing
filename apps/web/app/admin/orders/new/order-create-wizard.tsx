@@ -944,13 +944,13 @@ export function OrderCreateWizard({
                   <BranchCard
                     active={branch === 'EXISTING'}
                     title="Выбрать из номенклатуры"
-                    hint="Готовое лекало с техкартой и размерами"
+                    hint="Готовое лекало с составом материалов и размерами"
                     onClick={() => setBranch('EXISTING')}
                   />
                   <BranchCard
                     active={branch === 'CREATE'}
                     title="Создать изделие"
-                    hint="Новое лекало: группа, техкарта, площади по размерам"
+                    hint="Новое лекало: группа, состав материалов, площади по размерам"
                     onClick={() => {
                       setBranch('CREATE');
                       setInlineTab('calculate');

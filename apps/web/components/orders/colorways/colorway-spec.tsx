@@ -195,7 +195,7 @@ const QTY_SOURCE_BADGE: Record<string, { letter: string; title: string }> = {
   TEMPLATE: {
     letter: 'Ш',
     title:
-      'Норма из шаблона техкарты — в номенклатуре подходящего параметра не нашлось',
+      'Норма из шаблона состава — в номенклатуре подходящего параметра не нашлось',
   },
   ORDER: {
     letter: 'З',
@@ -581,7 +581,7 @@ export function ColorwaySpec({
             <tr>
               <th colSpan={2}></th>
               <th className="cws-grp cws-grp--norm" colSpan={4}>
-                Расход — единица техкарты
+                Расход — единица состава
               </th>
               <th></th>
               <th className="cws-grp cws-grp--buy" colSpan={2}>
@@ -606,8 +606,8 @@ export function ColorwaySpec({
             {group.lines.length === 0 && drafts.length === 0 && (
               <tr>
                 <td colSpan={cols} className="cws-muted">
-                  Пока пусто: выберите техкарту расцветки — материалы придут из
-                  шаблона, — или добавьте материалы вручную.
+                  Пока пусто: выберите номенклатуру расцветки — материалы придут
+                  из её состава, — или добавьте материалы вручную.
                 </td>
               </tr>
             )}
@@ -1542,7 +1542,7 @@ function LineParams({
                 disabled={disabled || bound}
                 title={
                   bound
-                    ? 'Ячейка привязана к параметру техкарты — правьте значение параметра'
+                    ? 'Ячейка привязана к параметру состава — правьте значение параметра'
                     : undefined
                 }
                 onBlur={(e) => {

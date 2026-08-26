@@ -1336,7 +1336,7 @@ export class WorkshopNeedsService {
 
     if (!order.patternItemId) {
       warnings.push(
-        'У заказа не выбрано лекало — расчёт по площади и плотности невозможен, использован fallback по норме техкарты.',
+        'У заказа не выбрано лекало — расчёт по площади и плотности невозможен, использован fallback по норме из состава материалов.',
       );
     }
 
@@ -2450,7 +2450,7 @@ export class WorkshopNeedsService {
       }
       // Площадей вообще нет → fallback на QTY_PER_UNIT с нотой.
       warnings.push(
-        `Для строки «${line.name}» (роль ${role}) нет ни одной площади в лекале — расчёт по норме техкарты.`,
+        `Для строки «${line.name}» (роль ${role}) нет ни одной площади в лекале — расчёт по норме из состава материалов.`,
       );
     }
 
@@ -2882,7 +2882,7 @@ export class WorkshopNeedsService {
       );
       unit = 'м²';
       calculationMethod = 'QTY_PER_UNIT';
-      const w = `Не указана плотность материала по роли «${role}» — потребность сохранена в м² вместо кг. Заполните плотность в техкарте.`;
+      const w = `Не указана плотность материала по роли «${role}» — потребность сохранена в м² вместо кг. Заполните плотность в составе материалов.`;
       noteParts.push(w);
       warnings.push(w);
     }
@@ -2897,7 +2897,7 @@ export class WorkshopNeedsService {
       parts.length === 1 ? parts[0] : `${parts[0]} ${parts.slice(1).join(', ')}`;
 
     if (matchedLine == null) {
-      const w = `Не найдена строка техкарты для роли «${role}». Описание потребности минимальное.`;
+      const w = `Не найдена строка состава материалов для роли «${role}». Описание потребности минимальное.`;
       noteParts.push(w);
       warnings.push(w);
     }
@@ -3230,7 +3230,7 @@ export class WorkshopNeedsService {
       unit = 'м пог.';
     } else if (outputUnit === 'м²') {
       if (widthCm == null || widthCm <= 0) {
-        const w = `Не указана ширина материала для пересчёта погонных метров в м². Заполните ширину в техкарте по строке с ролью «${head.roleKey}».`;
+        const w = `Не указана ширина материала для пересчёта погонных метров в м². Заполните ширину в составе материалов по строке с ролью «${head.roleKey}».`;
         noteParts.push(w);
         warnings.push(`«${head.labelSnapshot}»: ${w}`);
         // Ноль «ради явной проблемы» проблему как раз и прятал: в списке
@@ -3265,12 +3265,12 @@ export class WorkshopNeedsService {
       const densityMissing = densityGsm == null || densityGsm <= 0;
       if (widthMissing || densityMissing) {
         if (widthMissing) {
-          const w = `Не указана ширина материала для пересчёта погонных метров в кг. Заполните ширину в техкарте по строке с ролью «${head.roleKey}».`;
+          const w = `Не указана ширина материала для пересчёта погонных метров в кг. Заполните ширину в составе материалов по строке с ролью «${head.roleKey}».`;
           noteParts.push(w);
           warnings.push(`«${head.labelSnapshot}»: ${w}`);
         }
         if (densityMissing) {
-          const d = `Не указана плотность материала для пересчёта погонных метров в кг. Заполните плотность (г/м²) в техкарте по строке с ролью «${head.roleKey}».`;
+          const d = `Не указана плотность материала для пересчёта погонных метров в кг. Заполните плотность (г/м²) в составе материалов по строке с ролью «${head.roleKey}».`;
           noteParts.push(d);
           warnings.push(`«${head.labelSnapshot}»: ${d}`);
         }

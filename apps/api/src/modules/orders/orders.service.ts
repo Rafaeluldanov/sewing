@@ -95,7 +95,6 @@ import {
   OrderOutsourceRequirementNotFoundException,
   OrderOutsourceRequirementNotReadyException,
   OrderPatternRequiredException,
-  OrderTechCardAlreadyStartedException,
   OrderTechCardRequiredException,
   PatternCategoryInactiveException,
   PatternCategoryNotFoundException,
@@ -103,7 +102,6 @@ import {
   PatternNotFoundException,
   RouteTemplateInactiveException,
   RouteTemplateNotFoundException,
-  TechCardNotCompatibleWithCategoryException,
   WorkshopNeedsAlreadyReviewedException,
 } from '../../common/errors.js';
 import { aggregateOrder } from './order-aggregator.js';
@@ -2441,13 +2439,13 @@ export class OrdersService {
     if (wantsDraftOnlyChange && !isDraft) {
       // CALCULATION+ : план уже использован для авторасчёта `WorkshopNeed`,
       // а на CALCULATION_DONE ещё и заморожена себестоимость. Изменение
-      // состава / изделия / лекала / техкарты сделало бы потребности и
+      // состава / изделия / лекала сделало бы потребности и
       // цены закупщика нерелевантными (их пересчёт их СТИРАЕТ), поэтому
       // такие правки — только в DRAFT, либо через «Вернуть на пересчёт»
       // (reopenCalculation сохраняет данные закупщика и возвращает заказ
       // в CALCULATION, где спецификация правится штатно).
       throw new OrderLockedException(
-        'Состав, изделие, техкарту и лекало можно менять только в статусе «Черновик». ' +
+        'Состав, изделие и лекало можно менять только в статусе «Черновик». ' +
           'После расчёта правьте спецификацию через «Вернуть на пересчёт».',
       );
     }
@@ -4651,7 +4649,7 @@ export class OrdersService {
         statusCode: 409,
         code: 'ORDER_TECH_CARD_LOCKED',
         message:
-          'Обновить техкарту из шаблона можно только в черновике и на этапе расчёта.',
+          'Обновить состав материалов из шаблона можно только в черновике и на этапе расчёта.',
       });
     }
 

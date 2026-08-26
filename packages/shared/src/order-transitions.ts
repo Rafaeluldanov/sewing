@@ -110,7 +110,7 @@ export const ORDER_TRANSITION_BLOCK_LABELS: Record<
 > = {
   ORDER_PATTERN_REQUIRED: 'Не выбрано лекало',
   ORDER_CLIENT_REQUIRED: 'Не указан клиент — обязательное поле заказа',
-  ORDER_TECH_CARD_REQUIRED: 'Не привязана техкарта',
+  ORDER_TECH_CARD_REQUIRED: 'Не заполнен состав материалов в номенклатуре',
   ORDER_ITEMS_REQUIRED: 'В заказе нет позиций с количеством',
   ORDER_HAS_NO_ITEMS: 'В заказе нет позиций',
   PATTERN_INACTIVE:

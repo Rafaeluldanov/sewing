@@ -730,7 +730,7 @@ export function withParameterCrossChecks<
       ctx.addIssue({
         path: ['parameters', i, 'key'],
         code: z.ZodIssueCode.custom,
-        message: `Параметр «${p.key}» уже объявлен в этой техкарте`,
+        message: `Параметр «${p.key}» уже объявлен в этом составе`,
       });
     }
     seen.add(p.key);
@@ -752,7 +752,7 @@ export function withParameterCrossChecks<
         ctx.addIssue({
           path: ['materialLines', lineIndex, 'parameterBindings', field],
           code: z.ZodIssueCode.custom,
-          message: `Ячейка привязана к параметру «${key}», которого нет в техкарте`,
+          message: `Ячейка привязана к параметру «${key}», которого нет в составе`,
         });
       }
     }

@@ -133,7 +133,7 @@ export const WORKSHOP_NEED_CALCULATION_METHOD_LABELS: Record<
 > = {
   AREA_DENSITY: 'По площади и плотности',
   LINEAR_M_BY_SIZE: 'Погонные метры по размерам',
-  QTY_PER_UNIT: 'По норме техкарты',
+  QTY_PER_UNIT: 'По норме состава материалов',
 };
 
 /**

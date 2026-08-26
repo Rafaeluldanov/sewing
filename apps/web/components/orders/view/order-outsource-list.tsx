@@ -69,7 +69,7 @@ export function OrderOutsourceList({ orderId, items, canManage }: Props) {
         <AdminEmptyState
           icon={<Truck size={26} strokeWidth={1.6} aria-hidden />}
           title="Внешние подряды не зафиксированы"
-          hint="Snapshot техкарты пуст или техкарта не выбрана."
+          hint="Снимок состава материалов пуст или состав не заполнен."
         />
       ) : (
         <>
