@@ -416,11 +416,24 @@ function ActivePassportCard({
    * шаг», а работа, которая не засчитается на гейте перед ОТК; такой
    * случай должен выглядеть иначе, иначе тонет в потоке штатных
    * несовпадений.
+   *
+   * 26.08.2026: операцию взятия задаёт маршрут ПАСПОРТА, а не смена
+   * (`PassportsService.resolveOperationByPassportRoute`). Поэтому
+   * «смена не по маршруту» само по себе больше не беда: паспорт уже
+   * стоит на маршрутной операции, и работа запишется на неё. Кричать
+   * тут — ровно та же ложная тревога, из-за которой 01.07 проглядели
+   * настоящую. Громкий алерт оставлен только для паспортов, которые
+   * САМИ стоят вне маршрута: их взяли до этой правки, и на гейте перед
+   * ОТК они действительно встанут.
    */
   const routeMismatch =
     !!p.routeCurrentStep &&
     !!shiftOperationId &&
     p.routeCurrentStep.operationId !== shiftOperationId;
+  const passportOperationOffRoute =
+    !!p.currentOperationId &&
+    p.routeOperationIds.length > 0 &&
+    !p.routeOperationIds.includes(p.currentOperationId);
   const shiftOperationOffRoute =
     routeMismatch &&
     p.routeOperationIds.length > 0 &&
@@ -565,7 +578,17 @@ function ActivePassportCard({
               продолжать работу, паспорт не блокируется.
             </p>
           )}
-          {shiftOperationOffRoute && (
+          {shiftOperationOffRoute && !passportOperationOffRoute && (
+            <p className="active-passport__route-warn" role="status">
+              Работа запишется на операцию маршрута{' '}
+              <em>
+                {p.currentOperationName ?? p.routeCurrentStep?.operationName}
+              </em>
+              , хотя ваша смена идёт на другой. Так и задумано — операцию
+              задаёт паспорт.
+            </p>
+          )}
+          {passportOperationOffRoute && (
             <p className="active-passport__route-alert" role="alert">
               <strong>Операции нет в маршруте этого заказа.</strong> Эта
               работа не засчитается, и заказ встанет на ОТК. Позовите

@@ -2605,6 +2605,47 @@ export class PassportPrecedingStepIncompleteException extends BusinessException 
   }
 }
 
+/**
+ * Швея берёт паспорт, стоя на смене с операцией, которой в маршруте
+ * ЭТОГО паспорта нет, и подставить маршрутную операцию нельзя — на
+ * оборудовании её смены не разрешена ни одна операция маршрута
+ * (`EquipmentOperation`).
+ *
+ * Инцидент 15.08.2026, заказ 02-00001: станок ОВЕРЛОК привязан сразу к
+ * двум операциям-двойникам — `02 Ф ОВЕРЛОК` и `098642 ОВЕРЛОК`; в
+ * маршруте стоит вторая, смена была открыта на первой, и работа ушла
+ * мимо маршрута (см.
+ * `scripts/migrations/20260826_drop_offroute_f_overlock_02-00001.sql`).
+ * Предупреждение в карточке паспорта эту ошибку не удержало — теперь
+ * операцию задаёт паспорт (см.
+ * `PassportsService.resolveOperationByPassportRoute`), а этот отказ —
+ * случай, когда задать её нечем.
+ *
+ * Легальные обходы остаются: наряд-допуск мастера
+ * (`RouteWorkPermit`), справочная замена (`OperationSubstitution`) и
+ * `offRouteWorkPolicy = OFF` — все три делают операцию маршрутной, и
+ * до этого отказа дело не доходит.
+ */
+export class PassportShiftOperationNotOnRouteException extends BusinessException {
+  constructor(
+    routeOperationLabel: string | null,
+    shiftOperationLabel: string,
+    equipmentName: string | null,
+  ) {
+    super(
+      'PASSPORT_SHIFT_OPERATION_NOT_ON_ROUTE',
+      routeOperationLabel
+        ? `Паспорт идёт по маршруту на «${routeOperationLabel}», а ваша смена — «${shiftOperationLabel}»${
+            equipmentName ? `, оборудование «${equipmentName}»` : ''
+          }. Нужная операция на этом оборудовании не разрешена: перейдите на подходящее оборудование или попросите мастера оформить наряд-допуск.`
+        : `Операция «${shiftOperationLabel}» не входит в маршрут этого паспорта, а подставить маршрутную операцию не на чем${
+            equipmentName ? `: оборудование «${equipmentName}» её не умеет` : ''
+          }. Перейдите на подходящее оборудование или попросите мастера оформить наряд-допуск.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Auth (MVP 1.1, ADR-0014)
 // ---------------------------------------------------------------------------

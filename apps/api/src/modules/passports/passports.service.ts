@@ -59,6 +59,7 @@ import {
   PassportNotYoursException,
   PassportIssueBackwardException,
   PassportOperationNotInOrderRouteException,
+  PassportShiftOperationNotOnRouteException,
   PassportParallelGroupIncompleteException,
   PassportPrecedingStepIncompleteException,
   PassportReworkOperationNotAllowedForShiftException,
@@ -2156,8 +2157,190 @@ export class PassportsService {
     }
   }
 
+  /**
+   * Операция ВЗЯТИЯ определяется маршрутом ПАСПОРТА, а не тем, что швея
+   * выбрала при открытии смены.
+   *
+   * Зачем. `ShiftSession.operationId` — свойство человека и станка, оно
+   * общее на все паспорта на руках и переживает переход к другому
+   * заказу. Маршрут — свойство паспорта. Пока источником истины была
+   * смена, любой промах в списке операций станка записывал работу мимо
+   * маршрута: инцидент 15.08.2026, заказ 02-00001 — станок ОВЕРЛОК
+   * (overlok-12) привязан к двум операциям-двойникам, `02 Ф ОВЕРЛОК` и
+   * `098642 ОВЕРЛОК`, в маршруте стоит вторая, смена была открыта на
+   * первой. Паспорт встал не на тот шаг, сделка легла по чужой
+   * расценке, а шаг маршрута пришлось проходить заново — разбор в
+   * `scripts/migrations/20260826_drop_offroute_f_overlock_02-00001.sql`.
+   * Мягкая подсказка в карточке паспорта (`current-work-card.tsx`,
+   * `passport-confirm-modal.tsx`) от этого не спасла: её видно уже
+   * ПОСЛЕ взятия и её листают.
+   *
+   * Правило. Если операция смены в маршрут паспорта не входит, а
+   * оборудование смены умеет операцию ИЗ маршрута — паспорт встаёт на
+   * неё, без переоткрытия смены (ровно как для переделок ОТК, см.
+   * `resolveOperationForPassport`). Если не умеет ни одной —
+   * `PassportShiftOperationNotOnRouteException` (409) вместо прежнего
+   * молчаливого пропуска по `offRouteWorkPolicy = WARN`.
+   *
+   * Границы — те же, что у `enforceOffRoutePolicy`, иначе гейт
+   * остановит цех:
+   *   - `offRouteWorkPolicy = OFF` — контроль маршрута выключен целиком,
+   *     подстановки тоже нет;
+   *   - только `SEWING`: крой закрывается выпуском, ОТК/ВТО/упаковка
+   *     ходят своими гейтами и в снимке маршрута штатно отсутствуют;
+   *   - `evaluateRouteOrder` уже учитывает `OperationSubstitution` и
+   *     наряд-допуск (`RouteWorkPermit`), поэтому узаконенная замена
+   *     сюда не попадает: для неё `offRoute = false`;
+   *   - паспорт без заказа / заказ без снимка маршрута — тоже
+   *     `offRoute = false`, сравнивать не с чем.
+   *
+   * Выбор операции среди нескольких маршрутных, доступных на станке
+   * (напр. распошивальная машина умеет и подгиб, и рукав): берём первую
+   * по порядку маршрута, которую паспорт РЕАЛЬНО может взять сейчас
+   * (`previewOperationAvailability` — та же проверка, что и у взятия).
+   * Если взять нельзя ни одну, возвращаем самую правдоподобную и даём
+   * отказать штатному гейту `issueToEmployee`: он объяснит причину
+   * точнее («не закрыт предыдущий шаг», «операция уже завершена»), чем
+   * это сделала бы копия правил здесь.
+   */
+  private async resolveOperationByPassportRoute(
+    passport: {
+      id: string;
+      orderId: string | null;
+      currentRouteStepIndex: number | null;
+    },
+    session: { operationId: string; equipmentId: string },
+    fallbackOperationId: string,
+  ): Promise<string> {
+    if (!passport.orderId) return fallbackOperationId;
+
+    // Рубильник общий с гейтом работы вне маршрута.
+    const policy = await this.companySettings.getOffRouteWorkPolicy();
+    if (policy === 'OFF') return fallbackOperationId;
+
+    // Операция смены в маршруте (сама, заменой или по наряду-допуску) —
+    // подставлять нечего, поведение прежнее.
+    const order = await this.evaluateRouteOrder(passport, fallbackOperationId, {
+      allowCatchUp: true,
+    });
+    if (!order.offRoute) return fallbackOperationId;
+
+    const shiftOperation = await this.prisma.operation.findUnique({
+      where: { id: fallbackOperationId },
+      select: { code: true, name: true, category: true },
+    });
+    if (
+      !shiftOperation ||
+      shiftOperation.category !== OperationCategory.SEWING
+    ) {
+      return fallbackOperationId;
+    }
+
+    const [steps, allowed] = await Promise.all([
+      this.prisma.orderRouteStep.findMany({
+        where: { orderId: passport.orderId },
+        orderBy: { index: 'asc' },
+        select: {
+          index: true,
+          operationId: true,
+          operation: { select: { code: true, name: true, category: true } },
+        },
+      }),
+      this.prisma.equipmentOperation.findMany({
+        where: { equipmentId: session.equipmentId, isActive: true },
+        select: { operationId: true },
+      }),
+    ]);
+    const allowedIds = new Set(allowed.map((a) => a.operationId));
+    // Кандидаты — только ШВЕЙНЫЕ шаги: подставлять швее крой или ОТК
+    // нельзя, у них свои каналы и свои гейты, и попытка кончилась бы
+    // откатом назад по маршруту вместо понятного отказа.
+    const sewingSteps = steps.filter(
+      (s) => s.operation.category === OperationCategory.SEWING,
+    );
+    const candidates: { index: number; operationId: string; label: string }[] =
+      [];
+    for (const s of sewingSteps) {
+      if (!allowedIds.has(s.operationId)) continue;
+      if (candidates.some((c) => c.operationId === s.operationId)) continue;
+      candidates.push({
+        index: s.index,
+        operationId: s.operationId,
+        label: `${s.operation.code} ${s.operation.name}`.trim(),
+      });
+    }
+
+    const shiftLabel =
+      `${shiftOperation.code} ${shiftOperation.name}`.trim() ||
+      fallbackOperationId;
+
+    if (candidates.length === 0) {
+      // Подставить нечего: станок смены не умеет ни одной швейной
+      // операции маршрута. В ошибке называем ближайший швейный шаг
+      // ВПЕРЁД от текущего (именно за ним швея и пришла), иначе — шаг,
+      // на котором паспорт стоит: ей нужно знать, куда идти, а не то,
+      // чего у неё нет.
+      const expected =
+        sewingSteps.find(
+          (s) => s.index > (passport.currentRouteStepIndex ?? -1),
+        ) ??
+        steps.find((s) => s.index === passport.currentRouteStepIndex) ??
+        sewingSteps[0] ??
+        steps[0];
+      const equipment = await this.prisma.equipment.findUnique({
+        where: { id: session.equipmentId },
+        select: { name: true },
+      });
+      this.logger.warn(
+        `event=passport.operation.route_unreachable passportId=${passport.id} orderId=${passport.orderId} shiftOperationId=${fallbackOperationId} equipmentId=${session.equipmentId}`,
+      );
+      throw new PassportShiftOperationNotOnRouteException(
+        expected
+          ? `${expected.operation.code} ${expected.operation.name}`.trim()
+          : null,
+        shiftLabel,
+        equipment?.name ?? null,
+      );
+    }
+
+    let target = candidates[0];
+    for (const candidate of candidates) {
+      const preview = await this.previewOperationAvailability(
+        passport.id,
+        candidate.operationId,
+      );
+      if (preview.available) {
+        target = candidate;
+        break;
+      }
+    }
+
+    this.logger.log(
+      `event=passport.operation.routed passportId=${passport.id} orderId=${passport.orderId} from=${fallbackOperationId} to=${target.operationId} equipmentId=${session.equipmentId}`,
+    );
+    await this.audit.log({
+      event: 'PASSPORT_OPERATION_ROUTED',
+      entityType: 'PASSPORT',
+      entityId: passport.id,
+      payload: {
+        orderId: passport.orderId,
+        shiftOperationId: fallbackOperationId,
+        shiftOperation: shiftLabel,
+        routeOperationId: target.operationId,
+        routeOperation: target.label,
+        routeStepIndex: target.index,
+        equipmentId: session.equipmentId,
+      },
+    });
+    return target.operationId;
+  }
+
   private async resolveOperationForPassport(
-    passport: { id: string; orderId: string | null },
+    passport: {
+      id: string;
+      orderId: string | null;
+      currentRouteStepIndex: number | null;
+    },
     session: { operationId: string; equipmentId: string },
     opts?: { assignedTo?: string },
   ): Promise<string> {
@@ -2170,7 +2353,21 @@ export class PassportsService {
         )) ?? session.operationId
       : session.operationId;
     const openOps = await this.findOpenReworkOperationIds(passport.id);
-    if (openOps.length === 0) return fallbackOperationId;
+    if (openOps.length === 0) {
+      // Канал ВЗЯТИЯ (`assignedTo` не передан): операцию задаёт маршрут
+      // паспорта, а не то, что швея выбрала при открытии смены.
+      // Канал `complete` сюда не заходит намеренно — он закрывает то, НА
+      // ЧТО паспорт был взят (см. доккоммент и инцидент 04.08.2026):
+      // подмена операции на завершении переписала бы уже сделанную
+      // работу, а паспорта, взятые до этой правки, стали бы незакрываемы.
+      return opts?.assignedTo
+        ? fallbackOperationId
+        : this.resolveOperationByPassportRoute(
+            passport,
+            session,
+            fallbackOperationId,
+          );
+    }
 
     // Смена уже на нужной операции переделки — ничего не меняем
     // (полностью прежнее поведение).
@@ -2287,7 +2484,11 @@ export class PassportsService {
     // возврат по «Распошив рукав», стоя на смене «РАСПОШИВ», без ручного
     // переключения смены; обычный поток не меняется.
     const targetOperationId = await this.resolveOperationForPassport(
-      { id: passport.id, orderId: passport.orderId },
+      {
+        id: passport.id,
+        orderId: passport.orderId,
+        currentRouteStepIndex: passport.currentRouteStepIndex,
+      },
       session,
     );
 
@@ -3113,7 +3314,11 @@ export class PassportsService {
     // Побочно это чинит пакетное завершение разнооперационных паспортов:
     // каждый закрывает свою операцию, а не общую операцию смены.
     const completedOperationId = await this.resolveOperationForPassport(
-      { id: passport.id, orderId: passport.orderId },
+      {
+        id: passport.id,
+        orderId: passport.orderId,
+        currentRouteStepIndex: passport.currentRouteStepIndex,
+      },
       session,
       { assignedTo: employeeId },
     );
