@@ -217,6 +217,78 @@ export const OFF_ROUTE_WORK_POLICY_LABELS: Record<
 const OffRouteWorkPolicyField = z.enum(OFF_ROUTE_WORK_POLICIES).optional();
 
 // ---------------------------------------------------------------------------
+// Автовыход по бездействию
+// ---------------------------------------------------------------------------
+
+/** `0` — автовыход выключен (сессия живёт `JWT_EXPIRES_IN`, как раньше). */
+export const SESSION_IDLE_TIMEOUT_DISABLED = 0;
+/**
+ * Нижняя граница окна. Меньше пяти минут — это уже не «забыл выйти», а
+ * выкидывание человека, который читает экран: швея на ОТК разбирает
+ * партию молча по несколько минут.
+ */
+export const SESSION_IDLE_TIMEOUT_MIN_MINUTES = 5;
+/** Верхняя граница — 12 часов, дальше настройка теряет смысл (это уже TTL сессии). */
+export const SESSION_IDLE_TIMEOUT_MAX_MINUTES = 720;
+
+/**
+ * Готовые варианты для выпадающего списка в настройках. Свободный ввод
+ * минут здесь ни к чему: значимых режимов немного, а список избавляет
+ * от вопроса «а 7 минут — это нормально?».
+ */
+export const SESSION_IDLE_TIMEOUT_PRESETS = [
+  SESSION_IDLE_TIMEOUT_DISABLED,
+  15,
+  30,
+  60,
+  120,
+  240,
+  480,
+] as const;
+
+/** Подпись пресета в списке. `0` — «не выходить». */
+export function sessionIdleTimeoutLabel(minutes: number): string {
+  if (minutes <= SESSION_IDLE_TIMEOUT_DISABLED) return 'Не выходить';
+  if (minutes < 60) return `${minutes} минут бездействия`;
+  const hours = minutes / 60;
+  if (Number.isInteger(hours)) {
+    const word = hours === 1 ? 'час' : hours < 5 ? 'часа' : 'часов';
+    return `${hours} ${word} бездействия`;
+  }
+  return `${minutes} минут бездействия`;
+}
+
+/**
+ * Окно бездействия в минутах. `0` — выключено; иначе минимум
+ * `SESSION_IDLE_TIMEOUT_MIN_MINUTES`. Пустая строка из формы
+ * трактуется как «не менять» (`undefined`), а не как ноль — иначе
+ * случайно очищенное поле молча выключало бы автовыход.
+ */
+const SessionIdleTimeoutMinutesField = z.preprocess(
+  (v) => {
+    if (v === null || v === undefined) return undefined;
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed === '') return undefined;
+      const parsed = Number.parseInt(trimmed, 10);
+      return Number.isFinite(parsed) ? parsed : v;
+    }
+    return v;
+  },
+  z
+    .number({ invalid_type_error: 'Время бездействия — число минут' })
+    .int('Время бездействия — целое число минут')
+    .refine(
+      (n) =>
+        n === SESSION_IDLE_TIMEOUT_DISABLED ||
+        (n >= SESSION_IDLE_TIMEOUT_MIN_MINUTES &&
+          n <= SESSION_IDLE_TIMEOUT_MAX_MINUTES),
+      `Время бездействия — 0 (не выходить) или от ${SESSION_IDLE_TIMEOUT_MIN_MINUTES} до ${SESSION_IDLE_TIMEOUT_MAX_MINUTES} минут`,
+    )
+    .optional(),
+);
+
+// ---------------------------------------------------------------------------
 // Update DTO
 // ---------------------------------------------------------------------------
 
@@ -241,6 +313,7 @@ export const UpdateCompanySettingsSchema = z
     autoIssueMaterialsOnCutRelease: AutoIssueMaterialsOnCutReleaseField,
     allowNegativeMaterialStock: AllowNegativeMaterialStockField,
     offRouteWorkPolicy: OffRouteWorkPolicyField,
+    sessionIdleTimeoutMinutes: SessionIdleTimeoutMinutesField,
   })
   .refine(
     (obj) => Object.values(obj).some((v) => v !== undefined),
@@ -288,8 +361,28 @@ export interface CompanySettingsDto {
    */
   autoIssueMaterialsOnCutRelease: boolean;
   allowNegativeMaterialStock: boolean;
+  /**
+   * Автовыход по бездействию, минуты (`0` — выключен). См.
+   * `prisma/schema.prisma::CompanySettings.sessionIdleTimeoutMinutes`.
+   */
+  sessionIdleTimeoutMinutes: number;
+  /**
+   * Момент последнего «Завершить все сеансы» (ISO) или `null`. Сессии,
+   * выпущенные раньше, backend отвергает. Поле read-only: сдвинуть
+   * метку можно только ручкой `POST /company-settings/terminate-sessions`.
+   */
+  sessionsValidFrom: string | null;
   createdAt: string; // ISO
   updatedAt: string; // ISO
+}
+
+/**
+ * Ответ `POST /api/company-settings/terminate-sessions` — новая метка
+ * отсечки. Всё, что выпущено раньше неё, перестаёт пускать в систему,
+ * включая сессию того, кто нажал кнопку.
+ */
+export interface TerminateSessionsResponseDto {
+  sessionsValidFrom: string; // ISO
 }
 
 // ---------------------------------------------------------------------------

@@ -58,3 +58,18 @@ export interface UpdateOffRoutePolicyState {
 }
 
 export const initialUpdateOffRoutePolicyState: UpdateOffRoutePolicyState = {};
+
+/**
+ * State секции «Вход и сессии»: окно автовыхода по бездействию и
+ * кнопка «Завершить все сеансы». Один тип на обе формы секции —
+ * успех/ошибка у них не пересекаются во времени (сохранение окна и
+ * разовое действие).
+ */
+export interface UpdateSessionPolicyState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialUpdateSessionPolicyState: UpdateSessionPolicyState = {};

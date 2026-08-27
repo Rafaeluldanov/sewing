@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Patch } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
 import {
   UpdateCompanySettingsSchema,
   type OffRouteReadinessDto,
+  type TerminateSessionsResponseDto,
   type UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
@@ -13,9 +14,10 @@ import { CompanySettingsService } from './company-settings.service.js';
  * Контроллер блока «Настройки компании» (singleton-реквизиты
  * организации).
  *
- *   GET   /api/company-settings                     — текущие реквизиты
- *   GET   /api/company-settings/off-route-readiness — готовность к BLOCK
- *   PATCH /api/company-settings                     — частичное обновление
+ *   GET   /api/company-settings                       — текущие реквизиты
+ *   GET   /api/company-settings/off-route-readiness   — готовность к BLOCK
+ *   PATCH /api/company-settings                       — частичное обновление
+ *   POST  /api/company-settings/terminate-sessions    — выгнать всех сейчас
  *
  * RBAC — `SHOP_MANAGER` / `ADMIN`. Ровно как у других управленческих
  * справочников; рабочим ролям эта информация не нужна.
@@ -40,6 +42,24 @@ export class CompanySettingsController {
   @Get('off-route-readiness')
   offRouteReadiness(): Promise<OffRouteReadinessDto> {
     return this.settings.getOffRouteReadiness();
+  }
+
+  /**
+   * «Завершить все сеансы» — сдвигает отсечку, после которой ранее
+   * выданные session-cookie перестают пускать в систему. Отдельная
+   * ручка, а не поле в PATCH: это разовое ДЕЙСТВИЕ с моментальным
+   * эффектом на весь цех, и его нельзя выполнить случайно, сохраняя
+   * форму реквизитов.
+   *
+   * Выгоняет и того, кто нажал: собственная cookie тоже выпущена до
+   * отсечки. Это осознанно — «все» значит все.
+   */
+  @Post('terminate-sessions')
+  @HttpCode(200)
+  terminateSessions(
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<TerminateSessionsResponseDto> {
+    return this.settings.terminateAllSessions(user.employeeId);
   }
 
   @Patch()

@@ -8,7 +8,7 @@ import { LoginForm } from '@/components/auth/login-form';
 export const dynamic = 'force-dynamic';
 
 interface LoginPageProps {
-  searchParams: { next?: string; error?: string };
+  searchParams: { next?: string; error?: string; reason?: string };
 }
 
 /**
@@ -32,9 +32,19 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   // пустая строка, чтобы login action после успеха пошёл по
   // role-default. Делаем эту валидацию inline и узко.
   const nextForForm = sanitizeNextForAnon(searchParams.next);
+  // Автовыход по бездействию приводит человека сюда сам. Без
+  // объяснения форма входа посреди смены читается как «система
+  // выбросила», и первым делом спрашивают у мастера, что сломалось.
+  const idleLogout = searchParams.reason === 'idle';
   return (
     <AuthShell>
       <AuthCard>
+        {idleLogout && (
+          <p className="auth-screen__notice" role="status">
+            Вы вышли из системы из-за бездействия. Смена, если она была
+            открыта, не закрыта — войдите снова и продолжайте работу.
+          </p>
+        )}
         <LoginForm next={nextForForm} />
       </AuthCard>
     </AuthShell>

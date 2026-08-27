@@ -6,6 +6,7 @@ import {
   COMPANY_SETTINGS_SINGLETON_ID,
   type CompanySettingsDto,
   type OffRouteReadinessDto,
+  type TerminateSessionsResponseDto,
   type UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -317,7 +318,10 @@ export class CompanySettingsService {
     const data: Prisma.CompanySettingsUpdateInput = {};
     const changed: Record<
       string,
-      { before: string | boolean | null; after: string | boolean | null }
+      {
+        before: string | number | boolean | null;
+        after: string | number | boolean | null;
+      }
     > = {};
     for (const key of UPDATABLE_STRING_FIELDS) {
       const value = dto[key];
@@ -336,6 +340,19 @@ export class CompanySettingsService {
       if (before === after) continue;
       (data as Record<string, boolean>)[key] = after;
       changed[key] = { before, after };
+    }
+    // Окно автовыхода по бездействию — единственное числовое поле
+    // настроек (минуты, `0` = не выходить), поэтому идёт отдельной
+    // веткой от строк, boolean-ов и enum-а.
+    if (
+      dto.sessionIdleTimeoutMinutes !== undefined &&
+      dto.sessionIdleTimeoutMinutes !== current.sessionIdleTimeoutMinutes
+    ) {
+      data.sessionIdleTimeoutMinutes = dto.sessionIdleTimeoutMinutes;
+      changed.sessionIdleTimeoutMinutes = {
+        before: current.sessionIdleTimeoutMinutes,
+        after: dto.sessionIdleTimeoutMinutes,
+      };
     }
     // Строгость гейта «работа мимо маршрута» — единственное enum-поле
     // настроек, поэтому обрабатывается отдельно от строк и boolean-ов.
@@ -372,6 +389,44 @@ export class CompanySettingsService {
     return toDto(updated);
   }
 
+
+  /**
+   * «Завершить все сеансы» — сдвигает отсечку `sessionsValidFrom` на
+   * текущий момент. Все ранее выданные session-cookie (включая cookie
+   * того, кто нажал кнопку) перестают пускать в систему: проверку
+   * делает `AuthService.resolvePrincipal` по `SessionPayload.iat`.
+   *
+   * Зачем ручка вообще нужна: сессии stateless, реестра выданных
+   * токенов нет, и до неё «выгнать всех сейчас» означало сменить
+   * `JWT_SECRET` (рестарт API) или деактивировать сотрудников по
+   * одному. Типичный повод — терминал остался залогиненным на ночь
+   * или увольнение с непонятно где открытой сессией.
+   *
+   * Отсечка доезжает до работающих узлов не мгновенно, а по истечении
+   * кэша политики в `AuthService` (десятки секунд) — это сознательная
+   * плата за то, что политика не читается из БД на каждый запрос.
+   */
+  async terminateAllSessions(
+    actorEmployeeId?: string | null,
+  ): Promise<TerminateSessionsResponseDto> {
+    await this.getOrCreate();
+    const sessionsValidFrom = new Date();
+    await this.prisma.companySettings.update({
+      where: { id: COMPANY_SETTINGS_SINGLETON_ID },
+      data: { sessionsValidFrom },
+    });
+    this.logger.log(
+      `event=company-settings.sessions.terminate actor=${actorEmployeeId ?? 'unknown'} validFrom=${sessionsValidFrom.toISOString()}`,
+    );
+    await this.audit.log({
+      event: 'COMPANY_SESSIONS_TERMINATED',
+      entityType: 'COMPANY_SETTINGS',
+      entityId: COMPANY_SETTINGS_SINGLETON_ID,
+      payload: { sessionsValidFrom: sessionsValidFrom.toISOString() },
+      employeeId: actorEmployeeId ?? null,
+    });
+    return { sessionsValidFrom: sessionsValidFrom.toISOString() };
+  }
 
   /**
    * Готовность к включению `BLOCK` для секции настроек.
@@ -568,6 +623,8 @@ function toDto(c: CompanySettingsRow): CompanySettingsDto {
     autoIssueMaterialsOnCutRelease: c.autoIssueMaterialsOnCutRelease,
     allowNegativeMaterialStock: c.allowNegativeMaterialStock,
     offRouteWorkPolicy: c.offRouteWorkPolicy,
+    sessionIdleTimeoutMinutes: c.sessionIdleTimeoutMinutes,
+    sessionsValidFrom: c.sessionsValidFrom?.toISOString() ?? null,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
   };

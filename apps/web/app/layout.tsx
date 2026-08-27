@@ -21,6 +21,7 @@ import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { canSeeEmployeeQrButton } from '@/lib/rbac';
 import { SwitchWorkplaceButton } from '@/components/workplace/switch-workplace-button';
 import { ChunkErrorGuard } from '@/components/chunk-error-guard';
+import { IdleLogoutWatcher } from '@/components/session/idle-logout-watcher';
 import { Icon } from '@/components/icon';
 
 export const metadata: Metadata = {
@@ -111,6 +112,12 @@ export default async function RootLayout({
   const singleWorkspace =
     me?.user.singleWorkspace ??
     isSingleWorkspaceRole(me?.user.assignedRoles ?? roles);
+  // Автовыход по бездействию. Значение приходит из `/api/auth/me` уже
+  // эффективным для этой учётки: настройка организации минус
+  // исключения по ролям (монитор цеха автовыходу не подлежит — за ним
+  // некому «проявлять активность»). `0`/отсутствие — сторож не нужен,
+  // и на клиент не едет ни таймер, ни обработчики.
+  const idleTimeoutMinutes = me?.sessionIdleTimeoutMinutes ?? 0;
   return (
     <html lang="ru">
       <body>
@@ -169,6 +176,9 @@ export default async function RootLayout({
         </AppHeader>
         <main className="app-main">{children}</main>
         <ChunkErrorGuard />
+        {isStaff && idleTimeoutMinutes > 0 ? (
+          <IdleLogoutWatcher timeoutMinutes={idleTimeoutMinutes} />
+        ) : null}
         {isStaff && !singleWorkspace ? (
           <MobileNav
             showHome={showHome}

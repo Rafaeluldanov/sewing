@@ -140,6 +140,58 @@ export async function loginAndPersistSession(
 }
 
 /**
+ * Продлевает сессию: зовёт `POST /api/auth/refresh` и перекладывает
+ * свежую cookie в Next-cookie store (тем же приёмом, что логин —
+ * `apiFetch` заголовок `Set-Cookie` теряет).
+ *
+ * Зовётся сторожем бездействия по ДЕЙСТВИЮ человека (клик, клавиша,
+ * скан), а не по таймеру и не из фоновых опросов: иначе открытая
+ * вкладка держала бы сессию вечно, и автовыход по бездействию не
+ * работал бы вовсе.
+ *
+ * Возвращает `false`, если сессия уже недействительна (истекла,
+ * отозвана «Завершить все сеансы», сотрудника деактивировали) —
+ * клиенту это сигнал уйти на форму входа, а не молча продолжать.
+ */
+export async function refreshSessionCookie(): Promise<boolean> {
+  const { getServerApiUrl } = await import('./config');
+  const url = `${getServerApiUrl()}/auth/refresh`;
+  const tenantHost = readForwardTenantHost();
+  const cookieHeader = cookies().toString();
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        ...(cookieHeader ? { cookie: cookieHeader } : {}),
+        ...(tenantHost ? { 'x-tenant-host': tenantHost } : {}),
+      },
+      cache: 'no-store',
+    });
+  } catch {
+    // Сеть моргнула — не выкидываем человека из-за этого: сессия ещё
+    // жива до конца своего окна, и следующее действие попробует снова.
+    return true;
+  }
+  if (!res.ok) return false;
+
+  const session = pickCookie(collectSetCookie(res.headers), SESSION_COOKIE_NAME);
+  if (!session) return false;
+  const isHttps = headers().get('x-forwarded-proto') === 'https';
+  cookies().set({
+    name: SESSION_COOKIE_NAME,
+    value: session.value,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isHttps,
+    path: '/',
+    maxAge: session.maxAge ?? 12 * 60 * 60,
+  });
+  return true;
+}
+
+/**
  * Зовёт `POST /api/auth/logout` (форвардит cookie, чтобы API мог их
  * затереть на своём домене), и сразу удаляет cookie на стороне Next.
  */

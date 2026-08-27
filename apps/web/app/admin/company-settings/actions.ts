@@ -14,6 +14,8 @@ import { revalidatePath } from 'next/cache';
 import {
   OFF_ROUTE_WORK_POLICIES,
   OFF_ROUTE_WORK_POLICY_LABELS,
+  sessionIdleTimeoutLabel,
+  SESSION_IDLE_TIMEOUT_PRESETS,
   UpdateCompanySettingsSchema,
   type UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
@@ -26,11 +28,13 @@ import {
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   createCompanyDivision,
+  terminateAllSessions,
   updateCompanyDivision,
   updateCompanySettings,
 } from '@/lib/company-settings-api';
 import type {
   UpdateOffRoutePolicyState,
+  UpdateSessionPolicyState,
   CreateCompanyDivisionState,
   UpdateCompanyDivisionOverridesState,
   UpdateCompanyDivisionState,
@@ -323,6 +327,71 @@ export async function updateOffRoutePolicyAction(
     return {
       ok: true,
       successMessage: `Строгость сохранена: ${OFF_ROUTE_WORK_POLICY_LABELS[policy]}.`,
+    };
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Вход и сессии (автовыход по бездействию + «завершить все сеансы»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Сохраняет окно автовыхода по бездействию.
+ *
+ * Значение принимаем только из списка пресетов: свободный ввод минут
+ * здесь ни к чему, а заодно это отсекает «0.5» и прочие способы
+ * получить окно, в котором человека выкидывает посреди работы.
+ */
+export async function updateSessionIdleTimeoutAction(
+  _prev: UpdateSessionPolicyState,
+  form: FormData,
+): Promise<UpdateSessionPolicyState> {
+  const raw = String(form.get('sessionIdleTimeoutMinutes') ?? '');
+  const minutes = Number.parseInt(raw, 10);
+  if (
+    !Number.isFinite(minutes) ||
+    !SESSION_IDLE_TIMEOUT_PRESETS.includes(
+      minutes as (typeof SESSION_IDLE_TIMEOUT_PRESETS)[number],
+    )
+  ) {
+    return { error: 'Не выбрано время бездействия' };
+  }
+  try {
+    await updateCompanySettings({ sessionIdleTimeoutMinutes: minutes });
+    revalidatePath(ADMIN_PATH);
+    return {
+      ok: true,
+      successMessage:
+        minutes === 0
+          ? 'Автовыход выключен: сессия живёт до конца рабочего дня.'
+          : `Автовыход сохранён: ${sessionIdleTimeoutLabel(minutes).toLowerCase()}.`,
+    };
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
+}
+
+/**
+ * «Завершить все сеансы». Выгоняет всех, включая того, кто нажал:
+ * его собственная cookie тоже выпущена до отсечки. Поэтому сообщение
+ * об успехе он, скорее всего, увидит уже на форме входа — это
+ * ожидаемо, и секция предупреждает об этом заранее.
+ */
+export async function terminateSessionsAction(
+  _prev: UpdateSessionPolicyState,
+  _form: FormData,
+): Promise<UpdateSessionPolicyState> {
+  try {
+    await terminateAllSessions();
+    revalidatePath(ADMIN_PATH);
+    return {
+      ok: true,
+      successMessage:
+        'Все сеансы завершены. Сотрудникам нужно войти заново — включая вас.',
     };
   } catch (e) {
     const x = explainApiError(e);

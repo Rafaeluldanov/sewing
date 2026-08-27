@@ -169,6 +169,19 @@ export function isModuleEnabledValue(value: string | undefined | null): boolean 
  */
 export interface MeResponseDto extends LoginResponseDto {
   modules: ModuleFlags;
+  /**
+   * Автовыход по бездействию для ЭТОГО пользователя, минуты
+   * (`0` — выключен). Значение уже эффективное: настройка организации
+   * (`CompanySettings.sessionIdleTimeoutMinutes`) минус исключения по
+   * ролям (учётка монитора цеха автовыходу не подлежит — см.
+   * `SESSION_IDLE_EXEMPT_ROLES` в API).
+   *
+   * Веб по нему решает, включать ли клиентский сторож бездействия
+   * (`apps/web/components/session/idle-logout-watcher.tsx`).
+   * Опционально для backward-compat: старый API поля не отдаёт, и веб
+   * трактует отсутствие как «выключено».
+   */
+  sessionIdleTimeoutMinutes?: number;
 }
 
 // ---------------------------------------------------------------------------

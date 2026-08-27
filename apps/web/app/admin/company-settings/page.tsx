@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { Building2, Factory, Layers, Plug, Settings } from 'lucide-react';
+import { Building2, Factory, Layers, Plug, Settings, ShieldCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type {
@@ -24,6 +24,7 @@ import {
 import { DivisionsSection } from './divisions-section';
 import { MaterialStockDivisionOverridesSection } from './material-stock-division-overrides-section';
 import { OffRoutePolicySection } from './off-route-policy-section';
+import { SessionPolicySection } from './session-policy-section';
 import { AssistantSection } from './assistant-section';
 import { IntegrationsSection } from './integrations-section';
 
@@ -44,6 +45,11 @@ export const dynamic = 'force-dynamic';
  *                      «Подразделений и склада»: это правило
  *                      производственного потока, к материалам оно
  *                      отношения не имеет;
+ *   - `security`     — Вход и сессии: автовыход по бездействию и
+ *                      «завершить все сеансы». Отдельно от
+ *                      «Производства» сознательно: это правило про
+ *                      людей и их учётные записи, а не про поток
+ *                      паспортов по маршруту;
  *   - `integrations` — Интеграции: ERP upgifts (только под флагом
  *                      FEATURE_ERP_INTEGRATION, иначе вкладки нет).
  *
@@ -61,7 +67,7 @@ export const dynamic = 'force-dynamic';
  * редиректит остальных пользователей.
  */
 
-type TabKey = 'org' | 'divisions' | 'production' | 'integrations';
+type TabKey = 'org' | 'divisions' | 'production' | 'security' | 'integrations';
 
 function TabLink({
   active,
@@ -136,6 +142,7 @@ export default async function AdminCompanySettingsPage({
   const tab: TabKey =
     requestedTab === 'divisions' ||
     requestedTab === 'production' ||
+    requestedTab === 'security' ||
     (requestedTab === 'integrations' && integrationsAvailable)
       ? (requestedTab as TabKey)
       : 'org';
@@ -172,6 +179,12 @@ export default async function AdminCompanySettingsPage({
             Icon={Factory}
             label="Производство"
           />
+          <TabLink
+            active={tab === 'security'}
+            href="/admin/company-settings?tab=security"
+            Icon={ShieldCheck}
+            label="Вход и сессии"
+          />
           {integrationsAvailable && (
             <TabLink
               active={tab === 'integrations'}
@@ -203,6 +216,10 @@ export default async function AdminCompanySettingsPage({
           settings={settings}
           readiness={offRouteReadiness}
         />
+      )}
+
+      {tab === 'security' && settings && (
+        <SessionPolicySection settings={settings} />
       )}
 
       {tab === 'integrations' && integrationsAvailable && integrationSettings && (

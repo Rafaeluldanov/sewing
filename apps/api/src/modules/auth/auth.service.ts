@@ -16,9 +16,27 @@ import {
   buildSessionCookieAttributes,
   type CookieAttributes,
 } from './cookie.js';
+import {
+  isSessionRevoked,
+  PERMISSIVE_SESSION_POLICY,
+  resolveIdleTimeoutMinutes,
+  SESSION_IDLE_DISABLED,
+  type SessionPolicy,
+} from './session-policy.js';
 import type { AuthPrincipal } from './auth.types.js';
 
 const DEFAULT_TTL_SECONDS = 12 * 60 * 60;
+
+/**
+ * Сколько секунд держим прочитанную политику сессий в памяти.
+ *
+ * Её читает КАЖДЫЙ авторизованный запрос (`resolvePrincipal`), поэтому
+ * ходить в БД каждый раз нельзя. Полминуты — компромисс: правка
+ * настройки доезжает до цеха почти сразу, а «Завершить все сеансы»
+ * задерживается максимум на этот интервал (нажавший всё равно узнаёт
+ * результат по своему собственному выходу).
+ */
+const POLICY_CACHE_TTL_MS = 30_000;
 
 @Injectable()
 export class AuthService {
@@ -26,6 +44,15 @@ export class AuthService {
   private readonly secret: string;
   private readonly ttlSeconds: number;
   private readonly appUrl: string | null;
+  /**
+   * Кэш политики сессий — ПО ТЕНАНТАМ. Ключ обязателен: настройки живут
+   * в БД тенанта (DB-per-tenant), и общий кэш на процесс раздал бы
+   * окно бездействия одного клиента всем остальным.
+   */
+  private readonly policyCache = new Map<
+    string,
+    { value: SessionPolicy; expiresAt: number }
+  >();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -80,7 +107,85 @@ export class AuthService {
     const assigned =
       employee.roles.length > 0 ? employee.roles : [employee.role];
     const workspace = await this.appRoles.resolveWorkspace(assigned);
-    return this.issueSession(employee, workspace);
+    // Автовыход по бездействию: cookie выпускается ровно на окно
+    // бездействия, а не на весь `JWT_EXPIRES_IN` (см. `session-policy.ts`).
+    const ttlOverride = await this.resolveIdleTtlSeconds(assigned);
+    return this.issueSession(employee, workspace, ttlOverride);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Политика сессий (автовыход по бездействию + «завершить все сеансы»)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Текущая политика организации с коротким кэшем (см.
+   * `POLICY_CACHE_TTL_MS`).
+   *
+   * Читаем singleton `CompanySettings` НАПРЯМУЮ, не через
+   * `CompanySettingsService`: auth — базовый модуль, и зависимость от
+   * модуля настроек развернула бы цикл (настройки сами живут под
+   * `AuthGuard`). Тем же приёмом пользуются hardening-геттеры настроек.
+   *
+   * Fail-soft. Если колонок ещё нет (`deploy-prod.sh` поднимает
+   * контейнеры ДО `prisma migrate deploy`) или БД недоступна — отдаём
+   * пермиссивную политику: не пускать людей в систему из-за настройки
+   * автовыхода было бы хуже самой проблемы, которую она решает.
+   */
+  async getSessionPolicy(): Promise<SessionPolicy> {
+    const tenantKey = this.tenantContext.getStore()?.tenantId ?? 'default';
+    const cached = this.policyCache.get(tenantKey);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) return cached.value;
+
+    let value: SessionPolicy = PERMISSIVE_SESSION_POLICY;
+    try {
+      const row = await this.prisma.companySettings.findUnique({
+        where: { id: 'default' },
+        select: { sessionIdleTimeoutMinutes: true, sessionsValidFrom: true },
+      });
+      value = {
+        idleTimeoutMinutes:
+          row?.sessionIdleTimeoutMinutes ?? SESSION_IDLE_DISABLED,
+        sessionsValidFrom: row?.sessionsValidFrom ?? null,
+      };
+    } catch (e) {
+      this.logger.warn(
+        `event=auth.sessionPolicy.unavailable reason=${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+    this.policyCache.set(tenantKey, {
+      value,
+      expiresAt: now + POLICY_CACHE_TTL_MS,
+    });
+    return value;
+  }
+
+  /**
+   * Эффективное окно бездействия для набора ролей, минуты (`0` —
+   * выключено). Отдаётся в `/api/auth/me`, чтобы веб включал сторож
+   * бездействия ровно тогда, когда он реально применяется.
+   */
+  async getIdleTimeoutMinutes(roles: readonly string[]): Promise<number> {
+    const policy = await this.getSessionPolicy();
+    return resolveIdleTimeoutMinutes(policy.idleTimeoutMinutes, roles);
+  }
+
+  /**
+   * TTL cookie в секундах для набора ролей: окно бездействия, если оно
+   * включено и роль под него попадает, иначе `undefined` (обычный
+   * `JWT_EXPIRES_IN`).
+   *
+   * Окно НЕ может быть длиннее обычного TTL: настройка задумана как
+   * ужесточение, а не как способ продлить сессию на неделю.
+   */
+  private async resolveIdleTtlSeconds(
+    roles: readonly string[],
+  ): Promise<number | undefined> {
+    const minutes = await this.getIdleTimeoutMinutes(roles);
+    if (minutes <= SESSION_IDLE_DISABLED) return undefined;
+    return Math.min(minutes * 60, this.ttlSeconds);
   }
 
   /**
@@ -91,6 +196,11 @@ export class AuthService {
    * и web-middleware откатывается на legacy-логику по системным ролям
    * (для них результат тот же). Так тестовые хелперы остаются
    * синхронными и не тянут за собой справочник ролей.
+   *
+   * `ttlSecondsOverride` — окно бездействия (см. `session-policy.ts`).
+   * Метод остаётся СИНХРОННЫМ: политику читают асинхронные вызывающие
+   * (`login`, `refresh`) и передают готовое число, а тестовые хелперы
+   * продолжают звать `issueSession` без него.
    */
   issueSession(
     employee: Pick<
@@ -98,6 +208,7 @@ export class AuthService {
       'id' | 'role' | 'login' | 'fullName'
     > & { roles?: string[]; activeRole?: string | null },
     workspace?: RoleWorkspaceResolution,
+    ttlSecondsOverride?: number,
   ): {
     user: AuthPrincipal;
     cookie: { name: string; value: string; attrs: CookieAttributes };
@@ -113,6 +224,10 @@ export class AuthService {
     // TenantContext без throw: при логине вне HTTP-контекста (тесты) или в
     // single-tenant токен выпускается без `tid`, и проверка не применяется.
     const tid = this.tenantContext.getStore()?.tenantId;
+    const ttlSeconds =
+      ttlSecondsOverride && ttlSecondsOverride > 0
+        ? ttlSecondsOverride
+        : this.ttlSeconds;
     const { token, expiresAt } = signSession(
       {
         sub: employee.id,
@@ -123,11 +238,11 @@ export class AuthService {
           ? { ws: workspace.workspace, lock: workspace.lockToWorkspace }
           : {}),
       },
-      { secret: this.secret, ttlSeconds: this.ttlSeconds },
+      { secret: this.secret, ttlSeconds },
     );
     const attrs = buildSessionCookieAttributes({
       appUrl: this.appUrl,
-      ttlSeconds: this.ttlSeconds,
+      ttlSeconds,
       expires: expiresAt,
     });
     const user: AuthPrincipal = {
@@ -195,6 +310,12 @@ export class AuthService {
         return null;
       }
     }
+    // Рубильник «Завершить все сеансы»: токены, выпущенные до отсечки,
+    // больше не пускают. Проверка здесь, а не в `verifySession`:
+    // подпись и срок — свойства самого токена, а отсечка живёт в БД
+    // организации и кэшируется (см. `getSessionPolicy`).
+    const policy = await this.getSessionPolicy();
+    if (isSessionRevoked(payload.iat, policy.sessionsValidFrom)) return null;
     const employee = await this.prisma.employee.findUnique({
       where: { id: payload.sub },
       select: {
@@ -232,6 +353,61 @@ export class AuthService {
       lockToWorkspace: workspace.lockToWorkspace,
       login: employee.login,
       fullName: employee.fullName,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Refresh (продление сессии действием человека)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Перевыпускает cookie на полное окно бездействия — «человек ещё
+   * здесь». Зовётся только явным действием в интерфейсе (см.
+   * `POST /api/auth/refresh` и сторож бездействия в вебе).
+   *
+   * Возвращает `null`, если текущая сессия уже недействительна
+   * (истекла, отозвана рубильником, сотрудник деактивирован) — тогда
+   * продлевать нечего, и клиент идёт на форму входа.
+   *
+   * Если автовыход выключен, cookie всё равно перевыпускается на
+   * обычный TTL: поведение остаётся прежним «12 часов от последнего
+   * входа», просто точка отсчёта сдвигается. Отдельная ветка «ничего
+   * не делать» здесь только усложнила бы клиента.
+   */
+  async refreshSession(token: string): Promise<{
+    user: AuthPrincipal;
+    cookie: { name: string; value: string; attrs: CookieAttributes };
+    expiresAt: Date;
+  } | null> {
+    const principal = await this.resolvePrincipal(token);
+    if (!principal) return null;
+    const ttlOverride = await this.resolveIdleTtlSeconds(
+      principal.assignedRoles,
+    );
+    const issued = this.issueSession(
+      {
+        id: principal.employeeId,
+        role: principal.role,
+        login: principal.login,
+        fullName: principal.fullName,
+        roles: principal.assignedRoles,
+        activeRole: principal.activeRole,
+      },
+      {
+        workspace: principal.workspace,
+        singleWorkspace: principal.singleWorkspace,
+        lockToWorkspace: principal.lockToWorkspace,
+      },
+      ttlOverride,
+    );
+    return {
+      user: issued.user,
+      cookie: issued.cookie,
+      // `buildSessionCookieAttributes` всегда получает `expires` от
+      // `signSession`, но подстраховываемся от `undefined` в типе.
+      expiresAt:
+        issued.cookie.attrs.expires ??
+        new Date(Date.now() + issued.cookie.attrs.maxAge * 1000),
     };
   }
 

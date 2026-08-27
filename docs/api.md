@@ -137,7 +137,8 @@ Response DTO: `HealthResponseDto`, `ReadyResponseDto`
 | ----- | ------------------- | ------ | -------- |
 | POST  | `/api/auth/login`   | Public | Body: `LoginRequestDto` (`{ login, password }`). На успех — `Set-Cookie: sewing_session=…`, ответ `LoginResponseDto`. 401 `INVALID_CREDENTIALS` / 403 `EMPLOYEE_INACTIVE`. |
 | POST  | `/api/auth/logout`  | Public | Идемпотентно затирает cookie (`Max-Age=0`), возвращает 204. |
-| GET   | `/api/auth/me`      | Any auth | Возвращает `MeResponseDto` (`{ user: { id, login, fullName, role } }`). 401 `UNAUTHENTICATED`, если сессии нет. |
+| POST  | `/api/auth/refresh` | Any auth | Продление сессии по ДЕЙСТВИЮ человека (автовыход по бездействию): перевыпускает cookie на полное окно, ответ `{ expiresAt }`. 401 `UNAUTHENTICATED`, если сессия истекла или отозвана — протухшую ручка не воскрешает. Фоновые опросы страниц её НЕ зовут, иначе открытая вкладка держала бы сессию вечно. |
+| GET   | `/api/auth/me`      | Any auth | Возвращает `MeResponseDto` (`{ user: { id, login, fullName, role }, modules, sessionIdleTimeoutMinutes }`). `sessionIdleTimeoutMinutes` — эффективное окно бездействия для этой учётки (`0` — выключено; учётка `DISPLAY` исключена всегда). 401 `UNAUTHENTICATED`, если сессии нет. |
 
 Side effects: `login` обновляет `Employee.lastSeenAt`-style-поля
 не пишет (на MVP отдельной таблицы сессий нет, см. ADR-0014).
@@ -2428,7 +2429,8 @@ DTO: `packages/shared/src/printers.ts`.
 | Метод | Путь                       | RBAC                | Описание |
 | ----- | -------------------------- | ------------------- | -------- |
 | GET   | `/api/company-settings`    | SHOP_MANAGER, ADMIN | Текущие реквизиты + флаги блока «Материалы и склад» (`autoIssueMaterialsOnCutRelease`, `allowNegativeMaterialStock`). Backend идемпотентно создаёт singleton-строку, если её ещё нет (`CompanySettingsService.getOrCreate`) — в этом случае флаги отдаются со значениями Prisma-default (`false` / `true`). |
-| PATCH | `/api/company-settings`    | SHOP_MANAGER, ADMIN | `UpdateCompanySettingsDto` (любое подмножество полей: legalName/shortName/INN/КПП/ОГРН/адреса/телефон/email/руководители/банк/БИК/р/с/к/с + `autoIssueMaterialsOnCutRelease?`, `allowNegativeMaterialStock?`). Audit `COMPANY_SETTINGS_UPDATED`. |
+| PATCH | `/api/company-settings`    | SHOP_MANAGER, ADMIN | `UpdateCompanySettingsDto` (любое подмножество полей: legalName/shortName/INN/КПП/ОГРН/адреса/телефон/email/руководители/банк/БИК/р/с/к/с + `autoIssueMaterialsOnCutRelease?`, `allowNegativeMaterialStock?`, `sessionIdleTimeoutMinutes?`). Audit `COMPANY_SETTINGS_UPDATED`. |
+| POST  | `/api/company-settings/terminate-sessions` | SHOP_MANAGER, ADMIN | «Завершить все сеансы»: сдвигает `sessionsValidFrom` на текущий момент, после чего ранее выданные session-cookie перестают пускать в систему (сравнение с `SessionPayload.iat` в `AuthService.resolvePrincipal`). Выгоняет и того, кто нажал. Ответ `{ sessionsValidFrom }`, audit `COMPANY_SESSIONS_TERMINATED`. Отсечка доезжает до узлов по истечении кэша политики (десятки секунд). |
 
 DTO: `packages/shared/src/company-settings.ts`. Audit:
 `COMPANY_SETTINGS_UPDATED` (`entityType = COMPANY_SETTINGS`,

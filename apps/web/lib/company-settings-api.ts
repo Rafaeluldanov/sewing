@@ -11,6 +11,7 @@
 import type {
   CompanySettingsDto,
   OffRouteReadinessDto,
+  TerminateSessionsResponseDto,
   UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
 import type {
@@ -38,6 +39,18 @@ export function updateCompanySettings(
     method: 'PATCH',
     body,
   });
+}
+
+/**
+ * «Завершить все сеансы»: сдвигает отсечку, после которой ранее
+ * выданные session-cookie перестают пускать в систему. Выгоняет и
+ * того, кто нажал кнопку, — включая эту самую вкладку.
+ */
+export function terminateAllSessions(): Promise<TerminateSessionsResponseDto> {
+  return apiFetch<TerminateSessionsResponseDto>(
+    '/company-settings/terminate-sessions',
+    { method: 'POST' },
+  );
 }
 
 // ---------------------------------------------------------------------------

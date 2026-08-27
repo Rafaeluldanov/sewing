@@ -82,6 +82,38 @@ export class AuthController {
     res.setHeader('Set-Cookie', serializeClearCookie(name, attrs));
   }
 
+  /**
+   * Продление сессии — «человек ещё здесь».
+   *
+   * Зовётся ТОЛЬКО по явному действию в интерфейсе (сторож бездействия
+   * в вебе), а не фоновыми опросами страниц: иначе открытая вкладка
+   * держала бы сессию вечно и автовыход по бездействию не работал бы
+   * вовсе. Cookie перевыпускается на полное окно бездействия.
+   *
+   * Не `@Public()`: продлевать можно только живую сессию. Протухшую
+   * или отозванную ручка не воскрешает — клиент получает 401 и идёт на
+   * форму входа.
+   */
+  @Post('refresh')
+  @HttpCode(200)
+  async refresh(
+    @Req() req: { headers: { cookie?: string } },
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ expiresAt: string }> {
+    const token = readSessionCookie(req.headers.cookie);
+    const refreshed = token ? await this.auth.refreshSession(token) : null;
+    if (!refreshed) throw new UnauthenticatedException();
+    res.setHeader(
+      'Set-Cookie',
+      serializeCookie(
+        refreshed.cookie.name,
+        refreshed.cookie.value,
+        refreshed.cookie.attrs,
+      ),
+    );
+    return { expiresAt: refreshed.expiresAt.toISOString() };
+  }
+
   @Get('me')
   async me(
     @CurrentUser() principal: AuthPrincipal | undefined,
@@ -113,6 +145,12 @@ export class AuthController {
       // control-plane TenantModule или env (single-tenant). См.
       // FeatureModulesService и packages/shared/src/auth.ts.
       modules: await this.featureModules.resolve(),
+      // Автовыход по бездействию: эффективное окно ДЛЯ ЭТОГО
+      // пользователя (настройка организации минус исключения по ролям).
+      // Веб включает сторож бездействия только когда значение > 0.
+      sessionIdleTimeoutMinutes: await this.auth.getIdleTimeoutMinutes(
+        principal.assignedRoles,
+      ),
     };
   }
 }
