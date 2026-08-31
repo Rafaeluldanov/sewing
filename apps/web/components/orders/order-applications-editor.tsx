@@ -48,7 +48,7 @@
  */
 
 import { ChevronDown, Copy, Plus, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ORDER_APPLICATION_STAGES,
   ORDER_APPLICATION_STAGE_LABELS,
@@ -273,6 +273,13 @@ interface Props {
    * Если список пуст — режим «выбранные размеры» недоступен.
    */
   availableSizes?: SizeOption[];
+  /**
+   * Зеркало текущих строк для владельца. Мастеру создания заказа
+   * нужно пережить размонтирование шага «Нанесение» (шаги рендерятся
+   * условно): он хранит строки у себя, возвращает их через `initial`
+   * при повторном заходе и показывает сводку на шаге «Проверка».
+   */
+  onRowsChange?: (rows: ApplicationRow[]) => void;
 }
 
 export function OrderApplicationsEditor({
@@ -280,8 +287,12 @@ export function OrderApplicationsEditor({
   inputName = 'applicationsJson',
   disabled = false,
   availableSizes = [],
+  onRowsChange,
 }: Props) {
   const [rows, setRows] = useState<ApplicationRow[]>(() => [...initial]);
+  useEffect(() => {
+    onRowsChange?.(rows);
+  }, [rows, onRowsChange]);
   /**
    * Развёрнутые блоки: ключ строки (`row.key`) для одиночного нанесения
    * и участника комплекта, `groupKey` — для комплекта целиком. Пусто на

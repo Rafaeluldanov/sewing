@@ -103,7 +103,11 @@ import {
   PatternHeroPreview,
 } from '@/components/admin';
 import { CreatableSelect } from '@/components/admin/ref-create/creatable-select';
-import { OrderApplicationsEditor } from '@/components/orders/order-applications-editor';
+import {
+  OrderApplicationsEditor,
+  type ApplicationRow,
+} from '@/components/orders/order-applications-editor';
+import { ORDER_APPLICATION_TYPE_LABELS } from '@sewing/shared/order-applications';
 import { createOrderForCalculationAction } from '@/app/orders/actions';
 import {
   createOrderDraftAction,
@@ -220,6 +224,14 @@ export function OrderCreateWizard({
 
   // --- Шаг 5: нанесение --------------------------------------------------
   const applicationsFormRef = useRef<HTMLFormElement | null>(null);
+  /**
+   * Строки редактора нанесений. Шаги рендерятся условно, и при уходе
+   * с шага 5 редактор размонтируется вместе со своим state — без
+   * зеркала здесь повторный заход показывал бы пустой редактор
+   * (а «Далее» затирал бы сохранённое на сервере пустым списком),
+   * и шагу «Проверка» нечего было бы показать.
+   */
+  const [applicationRows, setApplicationRows] = useState<ApplicationRow[]>([]);
 
   const sortedSizes = useMemo(
     () => [...sizes].sort((a, b) => a.sortOrder - b.sortOrder),
@@ -547,6 +559,14 @@ export function OrderCreateWizard({
         }
         const res = await saveDraftApplicationsAction(orderId, parsed);
         if (!applyResult(res)) return;
+        // Шаг пройден по-настоящему — снимаем пометку «пропущен»,
+        // если менеджер сначала пропустил, а потом вернулся и заполнил.
+        setSkipped((prev) => {
+          if (!prev.has('applications')) return prev;
+          const next = new Set(prev);
+          next.delete('applications');
+          return next;
+        });
         setStep(nextStepId('applications'));
         return;
       }
@@ -1198,6 +1218,8 @@ export function OrderCreateWizard({
               onSubmit={(e) => e.preventDefault()}
             >
               <OrderApplicationsEditor
+                initial={applicationRows}
+                onRowsChange={setApplicationRows}
                 availableSizes={availableSizes.map((s) => ({
                   id: s.id,
                   code: s.code,
@@ -1265,7 +1287,22 @@ export function OrderCreateWizard({
               />
               <ReviewItem
                 label="Нанесение"
-                value={skipped.has('applications') ? null : null}
+                value={
+                  applicationRows.length > 0
+                    ? `${applicationRows.length} шт`
+                    : null
+                }
+                extra={
+                  applicationRows.length > 0
+                    ? applicationRows
+                        .map((r) => {
+                          const t = ORDER_APPLICATION_TYPE_LABELS[r.type];
+                          const place = r.placement.trim();
+                          return place ? `${t} (${place})` : t;
+                        })
+                        .join(' · ')
+                    : null
+                }
                 onEdit={
                   awaitingPattern ? undefined : () => setStep('applications')
                 }
