@@ -597,7 +597,13 @@ export interface ShopfloorDisplayRouteOperationDto {
   operationId: string;
   /** `Operation.name` — заголовок блока на UI. */
   operationName: string;
-  /** Сортировка блока — `Operation.sortOrder`. */
+  /**
+   * `Operation.sortOrder` из справочника. НЕ порядок блоков: блоки уже
+   * приходят упорядоченными по маршрутам активных заказов (см.
+   * `buildRouteOperationRanks`), а справочный sortOrder участвует лишь
+   * как тай-брейк. UI обязан сохранять порядок массива как есть —
+   * пересортировка по этому полю вернёт зигзаг (заказ 02-00020).
+   */
   operationSortOrder: number;
   rows: ShopfloorDisplayRouteSizeRowDto[];
 }

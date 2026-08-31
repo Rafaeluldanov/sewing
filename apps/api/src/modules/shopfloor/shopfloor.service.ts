@@ -23,6 +23,7 @@ import type {
   ShopfloorStateQuery,
 } from '@sewing/shared/shopfloor';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { buildRouteOperationRanks } from '../../common/route-operation-order.js';
 import {
   findCollapsibleGroup,
   type CollapsiblePlan,
@@ -1451,9 +1452,12 @@ function resolveCurrentSewingOperationId(p: {
  *      нескольких активных заказов, даёт ровно ОДИН блок; rows —
  *      union размеров, ▶/✔ — Σ по всем заказам.
  *
- * Сортировка стабильна между polling-tick'ами: блоки — по
- * `Operation.sortOrder`, строки — по `Size.sortOrder`. Это даёт
- * предсказуемый layout на TV (взгляд оператора не «прыгает»).
+ * Сортировка стабильна между polling-tick'ами: блоки — в
+ * топологическом порядке САМИХ МАРШРУТОВ активных заказов
+ * (`buildRouteOperationRanks`, тай-брейк — `Operation.sortOrder`),
+ * строки — по `Size.sortOrder`. Это даёт предсказуемый layout на TV
+ * (взгляд оператора не «прыгает») и совпадает с тем, в каком порядке
+ * цех реально проходит операции.
  */
 function buildSewingRoute(
   passports: Array<{
@@ -1744,6 +1748,24 @@ function buildSewingRoute(
     });
   }
 
+  // Порядок блоков — ПО МАРШРУТАМ активных заказов
+  // (`buildRouteOperationRanks`), а не по глобальному
+  // `Operation.sortOrder`: справочник не знает технологии заказа, и
+  // операции, заведённые позже, уезжали в конец монитора мимо своего
+  // места в маршруте (тот же дефект, что чинился на «Доске движения
+  // тиража», заказ 02-00020). `sortOrder` остался тай-брейком для
+  // операций, которые маршруты между собой не сравнивают, поэтому
+  // сортировка по-прежнему стабильна между polling-tick'ами.
+  const routeRanks = buildRouteOperationRanks(
+    routeSteps.map((step) => ({
+      orderId: step.orderId,
+      index: step.index,
+      operationId: step.operation.id,
+      sortOrder: step.operation.sortOrder,
+      tieBreak: step.operation.name,
+    })),
+  );
+
   // Sort: сначала по цвету (стабильно — алфавит colorLabel), потом
   // по размеру. UI группирует по colorKey, так что порядок внутри
   // одного цвета — это уже привычная sortOrder размера.
@@ -1759,7 +1781,15 @@ function buildSewingRoute(
         return a.sizeSortOrder - b2.sizeSortOrder;
       }),
     }))
-    .sort((a, b) => a.operationSortOrder - b.operationSortOrder);
+    .sort((a, b) => {
+      const ra = routeRanks.get(a.operationId) ?? Number.MAX_SAFE_INTEGER;
+      const rb = routeRanks.get(b.operationId) ?? Number.MAX_SAFE_INTEGER;
+      if (ra !== rb) return ra - rb;
+      if (a.operationSortOrder !== b.operationSortOrder) {
+        return a.operationSortOrder - b.operationSortOrder;
+      }
+      return a.operationName < b.operationName ? -1 : 1;
+    });
 
   // Defensive invariant log: каждая sewing-операция, встретившаяся
   // в snapshot маршрута активного заказа, ОБЯЗАНА присутствовать в

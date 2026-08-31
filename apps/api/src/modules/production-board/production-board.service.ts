@@ -22,6 +22,7 @@ import {
 } from '@sewing/shared';
 import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { buildRouteOperationRanks } from '../../common/route-operation-order.js';
 import { computeRouteDebts } from './route-debt.js';
 import { computeRouteDivergences } from './route-divergence.js';
 import { loadActivePermitSubstitutions } from '../routes/route-work-permits.js';
@@ -50,8 +51,9 @@ const DEBT_PASSPORT_LIMIT = 2000;
  * Колонки доски — НЕ статический список. Они вычисляются из
  * `OrderRouteStep` snapshot'ов заказов, чьи паспорта попали в окно
  * когорты: каждая уникальная операция маршрута (sewing + ОТК/ВТО/
- * упаковка, без кройки) → одна колонка, порядок — `Operation.sortOrder`.
- * Это тот же источник операций, что у «Экрана цеха»
+ * упаковка, без кройки) → одна колонка, порядок — топологический ПО
+ * САМИМ МАРШРУТАМ (`buildRouteOperationRanks`), с `Operation.sortOrder`
+ * как тай-брейком. Это тот же источник операций, что у «Экрана цеха»
  * (`ShopfloorService.buildSewingRoute`): сколько оверлоков реально в
  * маршруте — столько и колонок, без фантомных.
  *
@@ -353,15 +355,34 @@ export class ProductionBoardService {
       }
       bi.set(st.index, { id: st.operation.id, code: st.operation.code });
     }
+    // Порядок колонок — ПО МАРШРУТАМ заказов когорты, а не по
+    // глобальному `Operation.sortOrder` (см. `buildRouteOperationRanks`).
+    // Справочник не знает технологии заказа: на 02-00020 «Ф РАСПОШИВ
+    // ГОРЛОВИНЫ» (sortOrder 420) и «ВТО ОКЛАД» (290) уезжали правее
+    // УПАКОВКИ (70), и тираж, идущий строго по маршруту, рисовался на
+    // доске зигзагом. `sortOrder` остался тай-брейком для операций,
+    // которые маршруты между собой не сравнивают.
+    const routeRanks = buildRouteOperationRanks(
+      routeSteps.map((st) => ({
+        orderId: st.orderId,
+        index: st.index,
+        operationId: st.operation.id,
+        sortOrder: st.operation.sortOrder,
+        tieBreak: st.operation.code,
+      })),
+    );
     const orderedCols = [...columns.entries()]
       .map(([id, meta]) => ({ id, ...meta }))
-      .sort((a, b) =>
-        a.sortOrder !== b.sortOrder
+      .sort((a, b) => {
+        const ra = routeRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+        const rb = routeRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+        if (ra !== rb) return ra - rb;
+        return a.sortOrder !== b.sortOrder
           ? a.sortOrder - b.sortOrder
           : a.code < b.code
             ? -1
-            : 1,
-      );
+            : 1;
+      });
 
     // «Выдан» = паспорт в выборке. «В работе» = паспорт реально начат
     // или завершён, ЛИБО прямо сейчас закреплён за швеёй
