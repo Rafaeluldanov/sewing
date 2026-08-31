@@ -450,3 +450,79 @@ describe('/admin/orders/new — НЕ создаёт потребность пр�
     expect(src).not.toMatch(/calculateOrderWorkshopNeedsAction/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 5. Адресный ORDER_TECH_CARD_REQUIRED: «в какой шаг вернуться»
+// ---------------------------------------------------------------------------
+
+describe('ORDER_TECH_CARD_REQUIRED — адресная ошибка (карточка номенклатуры + шаг мастера)', () => {
+  test('errors.ts: исключение несёт details с карточкой номенклатуры и называет её в тексте', () => {
+    const src = read('apps/api/src/common/errors.ts');
+    const cls = src.slice(src.indexOf('export class OrderTechCardRequiredException'));
+    expect(cls).toMatch(/patternItemId: string;/);
+    expect(cls).toMatch(/patternName: string;/);
+    expect(cls).toMatch(/patternArticle: string \| null;/);
+    expect(cls).toMatch(/«\$\{details\.patternName\}»/);
+    expect(cls).toMatch(/\.\.\.\(details \? \{ details \} : \{\}\)/);
+  });
+
+  test('OrdersService.startCalculation подгружает patternItem и передаёт его в исключение', () => {
+    const src = read('apps/api/src/modules/orders/orders.service.ts');
+    const fn = src.slice(src.indexOf('async startCalculation('));
+    expect(fn).toMatch(
+      /patternItem: \{ select: \{ id: true, name: true, article: true \} \}/,
+    );
+    expect(fn).toMatch(
+      /new OrderTechCardRequiredException\(\s*order\.patternItem\s*\?\s*\{/,
+    );
+  });
+
+  test('lib/api.ts прокидывает details бизнес-ошибки в ApiRequestError', () => {
+    const src = read('apps/web/lib/api.ts');
+    expect(src).toMatch(/readonly details\?: unknown;/);
+    expect(src).toMatch(/this\.details = payload\.details;/);
+    expect(src.match(/details: err\.details,/g)?.length).toBe(2);
+  });
+
+  test('lib/order-gate-fix.ts: код гейта → шаг мастера, details → ссылка на /admin/patterns/:id', () => {
+    const src = read('apps/web/lib/order-gate-fix.ts');
+    expect(src).toMatch(/ORDER_CLIENT_REQUIRED: 'client'/);
+    expect(src).toMatch(/ORDER_PATTERN_REQUIRED: 'product'/);
+    expect(src).toMatch(/ORDER_TECH_CARD_REQUIRED: 'product'/);
+    expect(src).toMatch(/ORDER_ITEMS_REQUIRED: 'colorways'/);
+    expect(src).toMatch(/\/admin\/patterns\/\$\{encodeURIComponent\(patternItemId\)\}/);
+    expect(src).toMatch(/export function orderGateReturnStep/);
+    expect(src).toMatch(/export function orderGateFixLink/);
+  });
+
+  test('мастер создания: wizard-actions отдаёт returnStep/fixLink, мастер рисует «Вернуться на шаг» и ссылку', () => {
+    const actions = read('apps/web/app/admin/orders/new/wizard-actions.ts');
+    expect(actions).toMatch(/returnStep\?: WizardStepId;/);
+    expect(actions).toMatch(/fixLink\?: OrderGateFixLink;/);
+    expect(actions).toMatch(/orderGateReturnStep\(e\)/);
+    expect(actions).toMatch(/orderGateFixLink\(e\)/);
+
+    const wizard = read('apps/web/app/admin/orders/new/order-create-wizard.tsx');
+    expect(wizard).toMatch(/Вернуться на шаг «/);
+    expect(wizard).toMatch(/order-wizard__error-actions/);
+    expect(wizard).toMatch(/errorFix\.fixLink\.href/);
+    // Предупреждение до отправки — на шаге «Изделие» и на «Проверке».
+    expect(wizard.match(/materialSpecLinesCount === 0/g)?.length).toBe(2);
+  });
+
+  test('PatternListItemDto.materialSpecLinesCount заполняется из _count.materialSpecLines', () => {
+    expect(read('packages/shared/src/patterns.ts')).toMatch(
+      /materialSpecLinesCount: number;/,
+    );
+    const svc = read('apps/api/src/modules/patterns/patterns.service.ts');
+    expect(svc).toMatch(/materialSpecLinesCount: row\._count\.materialSpecLines/);
+  });
+
+  test('карточка заказа: кнопка «Перевести в расчёт» показывает ссылку «где исправить»', () => {
+    const action = read('apps/web/app/orders/actions.ts');
+    expect(action).toMatch(/fixLink\?: OrderGateFixLink/);
+    const btn = read('apps/web/components/orders/start-calculation-button.tsx');
+    expect(btn).toMatch(/result\.fixLink/);
+    expect(btn).toMatch(/start-calc__fix-link/);
+  });
+});

@@ -3389,6 +3389,9 @@ export class OrdersService {
       where: { id },
       include: {
         items: true,
+        // Для адресного `ORDER_TECH_CARD_REQUIRED`: в ошибке называем
+        // карточку номенклатуры, у которой пуста спецификация.
+        patternItem: { select: { id: true, name: true, article: true } },
         // Итерация 3 «стадия per вариант»: активная калькуляция — для
         // ветки «рассчитать вариант» на заказе, уже прошедшем DRAFT.
         calculations: {
@@ -3454,7 +3457,15 @@ export class OrdersService {
           { where: { orderId: id } },
         );
         if (snapshotLines === 0) {
-          throw new OrderTechCardRequiredException();
+          throw new OrderTechCardRequiredException(
+            order.patternItem
+              ? {
+                  patternItemId: order.patternItem.id,
+                  patternName: order.patternItem.name,
+                  patternArticle: order.patternItem.article || null,
+                }
+              : undefined,
+          );
         }
       }
     }

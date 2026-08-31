@@ -190,6 +190,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
           updatedAt: detail.updatedAt,
           sizeFilesCount: detail.sizeFiles.length,
           materialAreasCount: detail.materialAreas.length,
+          materialSpecLinesCount: detail.materialSpecLines?.length ?? 0,
           sizes: [],
         },
       ];

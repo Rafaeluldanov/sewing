@@ -51,11 +51,17 @@ import {
 } from '@sewing/shared/order-applications';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
+  orderGateFixLink,
+  orderGateReturnStep,
+  type OrderGateFixLink,
+} from '@/lib/order-gate-fix';
+import {
   createOrder,
   startCalculationOrder,
   updateOrder,
 } from '@/lib/orders-api';
 import { replaceOrderApplications } from '@/lib/order-applications-api';
+import type { WizardStepId } from './wizard-steps';
 
 /**
  * Единый результат шага мастера. `fieldErrors` — по тем же путям, что
@@ -67,6 +73,20 @@ export interface WizardStepResult {
   orderId?: string;
   error?: string;
   fieldErrors?: Record<string, string>;
+  /**
+   * Адресный возврат: на каком шаге мастера лечится ошибка гейта
+   * (`ORDER_TECH_CARD_REQUIRED` → «Изделие», `ORDER_ITEMS_REQUIRED` →
+   * «Расцветки и размеры», …). Баннер ошибки рисует по нему кнопку
+   * «Вернуться на шаг …» вместо того, чтобы оставлять менеджера на
+   * «Проверке» гадать, что именно не так.
+   */
+  returnStep?: WizardStepId;
+  /**
+   * Ссылка «где исправить», если это не в мастере: пустая
+   * спецификация лечится в карточке номенклатуры
+   * (`/admin/patterns/:id`), а не в заказе.
+   */
+  fixLink?: OrderGateFixLink;
 }
 
 function zodFieldErrors(
@@ -81,7 +101,14 @@ function zodFieldErrors(
 
 function apiError(e: unknown): WizardStepResult {
   if (e instanceof ApiRequestError) {
-    return { ok: false, error: errorText(e) };
+    const returnStep = orderGateReturnStep(e);
+    const fixLink = orderGateFixLink(e);
+    return {
+      ok: false,
+      error: errorText(e),
+      ...(returnStep ? { returnStep } : {}),
+      ...(fixLink ? { fixLink } : {}),
+    };
   }
   return { ok: false, error: 'Не удалось выполнить запрос' };
 }
@@ -211,7 +238,9 @@ export async function saveDraftApplicationsAction(
  * «Создать заказ», а переход по статусу. Редиректа здесь нет
  * намеренно: мастер сам решает, куда вести после успеха, и умеет
  * показать ошибку гейта (`ORDER_ITEMS_REQUIRED`,
- * `ORDER_CLIENT_REQUIRED`) прямо на шаге проверки — до перехода.
+ * `ORDER_CLIENT_REQUIRED`, `ORDER_TECH_CARD_REQUIRED`) прямо на шаге
+ * проверки — до перехода, с адресным `returnStep` / `fixLink`
+ * (см. `apiError` и `lib/order-gate-fix.ts`).
  */
 export async function finishOrderDraftAction(
   orderId: string,

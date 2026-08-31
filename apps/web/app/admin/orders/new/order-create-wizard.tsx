@@ -67,6 +67,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  ExternalLink,
   Loader2,
   Lock,
   Palette,
@@ -171,6 +172,14 @@ export function OrderCreateWizard({
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  /**
+   * Адресность ошибки гейта «Отправить в расчёт»: на какой шаг вернуться
+   * и/или где исправить вне мастера (карточка номенклатуры). Приходит
+   * из `WizardStepResult.returnStep` / `.fixLink`.
+   */
+  const [errorFix, setErrorFix] = useState<
+    Pick<WizardStepResult, 'returnStep' | 'fixLink'>
+  >({});
   /** Шаги, которые менеджер сознательно пропустил (4 и 5). */
   const [skipped, setSkipped] = useState<Set<WizardStepId>>(new Set());
 
@@ -331,6 +340,7 @@ export function OrderCreateWizard({
   const resetErrors = useCallback(() => {
     setError(null);
     setFieldErrors({});
+    setErrorFix({});
   }, []);
 
   /** Применить результат server action; вернуть `true` при успехе. */
@@ -339,11 +349,22 @@ export function OrderCreateWizard({
       if (res.orderId) setOrderId(res.orderId);
       setError(null);
       setFieldErrors({});
+      setErrorFix({});
       return true;
     }
     setError(res.error ?? 'Не удалось сохранить шаг');
     setFieldErrors(res.fieldErrors ?? {});
+    setErrorFix({ returnStep: res.returnStep, fixLink: res.fixLink });
     return false;
+  }, []);
+
+  /**
+   * Кнопка «Вернуться на шаг …» в баннере ошибки гейта. В отличие от
+   * `jumpTo`, баннер НЕ сбрасываем: менеджер должен видеть причину и
+   * на том шаге, куда пришёл исправлять.
+   */
+  const returnToStep = useCallback((target: WizardStepId) => {
+    setStep(target);
   }, []);
 
   /** Куда идти после текущего шага (с учётом заблокированных). */
@@ -640,7 +661,38 @@ export function OrderCreateWizard({
       {error && (
         <div role="alert" className="order-wizard__error">
           <AlertCircle size={18} strokeWidth={1.6} aria-hidden />
-          <span>{error}</span>
+          <div className="order-wizard__error-body">
+            <span>{error}</span>
+            {((errorFix.returnStep && errorFix.returnStep !== step) ||
+              errorFix.fixLink) && (
+              <div className="order-wizard__error-actions">
+                {errorFix.returnStep && errorFix.returnStep !== step && (
+                  <button
+                    type="button"
+                    className="order-wizard__error-action"
+                    onClick={() => returnToStep(errorFix.returnStep!)}
+                  >
+                    <ArrowLeft size={14} strokeWidth={1.7} aria-hidden />
+                    Вернуться на шаг «
+                    {WIZARD_STEPS.find((s) => s.id === errorFix.returnStep)
+                      ?.label ?? errorFix.returnStep}
+                    »
+                  </button>
+                )}
+                {errorFix.fixLink && (
+                  <a
+                    href={errorFix.fixLink.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="order-wizard__error-action"
+                  >
+                    <ExternalLink size={14} strokeWidth={1.7} aria-hidden />
+                    {errorFix.fixLink.label}
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1007,6 +1059,32 @@ export function OrderCreateWizard({
                         )}
                       </div>
 
+                      {/*
+                        Гейт `ORDER_TECH_CARD_REQUIRED` — предупреждаем
+                        здесь, а не на «Проверке»: состав материалов
+                        живёт в карточке номенклатуры, и лечить его надо
+                        ДО отправки в расчёт. Счётчик — с момента
+                        открытия мастера; если спецификацию уже заполнили
+                        в другой вкладке, отправка пройдёт (гейт
+                        проверяет бэкенд).
+                      */}
+                      {selectedPattern &&
+                        selectedPattern.materialSpecLinesCount === 0 && (
+                          <p className="order-wizard__warn">
+                            У номенклатуры «{selectedPattern.name}» не
+                            заполнен состав материалов — без него заказ не
+                            уйдёт в расчёт. Заполните раздел «Материалы
+                            (спецификация)» в{' '}
+                            <a
+                              href={`/admin/patterns/${encodeURIComponent(selectedPattern.id)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              карточке номенклатуры
+                            </a>{' '}
+                            и вернитесь сюда.
+                          </p>
+                        )}
                     </div>
 
                     {selectedPattern && (
@@ -1201,6 +1279,23 @@ export function OrderCreateWizard({
                 этого отправить заказ в расчёт нельзя.
               </p>
             )}
+            {!awaitingPattern &&
+              selectedPattern &&
+              selectedPattern.materialSpecLinesCount === 0 && (
+                <p className="order-wizard__warn">
+                  У номенклатуры «{selectedPattern.name}» не заполнен состав
+                  материалов — без него заказ не уйдёт в расчёт. Заполните
+                  раздел «Материалы (спецификация)» в{' '}
+                  <a
+                    href={`/admin/patterns/${encodeURIComponent(selectedPattern.id)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    карточке номенклатуры
+                  </a>
+                  , затем отправляйте.
+                </p>
+              )}
             {!awaitingPattern && sizesTotal === 0 && (
               <p className="order-wizard__warn">
                 План по размерам не заполнен — без него заказ не уйдёт в

@@ -19,9 +19,10 @@
  *     отрисует обновлённый статус и блок «Потребность цеха».
  */
 
-import { Calculator } from 'lucide-react';
+import { Calculator, ExternalLink } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { startCalculationOrderAction } from '@/app/orders/actions';
+import type { OrderGateFixLink } from '@/lib/order-gate-fix';
 
 interface Props {
   orderId: string;
@@ -37,6 +38,8 @@ interface Props {
 export function StartCalculationButton({ orderId, variantMode }: Props) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  /** Ссылка «где исправить» (карточка номенклатуры при пустой спецификации). */
+  const [fixLink, setFixLink] = useState<OrderGateFixLink | null>(null);
 
   const handleClick = () => {
     if (
@@ -48,6 +51,7 @@ export function StartCalculationButton({ orderId, variantMode }: Props) {
     )
       return;
     setError(null);
+    setFixLink(null);
     startTransition(async () => {
       try {
         // Action возвращает `{ error }` (а не throw) — в проде Next.js
@@ -56,6 +60,7 @@ export function StartCalculationButton({ orderId, variantMode }: Props) {
         const result = await startCalculationOrderAction(orderId);
         if (result?.error) {
           setError(result.error);
+          setFixLink(result.fixLink ?? null);
         }
       } catch (e) {
         // Фолбэк на непредвиденный сбой транспорта (не бизнес-ошибку):
@@ -86,7 +91,18 @@ export function StartCalculationButton({ orderId, variantMode }: Props) {
       </button>
       {error && (
         <div className="error-box" role="alert">
-          {error}
+          <div>{error}</div>
+          {fixLink && (
+            <a
+              href={fixLink.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="start-calc__fix-link"
+            >
+              <ExternalLink size={14} strokeWidth={1.7} aria-hidden />
+              {fixLink.label}
+            </a>
+          )}
         </div>
       )}
     </div>

@@ -114,6 +114,7 @@ export default async function EditOrderPage({
           updatedAt: detail.updatedAt,
           sizeFilesCount: detail.sizeFiles.length,
           materialAreasCount: detail.materialAreas.length,
+          materialSpecLinesCount: detail.materialSpecLines?.length ?? 0,
           sizes: [],
         },
       ];

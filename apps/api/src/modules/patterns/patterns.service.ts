@@ -137,7 +137,11 @@ export class PatternsService {
           },
         },
         _count: {
-          select: { sizeFiles: true, materialAreas: true },
+          select: {
+            sizeFiles: true,
+            materialAreas: true,
+            materialSpecLines: true,
+          },
         },
       },
     });
@@ -176,6 +180,7 @@ export class PatternsService {
         updatedAt: row.updatedAt.toISOString(),
         sizeFilesCount: row._count.sizeFiles,
         materialAreasCount: row._count.materialAreas,
+        materialSpecLinesCount: row._count.materialSpecLines,
         sizes,
       };
     });

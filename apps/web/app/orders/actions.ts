@@ -40,6 +40,7 @@ import {
   UpdateOrderExtraCostSchema,
 } from '@sewing/shared/order-extra-costs';
 import { ApiRequestError, errorText } from '@/lib/api';
+import { orderGateFixLink, type OrderGateFixLink } from '@/lib/order-gate-fix';
 import { clientRequiredError } from '@/lib/order-client-required';
 import {
   cancelOrder,
@@ -856,12 +857,16 @@ export async function startOrderAction(id: string): Promise<void> {
  */
 export async function startCalculationOrderAction(
   id: string,
-): Promise<{ ok?: boolean; error?: string }> {
+): Promise<{ ok?: boolean; error?: string; fixLink?: OrderGateFixLink }> {
   try {
     await startCalculationOrder(id);
   } catch (e) {
     if (isNextRedirect(e)) throw e;
-    return { error: explainApiError(e) };
+    // `fixLink` — «где исправить», когда лечится не в заказе: пустая
+    // спецификация (`ORDER_TECH_CARD_REQUIRED`) заполняется в карточке
+    // номенклатуры, кнопка покажет ссылку под текстом ошибки.
+    const fixLink = orderGateFixLink(e);
+    return { error: explainApiError(e), ...(fixLink ? { fixLink } : {}) };
   }
   revalidatePath('/orders');
   revalidatePath(`/orders/${id}`);

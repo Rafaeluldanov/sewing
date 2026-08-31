@@ -206,12 +206,34 @@ export class OrderPatternRequiredException extends BusinessException {
  * это проводной контракт, на него завязаны клиенты и тесты; техкарт
  * как сущности с этапа 5 «техкарты → номенклатура» больше нет.
  */
-export class OrderTechCardRequiredException extends BusinessException {
-  constructor() {
+export class OrderTechCardRequiredException extends HttpException {
+  /**
+   * `details` — адресность для UI: какая именно карточка номенклатуры
+   * пустая. Мастер создания заказа по ним возвращает на шаг «Изделие»
+   * и даёт ссылку на `/admin/patterns/:id`, карточка заказа — ссылку
+   * под кнопкой «Перевести в расчёт». Без `details` (заказ без лекала
+   * до этого гейта не доходит — `ORDER_PATTERN_REQUIRED`) текст общий.
+   */
+  constructor(
+    public readonly details?: {
+      patternItemId: string;
+      patternName: string;
+      patternArticle: string | null;
+    },
+  ) {
+    const article = details?.patternArticle?.trim();
+    const where = details
+      ? ` «${details.patternName}»${article ? ` (арт. ${article})` : ''}`
+      : '';
     super(
-      'ORDER_TECH_CARD_REQUIRED',
-      'Чтобы перевести заказ в расчёт, заполните состав материалов ' +
-        'в карточке номенклатуры.',
+      {
+        statusCode: HttpStatus.BAD_REQUEST,
+        message:
+          'Чтобы перевести заказ в расчёт, заполните состав материалов ' +
+          `в карточке номенклатуры${where}: раздел «Материалы (спецификация)» пуст.`,
+        code: 'ORDER_TECH_CARD_REQUIRED',
+        ...(details ? { details } : {}),
+      },
       HttpStatus.BAD_REQUEST,
     );
   }

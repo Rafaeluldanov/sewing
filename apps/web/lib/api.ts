@@ -29,6 +29,14 @@ export interface ApiError {
    * сразу находится нужная строка (см. `docs/api.md §13`).
    */
   requestId?: string;
+  /**
+   * Структурированный payload бизнес-ошибки (см.
+   * `GlobalExceptionFilter.toResponse`): `ORDER_TECH_CARD_REQUIRED` —
+   * какая карточка номенклатуры пустая, `ORDER_SPEC_INCOMPLETE` — какие
+   * расцветки не заполнены. Форма — на совести конкретного кода, поэтому
+   * `unknown`; читать через узкий хелпер (`lib/order-gate-fix.ts`).
+   */
+  details?: unknown;
 }
 
 export class ApiRequestError extends Error {
@@ -36,6 +44,7 @@ export class ApiRequestError extends Error {
   readonly code?: string;
   readonly issues?: ApiError['issues'];
   readonly requestId?: string;
+  readonly details?: unknown;
 
   constructor(payload: ApiError) {
     super(payload.message);
@@ -43,6 +52,7 @@ export class ApiRequestError extends Error {
     this.code = payload.code;
     this.issues = payload.issues;
     this.requestId = payload.requestId;
+    this.details = payload.details;
   }
 }
 
@@ -165,6 +175,7 @@ export async function apiFetch<T>(
       code: err.code,
       issues: err.issues,
       requestId: err.requestId ?? headerRequestId,
+      details: err.details,
     });
   }
   return payload as T;
@@ -224,6 +235,7 @@ export async function apiFetchMultipart<T>(
       code: err.code,
       issues: err.issues,
       requestId: err.requestId ?? headerRequestId,
+      details: err.details,
     });
   }
   return payload as T;

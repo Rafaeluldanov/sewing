@@ -23097,7 +23097,7 @@ input.mcbx__input:disabled {
 
 .order-wizard__error {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   padding: 0.6rem 0.8rem;
   border-radius: var(--radius-md);
@@ -23105,6 +23105,62 @@ input.mcbx__input:disabled {
   color: var(--color-danger-fg);
   border: 1px solid var(--color-danger);
   font-size: 0.88rem;
+}
+
+.order-wizard__error > svg {
+  flex: 0 0 auto;
+  margin-top: 0.1rem;
+}
+
+.order-wizard__error-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+/* Адресные действия под текстом ошибки гейта: «Вернуться на шаг …»
+   и внешняя ссылка «Открыть карточку …» (см. `wizard-actions.ts`). */
+.order-wizard__error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.8rem;
+  align-items: center;
+}
+
+.order-wizard__error-action,
+.start-calc__fix-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.order-wizard__error-action:hover,
+.start-calc__fix-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+.start-calc__fix-link {
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+}
+
+/* Предупреждение-«подсказка» с ссылкой внутри (шаг «Изделие»:
+   у номенклатуры пустая спецификация). */
+.order-wizard__warn a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .order-wizard__field-error {
