@@ -77,6 +77,8 @@ import {
 import { Activity, Layers, Lock, Workflow } from 'lucide-react';
 import { CreateFinishedGoodsShipmentButton } from '@/components/orders/finished-goods/create-finished-goods-shipment-button';
 import { OrderAmendmentButton } from '@/components/orders/amendments/order-amendment-button';
+import type { RatesAmendmentState } from '@/components/orders/amendments/rates-amendment-tab';
+import { loadRouteOverridesEditorData } from '@/components/orders/operations/route-overrides-editor-data';
 import { OrderAmendmentHistoryCard } from '@/components/orders/amendments/order-amendment-history-card';
 import {
   getAmendmentHistory,
@@ -238,6 +240,20 @@ export async function OrderProductionTab({
       operationState = null;
     }
   }
+  // Вкладка «Расценки» того же окна: стоимость операции правится там же,
+  // где маршрут. Права — как у остальной правки денег (`canManage`,
+  // ADMIN/SHOP_MANAGER); окно бэкенда `updateRouteOverrides` совпадает с
+  // окном правки маршрута, поэтому отдельного гейта по статусу тут нет —
+  // его держит `loadRouteOverridesEditorData`. Ошибка загрузки = вкладки
+  // просто нет, холст от этого не пропадает.
+  let ratesState: RatesAmendmentState | null = null;
+  if (canManage && operationState) {
+    try {
+      ratesState = await loadRouteOverridesEditorData(order);
+    } catch {
+      ratesState = null;
+    }
+  }
   // Полная правка (три вкладки) — только когда доступны ВСЕ состояния.
   const amendmentAvailable =
     quantityState !== null && sizeState !== null && operationState !== null;
@@ -249,6 +265,7 @@ export async function OrderProductionTab({
       quantityState={null}
       sizeState={null}
       operationState={operationState}
+      ratesState={ratesState}
       label="Изменить маршрут"
       variant="route"
       testId="order-route-edit-button"
@@ -263,6 +280,7 @@ export async function OrderProductionTab({
             quantityState={quantityState!}
             sizeState={sizeState!}
             operationState={operationState!}
+            ratesState={ratesState}
             label="Изменить в производстве"
           />
         )}

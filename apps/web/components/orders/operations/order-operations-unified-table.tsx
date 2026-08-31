@@ -53,15 +53,12 @@ import {
   OrderLogisticsAddButton,
   OrderLogisticsRowActions,
 } from './order-logistics-controls';
+import { OrderRouteOverridesEditor } from './order-route-overrides-editor';
 import {
-  OrderRouteOverridesEditor,
-  type RouteOverrideEditorSize,
-  type RouteOverrideEditorStep,
-} from './order-route-overrides-editor';
-
-/** Заказ нельзя редактировать (расценки/нормы операций) в финальных
- *  статусах — совпадает с гейтом бэкенда `updateRouteOverrides`. */
-const ROUTE_OVERRIDES_LOCKED_STATUSES = new Set(['DONE', 'CANCELLED']);
+  buildRouteOverrideEditorSizes,
+  buildRouteOverrideEditorSteps,
+  canEditRouteOverrides as isRouteOverridesEditable,
+} from './route-overrides-editor-data';
 
 interface Props {
   order: OrderDetailDto;
@@ -597,61 +594,11 @@ export async function OrderOperationsUnifiedTable({ order, passports }: Props) {
 
   // Данные режима «Редактировать маршрут заказа» (расценки/нормы внутри
   // заказа). Дефолты операции тянем из уже загруженных `OperationDetailDto`,
-  // текущие переопределения — из снимка `order.routeSteps`.
-  const canEditRouteOverrides = !ROUTE_OVERRIDES_LOCKED_STATUSES.has(
-    order.status,
-  );
-  const editorSizes: RouteOverrideEditorSize[] = (() => {
-    const m = new Map<string, { id: string; code: string; sortOrder: number }>();
-    for (const it of order.items) {
-      if (!m.has(it.sizeId)) {
-        m.set(it.sizeId, {
-          id: it.sizeId,
-          code: it.sizeCode,
-          sortOrder: it.sizeSortOrder,
-        });
-      }
-    }
-    return [...m.values()]
-      .sort((a, b) => a.sortOrder - b.sortOrder)
-      .map(({ id, code }) => ({ id, code }));
-  })();
-  const editorSteps: RouteOverrideEditorStep[] = [...order.routeSteps]
-    .sort((a, b) => a.index - b.index)
-    .map((step) => {
-      const op = data.operationsById.get(step.operationId) ?? null;
-      const ratesBySize: Record<string, number> = {};
-      const timeNormsBySize: Record<string, number> = {};
-      if (op) {
-        for (const r of op.ratesBySize) ratesBySize[r.sizeId] = Number(r.rate);
-        for (const t of op.timeNormsBySize) {
-          timeNormsBySize[t.sizeId] = Number(t.seconds);
-        }
-      }
-      const sizeOverrides: Record<
-        string,
-        { rate: number | null; seconds: number | null }
-      > = {};
-      for (const o of step.sizeOverrides) {
-        sizeOverrides[o.sizeId] = { rate: o.rate, seconds: o.seconds };
-      }
-      return {
-        stepId: step.id,
-        rowNumber: step.index + 1,
-        operationName: step.operationName,
-        operationCode: step.operationCode,
-        pricingMode: op?.pricingMode ?? null,
-        timeNormMode: op?.timeNormMode ?? null,
-        fixedRate: op?.fixedRate != null ? Number(op.fixedRate) : null,
-        timeNormSec: op?.timeNormSec ?? null,
-        ratesBySize,
-        timeNormsBySize,
-        pricingModeOverride: step.pricingModeOverride,
-        rateOverride: step.rateOverride,
-        timeNormSecOverride: step.timeNormSecOverride,
-        sizeOverrides,
-      };
-    });
+  // текущие переопределения — из снимка `order.routeSteps`. Сборка общая с
+  // вкладкой «Расценки» окна правки маршрута (`route-overrides-editor-data`).
+  const canEditRouteOverrides = isRouteOverridesEditable(order.status);
+  const editorSizes = buildRouteOverrideEditorSizes(order);
+  const editorSteps = buildRouteOverrideEditorSteps(order, data.operationsById);
 
   const emptyMoney = (
     <span className="order-operations-table__money order-operations-table__money--empty">

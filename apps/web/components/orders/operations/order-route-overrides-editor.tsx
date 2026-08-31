@@ -57,8 +57,22 @@ interface Props {
   orderId: string;
   sizes: RouteOverrideEditorSize[];
   steps: RouteOverrideEditorStep[];
-  /** Серверная read-only таблица — показывается вне режима правки. */
-  children: React.ReactNode;
+  /**
+   * Серверная read-only таблица — показывается вне режима правки. Не нужна
+   * встроенному варианту (`embedded`), где редактор и так открыт.
+   */
+  children?: React.ReactNode;
+  /**
+   * `embedded` — редактор сразу открыт и рисуется без кнопки
+   * «Редактировать маршрут заказа»: так он живёт вкладкой «Расценки» в
+   * окне правки маршрута, где режим правки задаёт само окно. По умолчанию
+   * `inline` — обёртка вокруг read-only таблицы во вкладке «Операции».
+   */
+  variant?: 'inline' | 'embedded';
+  /** `embedded`: закрыть окно (кнопка «Отмена»). */
+  onCancel?: () => void;
+  /** `embedded`: успешное сохранение — окно закрывает вызывающая сторона. */
+  onSaved?: () => void;
 }
 
 type FieldMap = Record<string, string>;
@@ -225,8 +239,12 @@ export function OrderRouteOverridesEditor({
   sizes,
   steps,
   children,
+  variant = 'inline',
+  onCancel,
+  onSaved,
 }: Props) {
-  const [editing, setEditing] = useState(false);
+  const embedded = variant === 'embedded';
+  const [editing, setEditing] = useState(embedded);
   const [values, setValues] = useState<FieldMap>(() =>
     buildInitial(steps, sizes),
   );
@@ -237,10 +255,13 @@ export function OrderRouteOverridesEditor({
   );
 
   // По успешному сохранению — выйти из режима правки (server action уже
-  // ревалидировал страницу, серверная таблица перечитает снимок).
+  // ревалидировал страницу, серверная таблица перечитает снимок). Во
+  // встроенном варианте выходить некуда: закрывает окно вызывающая сторона.
   useEffect(() => {
-    if (state.ok && state.doneToken) setEditing(false);
-  }, [state.ok, state.doneToken]);
+    if (!state.ok || !state.doneToken) return;
+    if (embedded) onSaved?.();
+    else setEditing(false);
+  }, [state.ok, state.doneToken, embedded, onSaved]);
 
   const built = useMemo(
     () => buildPayload(values, modes, steps, sizes),
@@ -258,7 +279,7 @@ export function OrderRouteOverridesEditor({
     setEditing(true);
   };
 
-  if (!editing) {
+  if (!editing && !embedded) {
     return (
       <div data-testid="order-route-overrides-section">
         <div
@@ -554,7 +575,8 @@ export function OrderRouteOverridesEditor({
           onClick={() => {
             setValues(buildInitial(steps, sizes));
             setModes(buildInitialModes(steps));
-            setEditing(false);
+            if (embedded) onCancel?.();
+            else setEditing(false);
           }}
         >
           Отмена

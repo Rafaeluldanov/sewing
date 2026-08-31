@@ -58,6 +58,13 @@ import {
   OPERATION_CATEGORY_ORDER,
 } from '@sewing/shared/operations';
 import { routeStepIcon, routeStepTone } from '@/components/admin/admin-route-steps';
+import {
+  fromOption,
+  normalizeLinks,
+  toDraft,
+  toPayloadSteps,
+  type DraftStep,
+} from './route-draft';
 import { applyRouteAmendmentAction } from '@/app/admin/orders/[id]/amendment-actions';
 import { initialRouteAmendmentFormState } from '@/app/admin/orders/[id]/amendment-form-state';
 
@@ -81,121 +88,10 @@ interface Props {
   compact?: boolean;
 }
 
-/** Шаг холста. `key` стабилен на всё время правки (React + фокус). */
-interface DraftStep {
-  key: string;
-  operationId: string;
-  /**
-   * Индекс шага в СНИМКЕ маршрута, который продолжает эта строка; `null` —
-   * шаг добавлен в этой правке. Идентичность шага — позиция, а не операция:
-   * одна операция может стоять в маршруте несколько раз (чередующиеся
-   * ОТК/ВТО), и по `operationId` такие шаги неразличимы. Уходит на бэкенд
-   * как `sourceIndex` (см. `RouteAmendmentStepSchema`).
-   */
-  sourceIndex: number | null;
-  name: string;
-  code: string;
-  category: string | null;
-  /**
-   * «Этот шаг в одной параллельной группе с предыдущим». Храним именно
-   * флаг связи, а не номер группы: номер — производная, его пересчёт
-   * после каждой перестановки собирается один раз в `toPayloadSteps`.
-   */
-  linkedWithPrev: boolean;
-  rateRub: number | null;
-  timeNormSec: number | null;
-  /** Шаг заморожен фронтом: не двигается, не удаляется. */
-  frozen: boolean;
-  /** По операции уже есть выработка — убрать нельзя даже впереди фронта. */
-  hasWork: boolean;
-  /** Добавлен в этой правке, ещё не сохранён. */
-  isNew: boolean;
-}
-
 /** Что сейчас тащим: чип палитры или шаг цепочки. */
 type DragSource =
   | { kind: 'pool'; operationId: string }
   | { kind: 'step'; index: number };
-
-/**
- * Счётчик ключей для шагов, добавленных в этой правке. Именно счётчик, а не
- * `operationId`: одну и ту же операцию можно поставить в маршрут несколько
- * раз, и общий ключ схлопнул бы такие чипы в React в один.
- */
-let draftKeySeq = 0;
-
-function toDraft(steps: readonly OperationAmendmentStepDto[]): DraftStep[] {
-  return steps.map((s, i) => ({
-    // Ключ по позиции снимка, а не по операции — при повторах операции
-    // ключи обязаны различаться.
-    key: `step:${s.index}`,
-    sourceIndex: s.index,
-    operationId: s.operationId,
-    name: s.operationName,
-    code: s.operationCode,
-    category: s.operationCategory,
-    linkedWithPrev:
-      i > 0 &&
-      s.parallelGroup != null &&
-      s.parallelGroup === steps[i - 1].parallelGroup,
-    rateRub: s.rateRub,
-    timeNormSec: s.timeNormSec,
-    frozen: !s.movable,
-    hasWork: s.movable && !s.removable,
-    isNew: false,
-  }));
-}
-
-function fromOption(op: OperationAmendmentOptionDto): DraftStep {
-  draftKeySeq += 1;
-  return {
-    key: `new:${op.id}:${draftKeySeq}`,
-    sourceIndex: null,
-    operationId: op.id,
-    name: op.name || op.code,
-    code: op.code,
-    category: op.category,
-    linkedWithPrev: false,
-    rateRub: op.rateRub,
-    timeNormSec: op.timeNormSec,
-    frozen: false,
-    hasWork: false,
-    isNew: true,
-  };
-}
-
-/**
- * Флаги связи → номера параллельных групп снимка: оба шага пары несут
- * ОДИН `parallelGroup`, цепочка из трёх связанных шагов — одна группа.
- * Это формат `OrderRouteStep.parallelGroup`, который читает enforcement
- * паспортов и доска.
- */
-function toPayloadSteps(
-  rows: readonly DraftStep[],
-): {
-  operationId: string;
-  parallelGroup: number | null;
-  sourceIndex: number | null;
-}[] {
-  const out = rows.map((s) => ({
-    operationId: s.operationId,
-    parallelGroup: null as number | null,
-    // Идентичность шага для бэкенда: какую строку снимка продолжает эта
-    // позиция. Без неё повторы операции сопоставились бы по порядку, и
-    // per-order расценка/норма могли бы уехать на чужое вхождение.
-    sourceIndex: s.sourceIndex,
-  }));
-  let group = 0;
-  rows.forEach((s, i) => {
-    if (i === 0 || !s.linkedWithPrev) return;
-    if (!rows[i - 1].linkedWithPrev) {
-      group += 1;
-      out[i - 1].parallelGroup = group;
-    }
-    out[i].parallelGroup = out[i - 1].parallelGroup;
-  });
-  return out;
-}
 
 const RUB = new Intl.NumberFormat('ru-RU', {
   minimumFractionDigits: 2,
@@ -553,18 +449,10 @@ export function RouteAmendmentTab({
   };
 
   /**
-   * После перестановки связь «параллельно с предыдущим» может оказаться
-   * невозможной: у первого шага нет предыдущего, а шаг сразу за фронтом
-   * связался бы с замороженным (это изменило бы его `parallelGroup`).
+   * Приведение связей после перестановки/вставки — вся логика в чистом
+   * `normalizeLinks` (`./route-draft`), здесь только запись в состояние.
    */
-  const applyRows = (rows: DraftStep[]) =>
-    setDraft(
-      rows.map((s, i) =>
-        i <= minSlot && s.linkedWithPrev
-          ? { ...s, linkedWithPrev: false }
-          : s,
-      ),
-    );
+  const applyRows = (rows: DraftStep[]) => setDraft(normalizeLinks(rows, minSlot));
 
   /**
    * Вставка из палитры. Если у операции есть вхождение в снимке, которое

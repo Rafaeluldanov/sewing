@@ -36,6 +36,8 @@ function readSrc(rel: string): string {
 }
 
 const CANVAS = 'apps/web/components/orders/amendments/route-amendment-tab.tsx';
+/** Чистая часть холста: модель черновика и сборка payload-а. */
+const CANVAS_DRAFT = 'apps/web/components/orders/amendments/route-draft.ts';
 const AMENDMENTS = 'packages/shared/src/amendments.ts';
 const AMEND_SERVICE =
   'apps/api/src/modules/order-amendments/order-amendments.service.ts';
@@ -65,7 +67,7 @@ describe('идентичность шага — позиция снимка, а 
   });
 
   test('холст шлёт `sourceIndex` и держит уникальные ключи чипов', () => {
-    const src = readSrc(CANVAS);
+    const src = readSrc(CANVAS_DRAFT);
     expect(src).toMatch(/sourceIndex: s\.sourceIndex/);
     // Ключ нового шага — счётчик, иначе два одинаковых чипа схлопнутся.
     expect(src).toMatch(/draftKeySeq/);

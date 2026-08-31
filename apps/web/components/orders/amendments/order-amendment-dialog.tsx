@@ -5,13 +5,16 @@
  * `FEATURE_ORDER_AMENDMENTS`). Вкладки:
  *   - «Количество» (ФАЗА 1) — правка планового тиража по размерам;
  *   - «Размерность» (ФАЗА 2) — добавить/убрать размер;
- *   - «Маршрут» (ФАЗА 3.1) — состав и порядок операций.
+ *   - «Маршрут» (ФАЗА 3.1) — состав и порядок операций;
+ *   - «Расценки» — способ оплаты, расценка и норма времени операций
+ *     внутри заказа (`PUT /orders/:id/route-overrides`). Появилась,
+ *     чтобы стоимость операции правилась там же, где сам маршрут;
+ *     `null` в `ratesState` убирает вкладку (мастеру деньги закрыты).
  *
  * Окно обслуживает ДВА входа, поэтому состояния вкладок опциональны:
- *   - «Изменить в производстве» (`IN_PRODUCTION`) — все три вкладки;
+ *   - «Изменить в производстве» (`IN_PRODUCTION`) — все вкладки;
  *   - «Изменить маршрут» (карточка «Маршрут операций», окно
- *     `ORDER_ROUTE_EDITABLE_STATUSES`) — только «Маршрут», без
- *     переключателя вкладок.
+ *     `ORDER_ROUTE_EDITABLE_STATUSES`) — «Маршрут» и «Расценки».
  * Переданы состояния — вкладка есть; `null` — вкладки нет. Так один и тот
  * же холст живёт в одном месте, а не копируется под расчёт.
  *
@@ -36,6 +39,10 @@ import { ModalPortal } from '@/components/modal-portal';
 import { QuantityAmendmentTab } from './quantity-amendment-tab';
 import { SizeAmendmentTab } from './size-amendment-tab';
 import { RouteAmendmentTab } from './route-amendment-tab';
+import {
+  RatesAmendmentTab,
+  type RatesAmendmentState,
+} from './rates-amendment-tab';
 
 interface Props {
   orderId: string;
@@ -43,18 +50,21 @@ interface Props {
   quantityState: QuantityAmendmentStateDto | null;
   sizeState: SizeAmendmentStateDto | null;
   operationState: OperationAmendmentStateDto;
+  /** `null` — вкладки «Расценки» нет (нет прав, финальный статус, пустой маршрут). */
+  ratesState: RatesAmendmentState | null;
   /** Заголовок окна — зависит от входа, а не от статуса заказа. */
   title: string;
   onClose: () => void;
 }
 
-type TabKey = 'qty' | 'sizes' | 'route';
+type TabKey = 'qty' | 'sizes' | 'route' | 'rates';
 
 export function OrderAmendmentDialog({
   orderId,
   quantityState,
   sizeState,
   operationState,
+  ratesState,
   title,
   onClose,
 }: Props) {
@@ -63,7 +73,8 @@ export function OrderAmendmentDialog({
   const [tab, setTab] = useState<TabKey>(
     quantityState ? 'qty' : sizeState ? 'sizes' : 'route',
   );
-  const hasTabs = quantityState !== null || sizeState !== null;
+  const hasTabs =
+    quantityState !== null || sizeState !== null || ratesState !== null;
 
   return (
     <ModalPortal>
@@ -75,7 +86,9 @@ export function OrderAmendmentDialog({
         onClick={onClose}
       >
         <div
-          className={`amend-window${tab === 'route' ? ' amend-window--wide' : ''}`}
+          className={`amend-window${
+            tab === 'route' || tab === 'rates' ? ' amend-window--wide' : ''
+          }`}
           onClick={(e) => e.stopPropagation()}
         >
           <header className="amend-header">
@@ -127,6 +140,18 @@ export function OrderAmendmentDialog({
               >
                 Маршрут
               </button>
+              {ratesState && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === 'rates'}
+                  className={`amend-tab${tab === 'rates' ? ' amend-tab--active' : ''}`}
+                  onClick={() => setTab('rates')}
+                  data-testid="amend-tab-rates"
+                >
+                  Расценки
+                </button>
+              )}
             </div>
           )}
 
@@ -149,6 +174,13 @@ export function OrderAmendmentDialog({
               <RouteAmendmentTab
                 orderId={orderId}
                 state={operationState}
+                onClose={onClose}
+              />
+            )}
+            {tab === 'rates' && ratesState && (
+              <RatesAmendmentTab
+                orderId={orderId}
+                state={ratesState}
                 onClose={onClose}
               />
             )}

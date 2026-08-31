@@ -25,6 +25,7 @@ import type {
   SizeAmendmentStateDto,
 } from '@sewing/shared';
 import { OrderAmendmentDialog } from './order-amendment-dialog';
+import type { RatesAmendmentState } from './rates-amendment-tab';
 
 interface Props {
   orderId: string;
@@ -32,6 +33,8 @@ interface Props {
   quantityState: QuantityAmendmentStateDto | null;
   sizeState: SizeAmendmentStateDto | null;
   operationState: OperationAmendmentStateDto;
+  /** `null` — вкладки «Расценки» нет (нет прав / финальный статус / пустой маршрут). */
+  ratesState: RatesAmendmentState | null;
   /** Подпись кнопки; она же — заголовок окна. */
   label: string;
   /** Иконка: слайдеры у полной правки, схема маршрута у route-only. */
@@ -44,6 +47,7 @@ export function OrderAmendmentButton({
   quantityState,
   sizeState,
   operationState,
+  ratesState,
   label,
   variant = 'full',
   testId = 'order-amendment-button',
@@ -68,6 +72,7 @@ export function OrderAmendmentButton({
           quantityState={quantityState}
           sizeState={sizeState}
           operationState={operationState}
+          ratesState={ratesState}
           title={label}
           onClose={() => setOpen(false)}
         />
