@@ -520,8 +520,14 @@ export class OrderCalculationsService {
 
     // --- Фаза C: производные существующим путём ----------------------------
     // Потребности НЕ пересчитываем: строки живут per вариант (фаза E).
+    // `calculationSwitch`: агрегат OrderItem («общий план»), снимок
+    // материалов и план операций пересобираются и в CALCULATION_DONE /
+    // SAMPLE_PRODUCTION — статус выше уже мог стать «Расчёт завершён» по
+    // смете целевого варианта, а обычный гейт ресинка там молча выходил,
+    // оставляя тираж прошлой вкладки.
     await this.orders.resyncColorwayDerived(orderId, actorEmployeeId, {
       skipWorkshopNeedsRecalc: true,
+      calculationSwitch: true,
     });
 
     // --- Фаза D: оверлей route-оверрайдов ПОСЛЕ resync ---------------------

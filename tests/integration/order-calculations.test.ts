@@ -681,6 +681,27 @@ describeWithDb('integration — варианты просчёта заказа (
     expect(afterClone.status).toBe('CALCULATION');
     expect(afterClone.costEstimateTotalRub).toBeNull();
 
+    // У B другой тираж: 150 вместо 100 (60+40). «Общий план» заказа
+    // (агрегат OrderItem = Σ OrderVariantSize) обязан ехать за вкладкой
+    // вместе со сметой — см. ниже после переключений.
+    await api()
+      .patch(`/api/orders/${orderId}`)
+      .set('Cookie', manager)
+      .send({
+        variants: [
+          { color: 'Синий', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 150 }] },
+        ],
+      })
+      .expect(200);
+    const planTotal = async (): Promise<number> => {
+      const agg = await t.prisma.orderItem.aggregate({
+        where: { orderId },
+        _sum: { qtyPlan: true },
+      });
+      return agg._sum.qtyPlan ?? 0;
+    };
+    expect(await planTotal()).toBe(150);
+
     // Второй расчёт — по варианту B, дороже.
     await api()
       .post(`/api/orders/${orderId}/start-calculation`)
@@ -727,6 +748,23 @@ describeWithDb('integration — варианты просчёта заказа (
     expect(Number(detail.body.currentCostEstimate.totalCostRub)).toBe(
       rowsA * 10 * 100,
     );
+    // «Общий план» = тираж A (100), а не B (150): активация в
+    // CALCULATION_DONE обязана пересобрать OrderItem из расцветок цели
+    // (жалоба «второй вариант берёт общий план от первого»).
+    expect(await planTotal()).toBe(100);
+    expect(detail.body.qtyPlanTotal).toBe(100);
+    // И обратно — B снова показывает свои 150.
+    await activate(orderId, calcB);
+    expect(await planTotal()).toBe(150);
+    expect(
+      (
+        await api()
+          .get(`/api/orders/${orderId}`)
+          .set('Cookie', manager)
+          .expect(200)
+      ).body.qtyPlanTotal,
+    ).toBe(150);
+    await activate(orderId, calcA);
     expect(
       await t.prisma.orderCostEstimate.count({
         where: { orderId, orderCalculationId: calcB, status: 'COMPLETED' },

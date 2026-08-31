@@ -4694,6 +4694,23 @@ export class OrdersService {
        * true — пропустить `calculateForOrder` в конце ресинка.
        */
       skipWorkshopNeedsRecalc?: boolean;
+      /**
+       * Фича «Варианты просчёта», переключение вкладки (`activate`):
+       * агрегат `OrderItem` («общий план» в шапке), снимок материалов, план
+       * операций и снимок шагов — производные ВАРИАНТА, и после restore
+       * расцветок целевого варианта их обязаны пересобрать в любом
+       * статусе, где переключение разрешено (`isEditableStatus`
+       * калькуляций: + `CALCULATION_DONE`, `SAMPLE_PRODUCTION`).
+       *
+       * Без этого флага гейт `canTouchSnapshot` (DRAFT/CALCULATION)
+       * молча выходил: `activate` в той же транзакции переводит заказ в
+       * `CALCULATION_DONE` (у целевого варианта есть смета) — и вариант с
+       * другим тиражом показывал «общий план» прошлой вкладки
+       * (жалоба 31.08.2026: «второй вариант берёт общий план от первого»).
+       * Гейт для правок расцветок (карточки/edit-форма) не меняется — там
+       * заморозка плана после расчёта по-прежнему осознанная.
+       */
+      calculationSwitch?: boolean;
     },
   ): Promise<void> {
     const order = await this.prisma.order.findUnique({
@@ -4728,7 +4745,10 @@ export class OrdersService {
 
     const canTouchSnapshot =
       order.status === OrderStatus.DRAFT ||
-      order.status === OrderStatus.CALCULATION;
+      order.status === OrderStatus.CALCULATION ||
+      (opts?.calculationSwitch === true &&
+        (order.status === OrderStatus.CALCULATION_DONE ||
+          order.status === OrderStatus.SAMPLE_PRODUCTION));
     if (!canTouchSnapshot) return;
 
     // Агрегат OrderItem = Σ OrderVariantSize.qtyPlan по размеру (union
