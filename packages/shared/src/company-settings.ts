@@ -289,6 +289,112 @@ const SessionIdleTimeoutMinutesField = z.preprocess(
 );
 
 // ---------------------------------------------------------------------------
+// Автозавершение смен
+// ---------------------------------------------------------------------------
+
+/**
+ * Чем считать конец смены, которую забыли закрыть.
+ *
+ * `LAST_ACTIVITY` — по последней отметке сотрудника в этой смене
+ * (событие паспорта, переключение операции). Ради него фича и нужна:
+ * иначе в часы попадают вечер и ночь, когда в цехе никого не было.
+ * `AT_DEADLINE` — по самому порогу; предсказуемо, но щедро.
+ */
+export const SHIFT_AUTO_CLOSE_MODES = ['LAST_ACTIVITY', 'AT_DEADLINE'] as const;
+export type ShiftAutoCloseModeValue = (typeof SHIFT_AUTO_CLOSE_MODES)[number];
+export const SHIFT_AUTO_CLOSE_MODE_LABELS: Record<
+  ShiftAutoCloseModeValue,
+  string
+> = {
+  LAST_ACTIVITY: 'По последней отметке сотрудника',
+  AT_DEADLINE: 'По времени завершения',
+};
+
+/** `0` — предельная длительность смены не ограничена. */
+export const SHIFT_MAX_DURATION_DISABLED = 0;
+/**
+ * Меньше 4 часов — это уже не «забыл закрыть», а разрезание нормальной
+ * смены пополам.
+ */
+export const SHIFT_MAX_DURATION_MIN_HOURS = 4;
+/** Больше трёх суток смысла нет: такую смену всё равно закроет порог по времени. */
+export const SHIFT_MAX_DURATION_MAX_HOURS = 72;
+
+/** Готовые варианты предельной длительности для списка в настройках. */
+export const SHIFT_MAX_DURATION_PRESETS = [
+  SHIFT_MAX_DURATION_DISABLED,
+  8,
+  10,
+  12,
+  16,
+  24,
+] as const;
+
+/** Подпись пресета длительности. `0` — «без ограничения». */
+export function shiftMaxDurationLabel(hours: number): string {
+  if (hours <= SHIFT_MAX_DURATION_DISABLED) return 'Без ограничения';
+  const word = hours === 1 ? 'час' : hours < 5 ? 'часа' : 'часов';
+  return `${hours} ${word} подряд`;
+}
+
+/** `HH:MM` в минутах от полуночи; `null` для пустого значения. */
+export function parseShiftAutoCloseTime(value: string | null): number | null {
+  if (!value) return null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!m) return null;
+  const hours = Number.parseInt(m[1]!, 10);
+  const minutes = Number.parseInt(m[2]!, 10);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+/**
+ * Время автозавершения `"HH:MM"` (по Москве) или `null` — выключено.
+ * Пустая строка из формы = `null`: так владелец может выключить
+ * правило, не выбирая «специальное» значение.
+ */
+const ShiftAutoCloseTimeField = z.preprocess(
+  (v) => {
+    if (v === null || v === undefined) return null;
+    if (typeof v !== 'string') return v;
+    const trimmed = v.trim();
+    return trimmed === '' ? null : trimmed;
+  },
+  z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Время завершения — в формате ЧЧ:ММ')
+    .nullable()
+    .optional(),
+);
+
+/** Предельная длительность смены в часах; `0` — без ограничения. */
+const ShiftMaxDurationHoursField = z.preprocess(
+  (v) => {
+    if (v === null || v === undefined) return undefined;
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed === '') return undefined;
+      const parsed = Number.parseInt(trimmed, 10);
+      return Number.isFinite(parsed) ? parsed : v;
+    }
+    return v;
+  },
+  z
+    .number({ invalid_type_error: 'Длительность смены — число часов' })
+    .int('Длительность смены — целое число часов')
+    .refine(
+      (n) =>
+        n === SHIFT_MAX_DURATION_DISABLED ||
+        (n >= SHIFT_MAX_DURATION_MIN_HOURS &&
+          n <= SHIFT_MAX_DURATION_MAX_HOURS),
+      `Длительность смены — 0 (без ограничения) или от ${SHIFT_MAX_DURATION_MIN_HOURS} до ${SHIFT_MAX_DURATION_MAX_HOURS} часов`,
+    )
+    .optional(),
+);
+
+const ShiftAutoCloseModeField = z.enum(SHIFT_AUTO_CLOSE_MODES).optional();
+
+// ---------------------------------------------------------------------------
 // Update DTO
 // ---------------------------------------------------------------------------
 
@@ -314,6 +420,9 @@ export const UpdateCompanySettingsSchema = z
     allowNegativeMaterialStock: AllowNegativeMaterialStockField,
     offRouteWorkPolicy: OffRouteWorkPolicyField,
     sessionIdleTimeoutMinutes: SessionIdleTimeoutMinutesField,
+    shiftAutoCloseTime: ShiftAutoCloseTimeField,
+    shiftMaxDurationHours: ShiftMaxDurationHoursField,
+    shiftAutoCloseMode: ShiftAutoCloseModeField,
   })
   .refine(
     (obj) => Object.values(obj).some((v) => v !== undefined),
@@ -366,6 +475,16 @@ export interface CompanySettingsDto {
    * `prisma/schema.prisma::CompanySettings.sessionIdleTimeoutMinutes`.
    */
   sessionIdleTimeoutMinutes: number;
+  /**
+   * Автозавершение смен: время суток по Москве (`"HH:MM"`) или `null`
+   * — выключено. См.
+   * `prisma/schema.prisma::CompanySettings.shiftAutoCloseTime`.
+   */
+  shiftAutoCloseTime: string | null;
+  /** Предельная длительность смены, часов; `0` — без ограничения. */
+  shiftMaxDurationHours: number;
+  /** Чем считать конец автозакрытой смены. */
+  shiftAutoCloseMode: ShiftAutoCloseModeValue;
   /**
    * Момент последнего «Завершить все сеансы» (ISO) или `null`. Сессии,
    * выпущенные раньше, backend отвергает. Поле read-only: сдвинуть

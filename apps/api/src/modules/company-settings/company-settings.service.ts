@@ -341,6 +341,40 @@ export class CompanySettingsService {
       (data as Record<string, boolean>)[key] = after;
       changed[key] = { before, after };
     }
+    // Время автозавершения смены — строка `"HH:MM"` или `null`
+    // (выключено). Идёт отдельной веткой от реквизитов: у тех пустая
+    // строка тоже значит `null`, но здесь важно, что `null` — это
+    // осмысленное «не закрывать», а не «поле не заполнили».
+    if (
+      dto.shiftAutoCloseTime !== undefined &&
+      (dto.shiftAutoCloseTime ?? null) !== current.shiftAutoCloseTime
+    ) {
+      data.shiftAutoCloseTime = dto.shiftAutoCloseTime ?? null;
+      changed.shiftAutoCloseTime = {
+        before: current.shiftAutoCloseTime,
+        after: dto.shiftAutoCloseTime ?? null,
+      };
+    }
+    if (
+      dto.shiftMaxDurationHours !== undefined &&
+      dto.shiftMaxDurationHours !== current.shiftMaxDurationHours
+    ) {
+      data.shiftMaxDurationHours = dto.shiftMaxDurationHours;
+      changed.shiftMaxDurationHours = {
+        before: current.shiftMaxDurationHours,
+        after: dto.shiftMaxDurationHours,
+      };
+    }
+    if (
+      dto.shiftAutoCloseMode !== undefined &&
+      dto.shiftAutoCloseMode !== current.shiftAutoCloseMode
+    ) {
+      data.shiftAutoCloseMode = dto.shiftAutoCloseMode;
+      changed.shiftAutoCloseMode = {
+        before: current.shiftAutoCloseMode,
+        after: dto.shiftAutoCloseMode,
+      };
+    }
     // Окно автовыхода по бездействию — единственное числовое поле
     // настроек (минуты, `0` = не выходить), поэтому идёт отдельной
     // веткой от строк, boolean-ов и enum-а.
@@ -624,6 +658,9 @@ function toDto(c: CompanySettingsRow): CompanySettingsDto {
     allowNegativeMaterialStock: c.allowNegativeMaterialStock,
     offRouteWorkPolicy: c.offRouteWorkPolicy,
     sessionIdleTimeoutMinutes: c.sessionIdleTimeoutMinutes,
+    shiftAutoCloseTime: c.shiftAutoCloseTime,
+    shiftMaxDurationHours: c.shiftMaxDurationHours,
+    shiftAutoCloseMode: c.shiftAutoCloseMode,
     sessionsValidFrom: c.sessionsValidFrom?.toISOString() ?? null,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),

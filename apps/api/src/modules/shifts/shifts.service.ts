@@ -20,6 +20,7 @@ import {
   ShiftOperationNotAllowedForEquipmentException,
 } from '../../common/errors.js';
 import { SalaryService } from '../salary/salary.service.js';
+import { ShiftAutoCloseService } from './shift-auto-close.service.js';
 import { closeShiftSegments, openShiftSegment } from './shift-segments.js';
 
 type ShiftRow = Prisma.ShiftSessionGetPayload<{
@@ -33,6 +34,7 @@ export class ShiftsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly salary: SalaryService,
+    private readonly autoClose: ShiftAutoCloseService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -73,6 +75,12 @@ export class ShiftsService {
     if (!allowed) {
       throw new ShiftOperationNotAllowedForEquipmentException();
     }
+
+    // Забытая вчерашняя смена этого же сотрудника закрывается ЗДЕСЬ:
+    // иначе она не даст стартовать новую (`SHIFT_ALREADY_ACTIVE`), и
+    // человек с утра упрётся в ошибку, которую сам исправить не может.
+    // Fail-soft внутри — старт смены важнее, чем чистота табеля.
+    await this.autoClose.runIfDue(dto.employeeId);
 
     const current = await this.findActiveByEmployee(dto.employeeId);
     if (current) throw new ShiftAlreadyActiveException();

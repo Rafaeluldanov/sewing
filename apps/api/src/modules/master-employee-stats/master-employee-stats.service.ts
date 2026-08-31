@@ -37,6 +37,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ShiftsService } from '../shifts/shifts.service.js';
+import { ShiftAutoCloseService } from '../shifts/shift-auto-close.service.js';
 import {
   clampSegment,
   loadShiftSegments,
@@ -78,6 +79,7 @@ export class MasterEmployeeStatsService {
     private readonly prisma: PrismaService,
     private readonly shifts: ShiftsService,
     private readonly audit: AuditService,
+    private readonly autoClose: ShiftAutoCloseService,
   ) {}
 
   /** `YYYY-MM-DD` по Москве из Date. */
@@ -229,6 +231,11 @@ export class MasterEmployeeStatsService {
   async getStats(
     query: MasterEmployeeStatsQuery,
   ): Promise<MasterEmployeeStatsDto> {
+    // Забытые смены закрываются ДО расчёта — иначе мастер увидит
+    // вчерашние часы, растянутые до полуночи, и следующим действием
+    // пойдёт закрывать их руками. Планировщика в проекте нет, поэтому
+    // проверку дёргают экраны (см. `ShiftAutoCloseService`).
+    await this.autoClose.runIfDue();
     const window = this.window(query.from, query.to);
     const now = new Date();
     const [events, defects, segments] = await Promise.all([
@@ -920,6 +927,9 @@ export class MasterEmployeeStatsService {
    * времени, а не от часов клиента.
    */
   async getActiveShifts(): Promise<MasterActiveShiftsDto> {
+    // Список «кто сейчас на смене» — главный экран, где видна проблема
+    // забытых смен, поэтому чистим прямо перед выборкой.
+    await this.autoClose.runIfDue();
     const now = new Date();
     const rows = await this.prisma.shiftSession.findMany({
       where: { endedAt: null },

@@ -16,6 +16,8 @@ import {
   OFF_ROUTE_WORK_POLICY_LABELS,
   sessionIdleTimeoutLabel,
   SESSION_IDLE_TIMEOUT_PRESETS,
+  SHIFT_AUTO_CLOSE_MODES,
+  SHIFT_MAX_DURATION_PRESETS,
   UpdateCompanySettingsSchema,
   type UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
@@ -35,6 +37,7 @@ import {
 import type {
   UpdateOffRoutePolicyState,
   UpdateSessionPolicyState,
+  UpdateShiftAutoCloseState,
   CreateCompanyDivisionState,
   UpdateCompanyDivisionOverridesState,
   UpdateCompanyDivisionState,
@@ -392,6 +395,62 @@ export async function terminateSessionsAction(
       ok: true,
       successMessage:
         'Все сеансы завершены. Сотрудникам нужно войти заново — включая вас.',
+    };
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Автозавершение смен
+// ---------------------------------------------------------------------------
+
+/**
+ * Сохраняет правило автозавершения смен: время суток, предельную
+ * длительность и то, чем считать конец смены.
+ *
+ * Три поля одной формой сознательно: по отдельности они не значат
+ * ничего. Порог без режима не отвечает на вопрос «сколько часов
+ * записать», а режим без порога вообще не применяется.
+ */
+export async function updateShiftAutoCloseAction(
+  _prev: UpdateShiftAutoCloseState,
+  form: FormData,
+): Promise<UpdateShiftAutoCloseState> {
+  const rawTime = String(form.get('shiftAutoCloseTime') ?? '').trim();
+  if (rawTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(rawTime)) {
+    return { error: 'Время завершения — в формате ЧЧ:ММ' };
+  }
+  const hours = Number.parseInt(
+    String(form.get('shiftMaxDurationHours') ?? ''),
+    10,
+  );
+  if (
+    !Number.isFinite(hours) ||
+    !SHIFT_MAX_DURATION_PRESETS.includes(
+      hours as (typeof SHIFT_MAX_DURATION_PRESETS)[number],
+    )
+  ) {
+    return { error: 'Не выбрана предельная длительность смены' };
+  }
+  const rawMode = String(form.get('shiftAutoCloseMode') ?? '');
+  const mode = SHIFT_AUTO_CLOSE_MODES.find((m) => m === rawMode);
+  if (!mode) return { error: 'Не выбрано, чем считать конец смены' };
+
+  try {
+    await updateCompanySettings({
+      shiftAutoCloseTime: rawTime === '' ? null : rawTime,
+      shiftMaxDurationHours: hours,
+      shiftAutoCloseMode: mode,
+    });
+    revalidatePath(ADMIN_PATH);
+    return {
+      ok: true,
+      successMessage:
+        !rawTime && hours === 0
+          ? 'Автозавершение выключено: смены закрываются только вручную.'
+          : 'Правило автозавершения смен сохранено.',
     };
   } catch (e) {
     const x = explainApiError(e);

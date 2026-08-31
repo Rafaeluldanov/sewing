@@ -74,6 +74,7 @@
 | `Role` | `SHOP_MANAGER`, `CUTTER`, `CUTTER_ASSISTANT`, `SEAMSTRESS`, `QC`, `IRONING`, `PACKING`, `ADMIN`, `DISPLAY`, `SHOPFLOOR_MASTER` | `prisma/schema.prisma::enum Role` |
 | `SalaryEntrySource` | `SHIFT_DAY`, `MANUAL`, `RECUT`, `MONTH_SALARY` | `prisma/schema.prisma::enum SalaryEntrySource` |
 | `SalaryRateMode` | `HOURLY`, `MONTHLY` | `prisma/schema.prisma::enum SalaryRateMode` |
+| `ShiftAutoCloseMode` | `AT_DEADLINE`, `LAST_ACTIVITY` | `prisma/schema.prisma::enum ShiftAutoCloseMode` |
 
 > **Free-form статусы.** В части моделей жизненный цикл хранится **строкой**
 > (а не Prisma enum-ом) ради расширяемости без миграции. Источник истины

@@ -73,3 +73,13 @@ export interface UpdateSessionPolicyState {
 }
 
 export const initialUpdateSessionPolicyState: UpdateSessionPolicyState = {};
+
+/** State секции «Завершение смены» (автозакрытие забытых смен). */
+export interface UpdateShiftAutoCloseState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialUpdateShiftAutoCloseState: UpdateShiftAutoCloseState = {};

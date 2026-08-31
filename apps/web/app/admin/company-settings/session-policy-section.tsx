@@ -168,40 +168,40 @@ export function SessionPolicySection({
               <>
                 {' '}
                 Последний раз: <b>{validFrom}</b>.
-            </>
-          ) : null}
-        </p>
+              </>
+            ) : null}
+          </p>
 
-        {confirming ? (
-          <form action={terminateFormAction} className="off-route__control">
-            <span className="off-route__label">
-              Завершить сеансы у всех сотрудников?
-            </span>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => setConfirming(false)}
-            >
-              Отмена
-            </button>
-            <TerminateButton />
-          </form>
-        ) : (
-          <div className="off-route__control">
-            <button
-              type="button"
-              className="btn btn-danger"
-              onClick={() => setConfirming(true)}
-            >
-              <LogOut size={16} aria-hidden />
-              Завершить все сеансы
-            </button>
-          </div>
-        )}
+          {confirming ? (
+            <form action={terminateFormAction} className="off-route__control">
+              <span className="off-route__label">
+                Завершить сеансы у всех сотрудников?
+              </span>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setConfirming(false)}
+              >
+                Отмена
+              </button>
+              <TerminateButton />
+            </form>
+          ) : (
+            <div className="off-route__control">
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => setConfirming(true)}
+              >
+                <LogOut size={16} aria-hidden />
+                Завершить все сеансы
+              </button>
+            </div>
+          )}
 
-        <Feedback state={terminateState} />
-      </div>
-    </AdminCard>
+          <Feedback state={terminateState} />
+        </div>
+      </AdminCard>
     </>
   );
 }

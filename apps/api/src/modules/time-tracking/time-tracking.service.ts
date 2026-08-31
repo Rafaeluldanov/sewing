@@ -15,6 +15,7 @@ import type {
 import { moscowDayKey, moscowDayWindow } from '../../common/moscow-date.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { MasterEmployeeStatsService } from '../master-employee-stats/master-employee-stats.service.js';
+import { ShiftAutoCloseService } from '../shifts/shift-auto-close.service.js';
 import {
   clampSegment,
   groupSegmentsByEmployee,
@@ -48,6 +49,7 @@ export class TimeTrackingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly masterStats: MasterEmployeeStatsService,
+    private readonly autoClose: ShiftAutoCloseService,
   ) {}
 
   /**
@@ -82,6 +84,9 @@ export class TimeTrackingService {
    * неделю) — тянем плоские срезы и сворачиваем в памяти, без N+1.
    */
   async getSummary(query: TimeTrackingQuery): Promise<TimeTrackingSummaryDto> {
+    // Тайм-трекер — второй экран, который обещает достоверные часы;
+    // забытые смены закрываем до расчёта, как и в табеле мастера.
+    await this.autoClose.runIfDue();
     const win = this.window(query.from, query.to);
     const now = new Date();
 

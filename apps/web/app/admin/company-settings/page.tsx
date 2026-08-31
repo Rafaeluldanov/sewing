@@ -25,6 +25,7 @@ import { DivisionsSection } from './divisions-section';
 import { MaterialStockDivisionOverridesSection } from './material-stock-division-overrides-section';
 import { OffRoutePolicySection } from './off-route-policy-section';
 import { SessionPolicySection } from './session-policy-section';
+import { ShiftAutoCloseSection } from './shift-auto-close-section';
 import { AssistantSection } from './assistant-section';
 import { IntegrationsSection } from './integrations-section';
 
@@ -45,11 +46,14 @@ export const dynamic = 'force-dynamic';
  *                      «Подразделений и склада»: это правило
  *                      производственного потока, к материалам оно
  *                      отношения не имеет;
- *   - `security`     — Вход и сессии: автовыход по бездействию и
- *                      «завершить все сеансы». Отдельно от
- *                      «Производства» сознательно: это правило про
- *                      людей и их учётные записи, а не про поток
- *                      паспортов по маршруту;
+ *   - `security`     — Вход и смены: автовыход по бездействию,
+ *                      «завершить все сеансы» и автозавершение забытых
+ *                      смен. Отдельно от «Производства» сознательно:
+ *                      это правила про людей и их учётные записи, а не
+ *                      про поток паспортов по маршруту. Сессия и смена
+ *                      лежат рядом, потому что для цеха это одна
+ *                      история — «человек ушёл, а система думает, что
+ *                      он на месте», — хотя механики разные;
  *   - `integrations` — Интеграции: ERP upgifts (только под флагом
  *                      FEATURE_ERP_INTEGRATION, иначе вкладки нет).
  *
@@ -183,7 +187,7 @@ export default async function AdminCompanySettingsPage({
             active={tab === 'security'}
             href="/admin/company-settings?tab=security"
             Icon={ShieldCheck}
-            label="Вход и сессии"
+            label="Вход и смены"
           />
           {integrationsAvailable && (
             <TabLink
@@ -219,7 +223,10 @@ export default async function AdminCompanySettingsPage({
       )}
 
       {tab === 'security' && settings && (
-        <SessionPolicySection settings={settings} />
+        <>
+          <SessionPolicySection settings={settings} />
+          <ShiftAutoCloseSection settings={settings} />
+        </>
       )}
 
       {tab === 'integrations' && integrationsAvailable && integrationSettings && (
