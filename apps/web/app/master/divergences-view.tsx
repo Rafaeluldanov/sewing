@@ -213,10 +213,23 @@ function DebtRow({ item }: { item: RouteDebtDto }) {
         {item.firstAt && <span>с {formatDay(item.firstAt)}</span>}
         {item.employees.length > 0 && <span>{item.employees.join(', ')}</span>}
       </div>
+      {item.passportNumbers.length > 0 && (
+        // Номера под раскрытием, а не в строке: решение мастер
+        // принимает на всю пачку (потому строка и свёрнута), но
+        // разговор со швеёй идёт по конкретным паспортам, и без них
+        // «паспортов: 6» не помогало найти какие. `<details>` — чтобы
+        // группа из десятка номеров не растаскивала список.
+        <details className="debt-row__passports">
+          <summary>Номера паспортов ({item.passportNumbers.length})</summary>
+          <p className="debt-row__passports-list">
+            {item.passportNumbers.join(', ')}
+          </p>
+        </details>
+      )}
       <div className="divergence-row__meta">
         <span>
           {abandoned
-            ? 'Доделать может любой сотрудник на этой операции: отсканировать паспорт и завершить.'
+            ? 'Закрыть долг может сам сотрудник — секция «Не закрыто вами» на его экране: паспорт при этом не двигается по маршруту. Либо любой на этой операции сканирует паспорт и завершает.'
             : 'Шаг никто не брал в работу — вопрос к маршруту заказа.'}
         </span>
       </div>

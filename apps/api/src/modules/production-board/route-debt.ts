@@ -101,6 +101,13 @@ export interface RouteDebtGroup {
   operationName: string;
   reason: RouteDebtReason;
   passportCount: number;
+  /**
+   * Номера паспортов группы (по возрастанию) — то, с чем мастер идёт в
+   * цех. Свёртка до тройки нужна для РЕШЕНИЯ, но не для поиска: «шесть
+   * паспортов» без номеров не позволяют ни назвать их швее, ни
+   * проверить. Собираем из тех же `passportIds`, что дают счётчик.
+   */
+  passportNumbers: string[];
   /** Сумма `qtyGood` паспортов группы — масштаб неначисленной сделки. */
   qty: number;
   /** Кто брал (только для `ABANDONED`) — с кем мастеру говорить. */
@@ -151,7 +158,11 @@ export function computeRouteDebts(
 
   const groups = new Map<
     string,
-    RouteDebtGroup & { passportIds: Set<string>; employeeSet: Set<string> }
+    RouteDebtGroup & {
+      passportIds: Set<string>;
+      passportNumberSet: Set<string>;
+      employeeSet: Set<string>;
+    }
   >();
 
   for (const p of passports) {
@@ -196,6 +207,7 @@ export function computeRouteDebts(
       if (existing) {
         if (!existing.passportIds.has(p.passportId)) {
           existing.passportIds.add(p.passportId);
+          existing.passportNumberSet.add(p.passportNumber);
           existing.qty += p.qty;
         }
         if (issue) {
@@ -217,20 +229,23 @@ export function computeRouteDebts(
         operationName: step.operationName,
         reason,
         passportCount: 0,
+        passportNumbers: [],
         qty: p.qty,
         employees: [],
         firstAt: issue?.at ?? null,
         lastAt: issue?.at ?? null,
         passportIds: new Set([p.passportId]),
+        passportNumberSet: new Set([p.passportNumber]),
         employeeSet: new Set(issue?.employeeName ? [issue.employeeName] : []),
       });
     }
   }
 
   return [...groups.values()]
-    .map(({ passportIds, employeeSet, ...g }) => ({
+    .map(({ passportIds, passportNumberSet, employeeSet, ...g }) => ({
       ...g,
       passportCount: passportIds.size,
+      passportNumbers: [...passportNumberSet].sort(),
       employees: [...employeeSet].sort(),
     }))
     .sort((a, b) => {

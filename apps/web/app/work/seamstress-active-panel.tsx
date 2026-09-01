@@ -45,6 +45,7 @@ import {
   closeUnclosedOperationAction,
   completePassportOperationAction,
   loadMyReworkAction,
+  loadMyUnclosedAction,
   lookupPassportAction,
 } from './actions';
 import { CurrentWorkCard } from './current-work-card';
@@ -129,6 +130,12 @@ const REWORK_POLL_INTERVAL_MS = 15_000;
  * когда она нажимает «Понятно».
  */
 const REWORK_ALERT_REPEAT_MS = 4_000;
+
+/**
+ * Период фонового опроса `/shifts/my-unclosed`. Вдвое реже брака
+ * (`REWORK_POLL_INTERVAL_MS`) — разбор у `UnclosedSection`.
+ */
+const UNCLOSED_POLL_INTERVAL_MS = 30_000;
 
 /** Стабильный ключ записи переделки — как в списке `ReworkSection`. */
 function reworkKey(p: ReworkPassportDto): string {
@@ -233,6 +240,36 @@ export function SeamstressActivePanel({
   useEffect(() => {
     processRework(myRework);
   }, [myRework, processRework]);
+
+  // ПОЛЛИНГ «Не закрыто вами» — как у брака, но реже и молча.
+  //
+  // Живёт ЗДЕСЬ, а не внутри `UnclosedSection`: секция рендерится
+  // только при непустом списке, и поллинг внутри неё никогда бы не
+  // запустился в самом нужном случае — когда долг появляется посреди
+  // смены у человека, у которого его не было.
+  //
+  // Откуда долг берётся теперь, когда перехват закрыт гейтом: мастер
+  // снял владельца (`unassign`) или продавил паспорт вперёд
+  // (`set-route-step`) — оба канала через маршрутный гейт не ходят.
+  //
+  // 30 с вместо 15: брак требует реакции сейчас (там ещё звук и
+  // вибрация), долг — нет, он про деньги в конце месяца. Без звука и
+  // модалки по той же причине: поднимать тревогу из-за строки, которую
+  // можно закрыть в любой момент, — способ приучить закрывать не глядя.
+  const [unclosed, setUnclosed] = useState<UnclosedWorkPassportDto[]>(myUnclosed);
+  useEffect(() => setUnclosed(myUnclosed), [myUnclosed]);
+  useEffect(() => {
+    let stopped = false;
+    const id = setInterval(() => {
+      void loadMyUnclosedAction().then((fresh) => {
+        if (!stopped) setUnclosed(fresh);
+      });
+    }, UNCLOSED_POLL_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, []);
 
   // Повтор сигнала, пока модал тревоги открыт.
   useEffect(() => {
@@ -477,7 +514,7 @@ export function SeamstressActivePanel({
         <ReworkSection items={myRework} takeLabel={wording.take} />
       )}
 
-      {myUnclosed.length > 0 && <UnclosedSection items={myUnclosed} />}
+      {unclosed.length > 0 && <UnclosedSection items={unclosed} />}
 
       <ReworkPushSetup />
 
@@ -597,6 +634,7 @@ function UnclosedSection({ items }: { items: UnclosedWorkPassportDto[] }) {
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const rows = items;
 
   const close = (passportId: string) => {
     setPendingId(passportId);
@@ -615,7 +653,7 @@ function UnclosedSection({ items }: { items: UnclosedWorkPassportDto[] }) {
 
   return (
     <section className="card unclosed-section" aria-label="Не закрыто вами">
-      <h2 className="card__title">⚠ Не закрыто вами ({items.length})</h2>
+      <h2 className="card__title">⚠ Не закрыто вами ({rows.length})</h2>
       <p className="card__hint">
         Вы брали эти паспорта, но не закрыли операцию — паспорт успели
         забрать дальше. Работа не зачтена. Искать паспорт не нужно:
@@ -627,7 +665,7 @@ function UnclosedSection({ items }: { items: UnclosedWorkPassportDto[] }) {
         </div>
       )}
       <ul className="unclosed-section__list">
-        {items.map((p) => (
+        {rows.map((p) => (
           <li key={`${p.passportId}:${p.operationId}`}>
             <div>
               <strong>{p.passportNumber}</strong> · {p.operationName} ·{' '}
@@ -653,8 +691,16 @@ function UnclosedSection({ items }: { items: UnclosedWorkPassportDto[] }) {
   );
 }
 
-/** «Где паспорт сейчас» одной строкой — от точного к общему. */
+/**
+ * «Где паспорт сейчас» одной строкой — от точного к общему.
+ *
+ * `packed` идёт первым и перекрывает всё остальное: упакованный паспорт
+ * искать в цехе бессмысленно, он в коробке. Долг по нему закрывается
+ * так же — работа сделана и не оплачена, — но человек должен понимать,
+ * что ходить никуда не надо.
+ */
 function describeWhere(p: UnclosedWorkPassportDto): string {
+  if (p.packed) return 'уже упакован';
   if (p.heldByEmployeeName) return `сейчас у ${p.heldByEmployeeName}`;
   if (p.cellCode) return `сейчас в ячейке ${p.cellCode}`;
   if (p.standsOnOperationName) return `сейчас на «${p.standsOnOperationName}»`;

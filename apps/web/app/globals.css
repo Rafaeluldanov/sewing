@@ -18793,6 +18793,23 @@ body:has(.admin-layout) .app-header { display: none !important; }
   padding: 0.5rem 1rem;
 }
 
+/* Раскрытие «Номера паспортов» в строке незакрытой работы
+   (`app/master/divergences-view.tsx::DebtRow`). Строка свёрнута до
+   тройки «заказ, операция, причина» ради решения на всю пачку, а
+   номера нужны для разговора в цехе — поэтому они под `<details>`, а
+   не в строке: десяток номеров иначе растащит список. */
+.debt-row__passports > summary {
+  cursor: pointer;
+  color: var(--color-fg-muted);
+  font-size: 0.9em;
+}
+.debt-row__passports-list {
+  margin: 0.35rem 0 0;
+  font-size: 0.9em;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
 .constructor-page__title {
   font-size: var(--title-page);
   margin: 0 0 1rem;

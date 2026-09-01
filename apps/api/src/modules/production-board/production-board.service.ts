@@ -1497,6 +1497,7 @@ export class ProductionBoardService {
       operationName: g.operationName,
       reason: g.reason,
       passportCount: g.passportCount,
+      passportNumbers: g.passportNumbers,
       qty: g.qty,
       employees: g.employees,
       firstAt: g.firstAt?.toISOString() ?? null,

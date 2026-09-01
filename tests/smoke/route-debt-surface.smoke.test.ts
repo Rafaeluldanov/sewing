@@ -36,6 +36,7 @@ const SHIFTS = 'apps/api/src/modules/shifts/shifts.service.ts';
 const WORK_PANEL = 'apps/web/app/work/seamstress-active-panel.tsx';
 const MASTER_ACTIONS =
   'apps/api/src/modules/master-actions/master-actions.service.ts';
+const MASTER_DIVERGENCES = 'apps/web/app/master/divergences-view.tsx';
 
 describe('поверхность «незакрытая работа»', () => {
   test('правило отсева: только SEWING и только вне параллельной группы', () => {
@@ -106,6 +107,34 @@ describe('поверхность «незакрытая работа»', () => {
     expect(src).toMatch(
       /curStep\.parallelGroup == null &&\s*\n\s*curStep\.operation\.category === OperationCategory\.SEWING/,
     );
+  });
+
+  test('долг переживает упаковку, но заместитель его закрывает', () => {
+    // Две границы, которые ломаются в разные стороны и обе дорого.
+    // `PACKED` отсечь — «не успела до упаковки, деньги пропали» (дважды
+    // потребовался ручной SQL). Замену не учесть — ручка выпишет ВТОРОЕ
+    // начисление за уже оплаченную работу: при сплит-распошиве взятая
+    // операция (16 / 0001) не получает «своего» OPERATION_FINISHED
+    // никогда, его пишет заместитель 04.
+    const shifts = read(SHIFTS);
+    expect(shifts).toMatch(/PassportStatus\.PACKED/);
+    expect(shifts).toMatch(/operationSubstitution\.findMany/);
+    expect(shifts).toMatch(/loadActivePermitSubstitutions/);
+
+    const passports = read(PASSPORTS);
+    expect(passports).toMatch(/isOperationSatisfiedBySubstitute/);
+    // По упакованному паспорту начисление обязано быть сразу
+    // подтверждённым: `approvePendingForPassport` уже отработал на
+    // закрытии коробки и второй раз не придёт.
+    expect(passports).toMatch(
+      /approveImmediately: passport\.status === PassportStatus\.PACKED/,
+    );
+  });
+
+  test('мастер видит номера паспортов, а не только счётчик', () => {
+    expect(read(DEBT)).toMatch(/passportNumbers/);
+    expect(read(BOARD)).toMatch(/passportNumbers: g\.passportNumbers/);
+    expect(read(MASTER_DIVERGENCES)).toMatch(/item\.passportNumbers/);
   });
 
   test('у обеих сторон есть выход из-под гейта', () => {

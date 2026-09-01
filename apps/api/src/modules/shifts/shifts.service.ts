@@ -28,6 +28,7 @@ import {
 import { SalaryService } from '../salary/salary.service.js';
 import { ShiftAutoCloseService } from './shift-auto-close.service.js';
 import { closeShiftSegments, openShiftSegment } from './shift-segments.js';
+import { loadActivePermitSubstitutions } from '../routes/route-work-permits.js';
 
 type ShiftRow = Prisma.ShiftSessionGetPayload<{
   include: { employee: true; equipment: true; operation: true };
@@ -464,7 +465,12 @@ export class ShiftsService {
         operationId: { not: null },
         operation: { category: OperationCategory.SEWING },
         passport: {
-          status: PassportStatus.IN_PROGRESS,
+          // `PACKED` включён намеренно: долг переживает упаковку —
+          // работа сделана и не оплачена, а закрытие коробки к этому
+          // отношения не имеет. Отсечь его значило бы «не успела до
+          // упаковки — деньги пропали», и именно так дважды
+          // потребовался ручной SQL (02-00013, 02-00020).
+          status: { in: [PassportStatus.IN_PROGRESS, PassportStatus.PACKED] },
           // `{ not: employeeId }` здесь НЕ подходит: Prisma переводит
           // его в `col <> value`, а для `NULL` это UNKNOWN — и паспорт
           // БЕЗ владельца (самый частый случай долга: увели и бросили в
@@ -514,11 +520,84 @@ export class ShiftsService {
           f.createdAt > after,
       );
 
-    const open = [...latest.values()].filter(
+    const openBySelf = [...latest.values()].filter(
       (t) =>
         t.operationId &&
         !finishedAfter(t.passportId, t.operationId, t.createdAt),
     );
+    if (openBySelf.length === 0) return [];
+
+    // ЗАКРЫТИЕ ЧЕРЕЗ ЗАМЕСТИТЕЛЯ — без этого список показывает ЛОЖНЫЕ
+    // долги по уже оплаченной работе.
+    //
+    // Сплит-распошив: швея берёт паспорт на «Распошив рукав» (16) или
+    // «Подгиб низа» (0001), а физически закрывает полный «04 Ф
+    // РАСПОШИВ». По `OperationSubstitution` это засчитывает обе, но
+    // «своего» `OPERATION_FINISHED` у взятой операции нет никогда —
+    // и пара навсегда выглядит открытой. На проде 01.09.2026 таких
+    // семь, все по закрытым и оплаченным паспортам. Показать их значило
+    // бы предложить швее нажать «Закрыть операцию» и получить ВТОРОЕ
+    // начисление за ту же работу.
+    //
+    // ⚠️ Правила замены ОДНОСТОРОННИЕ (04 засчитывает 0001/16, обратно
+    // нет), поэтому спрашиваем только «чем можно закрыть эту операцию».
+    // Наряд-допуски мастера подмешиваем к справочным правилам — иначе
+    // разрешённая им работа тоже висела бы долгом
+    // (см. `routes/route-work-permits.ts`).
+    const takenOperationIds = [
+      ...new Set(
+        openBySelf
+          .map((t) => t.operationId)
+          .filter((x): x is string => Boolean(x)),
+      ),
+    ];
+    const substitutions = await this.prisma.operationSubstitution.findMany({
+      where: { satisfiesOpId: { in: takenOperationIds } },
+      select: { satisfiesOpId: true, substituteOpId: true },
+    });
+    const orderIdByPassport = new Map(
+      (
+        await this.prisma.passport.findMany({
+          where: { id: { in: [...new Set(openBySelf.map((t) => t.passportId))] } },
+          select: { id: true, orderId: true },
+        })
+      ).map((p) => [p.id, p.orderId]),
+    );
+    const permitsByOrder = new Map<
+      string,
+      { satisfiesOpId: string; substituteOpId: string }[]
+    >();
+    for (const orderId of new Set(
+      [...orderIdByPassport.values()].filter((x): x is string => Boolean(x)),
+    )) {
+      permitsByOrder.set(
+        orderId,
+        await loadActivePermitSubstitutions(this.prisma, orderId),
+      );
+    }
+    const substitutesFor = (passportId: string, opId: string): string[] => {
+      const orderId = orderIdByPassport.get(passportId);
+      return [
+        ...new Set([
+          ...substitutions
+            .filter((x) => x.satisfiesOpId === opId)
+            .map((x) => x.substituteOpId),
+          ...(orderId ? permitsByOrder.get(orderId) ?? [] : [])
+            .filter((p) => p.satisfiesOpId === opId)
+            .map((p) => p.substituteOpId),
+        ]),
+      ];
+    };
+    const open = openBySelf.filter((t) => {
+      const subs = substitutesFor(t.passportId, t.operationId!);
+      if (subs.length === 0) return true;
+      return !finished.some(
+        (f) =>
+          f.passportId === t.passportId &&
+          f.operationId &&
+          subs.includes(f.operationId),
+      );
+    });
     if (open.length === 0) return [];
 
     const [passports, operations] = await Promise.all([
@@ -529,6 +608,7 @@ export class ShiftsService {
           number: true,
           color: true,
           qtyGood: true,
+          status: true,
           product: { select: { name: true } },
           size: { select: { code: true } },
           order: { select: { id: true, number: true } },
@@ -563,6 +643,7 @@ export class ShiftsService {
       items.push({
         passportId: p.id,
         passportNumber: p.number,
+        packed: p.status === PassportStatus.PACKED,
         orderId: p.order.id,
         orderNumber: p.order.number,
         productName: p.product.name,

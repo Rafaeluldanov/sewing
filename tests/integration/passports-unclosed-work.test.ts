@@ -54,7 +54,18 @@ describeWithDb('integration — passports.unclosed-work', () => {
    * `takenAway = false` оставляет паспорт на руках у швеи — это НЕ долг,
    * а нормальная работа, и её показывает «В работе у вас».
    */
-  async function setupDebt(opts: { takenAway?: boolean } = {}) {
+  async function setupDebt(
+    opts: {
+      takenAway?: boolean;
+      /** Паспорт уже упакован — долг это не отменяет. */
+      packed?: boolean;
+      /**
+       * Взятая операция закрыта ЗАМЕСТИТЕЛЕМ (сплит-распошив: взяли
+       * SEW_OVERLOCK_2, закрыли SEW_OVERLOCK_1 как полный аналог).
+       */
+      closedBySubstitute?: boolean;
+    } = {},
+  ) {
     const takenAway = opts.takenAway ?? true;
     const today = new Date();
     const order = await t.prisma.order.create({
@@ -93,7 +104,7 @@ describeWithDb('integration — passports.unclosed-work', () => {
         qtyGood: 4,
         cutterId: seed.employees.cutter.id,
         creatorId: seed.employees.cutter.id,
-        status: 'IN_PROGRESS',
+        status: opts.packed ? 'PACKED' : 'IN_PROGRESS',
         // Паспорт уже на ОТК (idx 3) и ничей — так выглядит перехват.
         currentOperationId: takenAway
           ? seed.operations.QC.id
@@ -122,6 +133,14 @@ describeWithDb('integration — passports.unclosed-work', () => {
         qty: 4,
       },
     });
+    if (opts.closedBySubstitute) {
+      await t.prisma.operationSubstitution.create({
+        data: {
+          satisfiesOpId: seed.operations.SEW_OVERLOCK_2.id,
+          substituteOpId: seed.operations.SEW_OVERLOCK_1.id,
+        },
+      });
+    }
     return { passportId: passport.id, orderId: order.id };
   }
 
@@ -232,5 +251,77 @@ describeWithDb('integration — passports.unclosed-work', () => {
       .send({})
       .expect(409);
     expect(res.body?.code).toBe('PASSPORT_NO_UNCLOSED_WORK');
+  });
+
+  // ---------------------------------------------------------------------------
+  // C. Долг переживает упаковку. Отсечь `PACKED` значило бы «не успела
+  //    закрыть до упаковки — деньги пропали»: ровно так дважды
+  //    потребовался ручной SQL (02-00013 17.08, 02-00020 31.08).
+  // ---------------------------------------------------------------------------
+
+  test('C. упакованный паспорт: долг виден и закрывается, начисление сразу APPROVED', async () => {
+    const { passportId } = await setupDebt({ packed: true });
+
+    const list = await request(t.app.getHttpServer())
+      .get('/api/shifts/my-unclosed')
+      .set('Cookie', cookies.seamstress)
+      .expect(200);
+    expect(list.body).toHaveLength(1);
+    // UI обязан сказать прямо: искать такой паспорт в цехе бессмысленно.
+    expect(list.body[0].packed).toBe(true);
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/close-unclosed-operation`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const earnings = await t.prisma.operationEntry.findMany({
+      where: { passportId, operationId: seed.operations.SEW_OVERLOCK_2.id },
+    });
+    expect(earnings).toHaveLength(1);
+    // `approvePendingForPassport` уже отработал на закрытии коробки и
+    // второй раз не придёт — PENDING_RELEASE зависло бы навсегда.
+    expect(earnings[0].status).toBe('APPROVED');
+
+    // Статус паспорта не тронут: закрываем долг, а не распаковываем.
+    const inDb = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
+    expect(inDb.status).toBe('PACKED');
+  });
+
+  // ---------------------------------------------------------------------------
+  // D. Закрытие ЗАМЕСТИТЕЛЕМ — граница, без которой ручка платит дважды.
+  //    Сплит-распошив: швея берёт «Распошив рукав» (16) или «Подгиб
+  //    низа» (0001), а закрывает полный «04», который по
+  //    `OperationSubstitution` засчитывает обе. «Своего»
+  //    OPERATION_FINISHED у взятой операции нет НИКОГДА, и пара вечно
+  //    выглядит открытой. На проде 01.09.2026 таких семь — все по
+  //    закрытым и уже оплаченным паспортам.
+  // ---------------------------------------------------------------------------
+
+  test('D. операция закрыта заместителем → не долг: ни в списке, ни к закрытию', async () => {
+    const { passportId } = await setupDebt({ closedBySubstitute: true });
+
+    const list = await request(t.app.getHttpServer())
+      .get('/api/shifts/my-unclosed')
+      .set('Cookie', cookies.seamstress)
+      .expect(200);
+    expect(list.body).toEqual([]);
+
+    // И прямой вызов ручки тоже отбивается — иначе второе начисление
+    // за уже оплаченную работу можно было бы выписать в обход UI.
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/close-unclosed-operation`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(409);
+    expect(res.body?.code).toBe('PASSPORT_NO_UNCLOSED_WORK');
+
+    const earnings = await t.prisma.operationEntry.findMany({
+      where: { passportId, operationId: seed.operations.SEW_OVERLOCK_2.id },
+    });
+    expect(earnings).toEqual([]);
   });
 });

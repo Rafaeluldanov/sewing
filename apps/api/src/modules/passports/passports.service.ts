@@ -3660,8 +3660,19 @@ export class PassportsService {
         message: 'Паспорт не найден',
       });
     }
-    this.assertPassportActive(passport.status);
-    if (passport.status !== PassportStatus.IN_PROGRESS) {
+    // `PACKED` пропускаем сознательно, поэтому НЕ зовём
+    // `assertPassportActive` (она бы отбила его `PASSPORT_ALREADY_PACKED`).
+    // Долг переживает упаковку: работа сделана и не оплачена, а закрытие
+    // коробки к этому отношения не имеет. Отсечь `PACKED` значило бы
+    // сказать швее «не успела до упаковки — деньги пропали»; ровно так
+    // и потребовался ручной SQL по 02-00013 и 02-00020.
+    if (passport.status === PassportStatus.CANCELLED) {
+      throw new PassportCancelledException();
+    }
+    if (
+      passport.status !== PassportStatus.IN_PROGRESS &&
+      passport.status !== PassportStatus.PACKED
+    ) {
       throw new PassportNotInProgressException();
     }
 
@@ -3682,6 +3693,31 @@ export class PassportsService {
       operationId,
       passport.orderId,
     );
+    // ЗАКРЫТИЕ ЧЕРЕЗ ЗАМЕСТИТЕЛЯ — иначе ручка ПЛАТИТ ДВАЖДЫ.
+    //
+    // `findOpenAssignmentOperation` и `assertOperationNotFinished`
+    // сравнивают операцию саму с собой, а сплит-распошив устроен иначе:
+    // швея берёт паспорт на «Распошив рукав» (16) или «Подгиб низа»
+    // (0001), а физически закрывает полный «04 Ф РАСПОШИВ», который по
+    // `OperationSubstitution` засчитывает обе. Взятие остаётся без
+    // «своего» `OPERATION_FINISHED` навсегда — и выглядит как долг,
+    // хотя работа давно закрыта и ОПЛАЧЕНА по 04.
+    //
+    // На проде 01.09.2026 таких пар семь (6 у Эсенгелдиевой по 16 + 1 у
+    // Кисембаевой по 0001, все паспорта PACKED, все операции закрыты).
+    // Без этой проверки они попали бы в список, а нажатие «Закрыть
+    // операцию» выписало бы ВТОРОЕ начисление за уже оплаченную работу.
+    // Недоплата хуже переплаты только до тех пор, пока переплата не
+    // становится автоматической.
+    if (
+      await this.isOperationSatisfiedBySubstitute(
+        passport.id,
+        operationId,
+        passport.orderId,
+      )
+    ) {
+      throw new PassportNoUnclosedWorkException();
+    }
 
     // Станок того самого взятия — см. доккомментарий. `null` допустим:
     // события до появления `equipmentId` его не хранят.
@@ -3721,6 +3757,11 @@ export class PassportsService {
         sizeId: passport.sizeId,
         qty: passport.qtyCut,
         sourceEventId: finishedEvent.id,
+        // По упакованному паспорту `approvePendingForPassport` уже
+        // отработал на закрытии коробки и второй раз не придёт —
+        // `PENDING_RELEASE` зависло бы навсегда. Та же ветка, что у
+        // retroactive-ОТК/ВТО (см. `EarningsService`).
+        approveImmediately: passport.status === PassportStatus.PACKED,
       });
       // Выпуск ГП здесь НЕ трогаем даже при `producesFinishedGoods`:
       // паспорт физически уехал дальше, и движение по нему уже создал
@@ -4396,6 +4437,58 @@ export class PassportsService {
    * аннулирован и его надо сделать заново (см. `QcService.returnToRework`
    * и `docs/flows.md §F5a`).
    */
+  /**
+   * Закрыта ли операция паспорта ЗАМЕСТИТЕЛЕМ (`OperationSubstitution`
+   * или действующий наряд-допуск по этому заказу).
+   *
+   * Отдельно от `assertOperationNotFinished`: тот считает проходы по
+   * САМОЙ операции, а сплит-распошив закрывается «чужим»
+   * `OPERATION_FINISHED` — 04 засчитывает и «Подгиб низа» (0001), и
+   * «Распошив рукав» (16). Та же логика, что у `isSatisfied` в
+   * `evaluateRouteOrder` и `passesFor` в `route-debt.ts`; заведено
+   * третьим местом сознательно — те два считают по СНИМКУ МАРШРУТА
+   * (нужен `OrderRouteStep` и порядковый номер вхождения), а здесь
+   * вопрос точечный: закрыта ли конкретная взятая операция.
+   *
+   * ⚠️ Правила замены ОДНОСТОРОННИЕ: 04 засчитывает 0001/16, обратное
+   * неверно. Поэтому спрашиваем только «чем можно закрыть эту», и
+   * никогда наоборот.
+   */
+  private async isOperationSatisfiedBySubstitute(
+    passportId: string,
+    operationId: string,
+    orderId: string | null,
+  ): Promise<boolean> {
+    const [subs, permitSubs] = await Promise.all([
+      this.prisma.operationSubstitution.findMany({
+        where: { satisfiesOpId: operationId },
+        select: { substituteOpId: true },
+      }),
+      orderId
+        ? loadActivePermitSubstitutions(this.prisma, orderId)
+        : Promise.resolve([]),
+    ]);
+    const substituteIds = [
+      ...new Set([
+        ...subs.map((x) => x.substituteOpId),
+        ...permitSubs
+          .filter((p) => p.satisfiesOpId === operationId)
+          .map((p) => p.substituteOpId),
+      ]),
+    ];
+    if (substituteIds.length === 0) return false;
+    const occurrences = orderId
+      ? await this.prisma.orderRouteStep.count({
+          where: { orderId, operationId },
+        })
+      : 0;
+    let passes = 0;
+    for (const subId of substituteIds) {
+      passes += await this.countFinishedPasses(passportId, subId);
+    }
+    return passes >= Math.max(1, occurrences);
+  }
+
   private async countFinishedPasses(
     passportId: string,
     operationId: string,

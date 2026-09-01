@@ -249,4 +249,42 @@ describe('computeRouteDebts', () => {
       '02-00015',
     ]);
   });
+
+  test('номера паспортов группы отдаются мастеру целиком', () => {
+    // Свёртка до тройки нужна для РЕШЕНИЯ («что делать с этой пачкой»),
+    // но не для поиска: «паспортов: 2» без номеров не позволяет ни
+    // назвать их швее, ни проверить. Номера — по возрастанию, дубли
+    // схлопнуты вместе с `passportCount`.
+    const steps = [
+      step({ index: 0, operationId: 'op-a', operationCode: '02' }),
+      step({ index: 1, operationId: 'op-b', operationCode: '04' }),
+    ];
+    const groups = computeRouteDebts(
+      [
+        passport({
+          passportId: 'p2',
+          passportNumber: 'P-0002',
+          currentRouteStepIndex: 1,
+          finishedOperationIds: [],
+          issuedByOperation: new Map([
+            ['op-a', { employeeName: 'Швея', at: d('2026-08-14T08:00:00Z') }],
+          ]),
+        }),
+        passport({
+          passportId: 'p1',
+          passportNumber: 'P-0001',
+          currentRouteStepIndex: 1,
+          finishedOperationIds: [],
+          issuedByOperation: new Map([
+            ['op-a', { employeeName: 'Швея', at: d('2026-08-14T09:00:00Z') }],
+          ]),
+        }),
+      ],
+      new Map([['o1', steps]]),
+      [],
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0].passportCount).toBe(2);
+    expect(groups[0].passportNumbers).toEqual(['P-0001', 'P-0002']);
+  });
 });

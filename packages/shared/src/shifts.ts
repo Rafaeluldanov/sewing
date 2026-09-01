@@ -278,6 +278,13 @@ export interface ReworkPassportDto {
 export interface UnclosedWorkPassportDto {
   passportId: string;
   passportNumber: string;
+  /**
+   * Паспорт уже упакован. Долг это не отменяет (работа сделана и не
+   * оплачена), но UI обязан сказать об этом прямо: искать такой паспорт
+   * в цехе бессмысленно, а начисление по нему создаётся сразу
+   * подтверждённым — упаковка уже прошла.
+   */
+  packed: boolean;
   orderId: string;
   orderNumber: string;
   productName: string;
