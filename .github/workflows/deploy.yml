@@ -74,7 +74,7 @@ jobs:
       # и сборка API падает пятью ошибками TS7006 («implicitly has an 'any' type»).
       # Из-за этого КАЖДЫЙ прогон Deploy на main падал с 27.08.2026 — то есть больше недели
       # ни один коммит не доезжал до прода: job «Deploy to PROD» гейтится этой сборкой.
-      - name: Prisma generate (обе схемы: основная + control-plane)
+      - name: "Prisma generate (обе схемы — основная и control-plane)"
         run: npm run prisma:generate:all
 
       - name: Build API (@sewing/api)
