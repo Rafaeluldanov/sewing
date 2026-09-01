@@ -7,6 +7,7 @@ import { AppModule } from './app.module.js';
 import { API_PREFIX } from '@sewing/shared/config';
 import { GlobalExceptionFilter } from './common/global-exception.filter.js';
 import { requestIdMiddleware } from './common/request-id.middleware.js';
+import { setupSwagger } from './common/swagger.js';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -48,6 +49,10 @@ async function bootstrap(): Promise<void> {
     origin: origins.length === 0 ? false : origins,
     credentials: true,
   });
+
+  // Swagger UI (/api/docs): карта роутов + body/query-схемы из Zod
+  // (см. common/swagger.ts). Выключатель — SWAGGER_DISABLED=1.
+  setupSwagger(app);
 
   const port = Number(process.env.API_PORT ?? 3001);
   await app.listen(port);

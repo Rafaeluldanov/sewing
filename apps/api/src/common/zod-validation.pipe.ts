@@ -24,7 +24,10 @@ export class ZodValidationPipe<T> implements PipeTransform<unknown, T> {
    * (query-флаг `'1' → true`) переставала подходить. Валидация от этого
    * не слабеет — на входе и так `unknown` из тела/query.
    */
-  constructor(private readonly schema: ZodType<T, ZodTypeDef, unknown>) {}
+  // `schema` публичный (readonly): сборка Swagger-документа читает его из
+  // route-метаданных, чтобы построить OpenAPI-схему body/query из той же
+  // Zod-схемы, которой идёт валидация (см. common/swagger.ts).
+  constructor(readonly schema: ZodType<T, ZodTypeDef, unknown>) {}
 
   transform(value: unknown): T {
     const parsed = this.schema.safeParse(value);
