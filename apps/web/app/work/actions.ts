@@ -7,10 +7,12 @@ import {
 } from '@sewing/shared/shifts';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
+  closeUnclosedOperation,
   completePassportOperation,
   completePassportOperationsBatch,
   findPassportByCode,
   getMyRework,
+  getMyUnclosed,
   issuePassport,
   scanPassport,
   startShift,
@@ -20,6 +22,7 @@ import {
 import type {
   BatchCompleteOperationsResultDto,
   ReworkPassportDto,
+  UnclosedWorkPassportDto,
 } from '@sewing/shared/shifts';
 import type { PassportLookupResponse, WorkFormState } from './state';
 
@@ -337,6 +340,43 @@ export async function loadMyReworkAction(): Promise<ReworkPassportDto[]> {
   } catch (e) {
     if (e instanceof ApiRequestError) return [];
     throw e;
+  }
+}
+
+/**
+ * Поллинг/перечитывание секции «Не закрыто вами» из клиента
+ * seamstress-flow. Fail-soft, как `loadMyReworkAction`.
+ */
+export async function loadMyUnclosedAction(): Promise<
+  UnclosedWorkPassportDto[]
+> {
+  try {
+    return await getMyUnclosed();
+  } catch (e) {
+    if (e instanceof ApiRequestError) return [];
+    throw e;
+  }
+}
+
+/**
+ * «Закрыть операцию» из секции «Не закрыто вами». Паспорт при этом НЕ
+ * двигается по маршруту (см.
+ * `PassportsService.closeUnclosedOperationByEmployee`) — поэтому
+ * инвалидируем только рабочие экраны и карточку самого паспорта.
+ */
+export async function closeUnclosedOperationAction(
+  passportId: string,
+): Promise<WorkFormState> {
+  const id = passportId.trim();
+  if (!id) return { error: 'Не указан паспорт' };
+  try {
+    await closeUnclosedOperation(id);
+    revalidateWorkSurfaces();
+    revalidatePath(`/passports/${id}`);
+    revalidatePath(`/admin/passports/${id}`);
+    return { info: 'Операция закрыта, работа зачтена' };
+  } catch (e) {
+    return { error: explainApiError(e), errorRequestId: errorRequestId(e) };
   }
 }
 

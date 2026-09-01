@@ -57,6 +57,7 @@ import type {
   EmployeeLiteDto,
   OperationLiteDto,
   ReworkPassportDto,
+  UnclosedWorkPassportDto,
   ShiftMetaDto,
   ShiftSessionDto,
 } from '@sewing/shared/shifts';
@@ -145,6 +146,12 @@ interface Props {
    */
   myRework: ReworkPassportDto[];
   /**
+   * Незакрытые операции упаковщика по уехавшим паспортам — секция
+   * «Не закрыто вами» внутри `SeamstressActivePanel`. В режиме коробок
+   * пустой.
+   */
+  myUnclosed: UnclosedWorkPassportDto[];
+  /**
    * SSR-снимок незакрытых (`OPEN`) коробок. На Stage 1 терминала
    * (когда нет активной карточки) выводится списком — упаковщик
    * может вернуться к любой коробке (своей или коллеги) одним
@@ -180,6 +187,7 @@ export function PackingTerminal({
   currentWork,
   cutIssueBanner,
   myRework,
+  myUnclosed,
   initialOpenBoxes,
   initialClosedUnplacedBoxes,
 }: Props) {
@@ -260,6 +268,7 @@ export function PackingTerminal({
           currentWork={currentWork}
           cutIssueBanner={cutIssueBanner}
           myRework={myRework}
+          myUnclosed={myUnclosed}
           wording={PACKING_INTAKE_WORDING}
         />
       ) : (

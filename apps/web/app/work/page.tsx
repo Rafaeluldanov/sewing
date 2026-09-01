@@ -5,6 +5,7 @@ import {
   getCurrentWork,
   getCutIssueBanner,
   getMyRework,
+  getMyUnclosed,
   getShiftMeta,
 } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
@@ -59,6 +60,19 @@ async function loadCurrentWorkSafely() {
 async function loadMyReworkSafely() {
   try {
     return await getMyRework();
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) throw e;
+    return [];
+  }
+}
+
+/**
+ * Аккуратный загрузчик «не закрыто вами» — fail-soft, как соседи:
+ * вспомогательная секция не должна ронять весь `/work`.
+ */
+async function loadMyUnclosedSafely() {
+  try {
+    return await getMyUnclosed();
   } catch (e) {
     if (!(e instanceof ApiRequestError)) throw e;
     return [];
@@ -231,11 +245,13 @@ export default async function WorkPage() {
         // проверки паспорта (см. ТЗ §1–§6, ADR-0014).
         isActive ? (
           await (async () => {
-            const [currentWork, cutIssueBanner, myRework] = await Promise.all([
-              loadCurrentWorkSafely(),
-              loadCutIssueBannerSafely(currentShift!.operationId),
-              loadMyReworkSafely(),
-            ]);
+            const [currentWork, cutIssueBanner, myRework, myUnclosed] =
+              await Promise.all([
+                loadCurrentWorkSafely(),
+                loadCutIssueBannerSafely(currentShift!.operationId),
+                loadMyReworkSafely(),
+                loadMyUnclosedSafely(),
+              ]);
             // Список операций, разрешённых на оборудовании текущей
             // смены. Если 2+ — `OperationSwitcher` отрендерит chip
             // «Сменить операцию», иначе вернёт null (см. компонент).
@@ -256,6 +272,7 @@ export default async function WorkPage() {
                   currentWork={currentWork}
                   cutIssueBanner={cutIssueBanner}
                   myRework={myRework}
+                  myUnclosed={myUnclosed}
                 />
               </>
             );

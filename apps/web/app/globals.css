@@ -18754,6 +18754,45 @@ body:has(.admin-layout) .app-header { display: none !important; }
   color: var(--color-danger-fg);
 }
 
+/* Секция «Не закрыто вами» на `/work` (`UnclosedSection` в
+   `app/work/seamstress-active-panel.tsx`). Соседняя «К переделке от ОТК»
+   (`.rework-section`) обходится одной `.card` без своих правил — там
+   строки чисто информационные. Здесь у каждой строки есть ДЕЙСТВИЕ
+   («Закрыть операцию»), поэтому нужна вертикальная строка-блок с
+   отбивкой, а не текстовый список: рабочий жмёт кнопку пальцем у
+   станка, и промахнуться по соседней строке нельзя.
+
+   Тон — предупреждающий, а не аварийный: работа не потеряна, её просто
+   надо зачесть. Красная плашка тут пугала бы зря. */
+.unclosed-section__list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.unclosed-section__list > li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.75rem;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-warn-soft);
+}
+/* «Где паспорт сейчас» — вспомогательная строка. Смысл секции в том,
+   чтобы человек НЕ шёл искать паспорт, но знать, куда тот уехал, он
+   должен: без этого закрытие долга выглядит как приписка. */
+.unclosed-section__where {
+  color: var(--color-fg-muted);
+  font-size: 0.9em;
+}
+.unclosed-section__btn {
+  align-self: flex-start;
+  padding: 0.5rem 1rem;
+}
+
 .constructor-page__title {
   font-size: var(--title-page);
   margin: 0 0 1rem;

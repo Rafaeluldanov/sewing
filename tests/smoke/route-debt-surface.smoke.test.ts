@@ -32,6 +32,10 @@ const DEBT = 'apps/api/src/modules/production-board/route-debt.ts';
 const BOARD = 'apps/api/src/modules/production-board/production-board.service.ts';
 const DIAGNOSTICS = 'apps/api/src/modules/diagnostics/diagnostics.service.ts';
 const PASSPORTS = 'apps/api/src/modules/passports/passports.service.ts';
+const SHIFTS = 'apps/api/src/modules/shifts/shifts.service.ts';
+const WORK_PANEL = 'apps/web/app/work/seamstress-active-panel.tsx';
+const MASTER_ACTIONS =
+  'apps/api/src/modules/master-actions/master-actions.service.ts';
 
 describe('поверхность «незакрытая работа»', () => {
   test('правило отсева: только SEWING и только вне параллельной группы', () => {
@@ -72,8 +76,46 @@ describe('поверхность «незакрытая работа»', () => {
     expect(src).toMatch(/PASSPORT_TAKEN_FROM_EMPLOYEE/);
     expect(src).toMatch(/abandonedOperationId/);
     expect(src).toMatch(/event=passport\.scan\.taken_unclosed/);
-    // Не блокируем: иначе брошенный в конце смены паспорт залипнет до
-    // мастера, а ОТК/ВТО не смогут его принять.
-    expect(src).not.toMatch(/takenFromEmployeeId[\s\S]{0,200}throw new/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Гейт «нельзя уйти вперёд с незакрытого шага» (01.09.2026).
+  //
+  // 23.08.2026 этот случай решили ТОЛЬКО фиксировать — блокировать
+  // побоялись, чтобы брошенный в конце смены паспорт не залипал до
+  // мастера. Детектор сработал, но долг продолжил появляться (31.08,
+  // заказ 02-00020: ОТК увела у распошивщицы пять паспортов подряд),
+  // поэтому гейт закрыли, а «залипание» сняли двумя выходами. Эти три
+  // теста сторожат гейт ВМЕСТЕ С выходами: убрать любой из них —
+  // значит остановить цех.
+  // -------------------------------------------------------------------------
+
+  test('шаг, на котором паспорт стоит, проверяется на закрытие', () => {
+    const src = read(PASSPORTS);
+    expect(src).toMatch(/currentStepCandidate/);
+    expect(src).toMatch(/currentStepIncomplete/);
+    expect(src).toMatch(/PassportCurrentStepIncompleteException/);
+  });
+
+  test('сужение гейта = зеркало правила долга: только вперёд, SEWING, вне группы', () => {
+    const src = read(PASSPORTS);
+    // Только вперёд — иначе ломается доделка долга (`catchUpCandidate`)
+    // и вторая операция той же параллельной группы.
+    expect(src).toMatch(/targetRep > currentRep &&/);
+    // Те же два отсева, что в `route-debt.ts`.
+    expect(src).toMatch(
+      /curStep\.parallelGroup == null &&\s*\n\s*curStep\.operation\.category === OperationCategory\.SEWING/,
+    );
+  });
+
+  test('у обеих сторон есть выход из-под гейта', () => {
+    // 1) Сам сотрудник закрывает свой долг, не двигая паспорт назад.
+    expect(read(PASSPORTS)).toMatch(/closeUnclosedOperationByEmployee/);
+    expect(read(SHIFTS)).toMatch(/getMyUnclosedPassports/);
+    expect(read(WORK_PANEL)).toMatch(/UnclosedSection/);
+    expect(read(WORK_PANEL)).toMatch(/closeUnclosedOperationAction/);
+    // 2) Мастер продавливает паспорт вперёд — `set-route-step` через
+    //    `evaluateRouteOrder` не ходит вовсе, и это намеренно.
+    expect(read(MASTER_ACTIONS)).not.toMatch(/evaluateRouteOrder/);
   });
 });

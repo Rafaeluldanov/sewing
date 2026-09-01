@@ -4,6 +4,7 @@ import type { OrderCutIssueRuleBannerDto } from '@sewing/shared';
 import type {
   CurrentWorkPassportDto,
   ReworkPassportDto,
+  UnclosedWorkPassportDto,
 } from '@sewing/shared/shifts';
 import { listBoxes, BOX_STATUS_LABELS } from '@/lib/packing-api';
 import {
@@ -11,6 +12,7 @@ import {
   getCurrentWork,
   getCutIssueBanner,
   getMyRework,
+  getMyUnclosed,
   getShiftMeta,
 } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
@@ -154,6 +156,7 @@ export default async function PackingPage({
     // -----------------------------------------------------------------
     let currentWork: CurrentWorkPassportDto[] = [];
     let myRework: ReworkPassportDto[] = [];
+    let myUnclosed: UnclosedWorkPassportDto[] = [];
     let cutIssueBanner: OrderCutIssueRuleBannerDto = {
       applicable: false,
       orders: [],
@@ -174,7 +177,7 @@ export default async function PackingPage({
     }
 
     if (isPlainPackingMode) {
-      const [banner, rework] = await Promise.all([
+      const [banner, rework, unclosed] = await Promise.all([
         getCutIssueBanner(shift!.operationId).catch((e) => {
           if (!(e instanceof ApiRequestError)) throw e;
           return { applicable: false, orders: [] } as OrderCutIssueRuleBannerDto;
@@ -183,9 +186,14 @@ export default async function PackingPage({
           if (!(e instanceof ApiRequestError)) throw e;
           return [] as ReworkPassportDto[];
         }),
+        getMyUnclosed().catch((e) => {
+          if (!(e instanceof ApiRequestError)) throw e;
+          return [] as UnclosedWorkPassportDto[];
+        }),
       ]);
       cutIssueBanner = banner;
       myRework = rework;
+      myUnclosed = unclosed;
     }
     const headerFields = isShiftActive
       ? [
@@ -238,6 +246,7 @@ export default async function PackingPage({
           currentWork={currentWork}
           cutIssueBanner={cutIssueBanner}
           myRework={myRework}
+          myUnclosed={myUnclosed}
         />
       </TerminalShell>
     );

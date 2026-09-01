@@ -15,6 +15,7 @@ import type {
   ShiftMetaDto,
   ShiftSessionDto,
   StartShiftDto,
+  UnclosedWorkPassportDto,
   SwitchShiftOperationDto,
 } from '@sewing/shared/shifts';
 import type { OrderCutIssueRuleBannerDto } from '@sewing/shared';
@@ -45,6 +46,29 @@ export function getCurrentWork(): Promise<CurrentWorkPassportDto[]> {
  */
 export function getMyRework(): Promise<ReworkPassportDto[]> {
   return apiFetch<ReworkPassportDto[]>('/shifts/my-rework');
+}
+
+/**
+ * Паспорта с незакрытой операцией текущего сотрудника, которые уже
+ * уехали дальше по маршруту. Используется на `/work` для секции
+ * «Не закрыто вами». Backend вырезает по сессии (ADR-0014).
+ */
+export function getMyUnclosed(): Promise<UnclosedWorkPassportDto[]> {
+  return apiFetch<UnclosedWorkPassportDto[]>('/shifts/my-unclosed');
+}
+
+/**
+ * Закрыть свою незакрытую операцию по паспорту, который уже увели
+ * дальше (`PassportsService.closeUnclosedOperationByEmployee`). Тела
+ * нет: что закрывать, backend берёт из истории паспорта.
+ */
+export function closeUnclosedOperation(
+  id: string,
+): Promise<PassportDetailDto> {
+  return apiFetch<PassportDetailDto>(
+    `/passports/${id}/close-unclosed-operation`,
+    { method: 'POST', body: {} },
+  );
 }
 
 export function startShift(body: StartShiftDto): Promise<ShiftSessionDto> {

@@ -89,6 +89,17 @@ export class ShiftsController {
     return this.shifts.getMyReworkPassports(user.employeeId);
   }
 
+  /**
+   * Паспорта с незакрытой операцией этого сотрудника, которые уже уехали
+   * дальше по маршруту (см. `ShiftsService.getMyUnclosedPassports`).
+   * Используется на `/work` для секции «Не закрыто вами». Backend сам
+   * вырезает по сессии — чужой список запросить нельзя (ADR-0014).
+   */
+  @Get('my-unclosed')
+  myUnclosed(@CurrentUser() user: AuthPrincipal) {
+    return this.shifts.getMyUnclosedPassports(user.employeeId);
+  }
+
   @Get('meta')
   meta() {
     return this.shifts.getMeta();

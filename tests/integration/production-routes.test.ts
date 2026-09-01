@@ -319,11 +319,25 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
     });
     expect(afterSew?.currentRouteStepIndex).toBe(0);
 
+    // Швея ЗАВЕРШАЕТ свою операцию. С 01.09.2026 это обязательный шаг
+    // перед тем, как паспорт заберёт следующий исполнитель: скан по
+    // паспорту, который числится за человеком с незакрытым швейным
+    // шагом, отбивается 409 `PASSPORT_CURRENT_STEP_INCOMPLETE` (см.
+    // `PassportsService.evaluateRouteOrder::currentStepCandidate`).
+    // Раньше здесь стояло «НИКАКОГО enforcement» — и ровно через эту
+    // дыру ОТК уводила паспорта у распошивщицы, оставляя работу без
+    // `OPERATION_FINISHED` и без начисления (инцидент 31.08.2026,
+    // заказ 02-00020).
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/complete-operation`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
     // ОТК открывает свою смену и сканирует — operationId = QC найдётся
     // в snapshot-е на индексе 1, бэкенд должен обновить
     // currentRouteStepIndex в той же транзакции, что пишет
-    // PassportEvent(OPERATION_SCAN). НИКАКОГО enforcement: scan
-    // успешен, никаких 409 (см. STEP 5 ТЗ).
+    // PassportEvent(OPERATION_SCAN).
     await request(t.app.getHttpServer())
       .post('/api/shifts/start')
       .set('Cookie', cookies.qc)

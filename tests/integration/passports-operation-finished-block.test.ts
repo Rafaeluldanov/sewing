@@ -50,6 +50,7 @@ describeWithDb('integration — passports.operation-finished block', () => {
     cookies = {
       seamstress: loginAs(t, seed.employees['seamstress']),
       master: loginAs(t, seed.employees['master']),
+      qc: loginAs(t, seed.employees['qc']),
     };
   });
 
@@ -69,6 +70,11 @@ describeWithDb('integration — passports.operation-finished block', () => {
     currentRouteStepIndex?: number;
     /** Операция активной смены. По умолчанию `SEW_OVERLOCK_1`. */
     shiftOperationCode?: 'SEW_OVERLOCK_1' | 'SEW_OVERLOCK_2';
+    /**
+     * Открыть смену ОТК на `qc-station-01` вместо швейной. Нужно
+     * блоку E: там паспорт уводит контролёр, а не вторая швея.
+     */
+    qcShift?: boolean;
     /** Если true — паспорт закрепляется за швеёй (для complete). */
     issueToSeamstress?: boolean;
     /** Если true — паспорт лежит в ячейке A1 (для issue из буфера). */
@@ -111,6 +117,16 @@ describeWithDb('integration — passports.operation-finished block', () => {
         startedAt: today,
       },
     });
+    if (opts.qcShift) {
+      await t.prisma.shiftSession.create({
+        data: {
+          employeeId: seed.employees.qc.id,
+          equipmentId: seed.equipment['qc-station-01'].id,
+          operationId: seed.operations.QC.id,
+          startedAt: today,
+        },
+      });
+    }
 
     const opCode = opts.currentOperationCode ?? 'SEW_OVERLOCK_1';
     const currentRouteStepIndex =
@@ -474,6 +490,143 @@ describeWithDb('integration — passports.operation-finished block', () => {
       where: { id: passportId },
     });
     expect(inDb.currentOperationId).toBe(seed.operations.SEW_OVERLOCK_1.id);
+    expect(inDb.currentRouteStepIndex).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // E. Гейт «нельзя уйти вперёд с НЕЗАКРЫТОГО шага, на котором паспорт
+  //    стоит» (PASSPORT_CURRENT_STEP_INCOMPLETE). Инцидент 31.08.2026,
+  //    заказ 02-00020: распошивщица взяла пять паспортов, через минуту
+  //    ОТК отсканировала их на себя — её шаг был ТЕКУЩИМ, а не «между»,
+  //    и `sequentialBefore` (строго между current и target) его не
+  //    видел. Работа осталась без OPERATION_FINISHED и без начисления:
+  //    по P-20260822-0013 так потерялось 19 изделий.
+  // ---------------------------------------------------------------------------
+
+  test('E. scan ОТК: паспорт стоит на незакрытом швейном шаге → 409 PASSPORT_CURRENT_STEP_INCOMPLETE', async () => {
+    // Расстановка = прод 02-00020: ОТК стоит СРАЗУ за швейным шагом, на
+    // котором паспорт сейчас. Именно поэтому старый гейт молчал — между
+    // текущим шагом и ОТК нет ничего, а сам текущий шаг
+    // `sequentialBefore` не проверял. Предыдущий швейный шаг закрыт,
+    // иначе первым сработал бы `PASSPORT_PRECEDING_STEP_INCOMPLETE` и
+    // тест сторожил бы не тот гейт.
+    const { passportId } = await setup({
+      currentOperationCode: 'SEW_OVERLOCK_2',
+      currentRouteStepIndex: 2,
+      shiftOperationCode: 'SEW_OVERLOCK_2',
+      issueToSeamstress: true,
+      qcShift: true,
+      finishedOps: ['SEW_OVERLOCK_1'],
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.qc)
+      .send({})
+      .expect(409);
+    expect(res.body?.code).toBe('PASSPORT_CURRENT_STEP_INCOMPLETE');
+    // Текст обязан называть и операцию, и владельца: у станка читают
+    // его, а не код (см. `PassportCurrentStepIncompleteException`).
+    expect(res.body?.message).toContain('Оверлок 2');
+    expect(res.body?.message).toContain(seed.employees.seamstress.fullName);
+
+    // Паспорт остался у швеи на своём шаге — перехвата не случилось.
+    const inDb = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
+    expect(inDb.currentEmployeeId).toBe(seed.employees.seamstress.id);
+    expect(inDb.currentRouteStepIndex).toBe(2);
+    const scans = await t.prisma.passportEvent.findMany({
+      where: { passportId, type: 'OPERATION_SCAN' },
+    });
+    expect(scans).toHaveLength(0);
+  });
+
+  test('E-2. паспорт БЕЗ владельца с тем же незакрытым шагом — гейт молчит', async () => {
+    // Граница правила. Гейт держит перехват ИЗ РУК, а не любой
+    // незакрытый шаг: крой, брошенный в конце смены и снятый мастером
+    // («Снять с сотрудника»), обязан идти дальше — иначе он залипнет до
+    // мастера, ровно чего боялись 23.08.2026. Долг при этом никуда не
+    // девается: он виден и мастеру, и самой швее.
+    const { passportId } = await setup({
+      currentOperationCode: 'SEW_OVERLOCK_2',
+      currentRouteStepIndex: 2,
+      shiftOperationCode: 'SEW_OVERLOCK_2',
+      issueToSeamstress: false,
+      qcShift: true,
+      finishedOps: ['SEW_OVERLOCK_1'],
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.qc)
+      .send({})
+      .expect(201);
+  });
+
+  test('E-3. шаг закрыт → скан ОТК проходит штатно', async () => {
+    // Контр-кейс happy-path: ровно та же расстановка, что в E (паспорт
+    // на руках у швеи), но по SEW_OVERLOCK_2 есть OPERATION_FINISHED.
+    // Гейт обязан молчать — иначе он останавливает нормальный поток.
+    const { passportId } = await setup({
+      currentOperationCode: 'SEW_OVERLOCK_2',
+      currentRouteStepIndex: 2,
+      shiftOperationCode: 'SEW_OVERLOCK_2',
+      issueToSeamstress: true,
+      qcShift: true,
+      finishedOps: ['SEW_OVERLOCK_1', 'SEW_OVERLOCK_2'],
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.qc)
+      .send({})
+      .expect(201);
+
+    const inDb = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
+    expect(inDb.currentRouteStepIndex).toBe(3);
+  });
+
+  test('E-4. текущий шаг НЕ швейный (крой) → гейт молчит', async () => {
+    // Сужение до SEWING принципиально: OPERATION_FINISHED пишут только
+    // швейные операции, для кроя «нет закрытия» = «всегда блок», и
+    // первый же паспорт после выпуска не сдвинулся бы с места.
+    const { passportId } = await setup({
+      currentOperationCode: 'CUT_DIVISION',
+      currentRouteStepIndex: 0,
+      shiftOperationCode: 'SEW_OVERLOCK_1',
+      finishedOps: [],
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+  });
+
+  test('E-5. доделка долга позади (catch-up) не задета: назад на незакрытый шаг можно', async () => {
+    // `currentStepCandidate` смотрит только ВПЕРЁД. Паспорт уехал на
+    // SEW_OVERLOCK_2, шаг SEW_OVERLOCK_1 остался незакрытым — швея
+    // обязана иметь возможность его доделать (см. `catchUpCandidate`).
+    const { passportId } = await setup({
+      currentOperationCode: 'SEW_OVERLOCK_2',
+      currentRouteStepIndex: 2,
+      shiftOperationCode: 'SEW_OVERLOCK_1',
+      finishedOps: [],
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const inDb = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
     expect(inDb.currentRouteStepIndex).toBe(1);
   });
 });

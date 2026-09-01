@@ -259,6 +259,46 @@ export interface ReworkPassportDto {
   reworkedAt: string;
 }
 
+/**
+ * Одна незакрытая операция сотрудника по паспорту, который уже НЕ у
+ * него на руках (секция «Не закрыто вами» на `/work`). Источник —
+ * `ShiftsService.getMyUnclosedPassports`.
+ *
+ * Это НЕ «В работе у вас» (`currentEmployeeId = me`) и НЕ «К переделке»
+ * (открытый rework). Здесь паспорт взяли, работу сделали, а закрыть не
+ * успели — паспорт уехал дальше по маршруту (до 01.09.2026 его мог
+ * увести любой следующий скан, включая ОТК). Без `OPERATION_FINISHED`
+ * нет `OperationEntry`, то есть сделка не начислена никому: инцидент
+ * 17-18.08.2026 на 02-00013 стоил 3 743,44 руб.
+ *
+ * Поля `standsOn*` / `heldBy*` / `cellCode` — ответ на «где паспорт
+ * сейчас»: без них человеку пришлось бы искать его по цеху, хотя для
+ * закрытия долга паспорт физически не нужен вовсе.
+ */
+export interface UnclosedWorkPassportDto {
+  passportId: string;
+  passportNumber: string;
+  orderId: string;
+  orderNumber: string;
+  productName: string;
+  color: string;
+  sizeCode: string;
+  qtyGood: number;
+  /** Операция, которую человек взял и не закрыл. */
+  operationId: string;
+  operationCode: string;
+  operationName: string;
+  /** Когда взял (последнее `ISSUED_TO_EMPLOYEE` / `OPERATION_SCAN`). */
+  takenAt: string;
+  /** На какой операции паспорт стоит сейчас — `null`, если неизвестно. */
+  standsOnOperationCode: string | null;
+  standsOnOperationName: string | null;
+  /** У кого паспорт сейчас на руках; `null` — лежит в WIP-буфере. */
+  heldByEmployeeName: string | null;
+  /** Ячейка, если паспорт вернули на хранение. */
+  cellCode: string | null;
+}
+
 export interface CurrentWorkPassportDto {
   id: string;
   number: string;

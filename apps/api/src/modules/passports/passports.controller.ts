@@ -284,6 +284,27 @@ export class PassportsController {
   }
 
   /**
+   * «Закрыть» свою незакрытую операцию по паспорту, который уже увели
+   * дальше по маршруту (секция «Не закрыто вами» на `/work`).
+   *
+   * Тела нет: что именно закрывать, backend берёт из истории самого
+   * паспорта — последнее взятие ЭТОГО сотрудника без последующего
+   * `OPERATION_FINISHED` (см.
+   * `PassportsService.closeUnclosedOperationByEmployee`). Владелец
+   * действия — из сессии (ADR-0014), чужой долг закрыть нельзя.
+   */
+  @Post(':id/close-unclosed-operation')
+  closeUnclosedOperation(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.passports.closeUnclosedOperationByEmployee(
+      id,
+      user.employeeId,
+    );
+  }
+
+  /**
    * Пакетное завершение операций сразу по нескольким паспортам швеи
    * (UX /work: отметила чекбоксами «Текущий крой» → «Завершить
    * выбранные»). Тело — `{ passportIds: string[] }`; владелец берётся

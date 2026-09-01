@@ -4,8 +4,14 @@ import type {
   ReworkPassportDto,
   ShiftMetaDto,
   ShiftSessionDto,
+  UnclosedWorkPassportDto,
 } from '@sewing/shared/shifts';
-import { PassportEventType, PassportStatus, Prisma } from '@prisma/client';
+import {
+  OperationCategory,
+  PassportEventType,
+  PassportStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   EmployeeInactiveException,
@@ -412,6 +418,170 @@ export class ShiftsService {
           : null,
       };
     });
+  }
+
+  /**
+   * Паспорта, по которым у сотрудника осталась НЕЗАКРЫТАЯ операция, а
+   * сам паспорт уже уехал дальше (секция «Не закрыто вами» на `/work`).
+   *
+   * Правило — то же «открытое назначение», по которому считает
+   * `PassportsService.findOpenAssignmentOperation` и секция «Незакрытая
+   * работа» у мастера (`production-board/route-debt.ts`): последнее
+   * взятие (`ISSUED_TO_EMPLOYEE` / `OPERATION_SCAN`) этого сотрудника по
+   * паре (паспорт, операция), после которого нет `OPERATION_FINISHED`.
+   *
+   * Три сужения, каждое обязательное:
+   *   - `currentEmployeeId != me` — паспорта НА РУКАХ показывает
+   *     «В работе у вас» (`getCurrentWork`), дублировать их здесь
+   *     значило бы каждый день показывать швее её же нормальную работу;
+   *   - `status = IN_PROGRESS` — по упакованному паспорту долг закрыть
+   *     уже нельзя, это разбор мастера и SQL-журнала;
+   *   - `category = SEWING` — `OPERATION_FINISHED` пишут только швейные
+   *     операции (крой закрывается при выпуске, ОТК/ВТО/упаковка — на
+   *     собственных гейтах), для остальных «нет закрытия» = «всегда
+   *     долг».
+   *
+   * Почему фильтр по паспорту стоит В ЗАПРОСЕ, а не после выборки: у
+   * швеи за полгода накапливаются тысячи событий взятия, и тянуть их
+   * все ради десятка живых паспортов нельзя. Реляционный фильтр режет
+   * набор до незакрытых паспортов сразу.
+   *
+   * Backend вырезает по сессии — чужой список запросить нельзя
+   * (ADR-0014).
+   */
+  async getMyUnclosedPassports(
+    employeeId: string,
+  ): Promise<UnclosedWorkPassportDto[]> {
+    const takes = await this.prisma.passportEvent.findMany({
+      where: {
+        employeeId,
+        type: {
+          in: [
+            PassportEventType.ISSUED_TO_EMPLOYEE,
+            PassportEventType.OPERATION_SCAN,
+          ],
+        },
+        operationId: { not: null },
+        operation: { category: OperationCategory.SEWING },
+        passport: {
+          status: PassportStatus.IN_PROGRESS,
+          // `{ not: employeeId }` здесь НЕ подходит: Prisma переводит
+          // его в `col <> value`, а для `NULL` это UNKNOWN — и паспорт
+          // БЕЗ владельца (самый частый случай долга: увели и бросили в
+          // буфер) из выборки выпадал бы целиком.
+          OR: [
+            { currentEmployeeId: null },
+            { currentEmployeeId: { not: employeeId } },
+          ],
+        },
+      },
+      select: { passportId: true, operationId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (takes.length === 0) return [];
+
+    // Дедуп по (паспорт, операция): выборка уже по DESC, первое
+    // попавшееся — последнее взятие. Более ранние взятия той же пары
+    // ничего не добавляют: закрытие ищется после САМОГО свежего.
+    const latest = new Map<string, (typeof takes)[number]>();
+    for (const t of takes) {
+      if (!t.operationId) continue;
+      const key = `${t.passportId}:${t.operationId}`;
+      if (!latest.has(key)) latest.set(key, t);
+    }
+
+    // Все закрытия по этим паспортам одним запросом — вместо N
+    // findFirst-ов на строку (у `getMyReworkPassports` они уместны:
+    // reworks единичны, взятий же сотни).
+    const passportIds = [...new Set([...latest.values()].map((t) => t.passportId))];
+    const finished = await this.prisma.passportEvent.findMany({
+      where: {
+        passportId: { in: passportIds },
+        type: PassportEventType.OPERATION_FINISHED,
+        operationId: { not: null },
+      },
+      select: { passportId: true, operationId: true, createdAt: true },
+    });
+    const finishedAfter = (
+      passportId: string,
+      operationId: string,
+      after: Date,
+    ): boolean =>
+      finished.some(
+        (f) =>
+          f.passportId === passportId &&
+          f.operationId === operationId &&
+          f.createdAt > after,
+      );
+
+    const open = [...latest.values()].filter(
+      (t) =>
+        t.operationId &&
+        !finishedAfter(t.passportId, t.operationId, t.createdAt),
+    );
+    if (open.length === 0) return [];
+
+    const [passports, operations] = await Promise.all([
+      this.prisma.passport.findMany({
+        where: { id: { in: open.map((t) => t.passportId) } },
+        select: {
+          id: true,
+          number: true,
+          color: true,
+          qtyGood: true,
+          product: { select: { name: true } },
+          size: { select: { code: true } },
+          order: { select: { id: true, number: true } },
+          currentOperation: { select: { code: true, name: true } },
+          currentEmployee: { select: { fullName: true } },
+          currentCell: { select: { code: true } },
+        },
+      }),
+      this.prisma.operation.findMany({
+        where: {
+          id: {
+            in: [
+              ...new Set(
+                open
+                  .map((t) => t.operationId)
+                  .filter((x): x is string => Boolean(x)),
+              ),
+            ],
+          },
+        },
+        select: { id: true, code: true, name: true },
+      }),
+    ]);
+    const passportById = new Map(passports.map((p) => [p.id, p]));
+    const operationById = new Map(operations.map((o) => [o.id, o]));
+
+    const items: UnclosedWorkPassportDto[] = [];
+    for (const t of open) {
+      const p = passportById.get(t.passportId);
+      const op = t.operationId ? operationById.get(t.operationId) : null;
+      if (!p || !op) continue;
+      items.push({
+        passportId: p.id,
+        passportNumber: p.number,
+        orderId: p.order.id,
+        orderNumber: p.order.number,
+        productName: p.product.name,
+        color: p.color,
+        sizeCode: p.size.code,
+        qtyGood: p.qtyGood,
+        operationId: op.id,
+        operationCode: op.code,
+        operationName: op.name,
+        takenAt: t.createdAt.toISOString(),
+        standsOnOperationCode: p.currentOperation?.code ?? null,
+        standsOnOperationName: p.currentOperation?.name ?? null,
+        heldByEmployeeName: p.currentEmployee?.fullName ?? null,
+        cellCode: p.currentCell?.code ?? null,
+      });
+    }
+    // Самые старые сверху: чем дольше долг висит, тем выше шанс, что
+    // паспорт успеют упаковать и закрыть его станет нельзя.
+    return items.sort((a, b) => a.takenAt.localeCompare(b.takenAt));
   }
 
   /**

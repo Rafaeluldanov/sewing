@@ -62,6 +62,8 @@ import {
   PassportShiftOperationNotOnRouteException,
   PassportParallelGroupIncompleteException,
   PassportPrecedingStepIncompleteException,
+  PassportCurrentStepIncompleteException,
+  PassportNoUnclosedWorkException,
   PassportReworkOperationNotAllowedForShiftException,
   PassportReworkPendingException,
   PassportScanBackwardException,
@@ -1453,6 +1455,13 @@ export class PassportsService {
       id: string;
       orderId: string | null;
       currentRouteStepIndex: number | null;
+      /**
+       * Нужен только `currentStepIncomplete` — см. разбор там: гейт
+       * держит перехват паспорта ИЗ РУК, а не любой незакрытый шаг.
+       * Необязателен, чтобы вызывающие с урезанным объектом (там, где
+       * этот признак не считается) не ломались.
+       */
+      currentEmployeeId?: string | null;
     },
     targetOperationId: string,
     /**
@@ -1480,6 +1489,16 @@ export class PassportsService {
     missingGroupOps: string[];
     missingSequentialOps: string[];
     /**
+     * Паспорт стоит на НЕЗАКРЫТОМ швейном шаге, а цель — впереди него.
+     * Разбор и границы правила — у `currentStepCandidate` в теле.
+     * Отдельно от `sequentialIncomplete`, потому что и разговор другой:
+     * там «перепрыгнули чужой шаг», здесь «уводим паспорт из-под
+     * человека, который его прямо сейчас шьёт».
+     */
+    currentStepIncomplete: boolean;
+    /** Название незакрытой операции текущего шага — для текста ошибки. */
+    currentStepOperationName: string | null;
+    /**
      * Операции НЕТ в маршруте заказа и она не является заместителем.
      *
      * Это и есть перевёрнутое умолчание. Раньше здесь просто стоял
@@ -1506,6 +1525,8 @@ export class PassportsService {
       sequentialIncomplete: false,
       missingGroupOps: [],
       missingSequentialOps: [],
+      currentStepIncomplete: false,
+      currentStepOperationName: null,
       offRoute: false,
     };
     if (!passport.orderId) return none;
@@ -1617,15 +1638,70 @@ export class PassportsService {
 
     let backward = false;
     let currentRep: number | null = null;
-    if (passport.currentRouteStepIndex !== null) {
-      const curStep = steps.find(
-        (s) => s.index === passport.currentRouteStepIndex,
-      );
-      if (curStep) {
-        currentRep = rep(curStep.index, curStep.parallelGroup);
-        backward = targetRep < currentRep;
-      }
+    const curStep =
+      passport.currentRouteStepIndex !== null
+        ? steps.find((s) => s.index === passport.currentRouteStepIndex)
+        : undefined;
+    if (curStep) {
+      currentRep = rep(curStep.index, curStep.parallelGroup);
+      backward = targetRep < currentRep;
     }
+
+    // ПЕРЕХВАТ ПАСПОРТА С НЕЗАКРЫТОГО ШАГА (инцидент 31.08.2026, заказ
+    // 02-00020, паспорта P-20260822-0013/0014/0017/0018/0020).
+    //
+    // `sequentialBefore` ниже смотрит интервал СТРОГО между текущим
+    // рангом и целевым (`rep > currentRep && rep < targetRep`) — то есть
+    // шаг, на котором паспорт стоит, не проверялся ВООБЩЕ. Вместе с тем,
+    // что `scanOnOperation` не смотрит владельца (ADR-0003 §6), это
+    // давало дыру: распошивщица берёт паспорт, через минуту ОТК
+    // сканирует его на себя (её шаг — текущий, а не «между»), паспорт
+    // уезжает на проверку прямо из рук, а взятая операция остаётся
+    // долгом — без `OPERATION_FINISHED`, а значит и без
+    // `OperationEntry`. Работа сделана и не оплачена никому. Так на
+    // 02-00013 потерялось 3 743,44 руб. (17-18.08), на 02-00020 — ещё
+    // один паспорт (P-20260822-0013, 19 шт).
+    //
+    // 23.08.2026 этот случай решили только ФИКСИРОВАТЬ (аудит
+    // `PASSPORT_TAKEN_FROM_EMPLOYEE` + секция «Незакрытая работа» у
+    // мастера, см. `production-board/route-debt.ts`) — блокировать
+    // побоялись: паспорт, брошенный в конце смены, залипал бы до
+    // мастера. Детектор сработал, но долг продолжил появляться, поэтому
+    // 01.09.2026 гейт закрыли — и ровно в тех границах, где страх был
+    // необоснован.
+    //
+    // Условия сужены так, чтобы гейт не остановил цех:
+    //   - `currentEmployeeId != null` — КЛЮЧЕВОЕ. Держим только
+    //     перехват ИЗ РУК. Паспорт, лежащий в WIP-буфере с незакрытым
+    //     шагом (швея ушла, мастер снял её «Снять с сотрудника»,
+    //     `MasterActionsService.unassign`), обязан идти дальше: это и
+    //     есть тот самый «брошенный в конце смены», из-за которого
+    //     блок откладывали. Долг по нему никуда не девается — он виден
+    //     мастеру и самой швее, но поток не стоит;
+    //   - только вперёд (`targetRep > currentRep`): доделка позади
+    //     (catch-up) и вторая операция той же параллельной группы
+    //     (равный ранг) обязаны проходить;
+    //   - только `SEWING`: `OPERATION_FINISHED` пишут лишь швейные
+    //     операции (крой закрывается при выпуске, ОТК/ВТО/упаковка — на
+    //     своих гейтах), для остальных «нет закрытия» = «всегда блок»;
+    //   - только вне параллельной группы: незакрытую группу держит
+    //     AND-гейт (`groupIncomplete`), дублировать его нельзя.
+    //
+    // Выходы из-под гейта есть у обеих сторон, и оба уже существуют:
+    // владелец закрывает операцию сам («Завершить», а если паспорт уже
+    // унесли — секция «Не закрыто вами» на `/work`,
+    // `closeUnclosedOperationByEmployee`), мастер снимает владельца
+    // (`unassign`) или продавливает паспорт вперёд (`set-route-step`,
+    // который через этот расчёт не ходит вовсе).
+    const currentStepCandidate =
+      curStep &&
+      currentRep !== null &&
+      targetRep > currentRep &&
+      passport.currentEmployeeId != null &&
+      curStep.parallelGroup == null &&
+      curStep.operation.category === OperationCategory.SEWING
+        ? curStep
+        : null;
 
     // ДОДЕЛКА НЕЗАКРЫТОГО ШАГА — это не «назад» (инцидент 06–10.08.2026,
     // паспорта `P-20260804-0009/0010`).
@@ -1705,6 +1781,8 @@ export class PassportsService {
 
     let groupIncomplete = false;
     let sequentialIncomplete = false;
+    let currentStepIncomplete = false;
+    let currentStepOperationName: string | null = null;
     const missingGroupOps: string[] = [];
     const missingSequentialOps: string[] = [];
     // Запрос завершённых операций — только если есть что проверять
@@ -1713,7 +1791,8 @@ export class PassportsService {
     if (
       groupsBefore.length > 0 ||
       sequentialBefore.length > 0 ||
-      catchUpCandidate
+      catchUpCandidate ||
+      currentStepCandidate
     ) {
       // Только substitutes для операций, реально проверяемых здесь —
       // иначе тянули бы весь справочник.
@@ -1723,6 +1802,7 @@ export class PassportsService {
         ),
         ...sequentialBefore.map((s) => s.operationId),
         ...(catchUpCandidate ? [targetStep.operationId] : []),
+        ...(currentStepCandidate ? [currentStepCandidate.operationId] : []),
       ];
       const [finished, substitutes] = await Promise.all([
         this.prisma.passportEvent.findMany({
@@ -1799,6 +1879,16 @@ export class PassportsService {
         sequentialIncomplete = true;
         missingSequentialOps.push(...unmetSeq.map((s) => s.operation.name));
       }
+      if (
+        currentStepCandidate &&
+        !isSatisfied(
+          currentStepCandidate.operationId,
+          currentStepCandidate.index,
+        )
+      ) {
+        currentStepIncomplete = true;
+        currentStepOperationName = currentStepCandidate.operation.name;
+      }
     }
 
     return {
@@ -1808,6 +1898,8 @@ export class PassportsService {
       sequentialIncomplete,
       missingGroupOps,
       missingSequentialOps,
+      currentStepIncomplete,
+      currentStepOperationName,
       offRoute: false,
     };
   }
@@ -1925,6 +2017,22 @@ export class PassportsService {
         label,
       );
     }
+  }
+
+  /**
+   * ФИО сотрудника для текста ошибки. Отдельный метод — потому что
+   * зовётся только на ветке отказа: платить лишним SELECT-ом за каждый
+   * успешный скан незачем.
+   */
+  private async employeeNameOrNull(
+    employeeId: string | null,
+  ): Promise<string | null> {
+    if (!employeeId) return null;
+    const row = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { fullName: true },
+    });
+    return row?.fullName ?? null;
   }
 
   /**
@@ -2553,6 +2661,12 @@ export class PassportsService {
         issueOrder.missingSequentialOps,
       );
     }
+    // `issueOrder.currentStepIncomplete` здесь НЕ бросаем намеренно:
+    // канал «Взять крой» и так отказывает по паспорту, который числится
+    // за другим исполнителем (`PASSPORT_ALREADY_ISSUED` ниже, обе ветки
+    // — и с ячейкой, и route-WIP), и тот текст точнее. Гейт
+    // `currentStepCandidate` нужен там, где владельца не проверяют
+    // вообще, — в `scanOnOperation`.
     const issueTargetIndex = issueOrder.targetIndex;
 
     // QC-gate для входа на ВТО — зеркало `scanOnOperation` (см.
@@ -3095,6 +3209,16 @@ export class PassportsService {
         scanOrder.missingSequentialOps,
       );
     }
+    // Незакрытый шаг ПОД паспортом — см. `currentStepCandidate`. Стоит
+    // после остальных маршрутных гейтов намеренно: те говорят про
+    // маршрут, этот — про конкретного человека, и его текст должен
+    // побеждать только когда остальное в порядке.
+    if (scanOrder.currentStepIncomplete) {
+      throw new PassportCurrentStepIncompleteException(
+        scanOrder.currentStepOperationName,
+        await this.employeeNameOrNull(previousEmployeeId),
+      );
+    }
 
     const nextRouteStepIndex =
       scanOrder.targetIndex ?? passport.currentRouteStepIndex;
@@ -3477,6 +3601,157 @@ export class PassportsService {
 
     this.logger.log(
       `event=passport.complete-operation passportId=${passportId} employeeId=${employeeId} completedOperationId=${completedOperationId}`,
+    );
+    return this.getOne(passportId);
+  }
+
+  /**
+   * Закрыть СВОЮ незакрытую операцию по паспорту, который уже НЕ на
+   * руках у сотрудника.
+   *
+   * Зачем отдельный канал, а не `completeOperationByEmployee`. Тот
+   * требует `currentEmployeeId = me` (`PASSPORT_NOT_YOURS`) и двигает
+   * паспорт на завершённый шаг. Здесь ситуация ровно обратная: паспорт
+   * увели дальше по маршруту (до 01.09.2026 это мог сделать любой скан,
+   * в том числе ОТК — см. `currentStepCandidate` в
+   * `evaluateRouteOrder`), работа физически сделана, а
+   * `OPERATION_FINISHED` по ней нет — значит нет и `OperationEntry`, и
+   * сделка не начислена никому. Единственным способом её вернуть было
+   * пере-взятие паспорта: оно тянет его НАЗАД на швейный шаг, из-за
+   * чего уже пройденный ОТК приходится проходить второй раз (инцидент
+   * 31.08.2026, 02-00020: четыре паспорта прошли ОТК, потом уехали
+   * обратно на распошив горловины). Либо ручной SQL-журнал
+   * (`scripts/migrations/20260823_backfill_unclosed_rasposhiv_02-00013.sql`).
+   *
+   * Поэтому: пишем ТОЛЬКО факт работы и деньги за неё. Строку паспорта
+   * не трогаем вообще — ни `currentOperationId`, ни
+   * `currentRouteStepIndex`, ни владельца. Паспорт остаётся там, куда
+   * доехал; долг закрывается на месте.
+   *
+   * Что закрываем — не спрашиваем у клиента, а берём из истории:
+   * `findOpenAssignmentOperation` = последнее взятие этого сотрудника
+   * (`ISSUED_TO_EMPLOYEE` / `OPERATION_SCAN`) без последующего
+   * `OPERATION_FINISHED`. То есть закрыть можно только то, что человек
+   * действительно брал, — приписать себе чужую операцию через эту ручку
+   * нельзя.
+   *
+   * Сужение до `SEWING` — то же, что у `route-debt.ts` и
+   * `catchUpCandidate`: `OPERATION_FINISHED` пишут только швейные
+   * операции, у ОТК/ВТО/упаковки свои гейты и «незакрытость» для них
+   * ничего не значит.
+   *
+   * Станок берём из события взятия, а не из текущей смены: атрибуция
+   * должна указывать на машину, где работа реально шла (долг закрывают
+   * на следующий день, смена уже другая). По той же причине активной
+   * смены НЕ требуем — иначе долг нельзя было бы закрыть, выйдя на
+   * работу после болезни.
+   */
+  async closeUnclosedOperationByEmployee(
+    passportId: string,
+    employeeId: string,
+  ): Promise<PassportDetailDto> {
+    const passport = await this.prisma.passport.findUnique({
+      where: { id: passportId },
+    });
+    if (!passport) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'PASSPORT_NOT_FOUND',
+        message: 'Паспорт не найден',
+      });
+    }
+    this.assertPassportActive(passport.status);
+    if (passport.status !== PassportStatus.IN_PROGRESS) {
+      throw new PassportNotInProgressException();
+    }
+
+    const operationId = await this.findOpenAssignmentOperation(
+      passport.id,
+      employeeId,
+    );
+    if (!operationId) throw new PassportNoUnclosedWorkException();
+    const operation = await this.prisma.operation.findUnique({
+      where: { id: operationId },
+      select: { id: true, category: true, producesFinishedGoods: true },
+    });
+    if (!operation || operation.category !== OperationCategory.SEWING) {
+      throw new PassportNoUnclosedWorkException();
+    }
+    await this.assertOperationNotFinished(
+      passport.id,
+      operationId,
+      passport.orderId,
+    );
+
+    // Станок того самого взятия — см. доккомментарий. `null` допустим:
+    // события до появления `equipmentId` его не хранят.
+    const assignment = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId: passport.id,
+        employeeId,
+        operationId,
+        type: {
+          in: [
+            PassportEventType.ISSUED_TO_EMPLOYEE,
+            PassportEventType.OPERATION_SCAN,
+          ],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { equipmentId: true, createdAt: true },
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      const finishedEvent = await tx.passportEvent.create({
+        data: {
+          passportId: passport.id,
+          type: PassportEventType.OPERATION_FINISHED,
+          operationId,
+          fromOperationId: operationId,
+          employeeId,
+          equipmentId: assignment?.equipmentId ?? null,
+          qty: passport.qtyGood,
+        },
+      });
+      await this.earnings.createPendingForCompletedOperation(tx, {
+        passportId: passport.id,
+        operationId,
+        employeeId,
+        productId: passport.productId,
+        sizeId: passport.sizeId,
+        qty: passport.qtyCut,
+        sourceEventId: finishedEvent.id,
+      });
+      // Выпуск ГП здесь НЕ трогаем даже при `producesFinishedGoods`:
+      // паспорт физически уехал дальше, и движение по нему уже создал
+      // тот, кто его увёл (идемпотентность там по
+      // `sourceKey = PACKED_PASSPORT:<passportId>`). Задача этой ручки —
+      // ровно атрибуция работы и денег.
+      await this.audit.log(
+        {
+          event: 'PASSPORT_UNCLOSED_WORK_CLOSED',
+          entityType: 'PASSPORT',
+          entityId: passport.id,
+          employeeId,
+          payload: {
+            operationId,
+            qty: passport.qtyGood,
+            assignedAt: assignment?.createdAt?.toISOString() ?? null,
+            // Куда паспорт успел уехать к моменту закрытия долга —
+            // это и есть доказательство, что закрывали «вдогонку».
+            passportStandsOn: {
+              currentOperationId: passport.currentOperationId,
+              currentRouteStepIndex: passport.currentRouteStepIndex,
+              currentEmployeeId: passport.currentEmployeeId,
+            },
+          },
+        },
+        tx,
+      );
+    });
+
+    this.logger.log(
+      `event=passport.close-unclosed-operation passportId=${passportId} employeeId=${employeeId} operationId=${operationId}`,
     );
     return this.getOne(passportId);
   }

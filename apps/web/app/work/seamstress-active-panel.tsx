@@ -29,6 +29,7 @@ import type {
   CurrentWorkPassportDto,
   ReworkPassportDto,
   ShiftSessionDto,
+  UnclosedWorkPassportDto,
 } from '@sewing/shared/shifts';
 import type {
   OrderCutIssueRuleBannerDto,
@@ -41,6 +42,7 @@ import {
 } from './passport-confirm-modal';
 import {
   acceptPassportForIssueAction,
+  closeUnclosedOperationAction,
   completePassportOperationAction,
   loadMyReworkAction,
   lookupPassportAction,
@@ -87,6 +89,16 @@ interface Props {
    */
   myRework: ReworkPassportDto[];
   /**
+   * Паспорта, по которым у сотрудника осталась незакрытая операция, а
+   * сам паспорт уже уехал дальше по маршруту. Источник — `GET
+   * /api/shifts/my-unclosed` (`ShiftsService.getMyUnclosedPassports`).
+   * До 01.09.2026 такой паспорт исчезал с экрана бесследно: скан
+   * следующего исполнителя (в т.ч. ОТК) перезаписывал
+   * `currentEmployeeId`, работа оставалась без `OPERATION_FINISHED` и
+   * без начисления, и человек об этом просто не узнавал.
+   */
+  myUnclosed: UnclosedWorkPassportDto[];
+  /**
    * Ролевые подписи панели (см. `work-wording.ts`). По умолчанию —
    * швейные («Взять крой»). `/packing` в режиме некоробочной операции
    * («Распаковка» = приёмка сырья) передаёт свой словарь: кроя на том
@@ -128,6 +140,7 @@ export function SeamstressActivePanel({
   currentWork,
   cutIssueBanner,
   myRework,
+  myUnclosed,
   wording = SEAMSTRESS_WORDING,
 }: Props) {
   const router = useRouter();
@@ -464,6 +477,8 @@ export function SeamstressActivePanel({
         <ReworkSection items={myRework} takeLabel={wording.take} />
       )}
 
+      {myUnclosed.length > 0 && <UnclosedSection items={myUnclosed} />}
+
       <ReworkPushSetup />
 
       <CurrentWorkCard
@@ -554,6 +569,96 @@ function ReworkSection({
       </ul>
     </section>
   );
+}
+
+/**
+ * Секция «Не закрыто вами» на /work. Источник — `GET
+ * /api/shifts/my-unclosed` (`ShiftsService.getMyUnclosedPassports`).
+ *
+ * Что это. Человек взял паспорт на операцию, сделал работу, но не
+ * нажал «Завершить» — а паспорт тем временем увёл дальше по маршруту
+ * следующий исполнитель (до 01.09.2026 это мог сделать и ОТК: гейт не
+ * проверял шаг, на котором паспорт СТОИТ, см.
+ * `PassportsService.evaluateRouteOrder::currentStepCandidate`). Паспорт
+ * пропадал из «В работе у вас», `OPERATION_FINISHED` не появлялся, а
+ * без него нет `OperationEntry` — сделка за сделанную работу не
+ * начислялась никому.
+ *
+ * Почему кнопка закрывает операцию НА МЕСТЕ, а не отправляет искать
+ * паспорт: он физически уже у ОТК/ВТО/в буфере, и для фиксации работы
+ * не нужен. Альтернатива — пере-сканировать его у себя — тянет паспорт
+ * НАЗАД по маршруту и заставляет второй раз проходить ОТК (инцидент
+ * 31.08.2026, заказ 02-00020).
+ *
+ * Строка обязана отвечать «где паспорт сейчас»: это и есть ответ на
+ * «чтобы долго не искала».
+ */
+function UnclosedSection({ items }: { items: UnclosedWorkPassportDto[] }) {
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+
+  const close = (passportId: string) => {
+    setPendingId(passportId);
+    setError(null);
+    void closeUnclosedOperationAction(passportId).then((res) => {
+      setPendingId(null);
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      // Строка уходит из списка только после перечитывания server-
+      // component: источник истины — БД, локально ничего не вычёркиваем.
+      router.refresh();
+    });
+  };
+
+  return (
+    <section className="card unclosed-section" aria-label="Не закрыто вами">
+      <h2 className="card__title">⚠ Не закрыто вами ({items.length})</h2>
+      <p className="card__hint">
+        Вы брали эти паспорта, но не закрыли операцию — паспорт успели
+        забрать дальше. Работа не зачтена. Искать паспорт не нужно:
+        нажмите «Закрыть операцию».
+      </p>
+      {error && (
+        <div className="error-box" role="alert">
+          {error}
+        </div>
+      )}
+      <ul className="unclosed-section__list">
+        {items.map((p) => (
+          <li key={`${p.passportId}:${p.operationId}`}>
+            <div>
+              <strong>{p.passportNumber}</strong> · {p.operationName} ·{' '}
+              {p.qtyGood} шт.
+            </div>
+            <div className="unclosed-section__where">
+              Заказ {p.orderNumber} · {p.productName}, {p.color}, {p.sizeCode}
+              {' · '}
+              {describeWhere(p)}
+            </div>
+            <button
+              type="button"
+              className="btn unclosed-section__btn"
+              onClick={() => close(p.passportId)}
+              disabled={pendingId !== null}
+            >
+              {pendingId === p.passportId ? 'Закрываем…' : 'Закрыть операцию'}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** «Где паспорт сейчас» одной строкой — от точного к общему. */
+function describeWhere(p: UnclosedWorkPassportDto): string {
+  if (p.heldByEmployeeName) return `сейчас у ${p.heldByEmployeeName}`;
+  if (p.cellCode) return `сейчас в ячейке ${p.cellCode}`;
+  if (p.standsOnOperationName) return `сейчас на «${p.standsOnOperationName}»`;
+  return 'ушёл дальше по маршруту';
 }
 
 /**
