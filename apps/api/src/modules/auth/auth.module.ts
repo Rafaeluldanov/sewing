@@ -5,6 +5,7 @@ import { AuthService } from './auth.service.js';
 import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
 import { FeatureModulesService } from './feature-modules.service.js';
+import { ServiceTokenService } from './service-token.service.js';
 
 /**
  * Auth-модуль (MVP 1.1, ADR-0014).
@@ -26,11 +27,14 @@ import { FeatureModulesService } from './feature-modules.service.js';
   providers: [
     AuthService,
     FeatureModulesService,
+    // Машинный токен: резолвится в том же глобальном гварде, но своим путём —
+    // мимо политики сессий сотрудника (см. service-token.service.ts).
+    ServiceTokenService,
     {
       provide: APP_GUARD,
       useClass: AuthGuard,
     },
   ],
-  exports: [AuthService],
+  exports: [AuthService, ServiceTokenService],
 })
 export class AuthModule {}

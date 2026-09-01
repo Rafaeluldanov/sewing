@@ -6942,6 +6942,41 @@ model IntegrationSettings {
   updatedAt DateTime @updatedAt
 }
 
+/// Машинный (сервер-серверный) токен доступа к API — интеграция с ERP upgifts.
+///
+/// Живёт в БД ТЕНАНТА: токен чужого тенанта здесь просто не найдётся, то есть
+/// кросс-тенантный доступ невозможен по построению, без доверенных заголовков.
+/// Плейнтекст не хранится никогда — только sha256; владельцу он показывается
+/// один раз при выпуске.
+///
+/// Почему не session-cookie: у неё idle-TTL и рубильник «Завершить все сеансы»
+/// (`CompanySettings.sessionsValidFrom`) — один клик в настройках рвал бы обмен.
+/// Проверка — в глобальном `AuthGuard`, права — скоупами (`@MachineScopes`).
+model ServiceToken {
+  id          String    @id @default(cuid())
+  /// Человеческая метка: «ERP upgifts (справочники)».
+  name        String
+  /// sha256(plaintext) в hex.
+  tokenHash   String    @unique
+  /// Первые символы плейнтекста для опознания в UI («sew_ab12c3»). Не секрет.
+  tokenPrefix String
+  /// Роли принципала — чтобы пройти класс-уровневые `@Roles(...)`.
+  /// ADMIN/SUPERADMIN сервис выпуска отбрасывает: ADMIN — wildcard в гварде.
+  roles       String[]  @default(["SHOP_MANAGER"])
+  /// Скоупы: `equipment:read|write`, `operations:read|write`.
+  /// Маршрут без `@MachineScopes(...)` машине закрыт независимо от ролей.
+  scopes      String[]  @default([])
+  createdById String?
+  createdAt   DateTime  @default(now())
+  /// Пишется с дебаунсом (не на каждый запрос) — «токен жив» для владельца.
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  /// Отзыв — простановка даты, не DELETE: история нужна для расследования.
+  revokedAt   DateTime?
+  revokedById String?
+}
+
+
 // ---------------------------------------------------------------------------
 // AssistantThread / AssistantMessage — история диалогов с ассистентом.
 // ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ import {
   type BulkArchiveResultDto,
 } from '@sewing/shared/archive';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Public, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { EquipmentService } from './equipment.service.js';
 import { renderEquipmentPrintHtml } from './equipment-print.js';
@@ -58,6 +58,7 @@ import { renderEquipmentPrintHtml } from './equipment-print.js';
 export class EquipmentController {
   constructor(private readonly equipment: EquipmentService) {}
 
+  @MachineScopes('equipment:read')
   @Get()
   list(): Promise<EquipmentSummaryDto[]> {
     return this.equipment.list();
@@ -69,6 +70,7 @@ export class EquipmentController {
    * backend сгенерирует slug имени, чтобы менеджер не придумывал
    * технический идентификатор.
    */
+  @MachineScopes('equipment:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreateEquipmentSchema)) dto: CreateEquipmentDto,
@@ -115,6 +117,7 @@ export class EquipmentController {
     return this.equipment.purgeMany(dto.ids, user.employeeId);
   }
 
+  @MachineScopes('equipment:read')
   @Get(':id')
   getOne(@Param('id') id: string): Promise<EquipmentDetailDto> {
     return this.equipment.getOne(id);
@@ -134,6 +137,7 @@ export class EquipmentController {
    * (переименование) и/или `displayNumber` (ручной порядковый номер
    * для физической маркировки). См. `UpdateEquipmentSchema` и ADR-0017 §5.
    */
+  @MachineScopes('equipment:write')
   @Patch(':id')
   update(
     @Param('id') id: string,

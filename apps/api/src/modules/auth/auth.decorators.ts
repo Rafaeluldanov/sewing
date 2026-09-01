@@ -11,6 +11,7 @@ import type { AuthPrincipal, RequestWithAuth } from './auth.types.js';
  */
 export const PUBLIC_ROUTE_KEY = 'auth:public';
 export const ROLES_KEY = 'auth:roles';
+export const MACHINE_SCOPES_KEY = 'auth:machine-scopes';
 
 /**
  * Декоратор `@Public()` помечает маршрут как доступный без сессии
@@ -33,6 +34,18 @@ export const Public = (): MethodDecorator & ClassDecorator =>
 export const Roles = (
   ...roles: SystemRoleCode[]
 ): MethodDecorator & ClassDecorator => SetMetadata(ROLES_KEY, roles);
+
+/**
+ * Декоратор `@MachineScopes(...)` открывает маршрут МАШИННОМУ токену.
+ *
+ * Гвард работает DENY BY DEFAULT: без этого декоратора машинный токен не пройдёт
+ * никуда, какие бы роли ему ни выдали. Причина простая — роль `SHOP_MANAGER` открывает
+ * десятки контроллеров (зарплата, казначейство, сотрудники), а интеграции нужны два
+ * справочника. На людей декоратор не влияет вообще: их пускают роли.
+ */
+export const MachineScopes = (
+  ...scopes: string[]
+): MethodDecorator & ClassDecorator => SetMetadata(MACHINE_SCOPES_KEY, scopes);
 
 /**
  * Параметр-декоратор `@CurrentUser()` достаёт `AuthPrincipal`,

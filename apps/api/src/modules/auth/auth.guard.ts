@@ -4,13 +4,20 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UnauthenticatedException } from '../../common/errors.js';
 import { AuthService } from './auth.service.js';
 import { readSessionCookie } from './auth.controller.js';
-import { PUBLIC_ROUTE_KEY, ROLES_KEY } from './auth.decorators.js';
-import type { RequestWithAuth } from './auth.types.js';
+import {
+  MACHINE_SCOPES_KEY,
+  PUBLIC_ROUTE_KEY,
+  ROLES_KEY,
+} from './auth.decorators.js';
+import type { AuthPrincipal, RequestWithAuth } from './auth.types.js';
+import { readServiceToken } from './service-token.js';
+import { ServiceTokenService } from './service-token.service.js';
 
 /**
  * Глобальный AuthGuard.
@@ -28,9 +35,12 @@ import type { RequestWithAuth } from './auth.types.js';
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private readonly logger = new Logger(AuthGuard.name);
+
   constructor(
     @Inject(Reflector) private readonly reflector: Reflector,
     @Inject(AuthService) private readonly auth: AuthService,
+    @Inject(ServiceTokenService) private readonly serviceTokens: ServiceTokenService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -41,12 +51,44 @@ export class AuthGuard implements CanActivate {
     if (isPublic) return true;
 
     const req = context.switchToHttp().getRequest<RequestWithAuth>();
-    const token = readSessionCookie(req.headers.cookie);
-    if (!token) throw new UnauthenticatedException();
 
-    const principal = await this.auth.resolvePrincipal(token);
+    // МАШИННАЯ ВЕТКА (сервер-сервер, интеграция с ERP). Входим строго по префиксу
+    // токена в `Authorization`. Браузер этот заголовок не шлёт вовсе, поэтому для
+    // цехового пути ниже ветка исполнения не меняется ни для одного запроса.
+    const bearer = readServiceToken(req.headers.authorization);
+
+    let principal: AuthPrincipal | null;
+    if (bearer) {
+      principal = await this.serviceTokens.resolvePrincipal(bearer);
+    } else {
+      const token = readSessionCookie(req.headers.cookie);
+      if (!token) throw new UnauthenticatedException();
+      principal = await this.auth.resolvePrincipal(token);
+    }
     if (!principal) throw new UnauthenticatedException();
     req.auth = principal;
+
+    // Скоупы машины — DENY BY DEFAULT: маршрут без `@MachineScopes(...)` токену закрыт,
+    // сколько бы ролей у него ни было. Иначе роль `SHOP_MANAGER` открыла бы интеграции
+    // десятки контроллеров (зарплата, казначейство, сотрудники) вместо двух справочников.
+    if (principal.kind === 'MACHINE') {
+      const scopes = this.reflector.getAllAndOverride<string[] | undefined>(
+        MACHINE_SCOPES_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+      const granted = principal.scopes ?? [];
+      if (!scopes?.length || !scopes.some((s) => granted.includes(s))) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          code: 'FORBIDDEN_SCOPE',
+          message: 'Машинному токену этот маршрут не открыт.',
+        });
+      }
+      this.logger.log(
+        `event=auth.machine token=${principal.serviceTokenId} ` +
+          `${req.method} ${req.originalUrl}`,
+      );
+    }
 
     const required = this.reflector.getAllAndOverride<string[] | undefined>(
       ROLES_KEY,

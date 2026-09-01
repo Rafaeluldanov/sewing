@@ -57,6 +57,21 @@ export interface AuthPrincipal {
   login: string;
   /** ФИО для шапки UI. */
   fullName: string;
+  /**
+   * Вид субъекта. `MACHINE` — запрос пришёл по машинному токену (сервер-сервер,
+   * интеграция с ERP), а не от человека с cookie. Поле ОПЦИОНАЛЬНОЕ намеренно:
+   * `@CurrentUser()` используется в сотнях мест, и обязательное поле сломало бы их все.
+   * Отсутствие поля = обычный человек, как было до 09.2026.
+   */
+  kind?: 'HUMAN' | 'MACHINE';
+  /**
+   * Скоупы машинного токена (`equipment:read`, `operations:write`, …). У человека
+   * пусто: его права — роли. Проверяются в `AuthGuard` по `@MachineScopes(...)`,
+   * DENY BY DEFAULT: маршрут без декоратора машине закрыт, сколько бы ролей у неё ни было.
+   */
+  scopes?: string[];
+  /** Id записи `ServiceToken` — для аудита и отзыва «того самого» токена. */
+  serviceTokenId?: string;
 }
 
 export interface RequestWithAuth extends Request {
