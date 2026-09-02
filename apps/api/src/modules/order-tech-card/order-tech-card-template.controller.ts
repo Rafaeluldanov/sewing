@@ -12,7 +12,7 @@ import { OrderTechCardService } from './order-tech-card.service.js';
  * больше нет — состав правится на карточке номенклатуры).
  */
 @Controller('orders/:id/tech-card')
-@MachineScopes('orders:read', 'orders:write')
+@MachineScopes('orders:read')
 export class OrderTechCardTemplateController {
   constructor(
     private readonly orders: OrdersService,
@@ -25,6 +25,7 @@ export class OrderTechCardTemplateController {
    * перечитывает числа из карточки номенклатуры (нормы фурнитуры, погонные
    * метры, площади). Ручные строки остаются со своими числами.
    */
+  @MachineScopes('orders:write')
   @Post('reload-norms')
   @Roles('ADMIN', 'SHOP_MANAGER')
   reloadNorms(
@@ -43,6 +44,7 @@ export class OrderTechCardTemplateController {
    * перезаписывается спецификацией карточки, правки, сделанные в заказе,
    * теряются. Значения параметров и ручные строки переживают.
    */
+  @MachineScopes('orders:write')
   @Post('reload-from-template')
   @Roles('ADMIN', 'SHOP_MANAGER')
   async reload(

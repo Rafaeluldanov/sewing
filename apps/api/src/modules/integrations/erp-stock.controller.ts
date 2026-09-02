@@ -20,7 +20,7 @@ import { MachineScopes } from '../auth/auth.decorators.js';
  * состояние и видно, насколько оно устарело.
  */
 @Controller('integrations/erp-stock')
-@MachineScopes('stock:read', 'stock:write')
+@MachineScopes('stock:read')
 export class ErpStockController {
   constructor(private readonly prisma: PrismaService) {}
 
@@ -41,6 +41,7 @@ export class ErpStockController {
    * Принять снимок целиком. Замена, а не слияние: строка, которой в снимке нет,
    * означает «остатка больше нет» — при слиянии она осталась бы висеть вечно.
    */
+  @MachineScopes('stock:write')
   @Put()
   @MachineScopes('stock:write')
   async replace(@Body() body: { items?: ErpStockLine[] }) {

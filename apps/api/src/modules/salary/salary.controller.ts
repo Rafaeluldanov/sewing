@@ -16,7 +16,7 @@ import {
   type UpdateSalaryEntryDto,
 } from '@sewing/shared/salary';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineClosed, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { SalaryService } from './salary.service.js';
 
@@ -34,7 +34,6 @@ import { SalaryService } from './salary.service.js';
  * а ограничение приходит из `applyViewerScope`.
  */
 @Controller('salary')
-// Только чтение: зарплату начисляет цех, ERP её показывает.
 @MachineScopes('payroll:read')
 export class SalaryController {
   constructor(private readonly salary: SalaryService) {}
@@ -65,6 +64,7 @@ export class SalaryController {
    * RBAC-проверку дублируем здесь декоратором, а не только в сервисе.
    */
   @Roles('SHOP_MANAGER', 'ADMIN')
+  @MachineClosed()
   @Patch(':id')
   update(
     @Param('id') id: string,

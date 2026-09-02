@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { currentActor } from '../auth/actor-context.js';
 
 /**
  * Тип агрегата, к которому относится событие аудита (см.
@@ -718,11 +719,19 @@ export class AuditService {
     input: AuditLogInput,
     tx?: Prisma.TransactionClient,
   ): Promise<{ id: string } | null> {
+    // Действие через машинный токен ERP: `employeeId` — служебный сотрудник «Интеграция ERP»,
+    // а КТО из людей ERP нажал — здесь, в payload. Без этого журнал показывал бы «Интеграция»
+    // на каждой строке и восстановить автора было бы нечем (правило §0.1, actor-context.ts).
+    const actor = currentActor();
+    const payload: Prisma.InputJsonValue =
+      actor && input.payload && typeof input.payload === 'object' && !Array.isArray(input.payload)
+        ? { ...(input.payload as Prisma.JsonObject), actor: { ...actor } }
+        : input.payload;
     const data: Prisma.AuditLogUncheckedCreateInput = {
       event: input.event,
       entityType: input.entityType,
       entityId: input.entityId,
-      payload: input.payload,
+      payload,
       employeeId: input.employeeId ?? null,
     };
 

@@ -5,7 +5,7 @@ import {
   type ProductionDashboardQuery,
 } from '@sewing/shared/dashboard';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { MachineScopes, Roles } from '../auth/auth.decorators.js';
 import { DashboardService } from './dashboard.service.js';
 
 /**
@@ -21,6 +21,7 @@ import { DashboardService } from './dashboard.service.js';
  */
 @Roles('SHOP_MANAGER', 'ADMIN', 'DISPLAY')
 @Controller('dashboard')
+@MachineScopes('dashboard:read')
 export class DashboardController {
   constructor(private readonly dashboard: DashboardService) {}
 

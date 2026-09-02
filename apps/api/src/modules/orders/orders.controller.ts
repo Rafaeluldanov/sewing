@@ -72,7 +72,7 @@ import type { AuthPrincipal } from '../auth/auth.types.js';
  * по-прежнему закрыта.
  */
 @Controller('orders')
-@MachineScopes('orders:read', 'orders:write')
+@MachineScopes('orders:read')
 @Roles('SHOP_MANAGER')
 export class OrdersController {
   constructor(
@@ -81,6 +81,7 @@ export class OrdersController {
     private readonly productionBalance: OrderProductionBalanceService,
   ) {}
 
+  @MachineScopes('orders:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreateOrderSchema)) dto: CreateOrderDto,
@@ -119,6 +120,7 @@ export class OrdersController {
     return this.orders.getTransitions(id);
   }
 
+  @MachineScopes('orders:write')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -128,6 +130,7 @@ export class OrdersController {
     return this.orders.update(id, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Post(':id/start')
   start(@Param('id') id: string, @CurrentUser() user: AuthPrincipal) {
     return this.orders.start(id, user.employeeId);
@@ -139,6 +142,7 @@ export class OrdersController {
    * и в IN_PRODUCTION — это рантайм-настройка распошива, а не состав заказа.
    * См. `OrdersService.setRouteModeOverride` и `route-mode.ts`.
    */
+  @MachineScopes('orders:write')
   @Patch(':id/route-mode')
   setRouteMode(
     @Param('id') id: string,
@@ -164,6 +168,7 @@ export class OrdersController {
    * `ORDER_INVALID_STATUS_TRANSITION` (409). См.
    * `apps/api/src/common/errors.ts`.
    */
+  @MachineScopes('orders:write')
   @Post(':id/start-calculation')
   startCalculation(
     @Param('id') id: string,
@@ -181,6 +186,7 @@ export class OrdersController {
    * только если в строках есть USD). RBAC — `ADMIN`/`SHOP_MANAGER`,
    * см. `@Roles('SHOP_MANAGER')` на классе.
    */
+  @MachineScopes('orders:write')
   @Post(':id/complete-calculation')
   completeCalculation(
     @Param('id') id: string,
@@ -197,6 +203,7 @@ export class OrdersController {
    * `OrderCostEstimate` помечается как `REVOKED`,
    * `WorkshopNeed`/`PurchaseOrder`/`PurchaseReceipt` не трогаются.
    */
+  @MachineScopes('orders:write')
   @Post(':id/reopen-calculation')
   reopenCalculation(
     @Param('id') id: string,
@@ -214,6 +221,7 @@ export class OrdersController {
    * `WorkshopNeed` + `OrderExtraCost`. Разрешено из `CALCULATION_DONE`
    * и `IN_PRODUCTION`. Тело — то же `CompleteOrderCalculationSchema`.
    */
+  @MachineScopes('orders:write')
   @Post(':id/recalculate-cost-estimate')
   recalculateCostEstimate(
     @Param('id') id: string,
@@ -244,6 +252,7 @@ export class OrdersController {
    * `CALCULATION_DONE` / `IN_PRODUCTION` / `DONE` / `CANCELLED`
    * (см. `OrdersService.recalculateOperationPlan`).
    */
+  @MachineScopes('orders:write')
   @Post(':id/operation-plan/recalculate')
   recalculateOperationPlan(
     @Param('id') id: string,
@@ -263,6 +272,7 @@ export class OrdersController {
    * Backend валидирует статус (нельзя у `DONE` / `CANCELLED`) и
    * принадлежность шагов/размеров заказу.
    */
+  @MachineScopes('orders:write')
   @Put(':id/route-overrides')
   updateRouteOverrides(
     @Param('id') id: string,
@@ -315,11 +325,13 @@ export class OrdersController {
     return this.productionBalance.getForOrder(id, options);
   }
 
+  @MachineScopes('orders:write')
   @Post(':id/complete')
   complete(@Param('id') id: string) {
     return this.orders.complete(id);
   }
 
+  @MachineScopes('orders:write')
   @Post(':id/cancel')
   cancel(@Param('id') id: string) {
     return this.orders.cancel(id);
@@ -332,6 +344,7 @@ export class OrdersController {
    * `CANCELLED` или по нему есть производственная история
    * (`ORDER_DELETE_FORBIDDEN`).
    */
+  @MachineScopes('orders:write')
   @Delete(':id')
   remove(
     @Param('id') id: string,
@@ -351,6 +364,7 @@ export class OrdersController {
    * откатов и прямых правок `executionStatus` через PATCH
    * сознательно нет (см. ADR-0022).
    */
+  @MachineScopes('orders:write')
   @Post(':id/outsource-requirements/:requirementId/status')
   updateOutsourceRequirementStatus(
     @Param('id') id: string,
@@ -374,6 +388,7 @@ export class OrdersController {
    *
    * RBAC: `ADMIN` / `SHOP_MANAGER` — наследуется от `@Roles` на классе.
    */
+  @MachineScopes('orders:write')
   @Patch(':id/material-requirements/:requirementId/color')
   updateMaterialRequirementColor(
     @Param('id') id: string,
@@ -395,6 +410,7 @@ export class OrdersController {
   // `@Roles` на классе).
   // -------------------------------------------------------------------------
 
+  @MachineScopes('orders:write')
   @Post(':id/logistics-lines')
   addLogisticsLine(
     @Param('id') id: string,
@@ -405,6 +421,7 @@ export class OrdersController {
     return this.orders.addLogisticsLine(id, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Patch(':id/logistics-lines/:lineId')
   updateLogisticsLine(
     @Param('id') id: string,
@@ -416,6 +433,7 @@ export class OrdersController {
     return this.orders.updateLogisticsLine(id, lineId, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Delete(':id/logistics-lines/:lineId')
   deleteLogisticsLine(
     @Param('id') id: string,

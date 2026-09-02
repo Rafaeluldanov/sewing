@@ -16,7 +16,7 @@ import {
 } from '@sewing/shared/order-material-arrivals';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderMaterialArrivalsService } from './order-material-arrivals.service.js';
 
@@ -46,6 +46,7 @@ import { OrderMaterialArrivalsService } from './order-material-arrivals.service.
  * причинам, что `PurchaseReceiptsOrderController`).
  */
 @Controller('orders')
+@MachineScopes('orders:read')
 @Roles('ADMIN', 'SHOP_MANAGER', 'CUTTER', 'CUTTER_ASSISTANT')
 export class OrderMaterialArrivalsController {
   constructor(
@@ -59,6 +60,7 @@ export class OrderMaterialArrivalsController {
     return this.service.listForOrder(orderId);
   }
 
+  @MachineScopes('orders:write')
   @Post(':orderId/material-arrived')
   @HttpCode(HttpStatus.CREATED)
   markArrived(
@@ -70,6 +72,7 @@ export class OrderMaterialArrivalsController {
     return this.service.markArrived(user, orderId, body);
   }
 
+  @MachineScopes('orders:write')
   @Post(':orderId/material-arrival-overrides/:overrideId/revoke')
   @HttpCode(HttpStatus.CREATED)
   revoke(

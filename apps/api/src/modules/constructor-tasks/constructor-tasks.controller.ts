@@ -71,7 +71,7 @@ import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
  * пилота / разруливания «застрявших» задач).
  */
 @Controller('constructor-tasks')
-@MachineScopes('constructor:read', 'constructor:write')
+@MachineScopes('constructor:read')
 export class ConstructorTasksController {
   constructor(private readonly tasks: ConstructorTasksService) {}
 
@@ -93,6 +93,7 @@ export class ConstructorTasksController {
    * Объявлены ДО `@Get(':id')` для читаемости; конфликта нет —
    * одноимённого `@Post(':id')` в контроллере не существует.
    */
+  @MachineScopes('constructor:write')
   @Post('archive')
   @Roles('ADMIN', 'SHOP_MANAGER')
   archiveMany(
@@ -103,6 +104,7 @@ export class ConstructorTasksController {
     return this.tasks.archiveMany(dto.ids, user.employeeId);
   }
 
+  @MachineScopes('constructor:write')
   @Post('restore')
   @Roles('ADMIN', 'SHOP_MANAGER')
   restoreMany(
@@ -113,6 +115,7 @@ export class ConstructorTasksController {
     return this.tasks.restoreMany(dto.ids, user.employeeId);
   }
 
+  @MachineScopes('constructor:write')
   @Post('purge')
   @Roles('ADMIN', 'SHOP_MANAGER')
   purgeMany(
@@ -161,6 +164,7 @@ export class ConstructorTasksController {
    * Реальная запись `ConstructorTask` остаётся в БД для аудита;
    * DRAFT-pattern не трогается (может быть привязан к заказу).
    */
+  @MachineScopes('constructor:write')
   @Post(':id/cancel')
   @Roles('ADMIN', 'SHOP_MANAGER')
   cancel(@Param('id') id: string): Promise<ConstructorTaskDetailDto> {
@@ -173,6 +177,7 @@ export class ConstructorTasksController {
    * `ConstructorTasksService.assignSelf` для семантики идемпотентности
    * и переходов статуса.
    */
+  @MachineScopes('constructor:write')
   @Post(':id/assign-self')
   @Roles('CONSTRUCTOR', 'ADMIN', 'SHOP_MANAGER')
   assignSelf(
@@ -196,6 +201,7 @@ export class ConstructorTasksController {
    * (`saveDraft.comment`), на MVP это compromise: история комментариев
    * — отдельным потоком на будущее.
    */
+  @MachineScopes('constructor:write')
   @Patch(':id/comment')
   @Roles('CONSTRUCTOR', 'ADMIN', 'SHOP_MANAGER')
   updateComment(
@@ -240,6 +246,7 @@ export class ConstructorTasksController {
    * `saveDraft` — 50MB на файл, 64 файла суммарно (с запасом, т.к.
    * `task.sizeRows` ограничен 64 в shared-схеме).
    */
+  @MachineScopes('constructor:write')
   @Post(':id/complete')
   @Roles('CONSTRUCTOR', 'ADMIN', 'SHOP_MANAGER')
   @UseInterceptors(
@@ -298,6 +305,7 @@ export class ConstructorTasksController {
    * RBAC: только `ADMIN`/`SHOP_MANAGER`. `CONSTRUCTOR` не может
    * принимать собственную работу.
    */
+  @MachineScopes('constructor:write')
   @Post(':id/accept')
   @Roles('ADMIN', 'SHOP_MANAGER')
   acceptTask(
@@ -325,6 +333,7 @@ export class ConstructorTasksController {
    * чтобы не падать при отсутствии файлового поля совсем (комментарий
    * без файлов — нормальный кейс). Сами поля фильтруем по имени ниже.
    */
+  @MachineScopes('constructor:write')
   @Post(':id/rework')
   @Roles('ADMIN', 'SHOP_MANAGER')
   @UseInterceptors(
@@ -393,6 +402,7 @@ export class ConstructorTasksController {
    * JSON-payload отдельным полем — стандартный паттерн NestJS для
    * mixed body.
    */
+  @MachineScopes('constructor:write')
   @Post()
   @Roles('ADMIN', 'SHOP_MANAGER')
   @UseInterceptors(
@@ -452,6 +462,7 @@ export class ConstructorTasksController {
    * Запрос: `multipart/form-data`, как у `POST /` — поле `payload`
    * (JSON `CreateConstructorTaskForPatternDto`) + `files` (file[]).
    */
+  @MachineScopes('constructor:write')
   @Post('for-pattern')
   @Roles('ADMIN', 'SHOP_MANAGER')
   @UseInterceptors(

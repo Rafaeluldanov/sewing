@@ -31,10 +31,11 @@ import { SizesService } from './sizes.service.js';
  */
 @Roles('ADMIN', 'SHOP_MANAGER')
 @Controller('sizes')
-@MachineScopes('patterns:read', 'patterns:write')
+@MachineScopes('patterns:read')
 export class SizesController {
   constructor(private readonly sizes: SizesService) {}
 
+  @MachineScopes('patterns:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreateSizeSchema))

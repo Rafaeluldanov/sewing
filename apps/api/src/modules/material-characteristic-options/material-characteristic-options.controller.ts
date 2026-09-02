@@ -7,7 +7,7 @@ import {
   type MaterialCharacteristicOptionDto,
 } from '@sewing/shared/material-characteristic-options';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineClosed, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { MaterialCharacteristicOptionsService } from './material-characteristic-options.service.js';
 
@@ -26,6 +26,7 @@ import { MaterialCharacteristicOptionsService } from './material-characteristic-
  */
 @Roles('ADMIN', 'SHOP_MANAGER')
 @Controller('material-characteristic-options')
+@MachineScopes('patterns:read')
 export class MaterialCharacteristicOptionsController {
   constructor(
     private readonly options: MaterialCharacteristicOptionsService,
@@ -39,6 +40,7 @@ export class MaterialCharacteristicOptionsController {
     return this.options.list(query);
   }
 
+  @MachineClosed()
   @Post()
   create(
     @Body(new ZodValidationPipe(CreateMaterialCharacteristicOptionSchema))
@@ -48,6 +50,7 @@ export class MaterialCharacteristicOptionsController {
     return this.options.create(body, user.employeeId);
   }
 
+  @MachineClosed()
   @Delete(':id')
   async remove(
     @Param('id') id: string,

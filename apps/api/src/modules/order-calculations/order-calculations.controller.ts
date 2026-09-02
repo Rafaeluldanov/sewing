@@ -21,7 +21,7 @@ import { OrderCalculationsService } from './order-calculations.service.js';
  * чтобы UI обновлял ряд вкладок из одного источника.
  */
 @Controller('orders/:id/calculations')
-@MachineScopes('orders:read', 'orders:write')
+@MachineScopes('orders:read')
 export class OrderCalculationsController {
   constructor(private readonly service: OrderCalculationsService) {}
 
@@ -31,6 +31,7 @@ export class OrderCalculationsController {
   }
 
   /** «+ Вариант просчёта» — клон активного варианта. */
+  @MachineScopes('orders:write')
   @Post()
   @Roles('ADMIN', 'SHOP_MANAGER')
   create(
@@ -43,6 +44,7 @@ export class OrderCalculationsController {
   }
 
   /** Переключение активного варианта (capture → restore → resync). */
+  @MachineScopes('orders:write')
   @Post(':calcId/activate')
   @Roles('ADMIN', 'SHOP_MANAGER')
   activate(
@@ -53,6 +55,7 @@ export class OrderCalculationsController {
     return this.service.activate(orderId, calcId, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Patch(':calcId')
   @Roles('ADMIN', 'SHOP_MANAGER')
   rename(
@@ -65,6 +68,7 @@ export class OrderCalculationsController {
     return this.service.rename(orderId, calcId, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Delete(':calcId')
   @Roles('ADMIN', 'SHOP_MANAGER')
   remove(

@@ -6974,6 +6974,10 @@ model ServiceToken {
   /// Отзыв — простановка даты, не DELETE: история нужна для расследования.
   revokedAt   DateTime?
   revokedById String?
+  /// Служебный сотрудник «Интеграция ERP», от чьего имени машина пишет в поля со ссылкой
+  /// на Employee (createdById заявок КБ, completedById расчёта). Создаётся лениво при первом
+  /// запросе токена. Автор-человек из ERP — в payload аудита (actor-context.ts, правило §0.1).
+  employeeId  String?
 }
 
 

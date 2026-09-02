@@ -24,7 +24,7 @@ import { CompanySettingsService } from './company-settings.service.js';
  */
 @Roles('SHOP_MANAGER', 'ADMIN')
 @Controller('company-settings')
-@MachineScopes('settings:read', 'settings:write')
+@MachineScopes('settings:read')
 export class CompanySettingsController {
   constructor(private readonly settings: CompanySettingsService) {}
 
@@ -55,6 +55,7 @@ export class CompanySettingsController {
    * Выгоняет и того, кто нажал: собственная cookie тоже выпущена до
    * отсечки. Это осознанно — «все» значит все.
    */
+  @MachineScopes('settings:write')
   @Post('terminate-sessions')
   @HttpCode(200)
   terminateSessions(
@@ -63,6 +64,7 @@ export class CompanySettingsController {
     return this.settings.terminateAllSessions(user.employeeId);
   }
 
+  @MachineScopes('settings:write')
   @Patch()
   update(
     @Body(new ZodValidationPipe(UpdateCompanySettingsSchema))

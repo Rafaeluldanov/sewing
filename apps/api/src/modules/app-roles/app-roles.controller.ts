@@ -37,7 +37,6 @@ import { AppRolesService } from './app-roles.service.js';
  */
 @Roles('ADMIN')
 @Controller('app-roles')
-// Только чтение: правка ролей — ADMIN, а машине ADMIN не выдаётся (см. FORBIDDEN_ROLES).
 @MachineScopes('roles:read')
 export class AppRolesController {
   constructor(private readonly service: AppRolesService) {}

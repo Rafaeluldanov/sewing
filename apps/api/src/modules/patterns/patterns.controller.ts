@@ -71,7 +71,7 @@ import type { UploadedFileLike } from './patterns-storage.service.js';
  */
 @Roles('ADMIN', 'SHOP_MANAGER')
 @Controller('patterns')
-@MachineScopes('patterns:read', 'patterns:write')
+@MachineScopes('patterns:read')
 export class PatternsController {
   constructor(private readonly patterns: PatternsService) {}
 
@@ -83,6 +83,7 @@ export class PatternsController {
     return this.patterns.list(query);
   }
 
+  @MachineScopes('patterns:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreatePatternSchema))
@@ -109,6 +110,7 @@ export class PatternsController {
    * читаемости — конфликта нет (одноимённого `@Post(':id')` в
    * контроллере не существует).
    */
+  @MachineScopes('patterns:write')
   @Post('archive')
   archiveMany(
     @Body(new ZodValidationPipe(PatternsArchiveRequestSchema))
@@ -118,6 +120,7 @@ export class PatternsController {
     return this.patterns.archiveMany(body.patternIds, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Post('restore')
   restoreMany(
     @Body(new ZodValidationPipe(PatternsArchiveRequestSchema))
@@ -127,6 +130,7 @@ export class PatternsController {
     return this.patterns.restoreMany(body.patternIds, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Post('purge')
   purgeMany(
     @Body(new ZodValidationPipe(PatternsArchiveRequestSchema))
@@ -147,6 +151,7 @@ export class PatternsController {
    * `PatternsService.clone`. Body опционален: если поля `name`/`article`
    * не заданы, backend сам подбирает значения (см. сервис).
    */
+  @MachineScopes('patterns:write')
   @Post(':id/clone')
   clone(
     @Param('id') id: string,
@@ -157,6 +162,7 @@ export class PatternsController {
     return this.patterns.clone(id, body, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -174,6 +180,7 @@ export class PatternsController {
    * если лекало не `ARCHIVED` или на него ссылаются заказы
    * (`PATTERN_DELETE_FORBIDDEN`).
    */
+  @MachineScopes('patterns:write')
   @Delete(':id/permanent')
   remove(
     @Param('id') id: string,
@@ -182,6 +189,7 @@ export class PatternsController {
     return this.patterns.remove(id, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Post(':id/preview')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -197,6 +205,7 @@ export class PatternsController {
     return this.patterns.uploadPreview(id, file, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Post(':id/sizes/:sizeId/file')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -213,6 +222,7 @@ export class PatternsController {
     return this.patterns.uploadSizeFile(id, sizeId, file, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Delete(':id/sizes/:sizeId/file/:fileId')
   archiveSizeFile(
     @Param('id') id: string,
@@ -223,6 +233,7 @@ export class PatternsController {
     return this.patterns.archiveSizeFile(id, sizeId, fileId, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Post(':id/sizes/:sizeId/file/:fileId/restore')
   restoreSizeFile(
     @Param('id') id: string,
@@ -233,6 +244,7 @@ export class PatternsController {
     return this.patterns.restoreSizeFile(id, sizeId, fileId, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Delete(':id/sizes/:sizeId/file/:fileId/permanent')
   deleteSizeFilePermanent(
     @Param('id') id: string,
@@ -248,6 +260,7 @@ export class PatternsController {
     );
   }
 
+  @MachineScopes('patterns:write')
   @Put(':id/material-areas')
   replaceMaterialAreas(
     @Param('id') id: string,
@@ -264,6 +277,7 @@ export class PatternsController {
    * с `inputType = QTY_PER_ITEM`. Параметры, для которых в payload
    * нет нормы, удаляются — это «очистить норму».
    */
+  @MachineScopes('patterns:write')
   @Put(':id/parameter-norms')
   replaceParameterNorms(
     @Param('id') id: string,
@@ -284,6 +298,7 @@ export class PatternsController {
    * `PatternItemSizeParameterValue` используется только под
    * LINEAR_M_BY_SIZE.
    */
+  @MachineScopes('patterns:write')
   @Put(':id/size-parameter-values')
   replaceSizeParameterValues(
     @Param('id') id: string,
@@ -301,6 +316,7 @@ export class PatternsController {
    * полным итоговым состоянием (см.
    * `PatternsService.replaceMaterialSpec`).
    */
+  @MachineScopes('patterns:write')
   @Put(':id/material-spec')
   replaceMaterialSpec(
     @Param('id') id: string,
