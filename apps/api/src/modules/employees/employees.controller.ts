@@ -69,6 +69,7 @@ export class EmployeesController {
    * не выдаёт роль ADMIN» в `PATCH` обходился бы созданием нового
    * админа одним POST.
    */
+  @MachineScopes('employees:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreateEmployeeSchema))
@@ -107,6 +108,7 @@ export class EmployeesController {
     return this.employees.get(id);
   }
 
+  @MachineScopes('employees:write')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -146,6 +148,7 @@ export class EmployeesController {
    * странице карточки. Сам по себе вызов идемпотентен и не меняет
    * данные.
    */
+  @MachineScopes('employees:read')
   @Get(':id/blockers')
   getBlockers(@Param('id') id: string) {
     return this.employees.getBlockers(id);
@@ -160,6 +163,7 @@ export class EmployeesController {
    * RBAC — `SHOP_MANAGER`/`ADMIN` (от класс-уровневого `@Roles(...)`).
    * SHOP_MANAGER не может архивировать ADMIN — guard в сервисе.
    */
+  @MachineScopes('employees:write')
   @Post(':id/archive')
   archive(@Param('id') id: string, @CurrentUser() viewer: AuthPrincipal) {
     return this.employees.archive(id, viewer);
@@ -175,6 +179,7 @@ export class EmployeesController {
    * `purge` — `ADMIN`-only, как и одиночный `DELETE :id`, и требует,
    * чтобы карточка была в архиве.
    */
+  @MachineScopes('employees:write')
   @Post('archive')
   archiveMany(
     @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
@@ -184,6 +189,7 @@ export class EmployeesController {
     return this.employees.archiveMany(dto.ids, viewer);
   }
 
+  @MachineScopes('employees:write')
   @Post('restore')
   restoreMany(
     @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
@@ -208,6 +214,7 @@ export class EmployeesController {
    * активных карточек. RBAC — `SHOP_MANAGER`/`ADMIN` (от класс-уровневого
    * декоратора).
    */
+  @MachineScopes('employees:write')
   @Post(':id/restore')
   restore(@Param('id') id: string, @CurrentUser() viewer: AuthPrincipal) {
     return this.employees.restore(id, viewer);

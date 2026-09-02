@@ -80,8 +80,11 @@ export const ERP_WINDOW_SCOPES = [
   'clients:read', 'clients:write',
   'catalog:read',
   'dashboard:read',
-  'employees:read',
+  'employees:read', 'employees:write',
   'roles:read',
   'payroll:read',
+  // Ведомость начислений — расчёт цеха; проведение (`payroll:pay`) ERP зовёт только по
+  // своей оплаченной заявке (правило §0.2 в ERP: деньги выдаёт только она).
+  'payroll:accrual:read', 'payroll:accrual:write', 'payroll:pay',
   'costs:read',
 ];

@@ -2096,6 +2096,14 @@ Snapshot строк (см. `PayrollPayoutLine.snapshot`):
 <a id="30c-payroll-accrual-documents"></a>
 ## 30c. Payroll accrual documents (PHASE 3 STEP 6)
 
+> **Машинный токен ERP (с 2026-09-02).** Класс открыт `@MachineScopes('payroll:accrual:read')`;
+> `POST /`, `POST :id/recompute`, `PATCH :id/lines/:lineId`, `POST :id/cancel` — `payroll:accrual:write`;
+> `POST :id/pay` — отдельный `payroll:pay`. Тело `pay` принимает `{ source: 'erp', externalRef:
+> { system: 'erp', documentId, documentNumber, paidAt? } }`: документ проводится по ОПЛАЧЕННОЙ заявке
+> ERP, ссылка ложится в `externalPaymentRef` (есть в списке и карточке), а заявка казначейства цеха
+> (`createSalaryExpenseRequestTx`) при `source: 'erp'` НЕ создаётся — деньги выдаёт только ERP.
+> Без `source` поведение прежнее.
+
 Источник: `payroll-accrual-documents/payroll-accrual-documents.controller.ts` +
 `payroll-accrual-documents/payroll-accrual-documents.service.ts`. DTO/zod —
 `packages/shared/src/payroll-accrual-documents.ts`. Источник истины модели —

@@ -128,7 +128,34 @@ export type UpdatePayrollAccrualDocumentLineDto = z.infer<
  *
  * MVP: нет дополнительных полей — расширяемый пустой объект.
  */
-export const PayPayrollAccrualDocumentSchema = z.object({}).strict();
+/**
+ * Внешняя ссылка на документ ДЕНЕГ в системе-владельце (ERP). Цех считает
+ * начисления, а платит ERP: при проведении из ERP сюда приходит номер её
+ * заявки на оплату, и собственная заявка казначейства цеха НЕ создаётся
+ * (`source: 'erp'`), иначе одна выплата легла бы в две кассы.
+ */
+export const ExternalPaymentRefSchema = z
+  .object({
+    system: z.literal('erp'),
+    documentId: z.string().trim().min(1).max(64),
+    documentNumber: z.string().trim().min(1).max(64),
+    /** ISO-дата факта оплаты в ERP (когда деньги ушли), если известна. */
+    paidAt: z.string().trim().min(1).max(40).nullable().optional(),
+  })
+  .strict();
+export type ExternalPaymentRef = z.infer<typeof ExternalPaymentRefSchema>;
+
+export const PayPayrollAccrualDocumentSchema = z
+  .object({
+    /** `'erp'` — проводит ERP по своей оплаченной заявке; казначейство цеха молчит. */
+    source: z.literal('erp').optional(),
+    externalRef: ExternalPaymentRefSchema.optional(),
+  })
+  .strict()
+  .refine((v) => v.source !== 'erp' || !!v.externalRef, {
+    message: 'Проведение из ERP требует externalRef (номер заявки на оплату)',
+    path: ['externalRef'],
+  });
 export type PayPayrollAccrualDocumentDto = z.infer<
   typeof PayPayrollAccrualDocumentSchema
 >;
@@ -211,6 +238,8 @@ export interface PayrollAccrualDocumentDto {
   paidAt: string | null;
   cancelledAt: string | null;
   cancelReason: string | null;
+  /** Чем оплачено во внешней системе-владельце денег (ERP); `null` — проведено в цехе. */
+  externalPaymentRef: ExternalPaymentRef | null;
   lines: PayrollAccrualDocumentLineDto[];
 }
 
@@ -233,6 +262,7 @@ export interface PayrollAccrualDocumentListItemDto {
   createdAt: string;
   paidAt: string | null;
   cancelledAt: string | null;
+  externalPaymentRef: ExternalPaymentRef | null;
   linesCount: number;
 }
 

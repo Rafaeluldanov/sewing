@@ -23,7 +23,7 @@ import {
   type UpdatePayrollAccrualDocumentLineDto,
 } from '@sewing/shared/payroll-accrual-documents';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { PayrollAccrualDocumentsService } from './payroll-accrual-documents.service.js';
 
@@ -43,7 +43,14 @@ import { PayrollAccrualDocumentsService } from './payroll-accrual-documents.serv
  *   - `POST   /api/payroll/accrual-documents/:id/pay`            — провести (PAID);
  *   - `POST   /api/payroll/accrual-documents/:id/cancel`         — отменить (CANCELLED).
  */
+/**
+ * Машинный токен ERP: ведомость начислений — РАСЧЁТ цеха (правило владельца:
+ * зарплату считает цех, деньги выдаёт ERP), поэтому список/карточка/расчёт/
+ * корректировка/отмена открыты под `payroll:accrual:*`. Проведение — отдельный
+ * скоуп `payroll:pay`: его ERP зовёт только по своей оплаченной заявке.
+ */
 @Roles('SHOP_MANAGER', 'ADMIN')
+@MachineScopes('payroll:accrual:read')
 @Controller('payroll/accrual-documents')
 export class PayrollAccrualDocumentsController {
   constructor(private readonly svc: PayrollAccrualDocumentsService) {}
@@ -58,6 +65,7 @@ export class PayrollAccrualDocumentsController {
     return this.svc.list(query, user);
   }
 
+  @MachineScopes('payroll:accrual:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreatePayrollAccrualDocumentSchema))
@@ -79,6 +87,7 @@ export class PayrollAccrualDocumentsController {
 
   @Roles('SHOP_MANAGER', 'ADMIN')
   @HttpCode(HttpStatus.OK)
+  @MachineScopes('payroll:accrual:write')
   @Post(':id/recompute')
   recompute(
     @Param('id') id: string,
@@ -90,6 +99,7 @@ export class PayrollAccrualDocumentsController {
 
   @Roles('SHOP_MANAGER', 'ADMIN')
   @HttpCode(HttpStatus.OK)
+  @MachineScopes('payroll:accrual:write')
   @Patch(':id/lines/:lineId')
   updateLine(
     @Param('id') id: string,
@@ -104,19 +114,21 @@ export class PayrollAccrualDocumentsController {
 
   @Roles('SHOP_MANAGER', 'ADMIN')
   @HttpCode(HttpStatus.OK)
+  @MachineScopes('payroll:pay')
   @Post(':id/pay')
   pay(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(PayPayrollAccrualDocumentSchema))
-    _body: PayPayrollAccrualDocumentDto,
+    body: PayPayrollAccrualDocumentDto,
     @CurrentUser() user: AuthPrincipal | undefined,
   ) {
     if (!user) throw new UnauthorizedException();
-    return this.svc.pay(id, user);
+    return this.svc.pay(id, user, body);
   }
 
   @Roles('SHOP_MANAGER', 'ADMIN')
   @HttpCode(HttpStatus.OK)
+  @MachineScopes('payroll:accrual:write')
   @Post(':id/cancel')
   cancel(
     @Param('id') id: string,

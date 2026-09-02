@@ -5,6 +5,11 @@ import {
   PayrollPayoutStatus,
   Prisma,
 } from '@prisma/client';
+import {
+  ExternalPaymentRefSchema,
+  type ExternalPaymentRef,
+  type PayPayrollAccrualDocumentDto,
+} from '@sewing/shared/payroll-accrual-documents';
 import type {
   CancelPayrollAccrualDocumentDto,
   CreatePayrollAccrualDocumentDto,
@@ -355,7 +360,19 @@ export class PayrollAccrualDocumentsService {
   // PAY (DRAFT → PAID + create PayrollPayout ISSUED per line)
   // ===========================================================================
 
-  async pay(id: string, viewer: AuthPrincipal): Promise<PayrollAccrualDocumentDto> {
+  /**
+   * Провести документ. `dto.source === 'erp'` — проводит ERP по своей уже
+   * оплаченной заявке (правило владельца: деньги выдаёт только ERP): ссылка
+   * на её документ ложится в `externalPaymentRef`, а заявка казначейства
+   * цеха НЕ создаётся — иначе одна выплата легла бы в две кассы.
+   */
+  async pay(
+    id: string,
+    viewer: AuthPrincipal,
+    dto: PayPayrollAccrualDocumentDto = {},
+  ): Promise<PayrollAccrualDocumentDto> {
+    const fromErp = dto.source === 'erp';
+    const externalRef = fromErp ? (dto.externalRef ?? null) : null;
     return this.prisma.$transaction(async (tx) => {
       const doc = await tx.payrollAccrualDocument.findUnique({
         where: { id },
@@ -604,12 +621,14 @@ export class PayrollAccrualDocumentsService {
         // статьёй ДДС сотрудника (fallback — глобальная). Проводка ДС
         // появится позже, на «Оплатить» заявку. Если казначейство не
         // настроено — заявка не создаётся (выплата работает как раньше).
-        await this.treasury.createSalaryExpenseRequestTx(tx, {
-          payoutId: payout.id,
-          employeeId: line.employeeId,
-          amount: line.amountToPayRub,
-          postedById: viewer.employeeId,
-        });
+        if (!fromErp) {
+          await this.treasury.createSalaryExpenseRequestTx(tx, {
+            payoutId: payout.id,
+            employeeId: line.employeeId,
+            amount: line.amountToPayRub,
+            postedById: viewer.employeeId,
+          });
+        }
 
         payoutsCreated += 1;
       }
@@ -622,6 +641,9 @@ export class PayrollAccrualDocumentsService {
           status: 'PAID',
           paidAt,
           paidById: viewer.employeeId,
+          externalPaymentRef: externalRef
+            ? (externalRef as Prisma.InputJsonObject)
+            : Prisma.JsonNull,
         },
         include: documentDetailInclude,
       });
@@ -641,6 +663,8 @@ export class PayrollAccrualDocumentsService {
             totalAdjustRub: roundMoneyNumber(doc.totalAdjustRub),
             paidById: viewer.employeeId,
             paidAt: paidAt.toISOString(),
+            source: fromErp ? 'erp' : 'shop',
+            externalRef: externalRef ?? null,
           },
         },
         tx,
@@ -977,6 +1001,7 @@ function toListItemDto(row: ListRow): PayrollAccrualDocumentListItemDto {
     createdAt: row.createdAt.toISOString(),
     paidAt: row.paidAt ? row.paidAt.toISOString() : null,
     cancelledAt: row.cancelledAt ? row.cancelledAt.toISOString() : null,
+    externalPaymentRef: toExternalRef(row.externalPaymentRef),
     linesCount: row._count.lines,
   };
 }
@@ -1014,6 +1039,11 @@ function toLineDto(line: LineRow): PayrollAccrualDocumentLineDto {
   };
 }
 
+function toExternalRef(raw: Prisma.JsonValue | null | undefined): ExternalPaymentRef | null {
+  const parsed = ExternalPaymentRefSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 function toDto(
   row: Omit<DocRow, 'lines'> & {
     totalPieceworkRub: Prisma.Decimal;
@@ -1042,6 +1072,7 @@ function toDto(
     paidAt: row.paidAt ? row.paidAt.toISOString() : null,
     cancelledAt: row.cancelledAt ? row.cancelledAt.toISOString() : null,
     cancelReason: row.cancelReason ?? null,
+    externalPaymentRef: toExternalRef(row.externalPaymentRef),
     lines: lines.map(toLineDto),
   };
 }

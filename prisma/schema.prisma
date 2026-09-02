@@ -3015,6 +3015,10 @@ model PayrollAccrualDocument {
   cancelledAt  DateTime?
   cancelReason String?   @db.Text
 
+  /// Внешняя ссылка на документ денег (ERP): `{system:'erp', documentId, documentNumber, paidAt}`.
+  /// Заполняется при проведении из ERP; `null` — проведено в цехе.
+  externalPaymentRef Json?
+
   createdBy   Employee  @relation("PayrollAccrualDocumentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   paidBy      Employee? @relation("PayrollAccrualDocumentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
   cancelledBy Employee? @relation("PayrollAccrualDocumentCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
