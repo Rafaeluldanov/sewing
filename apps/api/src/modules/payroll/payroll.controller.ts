@@ -16,7 +16,7 @@ import {
   type PayrollPeriodQuery,
 } from '@sewing/shared/payroll';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { PayrollService } from './payroll.service.js';
 
@@ -42,6 +42,7 @@ import { PayrollService } from './payroll.service.js';
  * public-шортката в `AuthGuard`.
  */
 @Controller('payroll')
+@MachineScopes('payroll:read')
 @Roles('SHOP_MANAGER', 'ADMIN')
 export class PayrollController {
   constructor(private readonly payroll: PayrollService) {}

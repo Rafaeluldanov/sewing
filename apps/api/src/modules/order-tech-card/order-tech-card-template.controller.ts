@@ -1,7 +1,7 @@
 import { Controller, Param, Post } from '@nestjs/common';
 import type { OrderTechCardParametersDto } from '@sewing/shared/order-tech-cards';
 
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrdersService } from '../orders/orders.service.js';
 import { OrderTechCardService } from './order-tech-card.service.js';
@@ -12,6 +12,7 @@ import { OrderTechCardService } from './order-tech-card.service.js';
  * больше нет — состав правится на карточке номенклатуры).
  */
 @Controller('orders/:id/tech-card')
+@MachineScopes('orders:read', 'orders:write')
 export class OrderTechCardTemplateController {
   constructor(
     private readonly orders: OrdersService,

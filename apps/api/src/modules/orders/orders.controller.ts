@@ -46,7 +46,7 @@ import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { OrderCostEstimatesService } from './order-cost-estimates.service.js';
 import { OrderProductionBalanceService } from './order-production-balance.service.js';
 import { OrdersService } from './orders.service.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 
 /**
@@ -72,6 +72,7 @@ import type { AuthPrincipal } from '../auth/auth.types.js';
  * по-прежнему закрыта.
  */
 @Controller('orders')
+@MachineScopes('orders:read', 'orders:write')
 @Roles('SHOP_MANAGER')
 export class OrdersController {
   constructor(

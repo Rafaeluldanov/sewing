@@ -1,5 +1,5 @@
 import { Controller, Get, Param } from '@nestjs/common';
-import { CurrentUser } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { EarningsService } from './earnings.service.js';
 
@@ -18,6 +18,7 @@ import { EarningsService } from './earnings.service.js';
  * См. `docs/api.md §10`.
  */
 @Controller('passports')
+@MachineScopes('payroll:read')
 export class PassportEarningsController {
   constructor(private readonly earnings: EarningsService) {}
 

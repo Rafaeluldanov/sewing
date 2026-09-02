@@ -6,7 +6,7 @@ import {
   type ListEarningsQuery,
 } from '@sewing/shared/earnings';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { EarningsService } from './earnings.service.js';
 
@@ -31,6 +31,7 @@ import { EarningsService } from './earnings.service.js';
  * любой авторизованной роли, ограничение делается на уровне данных.
  */
 @Controller('earnings')
+@MachineScopes('payroll:read')
 export class EarningsController {
   constructor(private readonly earnings: EarningsService) {}
 

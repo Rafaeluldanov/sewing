@@ -41,7 +41,7 @@ import {
 
 import { ConstructorTaskFileInvalidException } from '../../common/errors.js';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ConstructorTasksService } from './constructor-tasks.service.js';
 import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
@@ -71,6 +71,7 @@ import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
  * пилота / разруливания «застрявших» задач).
  */
 @Controller('constructor-tasks')
+@MachineScopes('constructor:read', 'constructor:write')
 export class ConstructorTasksController {
   constructor(private readonly tasks: ConstructorTasksService) {}
 

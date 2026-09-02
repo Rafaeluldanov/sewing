@@ -6,7 +6,7 @@ import {
   type UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { CompanySettingsService } from './company-settings.service.js';
 
@@ -24,6 +24,7 @@ import { CompanySettingsService } from './company-settings.service.js';
  */
 @Roles('SHOP_MANAGER', 'ADMIN')
 @Controller('company-settings')
+@MachineScopes('settings:read', 'settings:write')
 export class CompanySettingsController {
   constructor(private readonly settings: CompanySettingsService) {}
 

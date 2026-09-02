@@ -2749,6 +2749,9 @@ Singleton-настройки внешних связок тенанта: под�
 | PATCH | `/api/integrations/settings`              | SHOP_MANAGER, ADMIN | Частичное обновление (`UpdateIntegrationSettingsSchema`). `undefined` ⇒ не трогаем; пустой пароль/ключ ⇒ «не менять». |
 | POST  | `/api/integrations/upgifts/test-connection` | SHOP_MANAGER, ADMIN | Логин сервисным аккаунтом + `GET /auth/me`. Fail-soft: `{ ok, message }`, а не 5xx. |
 | POST  | `/api/integrations/assistant/test-key`    | SHOP_MANAGER, ADMIN | Проверка ключа Anthropic (`GET /v1/models?limit=1`). Fail-soft: `{ ok, message }`. Итог пишется в `assistantLastCheckOkAt` / `assistantLastCheckError`. |
+| GET   | `/api/integrations/service-tokens`        | SHOP_MANAGER, ADMIN | Машинные токены доступа к API. Секреты не отдаются: только `tokenPrefix` для опознания, скоупы, `lastUsedAt`, `revokedAt`. |
+| POST  | `/api/integrations/service-tokens`        | SHOP_MANAGER, ADMIN | Выпустить токен (`{ name?, scopes? }`). Плейнтекст возвращается **один раз** — в БД лежит только sha256. Скоупы по умолчанию: `equipment:read|write`, `operations:read|write`. |
+| POST  | `/api/integrations/service-tokens/:id/revoke` | SHOP_MANAGER, ADMIN | Отозвать: простановка `revokedAt`, не DELETE (история нужна для расследования). |
 
 Включение любой из связок проверяется на полноту: `upgiftsEnabled`
 требует baseUrl+tenant+email+password (400 `INTEGRATION_INCOMPLETE`),
@@ -2760,6 +2763,67 @@ Singleton-настройки внешних связок тенанта: под�
 ключом `INTEGRATION_SECRET_KEY` (`integrations/secret-box.ts`) и наружу не
 отдаются никогда. Audit: `INTEGRATION_SETTINGS_UPDATED` со списком
 изменённых полей, без значений.
+
+### Машинные токены (сервер-сервер)
+
+ERP upgifts показывает разделы швейки в своих экранах и пишет в них через прокси. Ходит он машинным токеном — `Authorization: Bearer sew_…`,
+который принимает глобальный `AuthGuard` (`auth/auth.guard.ts`) отдельной веткой, мимо
+cookie-пути.
+
+Почему не session-cookie: cookie завязана на политику сессий сотрудника (idle-TTL и
+рубильник «Завершить все сеансы» в `CompanySettings.sessionsValidFrom`) — один клик в
+настройках компании молча рвал бы обмен. Почему не HMAC-токен как `session.ts`:
+`JWT_SECRET` один на процесс, такой токен был бы валиден в любом тенанте; `ServiceToken`
+лежит в БД тенанта.
+
+Права машинного токена — СКОУПЫ, а не роли, и работают **deny by default**: маршрут без
+`@MachineScopes(...)` токену закрыт, сколько бы ролей ему ни выдали (роль `SHOP_MANAGER`
+открыла бы зарплату, казначейство и сотрудников). Сегодня открыто восемь хендлеров:
+`equipment` и `operations` — список, карточка, создание, правка. `ADMIN`/`SUPERADMIN`
+машине не выдаются: `ADMIN` — wildcard в гварде.
+
+Набор скоупов «окна ERP» — константа `ERP_WINDOW_SCOPES` (`auth/service-token.ts`), она же
+умолчание при выпуске токена. Решение владельца 02.09.2026: ERP показывает у себя заказы на
+производство, лекала, маршруты, операции, заявки конструктору, принтеры, роли, зарплату,
+себестоимость и настройки цеха так, чтобы человек не понимал, что систем две. Окно без данных
+— пустое окно, отсюда широкий набор.
+
+Deny-by-default при этом остаётся смыслом конструкции: под каждый скоуп открыт КОНКРЕТНЫЙ
+контроллер (`@MachineScopes(...)`), и того, чего в списке нет, машине не видно. Денег машина не
+двигает: `payroll:read`, `costs:read`, `roles:read` — только чтение; казначейство, выплаты,
+паспорта, смены и раскрой не открыты вовсе. `ADMIN`/`SUPERADMIN` машине не выдаются: `ADMIN` —
+wildcard в гварде.
+
+| Скоуп | Что открывает |
+|---|---|
+| `orders:read` / `orders:write` | `orders`, расчёты заказа, техкарта |
+| `patterns:read` / `patterns:write` | `patterns`, `pattern-categories`, `sizes` |
+| `routes:read` / `routes:write` | `routes` |
+| `operations:read/write`, `equipment:read/write` | справочники операций и оборудования |
+| `constructor:read` / `constructor:write` | `constructor-tasks` |
+| `printers:read` / `printers:write` | `printers`; `print-jobs` — только чтение |
+| `settings:read` / `settings:write` | `company-settings`, `company-divisions` |
+| `needs:read` / `needs:write` | `workshop-needs` (потребность цеха → заказ поставщику в ERP) |
+| `stock:read` / `stock:write` | `integrations/erp-stock` — зеркало остатка склада, ведомого в ERP |
+| `catalog:read`, `employees:read`, `roles:read`, `payroll:read`, `costs:read` | только чтение |
+
+### Зеркало остатка склада ERP
+
+| Метод | Путь | Доступ | Назначение |
+|---|---|---|---|
+| GET | `/api/integrations/erp-stock` | `stock:read` | Что цех знает об остатке ERP и насколько снимок свеж (`syncedAt`). |
+| PUT | `/api/integrations/erp-stock` | `stock:write` | Принять снимок целиком (`{ items: [...] }`). Замена, а не слияние. |
+
+⛔ Таблицу `ErpShopStock` на сегодня НЕ ЧИТАЕТ ни один рабочий путь. Готовность кроя
+(`cut-readiness.service.ts`) по-прежнему считает `placedQty` по собственной приёмке цеха.
+Переключать её на зеркало можно только вместе со старым путём: иначе в день переключения
+`placedQty` станет нулём и крой физически встанет.
+
+Почему снимок, а не события: у остатка нет своей истории, есть текущее значение. Пропущенная
+доставка лечится следующей, тогда как потерянное событие «+5 м» разошлось бы навсегда. Почему
+пишет ERP, а не спрашивает цех: недоступность ERP не должна останавливать цех — со снимком у
+него всегда есть последнее известное состояние и видно, насколько оно устарело.
+
 
 ---
 

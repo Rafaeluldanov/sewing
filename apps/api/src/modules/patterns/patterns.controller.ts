@@ -40,7 +40,7 @@ import {
   type ReplacePatternItemMaterialSpecDto,
 } from '@sewing/shared/pattern-item-spec';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { PatternsService } from './patterns.service.js';
 import type { UploadedFileLike } from './patterns-storage.service.js';
@@ -71,6 +71,7 @@ import type { UploadedFileLike } from './patterns-storage.service.js';
  */
 @Roles('ADMIN', 'SHOP_MANAGER')
 @Controller('patterns')
+@MachineScopes('patterns:read', 'patterns:write')
 export class PatternsController {
   constructor(private readonly patterns: PatternsService) {}
 

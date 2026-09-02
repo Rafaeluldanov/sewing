@@ -8989,3 +8989,46 @@ model PayrollAccrualSchedule {
   updatedByEmployeeId String?
   updatedBy           Employee? @relation("PayrollAccrualScheduleUpdatedBy", fields: [updatedByEmployeeId], references: [id], onDelete: SetNull)
 }
+
+
+// ---------------------------------------------------------------------------
+// ErpShopStock — зеркало остатка швейного склада, ведомого в ERP upgifts.
+// ---------------------------------------------------------------------------
+//
+// ⛔ ТЁМНАЯ ТАБЛИЦА. На момент заведения её НЕ ЧИТАЕТ НИКТО: готовность кроя
+// (`cut-readiness.service.ts`) по-прежнему считает `placedQty` по собственной
+// приёмке цеха. Переключать её на это зеркало можно только вместе со старым
+// путём — иначе в день переключения `placedQty` станет нулём и крой встанет.
+//
+// Зачем зеркало, а не запрос в ERP по требованию: недоступность ERP не должна
+// останавливать цех. Со снимком у цеха всегда есть последнее известное
+// состояние и видно, насколько оно устарело (`syncedAt`); при запросе-по-месту
+// упавший ERP означал бы, что готовность кроя не считается вовсе.
+//
+// Разрез — рулонный (`seriesId`), потому что настил кладут из КОНКРЕТНОГО
+// рулона: у рулона свой оттенок, ширина, плотность и своя цена.
+model ErpShopStock {
+  id               String   @id @default(cuid())
+  /// Номенклатура ERP (uuid). Своей номенклатуры у зеркала нет — оно снимок.
+  erpProductId     String
+  erpProductCode   String?
+  erpProductName   String
+  /// Характеристика ERP (цвет/размер материала), если ведётся.
+  erpCharacteristicId String?
+  /// Серия ERP = рулон. NULL — материал без рулонного учёта.
+  erpSeriesId      String?
+  rollNumber       String?
+  shade            String?
+  widthCm          String?
+  densityGsm       String?
+  qty              Decimal  @db.Decimal(15, 3)
+  unit             String?
+  /// Адреса хранения как их видит ERP: [{ bin_id, qty }]. Детализация остатка,
+  /// сумма по ячейкам может не сойтись с `qty`, пока принятое не разложено.
+  bins             Json     @default("[]")
+  /// Когда ERP прислала этот снимок. Возраст снимка — часть ответа наружу.
+  syncedAt         DateTime @default(now())
+
+  @@unique([erpProductId, erpCharacteristicId, erpSeriesId], name: "erp_shop_stock_key")
+  @@index([erpProductId])
+}

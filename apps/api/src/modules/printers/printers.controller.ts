@@ -30,7 +30,7 @@ import {
   type BulkArchiveResultDto,
 } from '@sewing/shared/archive';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Public, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { PrintersService } from './printers.service.js';
 
@@ -40,6 +40,7 @@ import { PrintersService } from './printers.service.js';
  * endpoint-ы вынесены в отдельный контроллер `PrintersAgentController`.
  */
 @Controller('printers')
+@MachineScopes('printers:read', 'printers:write')
 @Roles('SHOP_MANAGER', 'ADMIN')
 export class PrintersController {
   private readonly logger = new Logger(PrintersController.name);

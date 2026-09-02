@@ -7,7 +7,7 @@ import {
   type RenameOrderCalculationDto,
 } from '@sewing/shared';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderCalculationsService } from './order-calculations.service.js';
 
@@ -21,6 +21,7 @@ import { OrderCalculationsService } from './order-calculations.service.js';
  * чтобы UI обновлял ряд вкладок из одного источника.
  */
 @Controller('orders/:id/calculations')
+@MachineScopes('orders:read', 'orders:write')
 export class OrderCalculationsController {
   constructor(private readonly service: OrderCalculationsService) {}
 

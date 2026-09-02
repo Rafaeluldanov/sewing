@@ -6,6 +6,7 @@ import {
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
+import { ERP_WINDOW_SCOPES } from '../auth/service-token.js';
 import { ServiceTokenService } from '../auth/service-token.service.js';
 import { IntegrationsService } from './integrations.service.js';
 
@@ -67,11 +68,10 @@ export class IntegrationsController {
     @Body() body: { name?: string; scopes?: string[] },
     @CurrentUser() user: AuthPrincipal,
   ) {
-    // Скоупы по умолчанию — ровно то, ради чего токен и заводится: два справочника.
-    // Расширять надо осознанно, поэтому «всё сразу» здесь не предусмотрено.
-    const scopes = body.scopes?.length
-      ? body.scopes
-      : ['equipment:read', 'equipment:write', 'operations:read', 'operations:write'];
+    // Скоупы по умолчанию — набор «окна ERP» (`ERP_WINDOW_SCOPES`): всё, чем ERP рисует у себя
+    // экраны цеха, и ничего сверх. Явно переданный список его перекрывает — токен под узкую
+    // задачу выпускается с ним, а не правкой умолчания.
+    const scopes = body.scopes?.length ? body.scopes : [...ERP_WINDOW_SCOPES];
     return this.serviceTokens.issue({
       name: body.name?.trim() || 'ERP upgifts',
       scopes,

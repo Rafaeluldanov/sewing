@@ -5,7 +5,7 @@ import {
   type SizeDto,
 } from '@sewing/shared/sizes';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { SizesService } from './sizes.service.js';
 
@@ -31,6 +31,7 @@ import { SizesService } from './sizes.service.js';
  */
 @Roles('ADMIN', 'SHOP_MANAGER')
 @Controller('sizes')
+@MachineScopes('patterns:read', 'patterns:write')
 export class SizesController {
   constructor(private readonly sizes: SizesService) {}
 

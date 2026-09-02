@@ -19,7 +19,7 @@ import {
   type UpdatePrintJobStatusDto,
 } from '@sewing/shared/printers';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Public, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { PrintJobsService } from './print-jobs.service.js';
 import { AgentAuthGuard, CurrentPrinter } from './agent.guard.js';
@@ -45,6 +45,8 @@ import { resolvePublicApiBaseUrl } from './public-api-url.js';
  *     — менеджерский UI (карточка принтера) видит хвост job-ов.
  */
 @Controller('print-jobs')
+// Очередь печати машине доступна только на чтение: задание создаёт человек за станком.
+@MachineScopes('printers:read')
 export class PrintJobsController {
   constructor(private readonly jobs: PrintJobsService) {}
 
