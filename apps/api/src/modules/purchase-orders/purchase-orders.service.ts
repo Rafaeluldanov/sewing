@@ -147,6 +147,18 @@ export class PurchaseOrdersService {
       if (n.status === 'CANCELLED') {
         throw new PurchaseOrderNeedsRequiredException();
       }
+      // Закупочный шов ERP: потребность уже под заказом поставщику ERP — свой
+      // заказ цеха на неё был бы вторым заказом того же материала.
+      if (n.erpManagedAt) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'PURCHASE_ORDER_NEED_ERP_MANAGED',
+          message:
+            `Строка «${n.description}» уже заказана через ERP` +
+            (n.erpPurchaseOrderRef ? ` (заказ ${n.erpPurchaseOrderRef})` : '') +
+            '. Заказ поставщику по ней ведёт ERP.',
+        });
+      }
       // Фича «Варианты просчёта»: строка неактивного варианта — это
       // сравнительный просчёт, закупать под него нельзя. Адресная 409
       // вместо тихой закупки не того материала.

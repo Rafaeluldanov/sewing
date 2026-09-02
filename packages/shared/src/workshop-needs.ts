@@ -520,6 +520,30 @@ export const WorkshopNeedArchiveScopeSchema = z.enum(
 // List query DTO
 // ---------------------------------------------------------------------------
 
+/**
+ * Тело `POST /api/workshop-needs/:id/erp-link` — ERP взяла потребность под свой заказ поставщику
+ * (`ORDERED`) либо сообщает факт прихода по своей приёмке (`PARTIALLY_RECEIVED`/`RECEIVED`,
+ * `erpReceivedQty` — принято всего). Машинная ручка; человеческий PATCH статуса не расширяется.
+ */
+export const ErpLinkWorkshopNeedSchema = z
+  .object({
+    status: z.enum(['ORDERED', 'PARTIALLY_RECEIVED', 'RECEIVED']),
+    erpPurchaseOrderId: z.string().trim().min(1).max(64),
+    erpPurchaseOrderRef: z.string().trim().min(1).max(64),
+    erpReceivedQty: z
+      .union([z.number().nonnegative(), z.string().trim().regex(/^\d+(\.\d+)?$/)])
+      .nullable()
+      .optional(),
+  })
+  .strict();
+export type ErpLinkWorkshopNeedDto = z.infer<typeof ErpLinkWorkshopNeedSchema>;
+
+/** Тело `POST /api/workshop-needs/:id/erp-unlink` — ERP отказалась от потребности (заказ отменён). */
+export const ErpUnlinkWorkshopNeedSchema = z
+  .object({ reason: z.string().trim().max(500).optional() })
+  .strict();
+export type ErpUnlinkWorkshopNeedDto = z.infer<typeof ErpUnlinkWorkshopNeedSchema>;
+
 export const ListWorkshopNeedsQuerySchema = z.object({
   /** Опциональный фильтр по заказу. */
   orderId: z.string().min(1).optional(),
@@ -1107,6 +1131,16 @@ export interface WorkshopNeedDto {
   quotedCurrency: MoneyCurrency | string | null;
   /** ISO. */
   expectedDeliveryDate: string | null;
+  /**
+   * Закупка через ERP (шов). `erpManagedAt` задан — потребность взята под заказ поставщику ERP:
+   * свой заказ цех не создаёт, статус ведёт ERP. `erpReceivedQty` — принято по приёмке ERP
+   * (готовность кроя считает его размещённым).
+   */
+  erpManagedAt: string | null;
+  erpPurchaseOrderId: string | null;
+  erpPurchaseOrderRef: string | null;
+  erpReceivedQty: string | null;
+  erpReceivedAt: string | null;
 
   /**
    * Этап 5 «Поставщики». Связь с карточкой `Supplier`:

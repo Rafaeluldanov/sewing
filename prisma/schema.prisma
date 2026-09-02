@@ -5186,6 +5186,16 @@ model WorkshopNeed {
   quotedCurrency       String?
   expectedDeliveryDate DateTime?
 
+  /// Закупка через ERP (шов «потребность цеха → заказ поставщику ERP»). `erpManagedAt` — момент,
+  /// когда ERP взяла потребность под свой заказ: с этого момента свой заказ поставщику цех не
+  /// создаёт (409). `erpPurchaseOrderId/Ref` — документ ERP; `erpReceivedQty/At` — факт прихода
+  /// по её приёмке (готовность кроя считает его размещённым: рулоны лежат на складе ERP).
+  erpManagedAt        DateTime?
+  erpPurchaseOrderId  String?
+  erpPurchaseOrderRef String?
+  erpReceivedQty      Decimal?  @db.Decimal(14, 4)
+  erpReceivedAt       DateTime?
+
   /// Этап 5 «Поставщики» (см. `model Supplier` ниже,
   /// `apps/api/src/modules/suppliers/*`,
   /// `docs/recon-soft-integration.md §«Этап 5»`).

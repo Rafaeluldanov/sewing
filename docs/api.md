@@ -2094,6 +2094,18 @@ Snapshot строк (см. `PayrollPayoutLine.snapshot`):
 ---
 
 <a id="30c-payroll-accrual-documents"></a>
+## 30b-erp. Workshop needs — закупочный шов ERP (2026-09-02)
+
+`POST /api/workshop-needs/:id/erp-link` (`@MachineScopes('needs:write')`) — ERP взяла потребность под
+свой заказ поставщику: тело `{ status: 'ORDERED'|'PARTIALLY_RECEIVED'|'RECEIVED', erpPurchaseOrderId,
+erpPurchaseOrderRef, erpReceivedQty? }`. Ставит статус, `erpManagedAt` (если пусто), ссылку на документ
+ERP и факт прихода (`erpReceivedQty/At`). 409 `WORKSHOP_NEED_ERP_STATE`: потребность отменена, уже
+заказана заказом цеха, или уже под другим заказом ERP. `POST /:id/erp-unlink` `{ reason? }` — заказ ERP
+отменён до прихода: статус `PURCHASE_PLANNED`, ссылка снята (после прихода — 409).
+Следствия: `createFromNeeds` по `erpManagedAt` → 409 `PURCHASE_ORDER_NEED_ERP_MANAGED`;
+`cut-readiness` прибавляет `erpReceivedQty` к принятому И размещённому (склад — в ERP).
+DTO `WorkshopNeedDto` получил `erpManagedAt/erpPurchaseOrderId/erpPurchaseOrderRef/erpReceivedQty/erpReceivedAt`.
+
 ## 30c. Payroll accrual documents (PHASE 3 STEP 6)
 
 > **Машинный токен ERP (с 2026-09-02).** Класс открыт `@MachineScopes('payroll:accrual:read')`;

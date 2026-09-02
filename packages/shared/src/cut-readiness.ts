@@ -191,6 +191,8 @@ export interface CutMaterialReadinessDto {
 
   workshopNeedId?: string | null;
   workshopNeedStatus?: string | null;
+  /** Принято по приёмке ERP (закупочный шов); входит в receivedQty и placedQty. */
+  erpReceivedQty?: string | null;
 
   cells: CutMaterialReadinessCellDto[];
 

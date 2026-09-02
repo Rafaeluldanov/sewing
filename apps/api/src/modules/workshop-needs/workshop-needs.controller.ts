@@ -10,6 +10,10 @@ import {
 import {
   ListWorkshopNeedsQuerySchema,
   UpdateWorkshopNeedSchema,
+  ErpLinkWorkshopNeedSchema,
+  ErpUnlinkWorkshopNeedSchema,
+  type ErpLinkWorkshopNeedDto,
+  type ErpUnlinkWorkshopNeedDto,
   WorkshopNeedsArchiveRequestSchema,
   type ListWorkshopNeedsQuery,
   type UpdateWorkshopNeedDto,
@@ -109,6 +113,30 @@ export class WorkshopNeedsController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<WorkshopNeedDto> {
     return this.needs.update(id, dto, user.employeeId);
+  }
+
+  /** Закупочный шов ERP: ERP взяла потребность под свой заказ / сообщает приход по своей приёмке. */
+  @MachineScopes('needs:write')
+  @Post(':id/erp-link')
+  erpLink(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(ErpLinkWorkshopNeedSchema))
+    dto: ErpLinkWorkshopNeedDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<WorkshopNeedDto> {
+    return this.needs.erpLink(id, dto, user.employeeId);
+  }
+
+  /** Закупочный шов ERP: заказ ERP отменён до прихода — потребность возвращается «К закупке». */
+  @MachineScopes('needs:write')
+  @Post(':id/erp-unlink')
+  erpUnlink(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(ErpUnlinkWorkshopNeedSchema))
+    dto: ErpUnlinkWorkshopNeedDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<WorkshopNeedDto> {
+    return this.needs.erpUnlink(id, dto, user.employeeId);
   }
 
   @MachineScopes('needs:write')

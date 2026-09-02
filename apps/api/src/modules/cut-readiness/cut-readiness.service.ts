@@ -618,6 +618,17 @@ export class CutReadinessService {
     // qty IS NULL — считаем покрытие = `targetDecimal` (создатель
     // override мог не знать точное количество, но сказал «материал
     // есть»). Подробности — в JSDoc `CutMaterialReadinessDto.manualArrivedQty`.
+    // Закупочный шов ERP: приход по приёмке ERP. Рулоны лежат на складе ERP (своего склада у
+    // цеха нет — решение владельца 02.09.2026), поэтому принятое считается и размещённым;
+    // где именно рулон — закройщик смотрит по зеркалу остатка ERP.
+    const erpReceivedQty = need.erpReceivedQty
+      ? new Prisma.Decimal(need.erpReceivedQty)
+      : new Prisma.Decimal(0);
+    if (erpReceivedQty.greaterThan(0)) {
+      receivedQty = receivedQty.add(erpReceivedQty);
+      placedQty = placedQty.add(erpReceivedQty);
+    }
+
     let manualArrivedQty = new Prisma.Decimal(0);
     const manualArrivalRefs: CutMaterialArrivalOverrideRefDto[] = [];
     for (const ov of overrides) {
@@ -654,7 +665,7 @@ export class CutReadinessService {
       // Не блокирует крой; статус — INFO/WARNING. Override на
       // некритичной строке тоже допустим — UI его отрендерит, но
       // готовность строки и так всегда `ready = true`.
-      if (need.receiptLines.every((l) => l.status !== 'POSTED')) {
+      if (need.receiptLines.every((l) => l.status !== 'POSTED') && !erpReceivedQty.greaterThan(0)) {
         status = 'INFO';
         message =
           'Некритичный материал: ещё не принят, но крой по этой строке не блокируется.';
@@ -727,6 +738,7 @@ export class CutReadinessService {
       message,
       manualArrivedQty:
         manualArrivedQty.greaterThan(0) ? manualArrivedQty.toString() : null,
+      erpReceivedQty: erpReceivedQty.greaterThan(0) ? erpReceivedQty.toString() : null,
       manuallyUnblocked,
       manualArrivalOverrides:
         manualArrivalRefs.length > 0 ? manualArrivalRefs : undefined,

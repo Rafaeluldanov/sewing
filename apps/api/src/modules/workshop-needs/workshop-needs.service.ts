@@ -15,6 +15,8 @@ import type {
   WorkshopNeedListItemDto,
   WorkshopNeedOrderCalculationFilter,
   WorkshopNeedsArchiveResultDto,
+  ErpLinkWorkshopNeedDto,
+  ErpUnlinkWorkshopNeedDto,
 } from '@sewing/shared/workshop-needs';
 import {
   ORDER_APPLICATION_STAGE_LABELS,
@@ -32,6 +34,7 @@ import {
   normalizeUnit,
 } from '@sewing/shared/norm-purchase';
 
+import { PURCHASE_ORDER_LINE_ACTIVE_STATUSES } from '@sewing/shared/purchase-orders';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
@@ -47,6 +50,7 @@ import {
   WorkshopNeedOrderItemsRequiredException,
   WorkshopNeedsAlreadyReviewedException,
   WorkshopNeedsHaveStockException,
+  WorkshopNeedErpStateException,
 } from '../../common/errors.js';
 import { assertOrderMaterialCorrectionAllowed } from '../../common/order-material-correction.js';
 import { OrderCostEstimatesService } from '../orders/order-cost-estimates.service.js';
@@ -560,6 +564,136 @@ export class WorkshopNeedsService {
   // -------------------------------------------------------------------------
   // BULK ACCEPT (экран «Согласование закупки»)
   // -------------------------------------------------------------------------
+
+
+  // ═══════════════════ Закупочный шов ERP (машинные ручки) ═══════════════════
+
+  /**
+   * ERP взяла потребность под свой заказ поставщику (`ORDERED`) или сообщает
+   * приход по своей приёмке (`PARTIALLY_RECEIVED`/`RECEIVED`, `erpReceivedQty`
+   * — принято всего). Отдельная ручка вместо расширения человеческого
+   * `update()`: переход под ERP — один явный вызов, буфер полей закупщика не
+   * расползается. Стейт-машины у статуса нет и здесь её не заводим — но две
+   * вещи проверяем: потребность жива и не заказана СВОИМ заказом цеха.
+   */
+  async erpLink(
+    id: string,
+    dto: ErpLinkWorkshopNeedDto,
+    actorEmployeeId?: string | null,
+  ): Promise<WorkshopNeedDto> {
+    const existing = await this.prisma.workshopNeed.findUnique({ where: { id } });
+    if (!existing) throw new WorkshopNeedNotFoundException();
+    if (existing.status === 'CANCELLED') {
+      throw new WorkshopNeedErpStateException(
+        'Потребность отменена — заказать её через ERP нельзя.',
+      );
+    }
+    const ownPoLines = await this.prisma.purchaseOrderLine.count({
+      where: {
+        workshopNeedId: id,
+        status: { in: PURCHASE_ORDER_LINE_ACTIVE_STATUSES as string[] },
+      },
+    });
+    if (ownPoLines > 0) {
+      throw new WorkshopNeedErpStateException(
+        'По потребности уже есть заказ поставщику цеха — ERP взять её не может.',
+      );
+    }
+    if (
+      existing.erpPurchaseOrderId &&
+      existing.erpPurchaseOrderId !== dto.erpPurchaseOrderId
+    ) {
+      throw new WorkshopNeedErpStateException(
+        `Потребность уже под заказом ERP ${existing.erpPurchaseOrderRef ?? existing.erpPurchaseOrderId} — сначала отвяжите его.`,
+      );
+    }
+    const receivedQty =
+      dto.erpReceivedQty === undefined || dto.erpReceivedQty === null
+        ? null
+        : new Prisma.Decimal(dto.erpReceivedQty);
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.workshopNeed.update({
+        where: { id },
+        data: {
+          status: dto.status,
+          erpManagedAt: existing.erpManagedAt ?? now,
+          erpPurchaseOrderId: dto.erpPurchaseOrderId,
+          erpPurchaseOrderRef: dto.erpPurchaseOrderRef,
+          ...(receivedQty !== null
+            ? { erpReceivedQty: receivedQty, erpReceivedAt: now }
+            : {}),
+        },
+      });
+      await this.audit.log(
+        {
+          event: 'WORKSHOP_NEED_ERP_LINKED',
+          entityType: 'WORKSHOP_NEED',
+          entityId: id,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            orderId: existing.orderId,
+            previousStatus: existing.status,
+            status: dto.status,
+            erpPurchaseOrderId: dto.erpPurchaseOrderId,
+            erpPurchaseOrderRef: dto.erpPurchaseOrderRef,
+            erpReceivedQty: receivedQty ? receivedQty.toString() : null,
+          },
+        },
+        tx,
+      );
+    });
+    return this.getOne(id);
+  }
+
+  /**
+   * ERP отказалась от потребности (её заказ отменён до прихода): статус
+   * возвращается в `PURCHASE_PLANNED`, ссылка снимается. После факта прихода
+   * по приёмке ERP отвязка запрещена — материал уже на складе ERP.
+   */
+  async erpUnlink(
+    id: string,
+    dto: ErpUnlinkWorkshopNeedDto,
+    actorEmployeeId?: string | null,
+  ): Promise<WorkshopNeedDto> {
+    const existing = await this.prisma.workshopNeed.findUnique({ where: { id } });
+    if (!existing) throw new WorkshopNeedNotFoundException();
+    if (!existing.erpManagedAt) return this.getOne(id);
+    if (existing.erpReceivedQty && existing.erpReceivedQty.greaterThan(0)) {
+      throw new WorkshopNeedErpStateException(
+        'По потребности уже есть приход по приёмке ERP — отвязать нельзя.',
+      );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.workshopNeed.update({
+        where: { id },
+        data: {
+          status: existing.status === 'CANCELLED' ? 'CANCELLED' : 'PURCHASE_PLANNED',
+          erpManagedAt: null,
+          erpPurchaseOrderId: null,
+          erpPurchaseOrderRef: null,
+          erpReceivedQty: null,
+          erpReceivedAt: null,
+        },
+      });
+      await this.audit.log(
+        {
+          event: 'WORKSHOP_NEED_ERP_UNLINKED',
+          entityType: 'WORKSHOP_NEED',
+          entityId: id,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            orderId: existing.orderId,
+            previousStatus: existing.status,
+            erpPurchaseOrderRef: existing.erpPurchaseOrderRef,
+            reason: dto.reason ?? null,
+          },
+        },
+        tx,
+      );
+    });
+    return this.getOne(id);
+  }
 
   /**
    * «Принять теорию для непроверенных» — bulk-операция экрана
@@ -3676,6 +3810,11 @@ export class WorkshopNeedsService {
       expectedDeliveryDate: row.expectedDeliveryDate
         ? row.expectedDeliveryDate.toISOString()
         : null,
+      erpManagedAt: row.erpManagedAt ? row.erpManagedAt.toISOString() : null,
+      erpPurchaseOrderId: row.erpPurchaseOrderId,
+      erpPurchaseOrderRef: row.erpPurchaseOrderRef,
+      erpReceivedQty: row.erpReceivedQty ? row.erpReceivedQty.toString() : null,
+      erpReceivedAt: row.erpReceivedAt ? row.erpReceivedAt.toISOString() : null,
       selectedSupplierId: row.selectedSupplierId,
       selectedSupplierCatalogItemId: row.selectedSupplierCatalogItemId,
       selectedSupplierName: supplier?.name ?? null,

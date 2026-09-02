@@ -3533,6 +3533,13 @@ export class PatternSizeParameterValueNotAllowedException extends BusinessExcept
  * Потребность цеха не найдена. Бросается из `WorkshopNeedsService.get`
  * / `update` / `cancel`.
  */
+/** Закупочный шов ERP: потребность в состоянии, в котором ERP её взять/отпустить не может. */
+export class WorkshopNeedErpStateException extends BusinessException {
+  constructor(message: string) {
+    super('WORKSHOP_NEED_ERP_STATE', message, HttpStatus.CONFLICT);
+  }
+}
+
 export class WorkshopNeedNotFoundException extends BusinessException {
   constructor() {
     super(

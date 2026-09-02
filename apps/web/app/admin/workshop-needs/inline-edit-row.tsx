@@ -310,7 +310,9 @@ export function InlineEditWorkshopNeedRow({
   const isLockedByPo =
     need.status === 'ORDERED' ||
     need.status === 'PARTIALLY_RECEIVED' ||
-    need.status === 'RECEIVED';
+    need.status === 'RECEIVED' ||
+    // Закупочный шов: потребность под заказом поставщику ERP — статус ведёт ERP.
+    Boolean(need.erpManagedAt);
 
   const detailHref = `/admin/workshop-needs/${encodeURIComponent(need.id)}`;
 
@@ -670,7 +672,9 @@ export function InlineEditWorkshopNeedRow({
           </label>
 
           <label className="wn-field wn-field--status">
-            <span className="wn-field__lab">Статус</span>
+            <span className="wn-field__lab">
+              Статус{need.erpPurchaseOrderRef ? ` · ERP ${need.erpPurchaseOrderRef}` : ''}
+            </span>
             <select
               name="status"
               defaultValue={need.status}
