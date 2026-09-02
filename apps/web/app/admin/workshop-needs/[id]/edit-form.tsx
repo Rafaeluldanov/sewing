@@ -282,6 +282,8 @@ export function EditWorkshopNeedForm({
               id="need-status"
               name="status"
               defaultValue={need.status}
+              disabled={Boolean(need.erpManagedAt)}
+              title={need.erpManagedAt ? `Статус ведёт ERP (заказ ${need.erpPurchaseOrderRef ?? ''})` : undefined}
             >
               {WORKSHOP_NEED_STATUSES.map((s) => (
                 <option key={s} value={s}>

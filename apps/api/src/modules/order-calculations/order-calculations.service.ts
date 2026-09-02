@@ -628,6 +628,17 @@ export class OrderCalculationsService {
           'движения. Сначала отмените приход или расход по этим строкам.',
       );
     }
+    // Закупочный шов: строка варианта под заказом поставщику ERP — связь ERP оборвалась бы.
+    const needsUnderErp = await this.prisma.workshopNeed.count({
+      where: { orderId, orderCalculationId: calcId, erpManagedAt: { not: null } },
+    });
+    if (needsUnderErp > 0) {
+      throw this.conflict(
+        ORDER_CALCULATION_ERROR_CODES.CONFLICT,
+        'Нельзя удалить вариант: по его материалам есть заказ поставщику ERP. ' +
+          'Сначала отмените заказ в ERP и отвяжите строки.',
+      );
+    }
 
     const removedNeeds = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.workshopNeed.deleteMany({

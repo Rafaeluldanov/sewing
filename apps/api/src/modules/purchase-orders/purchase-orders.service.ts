@@ -311,10 +311,19 @@ export class PurchaseOrdersService {
         },
       });
 
-      await tx.workshopNeed.updateMany({
-        where: { id: { in: needs.map((n) => n.id) } },
+      // Условно по «не под ERP»: встречный erp-link мог взять строку между нашей проверкой
+      // и записью — тогда откатываем весь заказ, а не заводим второй на ту же ткань.
+      const flipped = await tx.workshopNeed.updateMany({
+        where: { id: { in: needs.map((n) => n.id) }, erpManagedAt: null, status: { not: 'CANCELLED' } },
         data: { status: 'ORDERED' },
       });
+      if (flipped.count !== needs.length) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'PURCHASE_ORDER_NEED_ERP_MANAGED',
+          message: 'Одна из потребностей только что взята под заказ ERP — обновите список.',
+        });
+      }
 
       await this.audit.log(
         {

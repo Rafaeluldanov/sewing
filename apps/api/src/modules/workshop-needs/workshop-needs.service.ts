@@ -325,6 +325,13 @@ export class WorkshopNeedsService {
     }
 
     if (dto.status !== undefined) {
+      // Закупочный шов: статус потребности под заказом ERP ведёт ERP (заказано/получено по
+      // её приёмке); ручная правка разошлась бы с документом, которого человек не видит.
+      if (existing.erpManagedAt && dto.status !== existing.status) {
+        throw new WorkshopNeedErpStateException(
+          `Статус потребности ведёт ERP (заказ ${existing.erpPurchaseOrderRef ?? ''}) — сначала отвяжите заказ в ERP.`,
+        );
+      }
       data.status = dto.status;
       changedFields.push('status');
     }
@@ -532,6 +539,12 @@ export class WorkshopNeedsService {
       return this.getOne(id);
     }
 
+    if (existing.erpManagedAt) {
+      throw new WorkshopNeedErpStateException(
+        `Потребность под заказом поставщику ERP (${existing.erpPurchaseOrderRef ?? ''}): отмените заказ в ERP и отвяжите её, потом отменяйте.`,
+      );
+    }
+
     await this.prisma.$transaction(async (tx) => {
       await tx.workshopNeed.update({
         where: { id },
@@ -581,22 +594,20 @@ export class WorkshopNeedsService {
     dto: ErpLinkWorkshopNeedDto,
     actorEmployeeId?: string | null,
   ): Promise<WorkshopNeedDto> {
-    const existing = await this.prisma.workshopNeed.findUnique({ where: { id } });
+    const existing = await this.prisma.workshopNeed.findUnique({
+      where: { id },
+      include: { orderCalculation: { select: { isActive: true, title: true } } },
+    });
     if (!existing) throw new WorkshopNeedNotFoundException();
     if (existing.status === 'CANCELLED') {
       throw new WorkshopNeedErpStateException(
         'Потребность отменена — заказать её через ERP нельзя.',
       );
     }
-    const ownPoLines = await this.prisma.purchaseOrderLine.count({
-      where: {
-        workshopNeedId: id,
-        status: { in: PURCHASE_ORDER_LINE_ACTIVE_STATUSES as string[] },
-      },
-    });
-    if (ownPoLines > 0) {
+    // ERP заказывает только под активный вариант просчёта — как и свой createFromNeeds.
+    if (existing.orderCalculation && !existing.orderCalculation.isActive) {
       throw new WorkshopNeedErpStateException(
-        'По потребности уже есть заказ поставщику цеха — ERP взять её не может.',
+        `Строка относится к невыбранному варианту просчёта «${existing.orderCalculation.title}» — ERP заказывает только под активный вариант.`,
       );
     }
     if (
@@ -607,12 +618,30 @@ export class WorkshopNeedsService {
         `Потребность уже под заказом ERP ${existing.erpPurchaseOrderRef ?? existing.erpPurchaseOrderId} — сначала отвяжите его.`,
       );
     }
+    // ORDERED = ничего не принято: приход по сторнированной приёмке ERP должен обнулиться,
+    // а не остаться от прошлой отправки.
     const receivedQty =
-      dto.erpReceivedQty === undefined || dto.erpReceivedQty === null
-        ? null
-        : new Prisma.Decimal(dto.erpReceivedQty);
+      dto.status === 'ORDERED'
+        ? new Prisma.Decimal(0)
+        : dto.erpReceivedQty === undefined || dto.erpReceivedQty === null
+          ? null
+          : new Prisma.Decimal(dto.erpReceivedQty);
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
+      // Строку — под замок, счёт своих заказов — внутри той же транзакции: иначе встречный
+      // createFromNeeds цеха успевает между проверкой и записью (два заказа на одну ткань).
+      await tx.$queryRaw`SELECT id FROM "WorkshopNeed" WHERE id = ${id} FOR UPDATE`;
+      const ownPoLines = await tx.purchaseOrderLine.count({
+        where: {
+          workshopNeedId: id,
+          status: { in: PURCHASE_ORDER_LINE_ACTIVE_STATUSES as string[] },
+        },
+      });
+      if (ownPoLines > 0) {
+        throw new WorkshopNeedErpStateException(
+          'По потребности уже есть заказ поставщику цеха — ERP взять её не может.',
+        );
+      }
       await tx.workshopNeed.update({
         where: { id },
         data: {
@@ -621,7 +650,10 @@ export class WorkshopNeedsService {
           erpPurchaseOrderId: dto.erpPurchaseOrderId,
           erpPurchaseOrderRef: dto.erpPurchaseOrderRef,
           ...(receivedQty !== null
-            ? { erpReceivedQty: receivedQty, erpReceivedAt: now }
+            ? {
+                erpReceivedQty: receivedQty.greaterThan(0) ? receivedQty : null,
+                erpReceivedAt: receivedQty.greaterThan(0) ? now : null,
+              }
             : {}),
         },
       });
@@ -1116,8 +1148,9 @@ export class WorkshopNeedsService {
       }
       // Защита складского остатка: удаление строк с движениями каскадом
       // снесло бы StockBalance/StockMovement (см. calculateForOrder).
+      // Строки под заказом ERP тоже держат: удаление оборвало бы связь с живым документом ERP.
       const withStock = await this.prisma.workshopNeed.count({
-        where: { orderId: id, stockMovements: { some: {} } },
+        where: { orderId: id, OR: [{ stockMovements: { some: {} } }, { erpManagedAt: { not: null } }] },
       });
       if (withStock > 0) {
         skipped.push({ orderId: id, reason: 'HAS_STOCK' });
@@ -1900,6 +1933,16 @@ export class WorkshopNeedsService {
     });
     if (needsWithStock > 0) {
       throw new WorkshopNeedsHaveStockException();
+    }
+    // Закупочный шов: строку под заказом поставщику ERP пересоздавать нельзя — связь ERP
+    // повисла бы на удалённом id, а новая строка снова выглядела бы «не заказана».
+    const needsUnderErp = await this.prisma.workshopNeed.count({
+      where: { ...doomedWhere, erpManagedAt: { not: null } },
+    });
+    if (needsUnderErp > 0) {
+      throw new WorkshopNeedErpStateException(
+        'Часть строк под заказом поставщику ERP — пересчитать их нельзя, сначала отвяжите заказ в ERP.',
+      );
     }
 
     // 5. Транзакция: удаляем нужные строки и пишем новые.

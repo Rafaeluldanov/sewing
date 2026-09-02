@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -43,6 +44,17 @@ import { WorkshopNeedsService } from './workshop-needs.service.js';
  * Расчёт по конкретному заказу живёт в
  * `WorkshopNeedsOrderController` (`/api/orders/:id/workshop-needs/*`).
  */
+/** Ручки шва — только интеграции: человек с ролью класса не должен «принимать через ERP» руками. */
+function assertMachine(user: AuthPrincipal): void {
+  if (user.kind !== 'MACHINE') {
+    throw new ForbiddenException({
+      statusCode: 403,
+      code: 'FORBIDDEN_ROLE',
+      message: 'Ручка только для интеграции ERP.',
+    });
+  }
+}
+
 @Controller('workshop-needs')
 @MachineScopes('needs:read')
 @Roles('ADMIN', 'SHOP_MANAGER')
@@ -124,6 +136,7 @@ export class WorkshopNeedsController {
     dto: ErpLinkWorkshopNeedDto,
     @CurrentUser() user: AuthPrincipal,
   ): Promise<WorkshopNeedDto> {
+    assertMachine(user);
     return this.needs.erpLink(id, dto, user.employeeId);
   }
 
@@ -136,6 +149,7 @@ export class WorkshopNeedsController {
     dto: ErpUnlinkWorkshopNeedDto,
     @CurrentUser() user: AuthPrincipal,
   ): Promise<WorkshopNeedDto> {
+    assertMachine(user);
     return this.needs.erpUnlink(id, dto, user.employeeId);
   }
 
