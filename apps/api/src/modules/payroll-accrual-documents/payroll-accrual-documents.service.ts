@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import {
   EntryStatus,
   PayrollPayoutLineKind,
@@ -371,8 +371,19 @@ export class PayrollAccrualDocumentsService {
     viewer: AuthPrincipal,
     dto: PayPayrollAccrualDocumentDto = {},
   ): Promise<PayrollAccrualDocumentDto> {
-    const fromErp = dto.source === 'erp';
-    const externalRef = fromErp ? (dto.externalRef ?? null) : null;
+    // Режим выводим из наличия ссылки (схема требует source и externalRef вместе): забытый
+    // source не должен молча превращать проведение ERP в проведение цеха с его заявкой.
+    const externalRef = dto.externalRef ?? null;
+    const fromErp = externalRef !== null;
+    // Машинный токен (ERP) проводит ведомость ТОЛЬКО по своей оплаченной заявке: без ссылки
+    // ветка цеха завела бы заявку его казначейства — вторую кассу на одну выплату.
+    if (viewer.kind === 'MACHINE' && !fromErp) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'FORBIDDEN_SCOPE',
+        message: 'Машинный токен проводит ведомость только по заявке ERP (source="erp" + externalRef).',
+      });
+    }
     return this.prisma.$transaction(async (tx) => {
       const doc = await tx.payrollAccrualDocument.findUnique({
         where: { id },
@@ -633,20 +644,32 @@ export class PayrollAccrualDocumentsService {
         payoutsCreated += 1;
       }
 
-      // Обновить документ: DRAFT → PAID.
+      // Обновить документ: DRAFT → PAID — УСЛОВНО по статусу. Статус читался до захвата
+      // advisory-lock'ов по сотрудникам; встречный pay() (кнопка цеха ∥ проведение из ERP) мог
+      // уже провести документ, и тогда выплаты выше — дубли. Условный переход откатывает всю
+      // транзакцию вместе с ними.
       const paidAt = now;
-      const updated = await tx.payrollAccrualDocument.update({
-        where: { id },
+      const flipped = await tx.payrollAccrualDocument.updateMany({
+        where: { id, status: 'DRAFT' },
         data: {
           status: 'PAID',
           paidAt,
           paidById: viewer.employeeId,
-          externalPaymentRef: externalRef
-            ? (externalRef as Prisma.InputJsonObject)
-            : Prisma.JsonNull,
+          // Ссылку пишем только при проведении из ERP; у цехового проведения колонка остаётся
+          // SQL NULL (не JSON-null) — по ней отчёты отличают «проведено в цехе».
+          ...(externalRef ? { externalPaymentRef: externalRef as Prisma.InputJsonObject } : {}),
         },
+      });
+      if (flipped.count !== 1) {
+        throw new PayrollAccrualDocumentInvalidStateException(
+          'Документ уже проведён или отменён параллельно — обновите карточку.',
+        );
+      }
+      const updated = await tx.payrollAccrualDocument.findUnique({
+        where: { id },
         include: documentDetailInclude,
       });
+      if (!updated) throw new PayrollAccrualDocumentNotFoundException();
 
       await this.audit.log(
         {

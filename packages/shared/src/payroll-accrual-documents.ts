@@ -152,8 +152,8 @@ export const PayPayrollAccrualDocumentSchema = z
     externalRef: ExternalPaymentRefSchema.optional(),
   })
   .strict()
-  .refine((v) => v.source !== 'erp' || !!v.externalRef, {
-    message: 'Проведение из ERP требует externalRef (номер заявки на оплату)',
+  .refine((v) => (v.source === 'erp') === !!v.externalRef, {
+    message: "source='erp' и externalRef указываются вместе: проведение из ERP требует номер её заявки",
     path: ['externalRef'],
   });
 export type PayPayrollAccrualDocumentDto = z.infer<

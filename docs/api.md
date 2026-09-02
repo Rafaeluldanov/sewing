@@ -2102,7 +2102,9 @@ Snapshot строк (см. `PayrollPayoutLine.snapshot`):
 > { system: 'erp', documentId, documentNumber, paidAt? } }`: документ проводится по ОПЛАЧЕННОЙ заявке
 > ERP, ссылка ложится в `externalPaymentRef` (есть в списке и карточке), а заявка казначейства цеха
 > (`createSalaryExpenseRequestTx`) при `source: 'erp'` НЕ создаётся — деньги выдаёт только ERP.
-> Без `source` поведение прежнее.
+> Без `source` поведение прежнее — но ТОЛЬКО для человека: машинный токен без `externalRef` получает 403
+> `FORBIDDEN_SCOPE` (иначе цех завёл бы заявку своего казначейства на выплату, которую уже оплатила ERP).
+> Переход DRAFT→PAID условный по статусу: встречное проведение откатывается 409.
 
 Источник: `payroll-accrual-documents/payroll-accrual-documents.controller.ts` +
 `payroll-accrual-documents/payroll-accrual-documents.service.ts`. DTO/zod —
