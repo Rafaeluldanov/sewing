@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import {
   UpdateIntegrationSettingsSchema,
   type UpdateIntegrationSettingsDto,
@@ -6,6 +6,7 @@ import {
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
+import { ServiceTokenService } from '../auth/service-token.service.js';
 import { IntegrationsService } from './integrations.service.js';
 
 /**
@@ -17,13 +18,19 @@ import { IntegrationsService } from './integrations.service.js';
  *                                                      (пароль не отдаётся)
  *   PATCH /api/integrations/settings                — частичное обновление
  *   POST  /api/integrations/upgifts/test-connection — логин + /auth/me
+ *   GET   /api/integrations/service-tokens          — машинные токены (без секретов)
+ *   POST  /api/integrations/service-tokens          — выпустить (плейнтекст ОДИН раз)
+ *   POST  /api/integrations/service-tokens/:id/revoke — отозвать
  *
  * RBAC — `SHOP_MANAGER` / `ADMIN` (как у company-settings).
  */
 @Roles('SHOP_MANAGER', 'ADMIN')
 @Controller('integrations')
 export class IntegrationsController {
-  constructor(private readonly integrations: IntegrationsService) {}
+  constructor(
+    private readonly integrations: IntegrationsService,
+    private readonly serviceTokens: ServiceTokenService,
+  ) {}
 
   @Get('settings')
   get() {
@@ -42,6 +49,39 @@ export class IntegrationsController {
   @Post('upgifts/test-connection')
   testConnection() {
     return this.integrations.testConnection();
+  }
+
+  /**
+   * Машинные токены: доступ ERP к справочникам швейки сервер-сервер.
+   *
+   * Список отдаётся БЕЗ секретов — только префикс для опознания. Сам токен виден
+   * ровно один раз, в ответе на выпуск: в БД лежит только sha256, восстановить нечем.
+   */
+  @Get('service-tokens')
+  listServiceTokens() {
+    return this.serviceTokens.list();
+  }
+
+  @Post('service-tokens')
+  issueServiceToken(
+    @Body() body: { name?: string; scopes?: string[] },
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    // Скоупы по умолчанию — ровно то, ради чего токен и заводится: два справочника.
+    // Расширять надо осознанно, поэтому «всё сразу» здесь не предусмотрено.
+    const scopes = body.scopes?.length
+      ? body.scopes
+      : ['equipment:read', 'equipment:write', 'operations:read', 'operations:write'];
+    return this.serviceTokens.issue({
+      name: body.name?.trim() || 'ERP upgifts',
+      scopes,
+      createdById: user.employeeId,
+    });
+  }
+
+  @Post('service-tokens/:id/revoke')
+  revokeServiceToken(@Param('id') id: string, @CurrentUser() user: AuthPrincipal) {
+    return this.serviceTokens.revoke(id, user.employeeId);
   }
 
   @Post('assistant/test-key')

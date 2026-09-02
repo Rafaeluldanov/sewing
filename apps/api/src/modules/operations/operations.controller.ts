@@ -26,7 +26,7 @@ import {
   type BulkArchiveResultDto,
 } from '@sewing/shared/archive';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OperationsService } from './operations.service.js';
 
@@ -48,11 +48,13 @@ import { OperationsService } from './operations.service.js';
 export class OperationsController {
   constructor(private readonly operations: OperationsService) {}
 
+  @MachineScopes('operations:read')
   @Get()
   list(@Query('search') search?: string): Promise<OperationSummaryDto[]> {
     return this.operations.list(search);
   }
 
+  @MachineScopes('operations:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreateOperationSchema))
@@ -61,11 +63,13 @@ export class OperationsController {
     return this.operations.create(dto);
   }
 
+  @MachineScopes('operations:read')
   @Get(':id')
   getOne(@Param('id') id: string): Promise<OperationDetailDto> {
     return this.operations.getOne(id);
   }
 
+  @MachineScopes('operations:write')
   @Patch(':id')
   update(
     @Param('id') id: string,
