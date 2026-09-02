@@ -11,7 +11,7 @@ import {
   type ProductionCostQuery,
 } from '@sewing/shared/costs';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineClosed, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { CostsService } from './costs.service.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
@@ -61,6 +61,7 @@ export class CostsController {
    * упакованным паспортам). `?date=YYYY-MM-DD` — по умолчанию текущий
    * UTC-день. Запускается планировщиком после закрытия дня или вручную.
    */
+  @MachineClosed()
   @Post('snapshots/finalize')
   finalizeSnapshots(
     @Query('date') date: string | undefined,

@@ -39,7 +39,7 @@ import { CompanyDivisionsService } from './company-divisions.service.js';
  */
 @Roles('SHOP_MANAGER', 'ADMIN')
 @Controller('company-divisions')
-@MachineScopes('settings:read', 'settings:write')
+@MachineScopes('settings:read')
 export class CompanyDivisionsController {
   constructor(private readonly divisions: CompanyDivisionsService) {}
 
@@ -51,6 +51,7 @@ export class CompanyDivisionsController {
     return this.divisions.list(query);
   }
 
+  @MachineScopes('settings:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreateCompanyDivisionSchema))
@@ -65,6 +66,7 @@ export class CompanyDivisionsController {
     return this.divisions.get(id);
   }
 
+  @MachineScopes('settings:write')
   @Patch(':id')
   update(
     @Param('id') id: string,

@@ -48,7 +48,7 @@ import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
  */
 @Roles('ADMIN', 'SHOP_MANAGER')
 @Controller('pattern-categories')
-@MachineScopes('patterns:read', 'patterns:write')
+@MachineScopes('patterns:read')
 export class PatternCategoriesController {
   constructor(private readonly service: PatternCategoriesService) {}
 
@@ -65,6 +65,7 @@ export class PatternCategoriesController {
     return this.service.get(id);
   }
 
+  @MachineScopes('patterns:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreatePatternCategorySchema))
@@ -74,6 +75,7 @@ export class PatternCategoriesController {
     return this.service.create(body, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -84,6 +86,7 @@ export class PatternCategoriesController {
     return this.service.update(id, body, user.employeeId);
   }
 
+  @MachineScopes('patterns:write')
   @Put(':id/parameters')
   replaceParameters(
     @Param('id') id: string,
@@ -102,6 +105,7 @@ export class PatternCategoriesController {
    * слишком большие запросы ещё до вызова контроллера, а сервис
    * ловит «обход» multer и кидает понятную бизнес-ошибку.
    */
+  @MachineScopes('patterns:write')
   @Post(':id/icon')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -118,6 +122,7 @@ export class PatternCategoriesController {
   }
 
   
+  @MachineScopes('patterns:write')
   @Delete(':id')
   archive(
     @Param('id') id: string,
@@ -138,6 +143,7 @@ export class PatternCategoriesController {
    * счётчиками ПЕРЕД вызовом; без флага непустая группа даёт 409 с
    * объяснением.
    */
+  @MachineScopes('patterns:write')
   @Delete(':id/permanent')
   remove(
     @Param('id') id: string,

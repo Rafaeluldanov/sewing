@@ -6,7 +6,7 @@ import {
   Post,
 } from '@nestjs/common';
 
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { OrderSamplesService } from './order-samples.service.js';
@@ -38,9 +38,11 @@ import {
  *     `SHOPFLOOR_MASTER` для чтения.
  */
 @Controller('orders')
+@MachineScopes('orders:read')
 export class OrderSamplesOrderController {
   constructor(private readonly samples: OrderSamplesService) {}
 
+  @MachineScopes('orders:write')
   @Post(':orderId/samples/start')
   @Roles('SHOP_MANAGER', 'CUTTER_ASSISTANT')
   start(
@@ -66,6 +68,7 @@ export class OrderSamplesOrderController {
  *   - approve / reject / cancel — `SHOP_MANAGER` (`ADMIN` глобально).
  */
 @Controller('order-samples')
+@MachineScopes('orders:read')
 export class OrderSamplesController {
   constructor(private readonly samples: OrderSamplesService) {}
 
@@ -75,6 +78,7 @@ export class OrderSamplesController {
     return this.samples.getOne(id);
   }
 
+  @MachineScopes('orders:write')
   @Post(':id/approve')
   @Roles('SHOP_MANAGER')
   approve(
@@ -85,6 +89,7 @@ export class OrderSamplesController {
     return this.samples.approve(id, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Post(':id/reject')
   @Roles('SHOP_MANAGER')
   reject(
@@ -95,6 +100,7 @@ export class OrderSamplesController {
     return this.samples.reject(id, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Post(':id/cancel')
   @Roles('SHOP_MANAGER')
   cancel(

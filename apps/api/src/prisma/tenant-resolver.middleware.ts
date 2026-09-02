@@ -44,8 +44,15 @@ export class TenantResolverMiddleware implements NestMiddleware {
     // форвардит явным заголовком (см. apps/web/lib/api.ts). Прямые вызовы
     // (curl/healthcheck) используют обычный Host.
     const forwarded = req.headers['x-tenant-host'];
+    // `x-sewing-tenant` — тот же смысл для сервер-серверного клиента (ERP upgifts): он
+    // обращается по адресу из настройки, а тенанта называет явно, чтобы обращение по IP или
+    // через прокси не зависело от того, какой Host довезёт транспорт. Приоритет у web-заголовка:
+    // он ставится нашим же SSR и не может прийти снаружи одновременно с машинным токеном.
+    const sewingTenant = req.headers['x-sewing-tenant'];
     const host =
-      (Array.isArray(forwarded) ? forwarded[0] : forwarded) ?? req.headers.host;
+      (Array.isArray(forwarded) ? forwarded[0] : forwarded) ??
+      (Array.isArray(sewingTenant) ? sewingTenant[0] : sewingTenant) ??
+      req.headers.host;
     const resolution = await this.registry.resolveByHost(host);
     // Приостановленный тенант ≠ неизвестный хост: web показывает по этим ответам
     // разные заглушки. Тело несёт и `error` (историческая форма), и

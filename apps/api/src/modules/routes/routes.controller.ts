@@ -47,7 +47,7 @@ import { RoutesService } from './routes.service.js';
  * единый источник истины для web и api.
  */
 @Controller('routes')
-@MachineScopes('routes:read', 'routes:write')
+@MachineScopes('routes:read')
 export class RoutesController {
   constructor(private readonly routes: RoutesService) {}
 
@@ -64,6 +64,7 @@ export class RoutesController {
     return this.routes.getOne(id);
   }
 
+  @MachineScopes('routes:write')
   @Post()
   @Roles('ADMIN', 'SHOP_MANAGER')
   create(
@@ -73,6 +74,7 @@ export class RoutesController {
     return this.routes.create(dto);
   }
 
+  @MachineScopes('routes:write')
   @Patch(':id')
   @Roles('ADMIN', 'SHOP_MANAGER')
   update(
@@ -89,6 +91,7 @@ export class RoutesController {
    * навсегда (только из архива и только если на шаблон не ссылаются
    * заказы/пробники). Ответ — частичный успех.
    */
+  @MachineScopes('routes:write')
   @Post('archive')
   @Roles('ADMIN', 'SHOP_MANAGER')
   archiveMany(
@@ -99,6 +102,7 @@ export class RoutesController {
     return this.routes.archiveMany(dto.ids, user.employeeId);
   }
 
+  @MachineScopes('routes:write')
   @Post('restore')
   @Roles('ADMIN', 'SHOP_MANAGER')
   restoreMany(
@@ -109,6 +113,7 @@ export class RoutesController {
     return this.routes.restoreMany(dto.ids, user.employeeId);
   }
 
+  @MachineScopes('routes:write')
   @Post('purge')
   @Roles('ADMIN', 'SHOP_MANAGER')
   purgeMany(
@@ -119,6 +124,7 @@ export class RoutesController {
     return this.routes.purgeMany(dto.ids, user.employeeId);
   }
 
+  @MachineScopes('routes:write')
   @Delete(':id')
   @HttpCode(204)
   @Roles('ADMIN', 'SHOP_MANAGER')

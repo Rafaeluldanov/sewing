@@ -18,7 +18,7 @@ import {
 } from '@sewing/shared/order-extra-costs';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderExtraCostsService } from './order-extra-costs.service.js';
 
@@ -36,6 +36,7 @@ import { OrderExtraCostsService } from './order-extra-costs.service.js';
  * CRUD-семантику — по тем же причинам, что `OrderMaterialArrivalsController`.
  */
 @Controller('orders')
+@MachineScopes('orders:read')
 @Roles('ADMIN', 'SHOP_MANAGER')
 export class OrderExtraCostsController {
   constructor(private readonly service: OrderExtraCostsService) {}
@@ -45,6 +46,7 @@ export class OrderExtraCostsController {
     return this.service.listForOrder(orderId);
   }
 
+  @MachineScopes('orders:write')
   @Post(':orderId/extra-costs')
   @HttpCode(HttpStatus.CREATED)
   create(
@@ -56,6 +58,7 @@ export class OrderExtraCostsController {
     return this.service.create(orderId, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Patch(':orderId/extra-costs/:costId')
   update(
     @Param('costId') costId: string,
@@ -66,6 +69,7 @@ export class OrderExtraCostsController {
     return this.service.update(costId, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Delete(':orderId/extra-costs/:costId')
   @HttpCode(HttpStatus.NO_CONTENT)
   async delete(

@@ -40,7 +40,7 @@ import { WorkshopNeedsService } from './workshop-needs.service.js';
  * `WorkshopNeedsOrderController` (`/api/orders/:id/workshop-needs/*`).
  */
 @Controller('workshop-needs')
-@MachineScopes('needs:read', 'needs:write')
+@MachineScopes('needs:read')
 @Roles('ADMIN', 'SHOP_MANAGER')
 export class WorkshopNeedsController {
   constructor(private readonly needs: WorkshopNeedsService) {}
@@ -59,6 +59,7 @@ export class WorkshopNeedsController {
    * «Архивировать все» = все видимые id. Частичный успех — непрошедшие
    * гейт заказы возвращаются в `skipped`.
    */
+  @MachineScopes('needs:write')
   @Post('archive')
   archive(
     @Body(new ZodValidationPipe(WorkshopNeedsArchiveRequestSchema))
@@ -69,6 +70,7 @@ export class WorkshopNeedsController {
   }
 
   /** Вернуть заказы из архива в активный список потребностей. */
+  @MachineScopes('needs:write')
   @Post('restore')
   restore(
     @Body(new ZodValidationPipe(WorkshopNeedsArchiveRequestSchema))
@@ -83,6 +85,7 @@ export class WorkshopNeedsController {
    * `WorkshopNeed`; сам заказ остаётся). Только из архива и только если
    * по строкам нет складских движений (иначе `skipped: HAS_STOCK`).
    */
+  @MachineScopes('needs:write')
   @Post('purge')
   purge(
     @Body(new ZodValidationPipe(WorkshopNeedsArchiveRequestSchema))
@@ -97,6 +100,7 @@ export class WorkshopNeedsController {
     return this.needs.getOne(id);
   }
 
+  @MachineScopes('needs:write')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -107,6 +111,7 @@ export class WorkshopNeedsController {
     return this.needs.update(id, dto, user.employeeId);
   }
 
+  @MachineScopes('needs:write')
   @Post(':id/cancel')
   cancel(
     @Param('id') id: string,

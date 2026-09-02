@@ -19,7 +19,7 @@ import {
   type UpdatePrintJobStatusDto,
 } from '@sewing/shared/printers';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, MachineScopes, Public, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineClosed, MachineScopes, Public, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { PrintJobsService } from './print-jobs.service.js';
 import { AgentAuthGuard, CurrentPrinter } from './agent.guard.js';
@@ -45,7 +45,6 @@ import { resolvePublicApiBaseUrl } from './public-api-url.js';
  *     — менеджерский UI (карточка принтера) видит хвост job-ов.
  */
 @Controller('print-jobs')
-// Очередь печати машине доступна только на чтение: задание создаёт человек за станком.
 @MachineScopes('printers:read')
 export class PrintJobsController {
   constructor(private readonly jobs: PrintJobsService) {}
@@ -62,6 +61,7 @@ export class PrintJobsController {
    * валидируется ниже). Без `printerId` — обычная пользовательская
    * кнопка «Печать», доступна любой залогиненной роли.
    */
+  @MachineClosed()
   @Post()
   async create(
     @Body(new ZodValidationPipe(CreatePrintJobSchema)) dto: CreatePrintJobDto,
@@ -110,6 +110,7 @@ export class PrintJobsController {
 
   @Public()
   @UseGuards(AgentAuthGuard)
+  @MachineClosed()
   @Patch(':id')
   updateStatus(
     @Param('id') id: string,

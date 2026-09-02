@@ -48,6 +48,17 @@ export const MachineScopes = (
 ): MethodDecorator & ClassDecorator => SetMetadata(MACHINE_SCOPES_KEY, scopes);
 
 /**
+ * `@MachineClosed()` — явно закрыть хендлер машинному токену, когда класс открыт на чтение.
+ *
+ * Классовый `@MachineScopes('x:read')` распространяется и на POST/PATCH класса; там, где
+ * запись машине не положена (зарплата, снапшоты себестоимости, очередь печати), нужен
+ * хендлерный декоратор с ПУСТЫМ списком: гвард трактует пустой список как «никому».
+ * Явное имя, а не `@MachineScopes()` без аргументов: пустые скобки читаются как забытые.
+ */
+export const MachineClosed = (): MethodDecorator & ClassDecorator =>
+  SetMetadata(MACHINE_SCOPES_KEY, []);
+
+/**
  * Параметр-декоратор `@CurrentUser()` достаёт `AuthPrincipal`,
  * прикреплённый `AuthGuard` к запросу. На public-маршрутах вернёт
  * `undefined` — поэтому в обработчике это нужно учитывать.

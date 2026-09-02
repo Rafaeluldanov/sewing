@@ -16,7 +16,7 @@ import {
   type UpdateClientDto,
 } from '@sewing/shared/clients';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ClientsService } from './clients.service.js';
 
@@ -34,6 +34,7 @@ import { ClientsService } from './clients.service.js';
  */
 @Roles('SHOP_MANAGER', 'ADMIN')
 @Controller('clients')
+@MachineScopes('clients:read')
 export class ClientsController {
   constructor(private readonly clients: ClientsService) {}
 
@@ -45,6 +46,7 @@ export class ClientsController {
     return this.clients.list(query);
   }
 
+  @MachineScopes('clients:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreateClientSchema))
@@ -59,6 +61,7 @@ export class ClientsController {
     return this.clients.get(id);
   }
 
+  @MachineScopes('clients:write')
   @Patch(':id')
   update(
     @Param('id') id: string,

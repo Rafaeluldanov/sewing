@@ -16,6 +16,7 @@ import {
   ROLES_KEY,
 } from './auth.decorators.js';
 import type { AuthPrincipal, RequestWithAuth } from './auth.types.js';
+import { enterActorContext, parseActorHeaders } from './actor-context.js';
 import { readServiceToken } from './service-token.js';
 import { ServiceTokenService } from './service-token.service.js';
 
@@ -84,9 +85,13 @@ export class AuthGuard implements CanActivate {
           message: 'Машинному токену этот маршрут не открыт.',
         });
       }
+      // Кто из людей ERP нажал — в контекст запроса: аудит допишет его сам, а FK-поля
+      // получат служебного сотрудника из principal (см. actor-context.ts, правило §0.1).
+      const actor = parseActorHeaders(req.headers);
+      if (actor) enterActorContext(actor);
       this.logger.log(
         `event=auth.machine token=${principal.serviceTokenId} ` +
-          `${req.method} ${req.originalUrl}`,
+          `actor=${actor?.id ?? '-'} ${req.method} ${req.originalUrl}`,
       );
     }
 

@@ -11,7 +11,7 @@ import {
 } from '@sewing/shared/order-applications';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderApplicationsService } from './order-applications.service.js';
 
@@ -33,6 +33,7 @@ import { OrderApplicationsService } from './order-applications.service.js';
  * RBAC: `ADMIN` / `SHOP_MANAGER` — рабочим ролям нанесения не нужны.
  */
 @Controller('orders')
+@MachineScopes('orders:read')
 @Roles('ADMIN', 'SHOP_MANAGER')
 export class OrderApplicationsController {
   constructor(
@@ -44,6 +45,7 @@ export class OrderApplicationsController {
     return this.applications.listForOrder(orderId);
   }
 
+  @MachineScopes('orders:write')
   @Put(':id/applications')
   replace(
     @Param('id') orderId: string,

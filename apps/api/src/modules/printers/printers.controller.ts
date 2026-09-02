@@ -40,7 +40,7 @@ import { PrintersService } from './printers.service.js';
  * endpoint-ы вынесены в отдельный контроллер `PrintersAgentController`.
  */
 @Controller('printers')
-@MachineScopes('printers:read', 'printers:write')
+@MachineScopes('printers:read')
 @Roles('SHOP_MANAGER', 'ADMIN')
 export class PrintersController {
   private readonly logger = new Logger(PrintersController.name);
@@ -53,6 +53,7 @@ export class PrintersController {
    * навсегда (только из архива). Архивный принтер не спаривается с
    * агентом; вместе с принтером уходит его очередь заданий печати.
    */
+  @MachineScopes('printers:write')
   @Post('archive')
   archiveMany(
     @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
@@ -62,6 +63,7 @@ export class PrintersController {
     return this.printers.archiveMany(dto.ids, user.employeeId);
   }
 
+  @MachineScopes('printers:write')
   @Post('restore')
   restoreMany(
     @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
@@ -71,6 +73,7 @@ export class PrintersController {
     return this.printers.restoreMany(dto.ids, user.employeeId);
   }
 
+  @MachineScopes('printers:write')
   @Post('purge')
   purgeMany(
     @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
@@ -115,6 +118,7 @@ export class PrintersController {
     return this.printers.getOne(id);
   }
 
+  @MachineScopes('printers:write')
   @Post()
   create(
     @Body(new ZodValidationPipe(CreatePrinterSchema)) dto: CreatePrinterDto,
@@ -122,6 +126,7 @@ export class PrintersController {
     return this.printers.create(dto);
   }
 
+  @MachineScopes('printers:write')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -130,6 +135,7 @@ export class PrintersController {
     return this.printers.update(id, dto);
   }
 
+  @MachineScopes('printers:write')
   @Delete(':id')
   @HttpCode(204)
   async remove(@Param('id') id: string): Promise<void> {
@@ -141,6 +147,7 @@ export class PrintersController {
    * сервер обновляет `pairingCode` принтера. Старый код — теряется,
    * как и должно быть: один активный код в каждый момент.
    */
+  @MachineScopes('printers:write')
   @Post(':id/pairing-code')
   generatePairingCode(@Param('id') id: string): Promise<PrinterDetailDto> {
     return this.printers.generatePairingCode(id);

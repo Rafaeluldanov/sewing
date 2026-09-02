@@ -23,7 +23,7 @@ import { OrderTechCardService } from './order-tech-card.service.js';
  * все write-методы возвращают свежий полный DTO — единый источник для UI.
  */
 @Controller('orders/:id/tech-card-parameters')
-@MachineScopes('orders:read', 'orders:write')
+@MachineScopes('orders:read')
 export class OrderTechCardController {
   constructor(private readonly service: OrderTechCardService) {}
 
@@ -33,6 +33,7 @@ export class OrderTechCardController {
   }
 
   /** Заполнить значение слота (пустая строка = очистить). */
+  @MachineScopes('orders:write')
   @Patch(':parameterId')
   @Roles('ADMIN', 'SHOP_MANAGER')
   setValue(
@@ -46,6 +47,7 @@ export class OrderTechCardController {
   }
 
   /** Разовое копирование значения в остальные расцветки (не связь). */
+  @MachineScopes('orders:write')
   @Post(':parameterId/apply-to-all-variants')
   @Roles('ADMIN', 'SHOP_MANAGER')
   applyToAll(
@@ -57,6 +59,7 @@ export class OrderTechCardController {
   }
 
   /** Ad-hoc слот: нужен только в этом заказе, шаблон не трогаем. */
+  @MachineScopes('orders:write')
   @Post()
   @Roles('ADMIN', 'SHOP_MANAGER')
   createAdHoc(
@@ -68,6 +71,7 @@ export class OrderTechCardController {
     return this.service.createAdHoc(orderId, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Delete(':parameterId')
   @Roles('ADMIN', 'SHOP_MANAGER')
   removeAdHoc(
@@ -88,10 +92,11 @@ export class OrderTechCardController {
  * Отдельный контроллер, потому что префикс другой: строки — не параметры.
  */
 @Controller('orders/:id/tech-card/lines')
-@MachineScopes('orders:read', 'orders:write')
+@MachineScopes('orders:read')
 export class OrderTechCardLinesController {
   constructor(private readonly service: OrderTechCardService) {}
 
+  @MachineScopes('orders:write')
   @Post()
   @Roles('ADMIN', 'SHOP_MANAGER')
   create(
@@ -108,6 +113,7 @@ export class OrderTechCardLinesController {
    * производных на всю пачку (по строке за запрос это было бы N пересборок
    * снимка, плана операций и потребностей цеха).
    */
+  @MachineScopes('orders:write')
   @Post('bulk')
   @Roles('ADMIN', 'SHOP_MANAGER')
   createMany(
@@ -120,6 +126,7 @@ export class OrderTechCardLinesController {
   }
 
   /** Правка полей строки (норма/ед./цвет/название/плотность). */
+  @MachineScopes('orders:write')
   @Patch(':requirementId')
   @Roles('ADMIN', 'SHOP_MANAGER')
   update(
@@ -132,6 +139,7 @@ export class OrderTechCardLinesController {
     return this.service.updateLine(orderId, requirementId, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Delete(':requirementId')
   @Roles('ADMIN', 'SHOP_MANAGER')
   remove(

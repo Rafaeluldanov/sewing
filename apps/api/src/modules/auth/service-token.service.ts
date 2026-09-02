@@ -7,12 +7,17 @@ import {
   hashServiceToken,
   previewOf,
 } from './service-token.js';
+import bcrypt from 'bcryptjs';
+import { randomBytes } from 'node:crypto';
 
 /** Как часто обновляем `lastUsedAt`: без дебаунса это UPDATE на КАЖДЫЙ запрос интеграции. */
 const LAST_USED_DEBOUNCE_MS = 5 * 60 * 1000;
 
 /** Роли, которые машинному токену выдавать нельзя ни при каких условиях. */
 const FORBIDDEN_ROLES = new Set(['ADMIN', 'SUPERADMIN']);
+/** Логин служебного сотрудника машинных токенов — один на тенанта. */
+export const SERVICE_EMPLOYEE_LOGIN = 'erp-integration';
+export const SERVICE_EMPLOYEE_NAME = 'Интеграция ERP';
 
 @Injectable()
 export class ServiceTokenService {
@@ -39,11 +44,12 @@ export class ServiceTokenService {
     void this.touch(row.id, row.lastUsedAt);
 
     const roles = row.roles.filter((r) => !FORBIDDEN_ROLES.has(r));
+    // Служебный сотрудник вместо синтетического id (правило §0.1): у заявок КБ, расчёта заказа
+    // и файлов лекал поля автора ссылаются на Employee внешним ключом, и строка
+    // `service-token:<id>` ронял бы запись из ERP на ключе. Кто из людей нажал — в аудите.
+    const employeeId = row.employeeId ?? (await this.ensureServiceEmployee(row.id, roles));
     return {
-      // Синтетический id: машинного сотрудника не существует, а поле обязательное.
-      // FK на Employee здесь нет ни у аудита, ни у справочников (проверено), поэтому
-      // строка безопасна и сразу читается в логах как «это не человек».
-      employeeId: `service-token:${row.id}`,
+      employeeId,
       role: roles[0] ?? 'SHOP_MANAGER',
       roles,
       assignedRoles: roles,
@@ -57,6 +63,46 @@ export class ServiceTokenService {
       scopes: row.scopes,
       serviceTokenId: row.id,
     };
+  }
+
+  /**
+   * Служебный сотрудник «Интеграция ERP» — один на тенанта, создаётся при первом запросе
+   * любого машинного токена и переиспользуется всеми. Логин фиксированный, PIN — случайный
+   * и никому не известен: войти этой учёткой с терминала нельзя, она существует только
+   * ради внешних ключей. Гонка двух первых запросов ловится на уникальности логина.
+   */
+  private async ensureServiceEmployee(tokenId: string, roles: string[]): Promise<string> {
+    const login = SERVICE_EMPLOYEE_LOGIN;
+    let employee = await this.prisma.employee.findUnique({ where: { login }, select: { id: true } });
+    if (!employee) {
+      const pinHash = await bcrypt.hash(randomBytes(24).toString('base64url'), 10);
+      try {
+        employee = await this.prisma.employee.create({
+          data: {
+            fullName: SERVICE_EMPLOYEE_NAME,
+            login,
+            pinHash,
+            role: roles[0] ?? 'SHOP_MANAGER',
+            roles: roles.length ? roles : ['SHOP_MANAGER'],
+            active: true,
+          },
+          select: { id: true },
+        });
+      } catch (err) {
+        // Параллельный первый запрос успел раньше — берём его результат.
+        employee = await this.prisma.employee.findUnique({ where: { login }, select: { id: true } });
+        if (!employee) throw err;
+      }
+    }
+    try {
+      await this.prisma.serviceToken.update({
+        where: { id: tokenId },
+        data: { employeeId: employee.id },
+      });
+    } catch (err) {
+      this.logger.warn(`event=service-token.employee-link.failed id=${tokenId} err=${String(err)}`);
+    }
+    return employee.id;
   }
 
   /** Отметка «токен жив» с дебаунсом; ошибка записи не должна ронять сам запрос. */

@@ -1,7 +1,7 @@
 import { Controller, Get, Param } from '@nestjs/common';
 import type { CutReadinessDto } from '@sewing/shared/cut-readiness';
 
-import { Roles } from '../auth/auth.decorators.js';
+import { MachineScopes, Roles } from '../auth/auth.decorators.js';
 import { CutReadinessService } from './cut-readiness.service.js';
 
 /**
@@ -20,6 +20,7 @@ import { CutReadinessService } from './cut-readiness.service.js';
  * Никаких write-методов — это сознательное ограничение Этапа 8А.
  */
 @Controller('orders')
+@MachineScopes('orders:read')
 @Roles('ADMIN', 'SHOP_MANAGER', 'CUTTER', 'CUTTER_ASSISTANT')
 export class CutReadinessController {
   constructor(private readonly readiness: CutReadinessService) {}
