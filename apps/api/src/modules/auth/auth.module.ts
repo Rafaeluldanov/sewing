@@ -1,8 +1,9 @@
-import { Global, Module } from '@nestjs/common';
+import { Global, type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { AppRolesModule } from '../app-roles/app-roles.module.js';
 import { AuthService } from './auth.service.js';
 import { AuthController } from './auth.controller.js';
+import { ActorContextMiddleware } from './actor-context.middleware.js';
 import { AuthGuard } from './auth.guard.js';
 import { FeatureModulesService } from './feature-modules.service.js';
 import { ServiceTokenService } from './service-token.service.js';
@@ -37,4 +38,10 @@ import { ServiceTokenService } from './service-token.service.js';
   ],
   exports: [AuthService, ServiceTokenService],
 })
-export class AuthModule {}
+export class AuthModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    // Автор действия из ERP — в контекст запроса ДО гварда и хендлера (правило §0.1).
+    // Middleware, а не гвард: только `als.run` вокруг `next()` доживает до аудита.
+    consumer.apply(ActorContextMiddleware).forRoutes('*');
+  }
+}
