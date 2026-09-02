@@ -87,6 +87,7 @@ export class EquipmentController {
    * Объявлены ДО `@Get(':id')` для читаемости; конфликта нет —
    * одноимённого `@Post(':id')` в контроллере не существует.
    */
+  @MachineScopes('equipment:write')
   @Post('archive')
   @Roles('ADMIN', 'SHOP_MANAGER')
   archiveMany(
@@ -97,6 +98,7 @@ export class EquipmentController {
     return this.equipment.archiveMany(dto.ids, user.employeeId);
   }
 
+  @MachineScopes('equipment:write')
   @Post('restore')
   @Roles('ADMIN', 'SHOP_MANAGER')
   restoreMany(
@@ -123,6 +125,7 @@ export class EquipmentController {
     return this.equipment.getOne(id);
   }
 
+  @MachineScopes('equipment:write')
   @Patch(':id/operations')
   updateOperations(
     @Param('id') id: string,

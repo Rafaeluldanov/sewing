@@ -87,6 +87,7 @@ export class OperationsController {
    * нового станка: открыл операцию → отметил станки → сохранил, и
    * операция сразу доступна на них в `/work`.
    */
+  @MachineScopes('operations:write')
   @Patch(':id/equipment')
   updateEquipment(
     @Param('id') id: string,
@@ -102,6 +103,7 @@ export class OperationsController {
    * показывать ли кнопку «Удалить» (hard) или только
    * «Деактивировать» (soft = `PATCH { isActive: false }`).
    */
+  @MachineScopes('operations:read')
   @Get(':id/blockers')
   getBlockers(@Param('id') id: string): Promise<OperationBlockersResponse> {
     return this.operations.getBlockers(id);
@@ -141,6 +143,7 @@ export class OperationsController {
    * необратимая операция. `archive`/`restore` — обратимы, доступны и
    * `SHOP_MANAGER` (класс-уровневый `@Roles`).
    */
+  @MachineScopes('operations:write')
   @Post('archive')
   archiveMany(
     @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
@@ -150,6 +153,7 @@ export class OperationsController {
     return this.operations.archiveMany(dto.ids, viewer);
   }
 
+  @MachineScopes('operations:write')
   @Post('restore')
   restoreMany(
     @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
