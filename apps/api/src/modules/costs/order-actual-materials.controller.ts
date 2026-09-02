@@ -4,7 +4,7 @@ import {
   type OrderActualMaterialsQuery,
 } from '@sewing/shared/order-actual-materials';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { MachineScopes, Roles } from '../auth/auth.decorators.js';
 import { OrderActualMaterialsService } from './order-actual-materials.service.js';
 
 /**
@@ -20,6 +20,7 @@ import { OrderActualMaterialsService } from './order-actual-materials.service.js
  */
 @Roles('SHOP_MANAGER', 'ADMIN')
 @Controller('costs')
+@MachineScopes('costs:read')
 export class OrderActualMaterialsController {
   constructor(private readonly service: OrderActualMaterialsService) {}
 

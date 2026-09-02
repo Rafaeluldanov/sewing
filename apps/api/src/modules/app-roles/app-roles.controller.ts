@@ -11,7 +11,7 @@ import {
   type BulkArchiveResultDto,
 } from '@sewing/shared/archive';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { AppRolesService } from './app-roles.service.js';
 
@@ -37,6 +37,8 @@ import { AppRolesService } from './app-roles.service.js';
  */
 @Roles('ADMIN')
 @Controller('app-roles')
+// Только чтение: правка ролей — ADMIN, а машине ADMIN не выдаётся (см. FORBIDDEN_ROLES).
+@MachineScopes('roles:read')
 export class AppRolesController {
   constructor(private readonly service: AppRolesService) {}
 

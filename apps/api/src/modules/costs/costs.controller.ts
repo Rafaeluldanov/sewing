@@ -11,7 +11,7 @@ import {
   type ProductionCostQuery,
 } from '@sewing/shared/costs';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { CostsService } from './costs.service.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
@@ -26,6 +26,7 @@ import { PassportRealCostService } from './passport-real-cost.service.js';
  */
 @Roles('SHOP_MANAGER', 'ADMIN')
 @Controller('costs')
+@MachineScopes('costs:read')
 export class CostsController {
   constructor(
     private readonly costs: CostsService,

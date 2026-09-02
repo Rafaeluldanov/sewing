@@ -27,7 +27,7 @@ import {
 } from '@sewing/shared/archive';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { RoutesService } from './routes.service.js';
 
@@ -47,6 +47,7 @@ import { RoutesService } from './routes.service.js';
  * единый источник истины для web и api.
  */
 @Controller('routes')
+@MachineScopes('routes:read', 'routes:write')
 export class RoutesController {
   constructor(private readonly routes: RoutesService) {}
 

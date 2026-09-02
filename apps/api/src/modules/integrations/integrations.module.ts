@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ErpStockController } from './erp-stock.controller.js';
 import { IntegrationsController } from './integrations.controller.js';
 import { IntegrationsService } from './integrations.service.js';
 import { UpgiftsClient } from './upgifts-client.service.js';
@@ -14,7 +15,7 @@ import { UpgiftsClient } from './upgifts-client.service.js';
  * (`secret-box.ts`). `AuditService` берётся из глобального `AuditModule`.
  */
 @Module({
-  controllers: [IntegrationsController],
+  controllers: [IntegrationsController, ErpStockController],
   providers: [IntegrationsService, UpgiftsClient],
   exports: [IntegrationsService, UpgiftsClient],
 })

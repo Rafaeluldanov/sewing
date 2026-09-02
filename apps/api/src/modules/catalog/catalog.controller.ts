@@ -1,6 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import type { ProductDto, SizeDto } from '@sewing/shared/orders';
 import { PrismaService } from '../../prisma/prisma.service';
+import { MachineScopes } from '../auth/auth.decorators.js';
 
 /**
  * Справочники, нужные формам заказов (Шаг 4):
@@ -11,6 +12,7 @@ import { PrismaService } from '../../prisma/prisma.service';
  * появится на следующих шагах (см. `docs/api.md §2`).
  */
 @Controller()
+@MachineScopes('catalog:read')
 export class CatalogController {
   constructor(private readonly prisma: PrismaService) {}
 

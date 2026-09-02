@@ -20,7 +20,7 @@ import {
 } from '@sewing/shared/workshop-needs';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { WorkshopNeedsService } from './workshop-needs.service.js';
 
@@ -40,6 +40,7 @@ import { WorkshopNeedsService } from './workshop-needs.service.js';
  * `WorkshopNeedsOrderController` (`/api/orders/:id/workshop-needs/*`).
  */
 @Controller('workshop-needs')
+@MachineScopes('needs:read', 'needs:write')
 @Roles('ADMIN', 'SHOP_MANAGER')
 export class WorkshopNeedsController {
   constructor(private readonly needs: WorkshopNeedsService) {}

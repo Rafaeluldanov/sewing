@@ -28,7 +28,7 @@ import {
 } from '@sewing/shared/archive';
 import * as QRCode from 'qrcode';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Public, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { EmployeesService } from './employees.service.js';
 import { renderEmployeePrintHtml } from './employee-print.js';
@@ -53,6 +53,7 @@ import { renderEmployeePrintHtml } from './employee-print.js';
 export class EmployeesController {
   constructor(private readonly employees: EmployeesService) {}
 
+  @MachineScopes('employees:read')
   @Get()
   list(
     @Query(new ZodValidationPipe(ListEmployeesQuerySchema))
@@ -94,11 +95,13 @@ export class EmployeesController {
    * `EmployeesService.listActiveCutters()` через Prisma `select`.
    */
   @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  @MachineScopes('employees:read')
   @Get('cutters')
   listActiveCutters() {
     return this.employees.listActiveCutters();
   }
 
+  @MachineScopes('employees:read')
   @Get(':id')
   get(@Param('id') id: string) {
     return this.employees.get(id);

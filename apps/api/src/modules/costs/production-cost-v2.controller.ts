@@ -10,7 +10,7 @@ import {
   type ProductionCostV2Query,
 } from '@sewing/shared/production-cost';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderProductionDocumentService } from './order-production-document.service.js';
 import { ProductionCostV2Service } from './production-cost-v2.service.js';
@@ -31,6 +31,7 @@ import { ProductionCostV2Service } from './production-cost-v2.service.js';
  */
 @Roles('ADMIN', 'SHOP_MANAGER')
 @Controller('admin/production-cost')
+@MachineScopes('costs:read')
 export class ProductionCostV2Controller {
   constructor(
     private readonly service: ProductionCostV2Service,

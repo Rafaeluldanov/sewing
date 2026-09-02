@@ -26,7 +26,7 @@ import {
   type UpdatePatternCategoryDto,
 } from '@sewing/shared/pattern-categories';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { PatternCategoriesService } from './pattern-categories.service.js';
 import { PatternCategoriesStorageService } from './pattern-categories-storage.service.js';
@@ -48,6 +48,7 @@ import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
  */
 @Roles('ADMIN', 'SHOP_MANAGER')
 @Controller('pattern-categories')
+@MachineScopes('patterns:read', 'patterns:write')
 export class PatternCategoriesController {
   constructor(private readonly service: PatternCategoriesService) {}
 

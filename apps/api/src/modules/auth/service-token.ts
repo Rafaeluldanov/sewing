@@ -52,3 +52,34 @@ export function hashEquals(a: string, b: string): boolean {
   const bb = Buffer.from(b, 'utf8');
   return ba.length === bb.length && timingSafeEqual(ba, bb);
 }
+
+/**
+ * Скоупы «окна ERP» — полный набор, которым ERP upgifts рисует у себя экраны цеха.
+ *
+ * Раньше здесь было два справочника, и это было верно, пока ERP показывала два справочника.
+ * Решение владельца 02.09.2026: заказы, лекала, маршруты, операции, заявки конструктору,
+ * принтеры, роли и зарплата, себестоимость и настройки открываются в ERP так, чтобы человек
+ * не понимал, что систем две. Окно без данных — пустое окно, поэтому набор такой широкий.
+ *
+ * Deny-by-default при этом никуда не делся и остаётся смыслом всей конструкции: маршрут без
+ * `@MachineScopes(...)` машине закрыт, и в этом списке нет ни одного скоупа, под который не
+ * открыт конкретный контроллер. Денег машина не двигает: `payroll`, `costs`, `roles` — только
+ * чтение, казначейство, выплаты и цеховые экраны (раскрой, смены, паспорта) не открыты вовсе.
+ */
+export const ERP_WINDOW_SCOPES = [
+  'equipment:read', 'equipment:write',
+  'operations:read', 'operations:write',
+  'orders:read', 'orders:write',
+  'patterns:read', 'patterns:write',
+  'routes:read', 'routes:write',
+  'constructor:read', 'constructor:write',
+  'printers:read', 'printers:write',
+  'settings:read', 'settings:write',
+  'needs:read', 'needs:write',
+  'stock:read', 'stock:write',
+  'catalog:read',
+  'employees:read',
+  'roles:read',
+  'payroll:read',
+  'costs:read',
+];

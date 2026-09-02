@@ -14,7 +14,7 @@ import {
 } from '@sewing/shared/order-tech-cards';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderTechCardService } from './order-tech-card.service.js';
 
@@ -23,6 +23,7 @@ import { OrderTechCardService } from './order-tech-card.service.js';
  * все write-методы возвращают свежий полный DTO — единый источник для UI.
  */
 @Controller('orders/:id/tech-card-parameters')
+@MachineScopes('orders:read', 'orders:write')
 export class OrderTechCardController {
   constructor(private readonly service: OrderTechCardService) {}
 
@@ -87,6 +88,7 @@ export class OrderTechCardController {
  * Отдельный контроллер, потому что префикс другой: строки — не параметры.
  */
 @Controller('orders/:id/tech-card/lines')
+@MachineScopes('orders:read', 'orders:write')
 export class OrderTechCardLinesController {
   constructor(private readonly service: OrderTechCardService) {}
 
