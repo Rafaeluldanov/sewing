@@ -27,8 +27,10 @@ CREATE TABLE IF NOT EXISTS "ErpShopStock" (
 
 -- NULLS NOT DISTINCT: у материала без рулонного учёта `erpSeriesId` пуст, и без
 -- этого ключ его не защищал бы — NULL <> NULL пропустил бы дубли остатка.
+-- ⚠️ В CREATE INDEX модификатор идёт ПОСЛЕ списка колонок (перед списком — это форма
+-- ALTER TABLE ... ADD CONSTRAINT ... UNIQUE NULLS NOT DISTINCT (...), и её здесь ждать нельзя).
 CREATE UNIQUE INDEX IF NOT EXISTS "ErpShopStock_key"
-  ON "ErpShopStock" NULLS NOT DISTINCT ("erpProductId", "erpCharacteristicId", "erpSeriesId");
+  ON "ErpShopStock" ("erpProductId", "erpCharacteristicId", "erpSeriesId") NULLS NOT DISTINCT;
 
 CREATE INDEX IF NOT EXISTS "ErpShopStock_erpProductId_idx"
   ON "ErpShopStock"("erpProductId");
