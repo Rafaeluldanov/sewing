@@ -1286,6 +1286,7 @@ model Employee {
   /// тот кто выдал, сам сотрудник-подтвердивший и тот кто отменил.
   payrollPayouts             PayrollPayout[] @relation("PayrollPayoutEmployee")
   createdPayrollPayouts      PayrollPayout[] @relation("PayrollPayoutCreatedBy")
+  serviceTokens              ServiceToken[]  @relation("ServiceTokenEmployee")
   issuedPayrollPayouts       PayrollPayout[] @relation("PayrollPayoutIssuedBy")
   acknowledgedPayrollPayouts PayrollPayout[] @relation("PayrollPayoutAcknowledgedBy")
   cancelledPayrollPayouts    PayrollPayout[] @relation("PayrollPayoutCancelledBy")
@@ -6977,7 +6978,10 @@ model ServiceToken {
   /// Служебный сотрудник «Интеграция ERP», от чьего имени машина пишет в поля со ссылкой
   /// на Employee (createdById заявок КБ, completedById расчёта). Создаётся лениво при первом
   /// запросе токена. Автор-человек из ERP — в payload аудита (actor-context.ts, правило §0.1).
+  /// FK с SetNull: удалили учётку из админки — колонка обнулится и учётка пересоздастся при
+  /// следующем запросе; без FK «висячий» id ронял бы каждую запись из ERP на ключе навсегда.
   employeeId  String?
+  employee    Employee? @relation("ServiceTokenEmployee", fields: [employeeId], references: [id], onDelete: SetNull)
 }
 
 

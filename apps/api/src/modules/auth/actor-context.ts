@@ -27,9 +27,16 @@ export interface ActorInfo {
 
 const als = new AsyncLocalStorage<ActorInfo>();
 
-/** Положить автора в контекст текущего запроса (вызывается из `AuthGuard`). */
-export function enterActorContext(actor: ActorInfo): void {
-  als.enterWith(actor);
+/**
+ * Выполнить обработку запроса с автором в контексте (вызывается из `ActorContextMiddleware`).
+ *
+ * Именно `run`, а не `enterWith`: гвард Nest вызывается после `await` внутри цепочки
+ * исполнения, и контекст, положенный `enterWith` там, до хендлера и аудита не доживает
+ * (проверено воспроизведением 02.09.2026). Middleware оборачивает `next()` целиком — так же,
+ * как `TenantResolverMiddleware` кладёт тенанта.
+ */
+export function runWithActor<T>(actor: ActorInfo, fn: () => T): T {
+  return als.run(actor, fn);
 }
 
 /** Автор текущего запроса или `null` (человек с cookie, фоновая задача). */
