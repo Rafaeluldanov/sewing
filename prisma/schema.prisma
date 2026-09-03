@@ -2064,6 +2064,8 @@ model Order {
   /// Факты списания материала в ERP по выпуску паспортов этого заказа
   /// (лестница остатков, шаг 5). Cascade — без заказа факт смысла не имеет.
   erpMaterialConsumptions ErpMaterialConsumption[]
+  /// Приходы готовой продукции этого заказа на склад ERP (§0.5).
+  erpFinishedGoodsReceipts ErpFinishedGoodsReceipt[]
 
   /// Этап «Склад выпуска готовой продукции» (см.
   /// `apps/api/src/modules/orders/orders.service.ts::create`/`update`,
@@ -2620,6 +2622,9 @@ model Passport {
   /// Один паспорт — одна строка: `null` = ERP ещё не списала (паспорт стоит в очереди
   /// `GET /api/integrations/erp-consumption`).
   erpConsumption ErpMaterialConsumption?
+  /// Приход этого паспорта на склад ERP (§0.5): зеркало её ответа. `null` — ERP ещё не
+  /// ответила (паспорт стоит в очереди `GET /api/integrations/erp-finished-goods`).
+  erpFinishedGoods ErpFinishedGoodsReceipt?
 
   @@index([status, currentOperationId])
   @@index([orderId])
@@ -6738,6 +6743,16 @@ model CompanySettings {
   /// `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`.
   autoIssueMaterialsOnCutRelease Boolean @default(false)
 
+  /// Обратный шов §0.5: с какого момента упакованные паспорта отдаются ERP на приход готовой
+  /// продукции. ⛔ Пусто = очередь ПУСТА (а не «весь архив»): на момент включения упакованных
+  /// паспортов больше тысячи, и приход задним числом нарисовал бы историю на складе ERP.
+  erpFinishedGoodsSince DateTime?
+  /// Остаток готовой продукции ведёт ERP (§0.5). При `true` ручные движения ГП в цехе
+  /// (перемещение, корректировка, отгрузка и её отмена) отвечают 409: у цеха своих складов нет.
+  /// Журнал выпуска цеха (`FinishedGoodsMovement PRODUCTION_RECEIPT`) при этом остаётся — он
+  /// нужен доске, дашборду и себестоимости, и складом не является.
+  erpOwnsFinishedGoods Boolean @default(false)
+
   /// Строгость гейта «работа мимо маршрута»
   /// (`PassportsService.evaluateRouteOrder` → issue / scan / complete).
   ///
@@ -9124,6 +9139,46 @@ model ErpMaterialConsumption {
 
   @@index([orderId])
   @@index([syncedAt])
+}
+
+// ---------------------------------------------------------------------------
+// ErpFinishedGoodsReceipt — что ERP оприходовала по выпуску паспорта (§0.5).
+// ---------------------------------------------------------------------------
+//
+// Готовая продукция цеха приходуется на склад ERP; своих складов у цеха нет. Здесь — ЗЕРКАЛО
+// её ответа: каким документом, на какой склад и под какой номенклатурой изделие встало на учёт.
+// Очередь без своего флага: «ERP ещё не ответила» = у упакованного паспорта нет этой строки.
+//
+// `state`: `POSTED` — оприходовано; `EMPTY` — приходовать нечего (брак / изделие сознательно не
+// приходуется); `FAILED` — ERP не смогла (изделие не сопоставлено с её номенклатурой, нет склада);
+// `REVERSED` — приход сторнирован. Строки-детализации нет: у выпуска одна позиция.
+model ErpFinishedGoodsReceipt {
+  id                    String    @id @default(cuid())
+  passportId            String    @unique
+  orderId               String
+  state                 String    @default("POSTED")
+  erpDocumentId         String?
+  erpDocumentNumber     String?
+  erpOrganizationId     String?
+  erpOrganizationName   String?
+  erpWarehouseId        String?
+  erpWarehouseName      String?
+  erpNomenclatureId     String?
+  erpNomenclatureName   String?
+  erpCharacteristicId   String?
+  erpCharacteristicName String?
+  qty                   Int?
+  postedAt              DateTime?
+  /// Почему не оприходовано — человеческим текстом от ERP (что именно сопоставить/завести).
+  error                 String?
+  syncedAt              DateTime  @default(now())
+
+  passport Passport @relation(fields: [passportId], references: [id], onDelete: Cascade)
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([syncedAt])
+  @@index([state])
 }
 
 /// Строка факта: сколько и на какую сумму ERP списала по КОНКРЕТНОЙ потребности
