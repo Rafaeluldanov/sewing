@@ -989,8 +989,9 @@ export class OrdersService {
    * `prisma/schema.prisma::Order.productCreationMode`,
    * `apps/web/app/admin/orders/new/create-product-modal.tsx`).
    *
-   * Атомарно создаёт `PatternItem` + `PatternMaterialArea[]` +
-   * technical `Product` + `Order` + `OrderItem[]` в одной транзакции.
+   * Атомарно создаёт `PatternItem` + `PatternSizeFile[]` (заглушки без
+   * файла — размерный ряд) + `PatternMaterialArea[]` + technical
+   * `Product` + `Order` + `OrderItem[]` в одной транзакции.
    * Делает те же snapshot-вызовы, что и стандартная ветка create —
    * `startCalculation` после этого проходит без отличий.
    */
@@ -1120,6 +1121,40 @@ export class OrdersService {
       if (materialAreasData.length > 0) {
         await tx.patternMaterialArea.createMany({
           data: materialAreasData,
+        });
+      }
+
+      // Размерный ряд новой номенклатуры. Размеры, введённые менеджером
+      // в модалке «Создать изделие», регистрируем строками
+      // `PatternSizeFile` БЕЗ файла (`fileUrl = null` — заглушка, файл
+      // догрузят позже). Тот же приём, что у завершения задачи КБ
+      // (`ConstructorTasksService.complete`: «с файлом или заглушкой»).
+      //
+      // Зачем: `PatternListItemDto.sizes` собирается ТОЛЬКО из активных
+      // `sizeFiles`, а из него растут колонки редактора расцветок в
+      // мастере создания. Без этих строк inline-изделие рождалось
+      // «безразмерным», и поразмерный план не открывался ни в этом
+      // заказе, ни в следующих по той же номенклатуре (прод: «Анорак /
+      // заказ 02-00042», 02.09.2026 — 0 размеров, заказ застрял в DRAFT).
+      // Контроль при этом не теряется: «Готовность кроя» отдельно
+      // проверяет наличие файла на каждый размер с `qtyPlan > 0`
+      // (`pattern.sizeFiles.missing`, см. `CutReadinessService`).
+      const inlineSizeIds = Array.from(
+        new Set(calc.sizes.map((row) => row.sizeId)),
+      );
+      if (inlineSizeIds.length > 0) {
+        await tx.patternSizeFile.createMany({
+          data: inlineSizeIds.map((sizeId) => ({
+            patternItemId: newPattern.id,
+            sizeId,
+            fileUrl: null,
+            originalFileName: null,
+            // Лекало только что создано в этой же транзакции — версий по
+            // паре `(pattern, size)` ещё нет, `max + 1` считать не из чего.
+            version: 1,
+            status: 'ACTIVE',
+            uploadedById: actorEmployeeId ?? null,
+          })),
         });
       }
 
@@ -1262,6 +1297,7 @@ export class OrdersService {
             productCreationMode: 'CREATE_FOR_CALCULATION',
             inlinePatternCategoryId: category?.id ?? null,
             inlinePatternMaterialAreaCount: materialAreasData.length,
+            inlinePatternSizeCount: inlineSizeIds.length,
             patternDevelopmentCostRub:
               calc.patternDevelopmentCostRub ?? null,
           },

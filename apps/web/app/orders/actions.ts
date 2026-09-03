@@ -606,6 +606,13 @@ export interface CreateOrderForCalculationResult {
   ok?: boolean;
   error?: string;
   orderId?: string;
+  /**
+   * Номенклатура, которую backend создал под этот заказ
+   * (`createWithInlinePattern`). Мастеру создания она нужна, чтобы
+   * подставить `patternItemId` в свой state: без неё шаг «Расцветки»
+   * считал, что изделие не выбрано, и не давал заполнить план.
+   */
+  patternItemId?: string | null;
   /** Адресные `missingRoleKeys` для UI техкарты. */
   missingRoleKeys?: string[];
 }
@@ -625,7 +632,11 @@ export async function createOrderForCalculationAction(
     revalidatePath('/orders');
     revalidatePath('/admin/orders');
     revalidatePath(`/admin/orders/${created.id}`);
-    return { ok: true, orderId: created.id };
+    return {
+      ok: true,
+      orderId: created.id,
+      patternItemId: created.patternItemId,
+    };
   } catch (e) {
     if (isNextRedirect(e)) throw e;
     if (e instanceof ApiRequestError) {

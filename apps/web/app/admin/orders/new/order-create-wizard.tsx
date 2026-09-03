@@ -219,6 +219,35 @@ export function OrderCreateWizard({
   ]);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
 
+  /**
+   * Ветка «Создать изделие»: перенести размерную матрицу из модалки на
+   * шаг «Расцветки и размеры». Менеджер уже ввёл там размеры и тираж,
+   * backend завёл по ним `OrderItem`, но шаг 3 об этом не знал и
+   * показывал пустой редактор — «Далее» упиралось в «Заполните план
+   * хотя бы по одному размеру», а сменить лекало на шаге 2 уже нельзя
+   * (черновик создан). Заполняем ОБА представления плана: расцветку #0
+   * (под флагом `FEATURE_COLORWAYS`) и плоскую матрицу.
+   *
+   * Название цвета не выдумываем — его вписывает менеджер.
+   */
+  const seedPlanFromInlineProduct = useCallback(
+    (payload: SavedInlineProductPayload): void => {
+      const bySize: Record<string, number> = {};
+      for (const s of payload.sizes) {
+        if (s.qtyPlan > 0) {
+          bySize[s.sizeId] = (bySize[s.sizeId] ?? 0) + s.qtyPlan;
+        }
+      }
+      if (Object.keys(bySize).length === 0) return;
+      setQuantities(bySize);
+      setColorways((prev) => {
+        const [first, ...rest] = prev.length > 0 ? prev : [makeEmptyColorway()];
+        return [{ ...first, sizes: { ...bySize } }, ...rest];
+      });
+    },
+    [],
+  );
+
   // --- Шаг 4: маршрут ----------------------------------------------------
   const [routeTemplateId, setRouteTemplateId] = useState('');
 
@@ -254,6 +283,33 @@ export function OrderCreateWizard({
     () => new Set(sortedSizes.map((s) => s.id)),
     [sortedSizes],
   );
+
+  /**
+   * Размеры плана, которых нет в размерном ряду лекала: их колонки
+   * редактор расцветок должен показать сразу при монтировании, иначе
+   * введённое количество «повисло» бы в state без ячейки. Нужно ветке
+   * «Создать изделие» (план приехал из модалки, а свежесозданной
+   * номенклатуры ещё нет в серверном списке `patterns`) и лекалу без
+   * загруженных размеров. Тот же приём, что в форме редактирования
+   * заказа (`admin-edit-order-form.tsx::initialExtraSizeIds`).
+   *
+   * Функция, а не `useMemo`: редактор читает проп только в момент
+   * СВОЕГО монтирования (шаги рендерятся условно), а к этому моменту
+   * план мог приехать позже мастера — мемо на `[availableSizes]`
+   * отдало бы устаревший пустой список.
+   */
+  const planExtraSizeIds = useCallback((): string[] => {
+    const inPattern = new Set(availableSizes.map((s) => s.id));
+    const out = new Set<string>();
+    for (const cw of colorways) {
+      for (const [sizeId, qty] of Object.entries(cw.sizes)) {
+        if (qty > 0 && allSizeIds.has(sizeId) && !inPattern.has(sizeId)) {
+          out.add(sizeId);
+        }
+      }
+    }
+    return [...out];
+  }, [availableSizes, allSizeIds, colorways]);
 
   /**
    * Тираж. В режиме расцветок считается по карточкам цветов (колонки
@@ -511,6 +567,26 @@ export function OrderCreateWizard({
 
     startTransition(async () => {
       if (step === 'colorways') {
+        // Расцветка без названия цвета молча выпадает из
+        // `variantsPayload` (фильтр `color.length > 0`), а вместе с ней
+        // и её количества — из агрегата `items`. Менеджер видел либо
+        // «не работает Далее» (если цвет один), либо потерянный тираж
+        // (если расцветок несколько). Называем причину прямо.
+        const namelessWithQty =
+          colorwaysEnabled &&
+          colorways.some(
+            (cw) =>
+              cw.color.trim() === '' &&
+              Object.entries(cw.sizes).some(
+                ([sizeId, qty]) => qty > 0 && allSizeIds.has(sizeId),
+              ),
+          );
+        if (namelessWithQty) {
+          setError(
+            'Укажите название цвета у каждой расцветки с количеством — безымянная расцветка не сохранится.',
+          );
+          return;
+        }
         if (itemsPayload.length === 0) {
           setError(
             'Заполните план хотя бы по одному размеру — без него заказ создать нельзя.',
@@ -580,6 +656,8 @@ export function OrderCreateWizard({
     applyResult,
     nextStepId,
     colorwaysEnabled,
+    colorways,
+    allSizeIds,
     variantsPayload,
     itemsPayload,
     routeTemplateId,
@@ -986,6 +1064,13 @@ export function OrderCreateWizard({
                     // `/admin/orders/[id]/edit`. Черновик создан —
                     // остаёмся в мастере и продолжаем с шага 3.
                     setOrderId(res.orderId);
+                    // Номенклатуру backend создал сам — подхватываем её id,
+                    // иначе шаг «Расцветки» считал бы изделие невыбранным.
+                    // В `patterns` (список отрисован сервером) её ещё нет,
+                    // поэтому размеры на шаг 3 переносим из payload-а
+                    // модалки — см. `seedPlanFromInlineProduct`.
+                    if (res.patternItemId) setPatternItemId(res.patternItemId);
+                    seedPlanFromInlineProduct(payload);
                     setSavedInlineProduct(payload);
                     setInlineOpen(false);
                     return { ok: true };
@@ -1122,12 +1207,39 @@ export function OrderCreateWizard({
         {/* ---------------- Шаг 3: расцветки и размеры ---------------- */}
         {step === 'colorways' && (
           <div className="order-wizard__body">
+            {/*
+              Размерный ряд лекала = активные `PatternSizeFile`. Его может
+              не быть (файлы ещё не загружены), и раньше это ПОЛНОСТЬЮ
+              блокировало шаг. Теперь размеры набираются вручную кнопкой
+              «+ размер», а здесь объясняем, откуда пустота и где её
+              лечить — тот же приём, что у предупреждения о пустой
+              спецификации на шаге «Изделие». Только для редактора
+              расцветок: у плоской матрицы (`FEATURE_COLORWAYS` выключен)
+              своей кнопки «+ размер» нет, и текст вводил бы в заблуждение.
+            */}
+            {colorwaysEnabled && selectedPattern && availableSizes.length === 0 && (
+              <p className="order-wizard__warn">
+                У номенклатуры «{selectedPattern.name}» не заведены размеры
+                лекала — добавьте нужные кнопкой «+ размер» ниже. Чтобы они
+                подставлялись сами, заведите размерный ряд в{' '}
+                <a
+                  href={`/admin/patterns/${encodeURIComponent(selectedPattern.id)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  карточке номенклатуры
+                </a>
+                . Перед раскроем система всё равно попросит файл лекала на
+                каждый размер.
+              </p>
+            )}
             {colorwaysEnabled ? (
               <OrderColorwaysFieldset
                 availableSizes={availableSizes}
                 allSizes={sortedSizes}
                 value={colorways}
                 onChange={setColorways}
+                initialExtraSizeIds={planExtraSizeIds()}
               />
             ) : (
               <SizePlanSelector
