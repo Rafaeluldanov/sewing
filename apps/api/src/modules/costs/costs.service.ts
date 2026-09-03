@@ -8,6 +8,7 @@ import {
   type ProductionCostSummaryDto,
 } from '@sewing/shared/costs';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { erpMaterialCostByPassport } from './erp-material-fact.js';
 import { isSalaryEligible } from '../employees/compensation.js';
 import {
   effectiveHourlyRateWithNorm,
@@ -253,6 +254,15 @@ export class CostsService {
           ret.passportId,
           prev - decimalToNumber(ret.totalCost),
         );
+      }
+      // Материалы, которые ведёт ERP: их расход — её списание по факту выпуска (шаг 6
+      // «тёмной лестницы»), своего документа расхода у них в цехе нет. Источники не
+      // пересекаются: автосписание кроя строк под ERP не создаёт.
+      const erpByPassport = await erpMaterialCostByPassport(this.prisma, passportIds);
+      for (const [passportId, rub] of erpByPassport) {
+        if (excludedPassportIds.has(passportId)) continue;
+        const prev = materialCostByPassport.get(passportId) ?? 0;
+        materialCostByPassport.set(passportId, prev + decimalToNumber(rub));
       }
     }
 

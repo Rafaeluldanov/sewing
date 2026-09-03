@@ -4408,6 +4408,27 @@ export class MaterialIssueWorkshopNeedNotInOrderException extends BusinessExcept
 }
 
 /**
+ * Строка расхода ссылается на потребность, материал которой ведёт ERP
+ * (`WorkshopNeed.erpManagedAt`). Такой материал лежит на складе ERP, и списывает
+ * его ОНА по факту выпуска — с конкретного рулона и по цене его партии (правило
+ * владельца §0.3, `service/docs/kb/sewing.md`). Свой документ расхода по нему
+ * означал бы второй расход того же материала: в себестоимость цеха он попадёт
+ * ещё и фактом ERP (`ErpMaterialConsumption`), и задвоение будет видно только
+ * сверкой с ERP.
+ */
+export class MaterialIssueWorkshopNeedManagedByErpException extends BusinessException {
+  constructor(description?: string) {
+    super(
+      'MATERIAL_ISSUE_WORKSHOP_NEED_MANAGED_BY_ERP',
+      description
+        ? `Материал «${description}» ведёт ERP: он списывается при выпуске на её складе`
+        : 'Материал ведёт ERP: он списывается при выпуске на её складе',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * `POST /api/material-issues` пришёл без строк (или с пустым массивом).
  * Создавать пустой документ нельзя — `totalCost` всегда суммируется
  * по строкам, а `lines` со стороны клиента — единственный источник

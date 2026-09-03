@@ -11,6 +11,7 @@ import { normalizeColorOrNull } from '@sewing/shared/colors';
 import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { erpMaterialFactByNeed } from './erp-material-fact.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
 
@@ -491,6 +492,33 @@ export class OrderProductionDocumentService {
       b.qty = b.qty.add(netQty);
       b.rub = b.rub.add(netRub);
       acc.breakdown.set(bk, b);
+    }
+
+    // 2.1. Факт «списано» по материалам под ERP — её списание по факту выпуска (шаг 6
+    // «тёмной лестницы»). У таких потребностей своего документа расхода в цехе нет:
+    // автосписание кроя строк под ERP не создаёт, поэтому источники не пересекаются.
+    // Количество — в единице цеха, сумма — та, что ERP реально сняла с партий рулона.
+    const erpFacts = await erpMaterialFactByNeed(this.prisma, orderId);
+    for (const fact of erpFacts.values()) {
+      const acc = ensure(fact.workshopNeedId, {
+        name: fact.description,
+        unit: fact.unit ?? '',
+        materialRole: null,
+      });
+      acc.issuedQty = acc.issuedQty.add(fact.qty);
+      acc.issuedRub = acc.issuedRub.add(fact.rub);
+      for (const part of fact.breakdown) {
+        const bk = `${part.sizeCode ?? ''}|${part.color ?? ''}`;
+        const b = acc.breakdown.get(bk) ?? {
+          sizeCode: part.sizeCode,
+          color: part.color,
+          qty: new Prisma.Decimal(0),
+          rub: new Prisma.Decimal(0),
+        };
+        b.qty = b.qty.add(part.qty);
+        b.rub = b.rub.add(part.rub);
+        acc.breakdown.set(bk, b);
+      }
     }
 
     // 3. Факт «принято» — POSTED PurchaseReceiptLine по заказу.

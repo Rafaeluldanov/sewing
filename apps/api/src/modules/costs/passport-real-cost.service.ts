@@ -13,6 +13,10 @@ import {
   type PassportCostSalaryLineDto,
 } from '@sewing/shared/costs';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import {
+  erpMaterialCostByPassport,
+  erpMaterialCostForPassport,
+} from './erp-material-fact.js';
 import { isSalaryEligible } from '../employees/compensation.js';
 import {
   effectiveHourlyRateWithNorm,
@@ -214,7 +218,7 @@ export class PassportRealCostService {
     // ЕГО собственном окне завершения (как живой `salaryFor`), а НЕ на окне
     // одного дня упаковки: иначе оклад за операции / ОТК / ВТО предыдущих
     // дней теряется в FINAL-снимке (C3 — снимок занижал ЗП vs живой вид).
-    const [pwRows, issues, returns] = await Promise.all([
+    const [pwRows, issues, returns, erpByPassport] = await Promise.all([
       this.prisma.operationEntry.groupBy({
         by: ['passportId'],
         where: { passportId: { in: passportIds }, status: EntryStatus.APPROVED },
@@ -230,6 +234,8 @@ export class PassportRealCostService {
         where: { status: MATERIAL_ISSUE_STATUS_POSTED, passportId: { in: passportIds } },
         _sum: { totalCost: true },
       }),
+      // Материалы под ERP — тем же батчем, что и свои: снимок обязан совпасть с живым видом.
+      erpMaterialCostByPassport(this.prisma, passportIds),
     ]);
     // Оклад по каждому паспорту на его окне завершения — совпадает с живым
     // `getForPassport` (C3). Батч-задача конца дня, N вызовов допустимы.
@@ -259,6 +265,9 @@ export class PassportRealCostService {
           (matByPassport.get(r.passportId) ?? 0) - decimalToNumber(r._sum.totalCost),
         );
       }
+    }
+    for (const [pid, rub] of erpByPassport) {
+      matByPassport.set(pid, (matByPassport.get(pid) ?? 0) + decimalToNumber(rub));
     }
 
     const now = new Date();
@@ -309,7 +318,10 @@ export class PassportRealCostService {
     excluded: boolean,
   ): Promise<number> {
     if (excluded) return 0;
-    const [issues, returns] = await Promise.all([
+    // Два источника, которые не пересекаются: свои материалы цеха (`MaterialIssue` нетто
+    // возвратов) и материалы под ERP (её списание по факту выпуска — шаг 6 «тёмной лестницы»;
+    // своего документа расхода у них в цехе нет).
+    const [issues, returns, erp] = await Promise.all([
       this.prisma.materialIssue.aggregate({
         where: { status: MATERIAL_ISSUE_STATUS_POSTED, passportId },
         _sum: { totalCost: true },
@@ -318,10 +330,12 @@ export class PassportRealCostService {
         where: { status: MATERIAL_ISSUE_STATUS_POSTED, passportId },
         _sum: { totalCost: true },
       }),
+      erpMaterialCostForPassport(this.prisma, passportId),
     ]);
     return (
       decimalToNumber(issues._sum.totalCost) -
-      decimalToNumber(returns._sum.totalCost)
+      decimalToNumber(returns._sum.totalCost) +
+      decimalToNumber(erp)
     );
   }
 

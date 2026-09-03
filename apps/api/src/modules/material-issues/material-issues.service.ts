@@ -22,6 +22,7 @@ import {
   MaterialIssueReturnOnlyPostedException,
   MaterialIssueReturnQtyExceedsAvailableException,
   MaterialIssueUnitCostInvalidException,
+  MaterialIssueWorkshopNeedManagedByErpException,
   MaterialIssueWorkshopNeedNotInOrderException,
   WorkshopNeedNotFoundException,
 } from '../../common/errors.js';
@@ -223,6 +224,7 @@ export class MaterialIssuesService {
         sourceName: string | null;
         materialRole: string | null;
         unit: string;
+        erpManagedAt: Date | null;
       }
     >();
     if (workshopNeedIds.length > 0) {
@@ -235,6 +237,7 @@ export class MaterialIssuesService {
           sourceName: true,
           materialRole: true,
           unit: true,
+          erpManagedAt: true,
         },
       });
       for (const n of found) needsById.set(n.id, n);
@@ -243,6 +246,13 @@ export class MaterialIssuesService {
         if (!need) throw new WorkshopNeedNotFoundException();
         if (need.orderId !== dto.orderId) {
           throw new MaterialIssueWorkshopNeedNotInOrderException();
+        }
+        // Материал под ERP цех у себя не списывает — ни автоматически, ни руками:
+        // его списывает ERP при выпуске, и её факт уже входит в себестоимость.
+        if (need.erpManagedAt) {
+          throw new MaterialIssueWorkshopNeedManagedByErpException(
+            need.description ?? need.sourceName ?? undefined,
+          );
         }
       }
     }
@@ -1135,12 +1145,21 @@ export class MaterialIssuesService {
     }> = [];
 
     for (const { need, qty: issuedQty } of shares.shares) {
+      // ⛔ Материал под ERP цех у себя НЕ списывает (правило владельца §0.3,
+      // `service/docs/kb/sewing.md`): склад его — ERP, и списывает она при ВЫПУСКЕ, с
+      // конкретного рулона и по цене его партии. Её факт приезжает в
+      // `ErpMaterialConsumption` и попадает в себестоимость оттуда
+      // (`costs/erp-material-fact.ts`). Строка здесь означала бы второй расход того же
+      // материала — задвоение, заметное только сверкой с ERP.
+      if (need.erpManagedAt) continue;
 
-      // Материал под ERP: цена — её заказа поставщику (₽ за единицу цеха), а не план закупщика.
-      const unitCost =
-        need.erpManagedAt && need.erpUnitPriceRub
-          ? need.erpUnitPriceRub.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
-          : resolveAutoIssueUnitCost(need.quotedPrice, need.quotedCurrency, usdRateRub);
+      // Цена — план закупщика цеха. Ветка «цена ERP» здесь больше не нужна: строки под ERP
+      // отсеяны выше, и их стоимость приходит фактом её списания.
+      const unitCost = resolveAutoIssueUnitCost(
+        need.quotedPrice,
+        need.quotedCurrency,
+        usdRateRub,
+      );
       if (
         unitCost.isZero() &&
         need.quotedPrice != null &&
