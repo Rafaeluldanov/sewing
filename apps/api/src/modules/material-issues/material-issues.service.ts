@@ -33,7 +33,10 @@ import type { ListMaterialIssuesQuery } from './dto/list-material-issues.dto.js'
 import type { ReturnMaterialIssueDto } from './dto/return-material-issue.dto.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
-import { normalizeColor } from '@sewing/shared/colors';
+import {
+  needDescription,
+  resolvePassportNeedShares,
+} from './passport-need-share.js';
 
 /**
  * Жизненный цикл документа `MaterialIssue` (статусы хранятся как
@@ -1078,138 +1081,29 @@ export class MaterialIssuesService {
       return { skipped: true, reason: 'passport_already_has_issue' };
     }
 
-    const passport = await tx.passport.findUnique({
-      where: { id: passportId },
-      select: {
-        id: true,
-        orderId: true,
-        qtyCut: true,
-        orderVariantId: true,
-        color: true,
-      },
-    });
-    if (!passport) {
-      // На практике issueToEmployee уже прочитал паспорт. Но в
-      // изоляции снятого состояния предохраняемся — безопасный
-      // skip вместо бросания из авто-помощника.
-      this.logger.warn(
-        `event=material_issue.auto.skip reason=passport_not_found passportId=${passportId}`,
-      );
-      return { skipped: true, reason: 'passport_not_found' };
-    }
-    if (passport.qtyCut <= 0) {
-      return { skipped: true, reason: 'passport_qty_zero' };
-    }
-
-    // totalOrderQty = Σ OrderItem.qtyPlan по orderId. Канонический
-    // источник, тот же, что используется в `CutReadinessService` и
-    // `WorkshopNeedsService` — `Order.items[].qtyPlan`. Поле
-    // `quantity` в проекте НЕ существует: размерная матрица
-    // раскладывается через OrderItem.
-    const orderItems = await tx.orderItem.findMany({
-      where: { orderId: passport.orderId },
-      select: { qtyPlan: true },
-    });
-    const totalOrderQty = orderItems.reduce(
-      (acc, it) => acc + (it.qtyPlan ?? 0),
-      0,
-    );
-    if (totalOrderQty <= 0) {
-      this.logger.warn(
-        `event=material_issue.auto.skip reason=total_order_qty_zero passportId=${passportId} orderId=${passport.orderId}`,
-      );
-      return { skipped: true, reason: 'total_order_qty_zero' };
-    }
-
-    // Фича «Расцветки» (P5): если паспорт привязан к расцветке
-    // (`orderVariantId`), списываем ТОЛЬКО потребности этой расцветки (+
-    // order-level строки без расцветки) и делим на плановое количество
-    // ИМЕННО этой расцветки (Σ OrderVariantSize.qtyPlan). Иначе (числитель
-    // по расцветке ÷ знаменатель по всему заказу + все расцветки на каждом
-    // паспорте) материал одной расцветки размазывался по паспортам другой.
-    // Паспорт без расцветки (одноцветный / ручной / исторический) → прежнее
-    // поведение: все потребности, знаменатель = весь заказ.
-    //
-    // Прямая привязка `orderVariantId` — быстрый надёжный путь. Если её нет
-    // (легаси / ручной выпуск / бэкфилл не сматчил цвет), а заказ
-    // мультирасцветочный — пробуем определить расцветку по цвету паспорта
-    // (`Passport.color = normalizeColor(variant.color)`). Однозначное
-    // совпадение → скоуп по расцветке (спасает несбэкфилленные паспорта на
-    // доске); неоднозначное/несовпавшее → легаси (весь заказ) + warning.
-    let variantId = passport.orderVariantId;
-    if (!variantId) {
-      const variants = await tx.orderVariant.findMany({
-        where: { orderId: passport.orderId },
-        select: { id: true, color: true },
-      });
-      if (variants.length >= 2) {
-        const matches = variants.filter(
-          (v) => normalizeColor(v.color) === passport.color,
+    // Доля каждой потребности на ЭТОТ паспорт — общая формула (`passport-need-share.ts`).
+    // Её же читает очередь списания материала в ERP по выпуску (лестница остатков, шаг 5):
+    // расход одного паспорта должен быть ОДНИМ числом у цеха и у ERP.
+    const shares = await resolvePassportNeedShares(tx, passportId, this.logger);
+    if (!shares.ok) {
+      if (shares.reason === 'passport_not_found') {
+        // На практике issueToEmployee уже прочитал паспорт. Но в изоляции снятого
+        // состояния предохраняемся — безопасный skip вместо бросания из авто-помощника.
+        this.logger.warn(
+          `event=material_issue.auto.skip reason=passport_not_found passportId=${passportId}`,
         );
-        if (matches.length === 1) {
-          variantId = matches[0].id;
-        } else {
-          this.logger.warn(
-            `event=material_issue.auto.colorway_unresolved passportId=${passportId} ` +
-              `orderId=${passport.orderId} color=${passport.color} ` +
-              `variants=${variants.length} matches=${matches.length}`,
-          );
-        }
+      } else if (shares.reason === 'total_order_qty_zero') {
+        this.logger.warn(
+          `event=material_issue.auto.skip reason=total_order_qty_zero passportId=${passportId}`,
+        );
+      } else if (shares.reason === 'no_material_needs') {
+        this.logger.log(
+          `event=material_issue.auto.skip reason=no_material_needs passportId=${passportId}`,
+        );
       }
+      return { skipped: true, reason: shares.reason };
     }
-    let variantQtyDec: Prisma.Decimal | null = null;
-    if (variantId) {
-      const variantSizes = await tx.orderVariantSize.findMany({
-        where: { variantId },
-        select: { qtyPlan: true },
-      });
-      const variantQty = variantSizes.reduce(
-        (acc, s) => acc + (s.qtyPlan ?? 0),
-        0,
-      );
-      // Нет планового кол-ва расцветки (не должно, но предохраняемся) —
-      // падаем на общий знаменатель заказа.
-      variantQtyDec = variantQty > 0 ? new Prisma.Decimal(variantQty) : null;
-    }
-
-    // Материальные потребности цеха, попадающие в автосписание.
-    // Исключаем нанесения (outsource) и отменённые строки. Оставляем
-    // всё остальное — materialRole может быть `null` (например, у
-    // PATTERN_SIZE_PARAMETER_VALUE), и это нормально.
-    // Фича «Варианты просчёта»: списываем только по строкам АКТИВНОГО
-    // варианта — иначе выдача кроя задвоила бы расход материала по
-    // потребностям вариантов сравнения. Фича «Расцветки»: при известной
-    // расцветке паспорта берём строки этой расцветки + order-level (null).
-    const needs = await tx.workshopNeed.findMany({
-      where: {
-        orderId: passport.orderId,
-        status: { not: 'CANCELLED' },
-        sourceType: { not: 'ORDER_APPLICATION' },
-        AND: [TIRAGE_NEED_WHERE],
-        ...(variantId
-          ? { OR: [{ orderVariantId: variantId }, { orderVariantId: null }] }
-          : {}),
-      },
-      select: {
-        id: true,
-        description: true,
-        sourceName: true,
-        materialRole: true,
-        unit: true,
-        calculatedQty: true,
-        quotedPrice: true,
-        quotedCurrency: true,
-        orderVariantId: true,
-        erpManagedAt: true,
-        erpUnitPriceRub: true,
-      },
-    });
-    if (needs.length === 0) {
-      this.logger.log(
-        `event=material_issue.auto.skip reason=no_material_needs passportId=${passportId} orderId=${passport.orderId}`,
-      );
-      return { skipped: true, reason: 'no_material_needs' };
-    }
+    const passport = shares.passport;
 
     // Курс валюты берём из активной сметы заказа — там он и задаётся
     // человеком при завершении расчёта. Без него валютная строка уходила
@@ -1228,8 +1122,6 @@ export class MaterialIssuesService {
     });
     const usdRateRub = activeEstimate?.usdRateRub ?? null;
 
-    const passportQtyCut = new Prisma.Decimal(passport.qtyCut);
-    const totalQtyDec = new Prisma.Decimal(totalOrderQty);
     const preparedLines: Array<{
       workshopNeedId: string;
       description: string;
@@ -1242,19 +1134,7 @@ export class MaterialIssuesService {
       comment: string | null;
     }> = [];
 
-    for (const need of needs) {
-      // issuedQty = calculatedQty * qtyCut / denom, округляем до 4 знаков
-      // (совпадает с `MaterialIssueLine.issuedQty` precision — Decimal(14,4)).
-      // Знаменатель: строка расцветки → плановое кол-во ЭТОЙ расцветки
-      // (variantQtyDec); order-level (null) строка или паспорт без расцветки
-      // → весь заказ (totalQtyDec).
-      const denom =
-        variantQtyDec != null && need.orderVariantId != null
-          ? variantQtyDec
-          : totalQtyDec;
-      const rawQty = need.calculatedQty.mul(passportQtyCut).div(denom);
-      const issuedQty = rawQty.toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
-      if (issuedQty.lessThanOrEqualTo(0)) continue;
+    for (const { need, qty: issuedQty } of shares.shares) {
 
       // Материал под ERP: цена — её заказа поставщику (₽ за единицу цеха), а не план закупщика.
       const unitCost =
@@ -1280,13 +1160,7 @@ export class MaterialIssuesService {
         .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 
       // description-fallback как у ручного create (prepareLine).
-      let description = (need.description ?? '').trim();
-      if (description.length === 0) {
-        description = (need.sourceName ?? '').trim();
-      }
-      if (description.length === 0) {
-        description = need.materialRole ?? 'Материал';
-      }
+      const description = needDescription(need);
 
       preparedLines.push({
         workshopNeedId: need.id,
@@ -1346,13 +1220,14 @@ export class MaterialIssuesService {
     });
 
     const calculationPayload = {
-      totalOrderQty,
+      totalOrderQty: shares.totalOrderQty,
       passportQtyCut: passport.qtyCut,
       // Расцветка (P5): строки этой расцветки делятся на её план
       // (variantPlanQty), order-level (null) строки — на весь заказ.
-      orderVariantId: variantId ?? null,
-      variantPlanQty: variantQtyDec != null ? variantQtyDec.toNumber() : null,
-      formula: variantId
+      orderVariantId: shares.variantId ?? null,
+      variantPlanQty:
+        shares.variantPlanQty != null ? shares.variantPlanQty.toNumber() : null,
+      formula: shares.variantId
         ? 'WorkshopNeed.calculatedQty * Passport.qtyCut / (variantPlanQty для строк расцветки, иначе totalOrderQty)'
         : 'WorkshopNeed.calculatedQty * Passport.qtyCut / totalOrderQty',
     };
@@ -1415,8 +1290,10 @@ export class MaterialIssuesService {
 
     this.logger.log(
       `event=material_issue.auto.created materialIssueId=${issue.id} passportId=${passport.id} orderId=${passport.orderId} ` +
-        `orderVariantId=${variantId ?? '-'} variantPlanQty=${variantQtyDec != null ? variantQtyDec.toString() : '-'} ` +
-        `totalOrderQty=${totalOrderQty} qtyCut=${passport.qtyCut} lines=${preparedLines.length} totalCost=${totalCost.toString()}`,
+        `orderVariantId=${shares.variantId ?? '-'} ` +
+        `variantPlanQty=${shares.variantPlanQty != null ? shares.variantPlanQty.toString() : '-'} ` +
+        `totalOrderQty=${shares.totalOrderQty} qtyCut=${passport.qtyCut} ` +
+        `lines=${preparedLines.length} totalCost=${totalCost.toString()}`,
     );
 
     return {

@@ -2061,6 +2061,9 @@ model Order {
   /// этого заказа (см. `model MaterialIssueReturn` ниже). Cascade —
   /// без заказа возврат теряет смысл.
   materialIssueReturns MaterialIssueReturn[]
+  /// Факты списания материала в ERP по выпуску паспортов этого заказа
+  /// (лестница остатков, шаг 5). Cascade — без заказа факт смысла не имеет.
+  erpMaterialConsumptions ErpMaterialConsumption[]
 
   /// Этап «Склад выпуска готовой продукции» (см.
   /// `apps/api/src/modules/orders/orders.service.ts::create`/`update`,
@@ -2612,6 +2615,11 @@ model Passport {
   /// connection between sample and passport just breaks).
   sampleId String?      @unique
   sample   OrderSample? @relation("OrderSamplePassport", fields: [sampleId], references: [id], onDelete: SetNull)
+
+  /// Факт списания материала в ERP по выпуску ЭТОГО паспорта (лестница остатков, шаг 5).
+  /// Один паспорт — одна строка: `null` = ERP ещё не списала (паспорт стоит в очереди
+  /// `GET /api/integrations/erp-consumption`).
+  erpConsumption ErpMaterialConsumption?
 
   @@index([status, currentOperationId])
   @@index([orderId])
@@ -5308,6 +5316,9 @@ model WorkshopNeed {
   /// удаление потребности (через cascade от заказа) не сносит
   /// уже созданный документ возврата.
   materialIssueReturnLines MaterialIssueReturnLine[]
+  /// Строки факта списания в ERP по этой потребности (`SetNull` со стороны
+  /// строки: снос потребности не сносит факт расхода).
+  erpConsumptionLines      ErpMaterialConsumptionLine[]
 
   /// Foundation складского учёта: текущий остаток по потребности заказа.
   stockBalances  StockBalance[]
@@ -9069,4 +9080,71 @@ model ErpShopStock {
 
   @@unique([erpProductId, erpCharacteristicId, erpSeriesId], name: "erp_shop_stock_key")
   @@index([erpProductId])
+}
+
+
+// ---------------------------------------------------------------------------
+// ErpMaterialConsumption — что ERP списала со склада по выпуску паспорта.
+// ---------------------------------------------------------------------------
+//
+// Лестница остатков, шаг 5. Материал списывается ПРИ ВЫПУСКЕ и в ERP
+// (правило владельца §0.3, `service/docs/kb/sewing.md`): склад один — её.
+// Цех считает, СКОЛЬКО ушло (доля потребности на паспорт — та же формула, что
+// у автосписания кроя), ERP списывает конкретный рулон по цене его партии и
+// присылает результат сюда.
+//
+// Очередь без своего поля-флага: «ERP ещё не списала» = у упакованного
+// паспорта нет этой строки (`Passport.erpConsumption is null`). Второй флаг
+// рядом с фактом разъехался бы с ним при первом же сбое.
+//
+// `state`: `POSTED` — списано; `REVERSED` — списание сторнировано в ERP
+// (ошибочный рулон, правка); `EMPTY` — списывать было нечего (ERP-строк у
+// заказа нет / вся доля округлилась в ноль). `EMPTY` — тоже ответ: без него
+// паспорт вечно висел бы в очереди.
+model ErpMaterialConsumption {
+  id          String @id @default(cuid())
+  passportId  String @unique
+  orderId     String
+  state       String @default("POSTED")
+  /// Документ ERP (`sewing.material_consumption.id`) и его человеческий номер.
+  erpDocumentId  String?
+  erpDocumentRef String?
+  writtenOffAt   DateTime?
+  /// Фактическая себестоимость списания по данным ERP (₽). Это и есть факт
+  /// материала для себестоимости цеха — цена партии рулона, а не план закупщика.
+  amountRub      Decimal? @db.Decimal(14, 2)
+  /// Сколько ERP не смогла покрыть партиями (приёмка не проведена и т.п.).
+  /// Ноль в норме; больше нуля — сигнал расхождения, видно и в ERP, и здесь.
+  uncoveredQty   Decimal? @db.Decimal(14, 4)
+  syncedAt       DateTime @default(now())
+
+  passport Passport @relation(fields: [passportId], references: [id], onDelete: Cascade)
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lines    ErpMaterialConsumptionLine[]
+
+  @@index([orderId])
+  @@index([syncedAt])
+}
+
+/// Строка факта: сколько и на какую сумму ERP списала по КОНКРЕТНОЙ потребности
+/// цеха (и с какого рулона). По ней себестоимость цеха показывает факт материала.
+model ErpMaterialConsumptionLine {
+  id             String  @id @default(cuid())
+  consumptionId  String
+  /// Потребность цеха. `SetNull` — снос потребности не сносит факт расхода.
+  workshopNeedId String?
+  description    String
+  unit           String?
+  qty            Decimal  @db.Decimal(14, 4)
+  amountRub      Decimal  @db.Decimal(14, 2)
+  /// Рулон ERP, с которого списали (может быть несколько — тогда основной).
+  erpSeriesId    String?
+  rollLabel      String?
+  uncoveredQty   Decimal? @db.Decimal(14, 4)
+
+  consumption  ErpMaterialConsumption @relation(fields: [consumptionId], references: [id], onDelete: Cascade)
+  workshopNeed WorkshopNeed?          @relation(fields: [workshopNeedId], references: [id], onDelete: SetNull)
+
+  @@index([consumptionId])
+  @@index([workshopNeedId])
 }

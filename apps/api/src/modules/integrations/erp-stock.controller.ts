@@ -43,7 +43,6 @@ export class ErpStockController {
    */
   @MachineScopes('stock:write')
   @Put()
-  @MachineScopes('stock:write')
   async replace(@Body() body: { items?: ErpStockLine[] }) {
     const items = Array.isArray(body?.items) ? body.items : [];
     const now = new Date();
