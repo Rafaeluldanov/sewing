@@ -53,6 +53,8 @@ function serverLay(
         layers: opts.layers ?? 10,
         variantId: null,
         variantColor: null,
+        erpSeriesId: null,
+        erpRollLabel: null,
       },
     ],
     completedAt: opts.completedAt ?? null,

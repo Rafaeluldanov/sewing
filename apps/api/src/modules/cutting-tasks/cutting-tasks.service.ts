@@ -746,6 +746,17 @@ export class CuttingTasksService {
     if (dto.lays.some((l) => l.rolls.some((r) => r.erpSeriesId))) {
       const orderIdRow = await this.prisma.cuttingTask.findUnique({ where: { id }, select: { orderId: true } });
       for (const er of await this.listErpRolls(orderIdRow?.orderId ?? '')) erpRollLabels.set(er.seriesId, er.label);
+      // Уже выбранные рулоны задачи разрешены всегда: докроенный до нуля рулон уходит из
+      // зеркала остатка, и без этого расклад с ним стало бы невозможно сохранить или закрыть.
+      const known = await this.prisma.cuttingTaskRoll.findMany({
+        where: { lay: { taskId: id }, erpSeriesId: { not: null } },
+        select: { erpSeriesId: true, erpRollLabel: true },
+      });
+      for (const k of known) {
+        if (k.erpSeriesId && !erpRollLabels.has(k.erpSeriesId)) {
+          erpRollLabels.set(k.erpSeriesId, k.erpRollLabel ?? k.erpSeriesId);
+        }
+      }
       for (const lay of dto.lays) {
         for (const r of lay.rolls) {
           if (r.erpSeriesId && !erpRollLabels.has(r.erpSeriesId)) {

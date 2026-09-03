@@ -234,6 +234,7 @@ export function CuttingForm({
             layers: '',
             variantId: defaultVariantId,
             erpSeriesId: null,
+            erpRollLabel: null,
           },
         ],
       };
@@ -253,7 +254,15 @@ export function CuttingForm({
     updateLay(layKey, (lay) => ({
       ...lay,
       rolls: lay.rolls.map((r) =>
-        r.key === rollKey ? { ...r, erpSeriesId: seriesId || null } : r,
+        r.key === rollKey
+          ? {
+              ...r,
+              erpSeriesId: seriesId || null,
+              erpRollLabel: seriesId
+                ? (erpRolls.find((er) => er.seriesId === seriesId)?.label ?? r.erpRollLabel)
+                : null,
+            }
+          : r,
       ),
     }));
   }
@@ -841,7 +850,9 @@ function LayBlock({
                 {erpRolls.length > 0 && (
                   <td>
                     {readOnly ? (
-                      erpRolls.find((er) => er.seriesId === r.erpSeriesId)?.label ?? '—'
+                      erpRolls.find((er) => er.seriesId === r.erpSeriesId)?.label ??
+                      r.erpRollLabel ??
+                      '—'
                     ) : (
                       <select
                         className="cutter-input"
@@ -851,6 +862,13 @@ function LayBlock({
                         aria-label={`Рулон ERP для рулона ${r.ordinal}`}
                       >
                         <option value="">— не указан —</option>
+                        {/* Выбранный ранее рулон, которого больше нет в остатке (докроен): без
+                            этой строки селект показал бы «не указан», а id молча уехал бы в payload. */}
+                        {r.erpSeriesId && !erpRolls.some((er) => er.seriesId === r.erpSeriesId) && (
+                          <option value={r.erpSeriesId}>
+                            {r.erpRollLabel ?? r.erpSeriesId} (нет в остатке ERP)
+                          </option>
+                        )}
                         {erpRolls.map((er) => (
                           <option key={er.seriesId} value={er.seriesId}>
                             {er.label} · {er.qty} {er.unit ?? ''}

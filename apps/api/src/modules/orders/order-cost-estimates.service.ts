@@ -156,6 +156,8 @@ export class OrderCostEstimatesService {
       }
       // Материал под ERP: цена её заказа поставщику (₽ за единицу цеха), если закупщик цеха
       // своей не вводил.
+      // Под ERP её цена — факт нашего заказа поставщику, она главнее плановой цены закупщика
+      // цеха (то же правило в автосписании и план→факте).
       const erpPrice = n.erpManagedAt && n.erpUnitPriceRub ? n.erpUnitPriceRub : null;
       if (n.quotedPrice == null && erpPrice == null) {
         errors.push({
@@ -165,7 +167,7 @@ export class OrderCostEstimatesService {
         });
         continue;
       }
-      const quotedPrice = new Prisma.Decimal(n.quotedPrice ?? erpPrice!);
+      const quotedPrice = new Prisma.Decimal(erpPrice ?? n.quotedPrice!);
       if (!quotedPrice.greaterThan(0)) {
         errors.push({
           needId: n.id,
@@ -174,9 +176,7 @@ export class OrderCostEstimatesService {
         });
         continue;
       }
-      const currencyRaw = (
-        n.quotedPrice == null && erpPrice != null ? 'RUB' : (n.quotedCurrency ?? '')
-      ).toUpperCase();
+      const currencyRaw = (erpPrice != null ? 'RUB' : (n.quotedCurrency ?? '')).toUpperCase();
       if (currencyRaw !== 'RUB' && currencyRaw !== 'USD') {
         errors.push({
           needId: n.id,

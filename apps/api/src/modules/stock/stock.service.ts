@@ -1218,6 +1218,7 @@ export class StockService {
                 sourceName: true,
                 materialRole: true,
                 unit: true,
+                erpManagedAt: true,
               },
             },
             cell: { select: { id: true, warehouseId: true } },
@@ -1266,6 +1267,7 @@ export class StockService {
             sourceName: true;
             materialRole: true;
             unit: true;
+            erpManagedAt: true;
           };
         };
         cell: { select: { id: true; warehouseId: true } };
@@ -1274,6 +1276,15 @@ export class StockService {
     comment: string,
     employeeId: string | null,
   ): Promise<StockMovement | null> {
+    // Материал под ERP: OUT по нему не писался (остаток в ERP), поэтому и возвращать в цех
+    // нечего — иначе на пустом ключе вырос бы положительный «остаток» несуществующей ткани.
+    if (line.workshopNeed?.erpManagedAt) {
+      this.logger.log(
+        `event=stock.material_issue_return.skip reason=erp_managed ` +
+          `materialIssueId=${materialIssueId} returnLineId=${line.id}`,
+      );
+      return null;
+    }
     const sourceLine = line.materialIssueLine;
     const workshopNeedId = sourceLine?.workshopNeedId ?? line.workshopNeedId;
     if (!workshopNeedId) {

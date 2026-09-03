@@ -32,6 +32,8 @@ export interface RollDraft {
   variantId: string | null;
   /** Рулон ERP (серия склада ERP), с которого настилали, или `null`. */
   erpSeriesId: string | null;
+  /** Подпись рулона на момент выбора: докроенный рулон уходит из остатка, подпись остаётся. */
+  erpRollLabel: string | null;
 }
 
 export interface LayDraft {
@@ -102,6 +104,7 @@ export function layFromDto(dto: CuttingTaskLayDto): LayDraft {
       layers: r.layers === 0 ? '' : String(r.layers),
       variantId: r.variantId,
       erpSeriesId: r.erpSeriesId ?? null,
+      erpRollLabel: r.erpRollLabel ?? null,
     })),
   };
 }

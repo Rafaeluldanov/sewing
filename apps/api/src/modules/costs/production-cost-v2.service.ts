@@ -791,8 +791,7 @@ export class ProductionCostV2Service {
         let hasUsdWarning = false;
         for (const wn of wns) {
           // Материал под ERP без цены закупщика цеха — цена заказа ERP, рубли.
-          const erpPrice =
-            wn.erpManagedAt && wn.erpUnitPriceRub && !wn.quotedPrice ? wn.erpUnitPriceRub : null;
+          const erpPrice = wn.erpManagedAt && wn.erpUnitPriceRub ? wn.erpUnitPriceRub : null;
           const currency = erpPrice ? 'RUB' : (wn.quotedCurrency ?? '').toUpperCase();
           if (!wn.quotedPrice && !erpPrice) continue;
           const purchaseQty = wn.purchaseQty ?? wn.calculatedQty;
@@ -803,7 +802,7 @@ export class ProductionCostV2Service {
           }
           if (currency !== 'RUB') continue;
           const lineTotal = new Prisma.Decimal(purchaseQty).mul(
-            new Prisma.Decimal(wn.quotedPrice ?? erpPrice!),
+            new Prisma.Decimal(erpPrice ?? wn.quotedPrice!),
           );
           // Каноническая классификация (роль-aware), как в смете
           // (`OrderCostEstimatesService` через line.kind) и в документе

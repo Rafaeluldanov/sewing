@@ -420,6 +420,10 @@ export class OrderProductionDocumentService {
       if (fromEstimate != null) {
         planRub = fromEstimate;
         planSource = 'COST_ESTIMATE';
+      } else if (wn.erpManagedAt && wn.erpUnitPriceRub) {
+        // Материал под ERP — цена её заказа поставщику (факт), рубли.
+        planRub = new Prisma.Decimal(wn.calculatedQty).mul(wn.erpUnitPriceRub);
+        planSource = 'WORKSHOP_NEED';
       } else if (wn.quotedPrice != null) {
         if ((wn.quotedCurrency ?? 'RUB') === 'RUB') {
           planRub = new Prisma.Decimal(wn.calculatedQty).mul(wn.quotedPrice);
@@ -427,10 +431,6 @@ export class OrderProductionDocumentService {
         } else {
           docWarnings.add('PLAN_USD_SKIPPED');
         }
-      } else if (wn.erpManagedAt && wn.erpUnitPriceRub) {
-        // Материал под ERP без цены закупщика цеха — план по цене заказа ERP.
-        planRub = new Prisma.Decimal(wn.calculatedQty).mul(wn.erpUnitPriceRub);
-        planSource = 'WORKSHOP_NEED';
       }
       ensure(wn.id, {
         name: wn.description || wn.sourceName || 'Материал',
