@@ -598,11 +598,37 @@ export class FinishedGoodsService {
    * `StockAdjustment` / `StockTransfer` / `CostsService` /
    * `ProductionCostV2Service`).
    */
+  /**
+   * ⛔ ГАРД §0.5: ручные движения остатка готовой продукции закрыты, когда его ведёт ERP.
+   *
+   * «Выпуск готовой продукции швейного цеха приходуется на склад ERP. Собственных складов —
+   * материалов, готовой продукции, полок — у цеха нет» (правило владельца §0.5,
+   * `service/docs/kb/sewing.md`). Пока флаг снят — всё работает как раньше; поднятый флаг
+   * означает, что перемещать, корректировать и отгружать готовую продукцию можно только в ERP,
+   * иначе у одной футболки снова два остатка и два хозяина.
+   *
+   * Журнал выпуска (`PRODUCTION_RECEIPT` при упаковке) под гард НЕ попадает: он не склад, а
+   * след того, что цех сделал, и его читают доска, дашборд и себестоимость.
+   */
+  private async assertErpDoesNotOwnFinishedGoods(action: string): Promise<void> {
+    const settings = await this.prisma.companySettings.findUnique({
+      where: { id: 'default' },
+      select: { erpOwnsFinishedGoods: true },
+    });
+    if (!settings?.erpOwnsFinishedGoods) return;
+    throw new BusinessException(
+      'FINISHED_GOODS_OWNED_BY_ERP',
+      `Остаток готовой продукции ведёт ERP — ${action} выполняется в ней`,
+      HttpStatus.CONFLICT,
+    );
+  }
+
   async createShipmentForOrder(
     orderId: string,
     dto: CreateFinishedGoodsShipmentDto,
     employeeId?: string | null,
   ): Promise<FinishedGoodsShipmentDetailDto> {
+    await this.assertErpDoesNotOwnFinishedGoods('отгрузка');
     // Базовая нормализация и проверки заказа выполняются вне
     // транзакции — это не меняет состояние.
     const order = await this.prisma.order.findUnique({
@@ -827,6 +853,7 @@ export class FinishedGoodsService {
     dto: CancelFinishedGoodsShipmentDto,
     employeeId?: string | null,
   ): Promise<FinishedGoodsShipmentDetailDto> {
+    await this.assertErpDoesNotOwnFinishedGoods('отмена отгрузки');
     const shipment = await this.prisma.finishedGoodsShipment.findUnique({
       where: { id },
       include: SHIPMENT_DETAIL_INCLUDE,
@@ -996,6 +1023,7 @@ export class FinishedGoodsService {
     outMovement: FinishedGoodsMovementListItem;
     inMovement: FinishedGoodsMovementListItem;
   }> {
+    await this.assertErpDoesNotOwnFinishedGoods('перемещение');
     if (!Number.isInteger(dto.qty) || dto.qty <= 0) {
       throw new BusinessException(
         'FINISHED_GOODS_TRANSFER_QTY_INVALID',
@@ -1229,6 +1257,7 @@ export class FinishedGoodsService {
     dto: CreateFinishedGoodsAdjustmentDto,
     employeeId: string | null | undefined,
   ): Promise<FinishedGoodsMovementListItem> {
+    await this.assertErpDoesNotOwnFinishedGoods('корректировка');
     if (!Number.isInteger(dto.qty) || dto.qty <= 0) {
       throw new BusinessException(
         'FINISHED_GOODS_ADJUSTMENT_QTY_INVALID',

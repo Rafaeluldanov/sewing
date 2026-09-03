@@ -179,60 +179,70 @@ export class ErpConsumptionService {
         skipped.push({ passport_id: passportId, reason: 'unknown_state' });
         continue;
       }
-      const passport = await this.prisma.passport.findUnique({
-        where: { id: passportId },
-        select: { id: true, orderId: true },
-      });
-      if (!passport) {
-        skipped.push({ passport_id: passportId, reason: 'passport_not_found' });
-        continue;
-      }
-      const lines = (Array.isArray(item.lines) ? item.lines : []).map((l) => ({
-        workshopNeedId: l.workshop_need_id ?? null,
-        description: String(l.description ?? 'Материал'),
-        unit: l.unit ?? null,
-        qty: new Prisma.Decimal(l.qty ?? 0),
-        amountRub: new Prisma.Decimal(l.amount_rub ?? 0),
-        erpSeriesId: l.erp_series_id ?? null,
-        rollLabel: l.roll_label ?? null,
-        uncoveredQty: l.uncovered_qty == null ? null : new Prisma.Decimal(l.uncovered_qty),
-      }));
-      const header = {
-        orderId: passport.orderId,
-        state,
-        erpDocumentId: item.erp_document_id ?? null,
-        erpDocumentRef: item.erp_document_ref ?? null,
-        writtenOffAt: item.written_off_at ? new Date(item.written_off_at) : null,
-        amountRub: item.amount_rub == null ? null : new Prisma.Decimal(item.amount_rub),
-        uncoveredQty:
-          item.uncovered_qty == null ? null : new Prisma.Decimal(item.uncovered_qty),
-        syncedAt: new Date(),
-      };
-      await this.prisma.$transaction(async (tx) => {
-        const existing = await tx.erpMaterialConsumption.findUnique({
-          where: { passportId },
-          select: { id: true },
+      // ⛔ КАЖДЫЙ элемент в СВОЁМ try/catch: исключение по одному паспорту не должно ронять
+      // весь PUT — иначе ERP не пометит доставленным НИ ОДИН ответ пакета и будет повторять его
+      // вечно, а очередь встанет на первом же плохом паспорте.
+      try {
+        const passport = await this.prisma.passport.findUnique({
+          where: { id: passportId },
+          select: { id: true, orderId: true },
         });
-        if (existing) {
-          await tx.erpMaterialConsumptionLine.deleteMany({
-            where: { consumptionId: existing.id },
-          });
-          await tx.erpMaterialConsumption.update({
-            where: { id: existing.id },
-            data: { ...header, lines: { create: lines } },
-          });
-          return;
+        if (!passport) {
+          skipped.push({ passport_id: passportId, reason: 'passport_not_found' });
+          continue;
         }
-        await tx.erpMaterialConsumption.create({
-          data: { passportId, ...header, lines: { create: lines } },
+        const lines = (Array.isArray(item.lines) ? item.lines : []).map((l) => ({
+          workshopNeedId: l.workshop_need_id ?? null,
+          description: String(l.description ?? 'Материал'),
+          unit: l.unit ?? null,
+          qty: new Prisma.Decimal(l.qty ?? 0),
+          amountRub: new Prisma.Decimal(l.amount_rub ?? 0),
+          erpSeriesId: l.erp_series_id ?? null,
+          rollLabel: l.roll_label ?? null,
+          uncoveredQty: l.uncovered_qty == null ? null : new Prisma.Decimal(l.uncovered_qty),
+        }));
+        const header = {
+          orderId: passport.orderId,
+          state,
+          erpDocumentId: item.erp_document_id ?? null,
+          erpDocumentRef: item.erp_document_ref ?? null,
+          writtenOffAt: item.written_off_at ? new Date(item.written_off_at) : null,
+          amountRub: item.amount_rub == null ? null : new Prisma.Decimal(item.amount_rub),
+          uncoveredQty:
+            item.uncovered_qty == null ? null : new Prisma.Decimal(item.uncovered_qty),
+          syncedAt: new Date(),
+        };
+        await this.prisma.$transaction(async (tx) => {
+          const existing = await tx.erpMaterialConsumption.findUnique({
+            where: { passportId },
+            select: { id: true },
+          });
+          if (existing) {
+            await tx.erpMaterialConsumptionLine.deleteMany({
+              where: { consumptionId: existing.id },
+            });
+            await tx.erpMaterialConsumption.update({
+              where: { id: existing.id },
+              data: { ...header, lines: { create: lines } },
+            });
+            return;
+          }
+          await tx.erpMaterialConsumption.create({
+            data: { passportId, ...header, lines: { create: lines } },
+          });
         });
-      });
-      accepted += 1;
-      this.logger.log(
-        `event=erp_consumption.ack passportId=${passportId} state=${state} ` +
-          `lines=${lines.length} amountRub=${header.amountRub?.toString() ?? '-'} ` +
-          `doc=${header.erpDocumentRef ?? '-'}`,
-      );
+        accepted += 1;
+        this.logger.log(
+          `event=erp_consumption.ack passportId=${passportId} state=${state} ` +
+            `lines=${lines.length} amountRub=${header.amountRub?.toString() ?? '-'} ` +
+            `doc=${header.erpDocumentRef ?? '-'}`,
+        );
+      } catch (e) {
+        this.logger.error(
+          `event=erp_consumption.ack.failed passportId=${passportId} error=${String(e)}`,
+        );
+        skipped.push({ passport_id: passportId, reason: 'ack_failed' });
+      }
     }
     return { accepted, skipped };
   }
