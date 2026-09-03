@@ -116,7 +116,16 @@ export class ErpConsumptionService {
       const lines = !shares.ok
         ? []
         : shares.shares
-            .filter((s) => s.need.erpManagedAt && s.need.erpNomenclatureId)
+            // Потребность должна была стать «под ERP» ДО упаковки. Иначе на заказе, часть
+            // которого уже выпущена своей тканью, первая же закупка через ERP отправила бы в
+            // списание все старые паспорта — материал, взятый со склада цеха ещё до перевода
+            // склада в ERP, списался бы вторично. Строк не осталось — ответим «нечего списывать».
+            .filter(
+              (s) =>
+                s.need.erpManagedAt &&
+                s.need.erpNomenclatureId &&
+                s.need.erpManagedAt <= event.createdAt,
+            )
             .map((s) => ({
               workshop_need_id: s.need.id,
               description: needDescription(s.need),
