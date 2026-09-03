@@ -36,8 +36,14 @@ export class ErpConsumptionService {
   private static readonly DEFAULT_LIMIT = 50;
   private static readonly MAX_LIMIT = 200;
 
-  /** Состояния, которые ERP может прислать в `ack`. */
-  private static readonly STATES = new Set(['POSTED', 'REVERSED', 'EMPTY']);
+  /**
+   * Состояния, которые ERP может прислать в `ack`.
+   *
+   * `FAILED` — тоже ответ: ERP не смогла списать (нет сопоставленной номенклатуры, закрыт
+   * период) и разбирается с этим у себя. Без такого ответа паспорт остался бы в очереди и
+   * держал бы за собой все следующие: очередь отдаёт старейшие первыми.
+   */
+  private static readonly STATES = new Set(['POSTED', 'REVERSED', 'EMPTY', 'FAILED']);
 
   /**
    * Что ERP осталось списать: упакованные паспорта без факта списания, старейшие первыми.
