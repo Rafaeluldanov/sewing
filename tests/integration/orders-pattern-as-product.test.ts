@@ -24,6 +24,11 @@
  *   5. PATCH /api/orders/:id меняет `patternItemId` на DRAFT-заказе:
  *      backend атомарно пересинхронизирует `OrderItem.productId` со
  *      скрытым legacy Product выбранного лекала.
+ *   6. Inline-создание изделия (`productMode = CREATE_FOR_CALCULATION`)
+ *      регистрирует размерный ряд новой номенклатуры строками
+ *      `PatternSizeFile` БЕЗ файла, и лекало приходит в списке с
+ *      непустым `sizes` — из него мастер создания строит колонки
+ *      поразмерного плана (расцветки).
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -278,5 +283,56 @@ describeWithDb('integration — orders × pattern as product', () => {
     for (const it of itemsAfter) {
       expect(it.productId).toBe(bLegacy);
     }
+  });
+  // ---------------------------------------------------------------------------
+  // 6. Inline-создание изделия заводит размерный ряд лекала
+  // ---------------------------------------------------------------------------
+
+  test('inline-создание изделия регистрирует размеры лекала (PatternSizeFile без файла)', async () => {
+    const created = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookie)
+      .send({
+        orderDate: new Date().toISOString(),
+        clientId: seed.client.id,
+        productMode: 'CREATE_FOR_CALCULATION',
+        newProductCalculation: {
+          sizes: [
+            { sizeId: seed.sizes.M, qtyPlan: 7 },
+            { sizeId: seed.sizes.L, qtyPlan: 3 },
+          ],
+        },
+        items: [],
+      });
+    expect(created.status).toBe(201);
+    const patternItemId = created.body.patternItemId as string;
+    expect(patternItemId).toBeTruthy();
+
+    // Размеры зарегистрированы заглушками: строка есть, файла нет —
+    // DXF догрузят позже, «Готовность кроя» об этом отдельно попросит.
+    const sizeFiles = await t.prisma.patternSizeFile.findMany({
+      where: { patternItemId },
+    });
+    expect(sizeFiles).toHaveLength(2);
+    expect(sizeFiles.map((f) => f.sizeId).sort()).toEqual(
+      [seed.sizes.M, seed.sizes.L].sort(),
+    );
+    for (const f of sizeFiles) {
+      expect(f.status).toBe('ACTIVE');
+      expect(f.fileUrl).toBeNull();
+      expect(f.originalFileName).toBeNull();
+      expect(f.version).toBe(1);
+    }
+
+    // Именно этот список читает мастер создания заказа: пустой `sizes`
+    // раньше означал «поразмерный план и расцветки недоступны».
+    const list = await request(t.app.getHttpServer())
+      .get('/api/patterns?status=ACTIVE')
+      .set('Cookie', cookie);
+    expect(list.status).toBe(200);
+    const row = (list.body as Array<{ id: string; sizes: unknown[] }>).find(
+      (p) => p.id === patternItemId,
+    );
+    expect(row?.sizes).toHaveLength(2);
   });
 });

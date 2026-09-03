@@ -13,6 +13,18 @@
  * кнопкой «+» (сверх лекала — бэкенд не валидирует размеры позиций по
  * лекалу). Свотч подхватывает цвет уже во время ввода (префикс основы).
  *
+ * Пустой размерный ряд лекала — НЕ повод блокировать редактор. Раньше
+ * при `availableSizes = []` кнопка «Добавить цвет» была `disabled`, а
+ * вместо карточек висело «Выберите номенклатуру…» — и менеджер вставал
+ * намертво на номенклатуре без загруженных файлов лекал (её размеры
+ * берутся из активных `PatternSizeFile`), хотя изделие выбрано.
+ * Ограничение было только здесь: `POST /orders` размеры по лекалу не
+ * валидирует, блок расцветок на карточке заказа предлагает ВЕСЬ
+ * справочник размеров, а реальный контроль стоит в «Готовности кроя»
+ * (`pattern.sizeFiles.missing` перечисляет размеры без файла). Поэтому
+ * размеры лекала — колонки ПО УМОЛЧАНИЮ: нет их — менеджер набирает
+ * ряд кнопкой «+ размер».
+ *
  * Ничего не сабмитит сам — только зовёт `onChange`. Скрытые input-ы
  * рисует родитель.
  */
@@ -87,10 +99,13 @@ export function OrderColorwaysFieldset({
   onChange: (next: ColorwayDraft[]) => void;
   /**
    * Доп. размеры (сверх лекала), которые нужно показать колонками сразу
-   * при монтировании. Нужно форме РЕДАКТИРОВАНИЯ: сид расцветок может
-   * содержать размеры вне лекала (менеджер добавил их при создании) —
-   * иначе их колонки не появились бы и введённые количества «повисли» бы
-   * в агрегате без ячейки. Форма создания prop не передаёт (пустой сид).
+   * при монтировании. Иначе их количества «повисли» бы в state без
+   * ячейки. Передают обе формы:
+   *   - РЕДАКТИРОВАНИЯ — сид расцветок может содержать размеры вне
+   *     лекала (менеджер добавил их при создании);
+   *   - СОЗДАНИЯ — план мог приехать из модалки «Создать изделие», а
+   *     свежесозданной номенклатуры ещё нет в серверном списке лекал,
+   *     либо у лекала вовсе не заведён размерный ряд.
    */
   initialExtraSizeIds?: string[];
 }) {
@@ -147,7 +162,10 @@ export function OrderColorwaysFieldset({
     );
   };
 
-  const noPattern = availableSizes.length === 0;
+  // Колонок нет вообще: у лекала пустой размерный ряд и менеджер ещё
+  // не добавил ни одного размера руками. Не блокирует ввод — только
+  // объясняет, куда нажимать.
+  const noSizes = displayedSizes.length === 0;
 
   const totalsBySize = displayedSizes.map((s) => ({
     ...s,
@@ -167,165 +185,163 @@ export function OrderColorwaysFieldset({
           type="button"
           className="admin-btn admin-btn--ghost cwf-add"
           onClick={add}
-          disabled={noPattern}
         >
           <Plus size={14} strokeWidth={2} aria-hidden /> Добавить цвет
         </button>
       </div>
 
-      {noPattern ? (
+      {noSizes && (
         <p className="admin-muted cwf-empty">
-          Выберите номенклатуру — тогда появятся её размеры для ввода по цветам.
+          У выбранной номенклатуры не заведён размерный ряд — добавьте
+          нужные размеры кнопкой «+ размер».
         </p>
-      ) : (
-        <>
-          {/* Управление колонками-размерами: доп.размеры (сверх лекала)
-              показываем как снимаемые чипы, «+» добавляет из справочника. */}
-          <div className="cwf-sizebar">
-            {extraSizes.length > 0 && (
-              <>
-                <span className="cwf-sizebar__label">Доп. размеры:</span>
-                {extraSizes.map((s) => (
-                  <span key={s.id} className="cwf-sizetag">
-                    {s.code}
-                    <button
-                      type="button"
-                      className="cwf-sizetag__x"
-                      aria-label={`Убрать размер ${s.code}`}
-                      onClick={() => removeExtraSize(s.id)}
-                    >
-                      <X size={11} strokeWidth={2.4} aria-hidden />
-                    </button>
-                  </span>
-                ))}
-              </>
-            )}
-            {remainingSizes.length > 0 && (
-              <div className="cwf-addsize">
+      )}
+
+      {/* Управление колонками-размерами: доп.размеры (сверх лекала)
+          показываем как снимаемые чипы, «+» добавляет из справочника. */}
+      <div className="cwf-sizebar">
+        {extraSizes.length > 0 && (
+          <>
+            <span className="cwf-sizebar__label">Доп. размеры:</span>
+            {extraSizes.map((s) => (
+              <span key={s.id} className="cwf-sizetag">
+                {s.code}
                 <button
                   type="button"
-                  className="cwf-addsize__btn"
-                  aria-label="Добавить размер"
-                  aria-expanded={addOpen}
-                  onClick={() => setAddOpen((o) => !o)}
+                  className="cwf-sizetag__x"
+                  aria-label={`Убрать размер ${s.code}`}
+                  onClick={() => removeExtraSize(s.id)}
                 >
-                  <Plus size={14} strokeWidth={2.2} aria-hidden />
-                  <span className="cwf-addsize__txt">размер</span>
+                  <X size={11} strokeWidth={2.4} aria-hidden />
                 </button>
-                {addOpen && (
-                  <div className="cwf-addsize__menu" role="menu">
-                    {remainingSizes.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        role="menuitem"
-                        onClick={() => addSize(s.id)}
-                      >
-                        {s.code}
-                      </button>
-                    ))}
-                  </div>
-                )}
+              </span>
+            ))}
+          </>
+        )}
+        {remainingSizes.length > 0 && (
+          <div className="cwf-addsize">
+            <button
+              type="button"
+              className="cwf-addsize__btn"
+              aria-label="Добавить размер"
+              aria-expanded={addOpen}
+              onClick={() => setAddOpen((o) => !o)}
+            >
+              <Plus size={14} strokeWidth={2.2} aria-hidden />
+              <span className="cwf-addsize__txt">размер</span>
+            </button>
+            {addOpen && (
+              <div className="cwf-addsize__menu" role="menu">
+                {remainingSizes.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => addSize(s.id)}
+                  >
+                    {s.code}
+                  </button>
+                ))}
               </div>
             )}
           </div>
+        )}
+      </div>
 
-          <div className="cwf-cards">
-            {value.map((c, idx) => {
-              const rowTotal = displayedSizes.reduce(
-                (s, sz) => s + (c.sizes[sz.id] || 0),
-                0,
-              );
-              return (
-                <div
-                  key={idx}
-                  className="cwf-card"
-                  style={{ ['--cwf-accent' as string]: swatchHex(c.color) }}
-                >
-                  <div className="cwf-card__head">
-                    <span
-                      className="cwf-swatch"
-                      style={{ background: swatchHex(c.color) }}
-                    />
-                    <input
-                      className="cwf-input cwf-input--name"
-                      value={c.color}
-                      onChange={(e) => patch(idx, { color: e.target.value })}
-                      placeholder="Цвет (напр. красный)"
-                      maxLength={60}
-                    />
-                    {value.length > 1 && (
-                      <button
-                        type="button"
-                        className="cwf-icon"
-                        aria-label="Убрать цвет"
-                        onClick={() => remove(idx)}
-                      >
-                        <Trash2 size={14} strokeWidth={1.8} aria-hidden />
-                      </button>
-                    )}
-                  </div>
+      <div className="cwf-cards">
+        {value.map((c, idx) => {
+          const rowTotal = displayedSizes.reduce(
+            (s, sz) => s + (c.sizes[sz.id] || 0),
+            0,
+          );
+          return (
+            <div
+              key={idx}
+              className="cwf-card"
+              style={{ ['--cwf-accent' as string]: swatchHex(c.color) }}
+            >
+              <div className="cwf-card__head">
+                <span
+                  className="cwf-swatch"
+                  style={{ background: swatchHex(c.color) }}
+                />
+                <input
+                  className="cwf-input cwf-input--name"
+                  value={c.color}
+                  onChange={(e) => patch(idx, { color: e.target.value })}
+                  placeholder="Цвет (напр. красный)"
+                  maxLength={60}
+                />
+                {value.length > 1 && (
+                  <button
+                    type="button"
+                    className="cwf-icon"
+                    aria-label="Убрать цвет"
+                    onClick={() => remove(idx)}
+                  >
+                    <Trash2 size={14} strokeWidth={1.8} aria-hidden />
+                  </button>
+                )}
+              </div>
 
-                  <div className="cwf-sizes">
-                    {displayedSizes.map((s) => {
-                      const qty = c.sizes[s.id] ?? 0;
-                      return (
-                        <label key={s.id} className="cwf-size">
-                          <span>{s.code}</span>
-                          <input
-                            type="number"
-                            min={0}
-                            inputMode="numeric"
-                            // Ноль показываем ПЛЕЙСХОЛДЕРОМ, а не значением:
-                            // иначе перед вводом менеджеру приходится стирать
-                            // «0» в каждой ячейке (а если не стёр — набирается
-                            // «012»). Тот же приём уже применён в размерной
-                            // матрице без расцветок (`size-plan-selector`).
-                            placeholder="0"
-                            value={qty === 0 ? '' : String(qty)}
-                            // Клик в заполненную ячейку выделяет число целиком —
-                            // следующая цифра ЗАМЕНЯЕТ значение, а не дописывается.
-                            onFocus={(e) => e.currentTarget.select()}
-                            onChange={(e) =>
-                              setQty(
-                                idx,
-                                s.id,
-                                Math.max(0, Math.trunc(+e.target.value || 0)),
-                              )
-                            }
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
+              <div className="cwf-sizes">
+                {displayedSizes.map((s) => {
+                  const qty = c.sizes[s.id] ?? 0;
+                  return (
+                    <label key={s.id} className="cwf-size">
+                      <span>{s.code}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        inputMode="numeric"
+                        // Ноль показываем ПЛЕЙСХОЛДЕРОМ, а не значением:
+                        // иначе перед вводом менеджеру приходится стирать
+                        // «0» в каждой ячейке (а если не стёр — набирается
+                        // «012»). Тот же приём уже применён в размерной
+                        // матрице без расцветок (`size-plan-selector`).
+                        placeholder="0"
+                        value={qty === 0 ? '' : String(qty)}
+                        // Клик в заполненную ячейку выделяет число целиком —
+                        // следующая цифра ЗАМЕНЯЕТ значение, а не дописывается.
+                        onFocus={(e) => e.currentTarget.select()}
+                        onChange={(e) =>
+                          setQty(
+                            idx,
+                            s.id,
+                            Math.max(0, Math.trunc(+e.target.value || 0)),
+                          )
+                        }
+                      />
+                    </label>
+                  );
+                })}
+              </div>
 
-                  {/* Итог по расцветке — отдельной строкой под сеткой.
-                      Раньше он стоял последним элементом самой сетки и
-                      «прилипал» сбоку к последнему размеру, съезжая вместе
-                      с ним при переносе. */}
-                  <div className="cwf-card__foot">
-                    <span className="cwf-rowtotal">Σ {rowTotal}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+              {/* Итог по расцветке — отдельной строкой под сеткой.
+                  Раньше он стоял последним элементом самой сетки и
+                  «прилипал» сбоку к последнему размеру, съезжая вместе
+                  с ним при переносе. */}
+              <div className="cwf-card__foot">
+                <span className="cwf-rowtotal">Σ {rowTotal}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
-          <div className="cwf-totals">
-            <span className="admin-muted">Итого по размерам:</span>
-            {totalsBySize
-              .filter((s) => s.total > 0)
-              .map((s) => (
-                <span key={s.id} className="cwf-chip">
-                  {s.code} <b>{s.total}</b>
-                </span>
-              ))}
-            <span className="cwf-chip cwf-chip--total">
-              Всего <b>{grandTotal}</b>
+      <div className="cwf-totals">
+        <span className="admin-muted">Итого по размерам:</span>
+        {totalsBySize
+          .filter((s) => s.total > 0)
+          .map((s) => (
+            <span key={s.id} className="cwf-chip">
+              {s.code} <b>{s.total}</b>
             </span>
-          </div>
-        </>
-      )}
+          ))}
+        <span className="cwf-chip cwf-chip--total">
+          Всего <b>{grandTotal}</b>
+        </span>
+      </div>
     </div>
   );
 }
