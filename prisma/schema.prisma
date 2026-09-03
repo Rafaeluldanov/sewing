@@ -2522,6 +2522,9 @@ model Passport {
   /// (миграция бэкфиллит `1` выпущенным паспортам — старый единственный
   /// расклад). FK не ставим по той же причине, что у `rollOrdinal`.
   cuttingLayOrdinal Int?
+  /// Рулон ERP, с которого кроили (копия с `CuttingTaskRoll` в момент выпуска паспорта).
+  erpSeriesId  String?
+  erpRollLabel String?
   qtyPlan           Int
   qtyCut            Int
   qtyDefect         Int            @default(0)
@@ -5195,6 +5198,13 @@ model WorkshopNeed {
   erpPurchaseOrderRef String?
   erpReceivedQty      Decimal?  @db.Decimal(14, 4)
   erpReceivedAt       DateTime?
+  /// Чем это в ERP: номенклатура/характеристика/единица ERP и цена строки её заказа (₽ за
+  /// единицу цеха). По ним готовность кроя показывает рулоны ERP из зеркала, а смета и
+  /// автосписание берут цену ERP вместо `quotedPrice`.
+  erpNomenclatureId   String?
+  erpCharacteristicId String?
+  erpUnitId           String?
+  erpUnitPriceRub     Decimal?  @db.Decimal(14, 4)
 
   /// Этап 5 «Поставщики» (см. `model Supplier` ниже,
   /// `apps/api/src/modules/suppliers/*`,
@@ -8527,6 +8537,12 @@ model CuttingTaskRoll {
   /// — снос расцветки не сносит рулон.
   variantId String?
   variant   OrderVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  /// Рулон ERP (серия склада ERP), с которого настилали: id серии и подпись для экрана.
+  /// Материал живёт в ERP (решение владельца 02.09.2026) — списать при выпуске она сможет
+  /// только зная рулон. Без FK: справочник рулонов — зеркало `ErpShopStock`.
+  erpSeriesId  String?
+  erpRollLabel String?
 
   @@unique([layId, ordinal], name: "CuttingTaskRoll_lay_ordinal_uniq")
   @@index([layId, ordinal])

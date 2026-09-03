@@ -60,7 +60,7 @@ export class ErpStockController {
         widthCm: i.width_cm == null ? null : String(i.width_cm),
         densityGsm: i.density_gsm == null ? null : String(i.density_gsm),
         qty: i.qty ?? '0',
-        unit: i.unit ?? null,
+        unit: i.unit ?? i.unit_code ?? null,
         bins: (i.bins ?? []) as object,
         syncedAt: now,
       }));
@@ -88,5 +88,6 @@ type ErpStockLine = {
   density_gsm?: string | number | null;
   qty?: string | null;
   unit?: string | null;
+  unit_code?: string | null;
   bins?: unknown;
 };

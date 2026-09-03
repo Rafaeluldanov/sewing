@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  CuttingTaskErpRollDto,
   CUTTING_TASK_MAX_LAYERS,
   CUTTING_TASK_MAX_LAYS,
   CUTTING_TASK_MAX_PER_LAYER_QTY,
@@ -55,6 +56,8 @@ interface Props {
    * расцветку (или `null`).
    */
   variants: CuttingTaskVariantDto[];
+  /** Рулоны ERP по материалам заказа; пусто — колонка «Рулон ERP» не показывается. */
+  erpRolls?: CuttingTaskErpRollDto[];
   readOnly?: boolean;
 }
 
@@ -69,6 +72,7 @@ export function CuttingForm({
   sizeRows,
   lays,
   variants,
+  erpRolls = [],
   readOnly = false,
 }: Props) {
   // Ф3: дефолтная расцветка нового рулона — первая (для одноцветного
@@ -229,6 +233,7 @@ export function CuttingForm({
             ordinal: nextOrdinal,
             layers: '',
             variantId: defaultVariantId,
+            erpSeriesId: null,
           },
         ],
       };
@@ -240,6 +245,15 @@ export function CuttingForm({
       ...lay,
       rolls: lay.rolls.map((r) =>
         r.key === rollKey ? { ...r, variantId: variantId || null } : r,
+      ),
+    }));
+  }
+
+  function setRollErpSeries(layKey: string, rollKey: string, seriesId: string) {
+    updateLay(layKey, (lay) => ({
+      ...lay,
+      rolls: lay.rolls.map((r) =>
+        r.key === rollKey ? { ...r, erpSeriesId: seriesId || null } : r,
       ),
     }));
   }
@@ -277,6 +291,7 @@ export function CuttingForm({
             ordinal: r.ordinal,
             layers: clampInt(r.layers, CUTTING_TASK_MAX_LAYERS),
             variantId: r.variantId,
+            erpSeriesId: r.erpSeriesId,
           })),
         })),
       // Удаление — только явным списком: backend не сносит расклад лишь
@@ -503,6 +518,8 @@ export function CuttingForm({
             onRemoveRoll={(rollKey) => removeRoll(lay.key, rollKey)}
             onSetRollLayers={(rollKey, v) => setRollLayers(lay.key, rollKey, v)}
             onSetRollVariant={(rollKey, v) => setRollVariant(lay.key, rollKey, v)}
+            onSetRollErpSeries={(rollKey, v) => setRollErpSeries(lay.key, rollKey, v)}
+            erpRolls={erpRolls}
             variants={variants}
             multiColor={multiColor}
             onRemove={() => removeLay(lay.key)}
@@ -618,6 +635,8 @@ interface LayBlockProps {
   onRemoveRoll: (rollKey: string) => void;
   onSetRollLayers: (rollKey: string, value: string) => void;
   onSetRollVariant: (rollKey: string, variantId: string) => void;
+  onSetRollErpSeries: (rollKey: string, seriesId: string) => void;
+  erpRolls: CuttingTaskErpRollDto[];
   variants: CuttingTaskVariantDto[];
   multiColor: boolean;
   onRemove: () => void;
@@ -642,6 +661,8 @@ function LayBlock({
   onRemoveRoll,
   onSetRollLayers,
   onSetRollVariant,
+  onSetRollErpSeries,
+  erpRolls,
   variants,
   multiColor,
   onRemove,
@@ -762,6 +783,7 @@ function LayBlock({
             <th>Рулон</th>
             <th>Слоёв</th>
             {multiColor && <th>Цвет</th>}
+            {erpRolls.length > 0 && <th>Рулон ERP</th>}
             {!readOnly && <th aria-label="Удалить" />}
           </tr>
         </thead>
@@ -769,7 +791,7 @@ function LayBlock({
           {lay.rolls.length === 0 ? (
             <tr>
               <td
-                colSpan={2 + (multiColor ? 1 : 0) + (readOnly ? 0 : 1)}
+                colSpan={2 + (multiColor ? 1 : 0) + (erpRolls.length > 0 ? 1 : 0) + (readOnly ? 0 : 1)}
                 className="constructor-muted"
               >
                 Рулоны ещё не добавлены.
@@ -810,6 +832,29 @@ function LayBlock({
                         {variants.map((v) => (
                           <option key={v.id} value={v.id}>
                             {v.color}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                )}
+                {erpRolls.length > 0 && (
+                  <td>
+                    {readOnly ? (
+                      erpRolls.find((er) => er.seriesId === r.erpSeriesId)?.label ?? '—'
+                    ) : (
+                      <select
+                        className="cutter-input"
+                        value={r.erpSeriesId ?? ''}
+                        onChange={(e) => onSetRollErpSeries(r.key, e.target.value)}
+                        disabled={disabled}
+                        aria-label={`Рулон ERP для рулона ${r.ordinal}`}
+                      >
+                        <option value="">— не указан —</option>
+                        {erpRolls.map((er) => (
+                          <option key={er.seriesId} value={er.seriesId}>
+                            {er.label} · {er.qty} {er.unit ?? ''}
+                            {er.bins.length ? ` · ${er.bins.join(', ')}` : ''}
                           </option>
                         ))}
                       </select>

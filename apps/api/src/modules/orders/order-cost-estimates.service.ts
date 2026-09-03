@@ -154,7 +154,10 @@ export class OrderCostEstimatesService {
         });
         continue;
       }
-      if (n.quotedPrice == null) {
+      // Материал под ERP: цена её заказа поставщику (₽ за единицу цеха), если закупщик цеха
+      // своей не вводил.
+      const erpPrice = n.erpManagedAt && n.erpUnitPriceRub ? n.erpUnitPriceRub : null;
+      if (n.quotedPrice == null && erpPrice == null) {
         errors.push({
           needId: n.id,
           description: n.description,
@@ -162,7 +165,7 @@ export class OrderCostEstimatesService {
         });
         continue;
       }
-      const quotedPrice = new Prisma.Decimal(n.quotedPrice);
+      const quotedPrice = new Prisma.Decimal(n.quotedPrice ?? erpPrice!);
       if (!quotedPrice.greaterThan(0)) {
         errors.push({
           needId: n.id,
@@ -171,7 +174,9 @@ export class OrderCostEstimatesService {
         });
         continue;
       }
-      const currencyRaw = (n.quotedCurrency ?? '').toUpperCase();
+      const currencyRaw = (
+        n.quotedPrice == null && erpPrice != null ? 'RUB' : (n.quotedCurrency ?? '')
+      ).toUpperCase();
       if (currencyRaw !== 'RUB' && currencyRaw !== 'USD') {
         errors.push({
           needId: n.id,

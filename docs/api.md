@@ -2105,6 +2105,14 @@ ERP и факт прихода (`erpReceivedQty/At`). 409 `WORKSHOP_NEED_ERP_STA
 Следствия: `createFromNeeds` по `erpManagedAt` → 409 `PURCHASE_ORDER_NEED_ERP_MANAGED`;
 `cut-readiness` прибавляет `erpReceivedQty` к принятому И размещённому (склад — в ERP).
 DTO `WorkshopNeedDto` получил `erpManagedAt/erpPurchaseOrderId/erpPurchaseOrderRef/erpReceivedQty/erpReceivedAt`.
+Шаг 4 лестницы остатков (2026-09-03): `erp-link` дополнительно принимает `erpNomenclatureId`,
+`erpCharacteristicId`, `erpUnitId`, `erpUnitPriceRub` (₽ за единицу цеха); по номенклатуре/характеристике
+`cut-readiness` отдаёт `erpRolls[]` из зеркала `ErpShopStock` (рулон, оттенок, ширина, остаток, ячейки),
+задача раскроя — `erpRolls[]` для выбора рулона на настиле (`CuttingTaskRollInput.erpSeriesId`,
+копируется на паспорт `Passport.erpSeriesId`). Цена ERP подставляется в смету, план→факт, v2 и
+автосписание при выдаче кроя, когда у потребности нет `quotedPrice`; движение по `StockBalance` цеха
+для материалов под ERP не пишется (остаток — в ERP). Снимок `erp-stock` принимает `unit_code` и
+`bins[{bin_id, bin_code, warehouse_name, qty}]`.
 
 ## 30c. Payroll accrual documents (PHASE 3 STEP 6)
 

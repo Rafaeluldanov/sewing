@@ -534,6 +534,14 @@ export const ErpLinkWorkshopNeedSchema = z
       .union([z.number().nonnegative(), z.string().trim().regex(/^\d+(\.\d+)?$/)])
       .nullable()
       .optional(),
+    /** Чем это в ERP: номенклатура, характеристика (цвет), единица; цена её заказа за единицу цеха, ₽. */
+    erpNomenclatureId: z.string().trim().min(1).max(64).nullable().optional(),
+    erpCharacteristicId: z.string().trim().min(1).max(64).nullable().optional(),
+    erpUnitId: z.string().trim().min(1).max(64).nullable().optional(),
+    erpUnitPriceRub: z
+      .union([z.number().nonnegative(), z.string().trim().regex(/^\d+(\.\d+)?$/)])
+      .nullable()
+      .optional(),
   })
   .strict();
 export type ErpLinkWorkshopNeedDto = z.infer<typeof ErpLinkWorkshopNeedSchema>;
@@ -1141,6 +1149,11 @@ export interface WorkshopNeedDto {
   erpPurchaseOrderRef: string | null;
   erpReceivedQty: string | null;
   erpReceivedAt: string | null;
+  /** Чем это в ERP (по нему зеркало остатка отдаёт рулоны) и цена ERP за единицу цеха, ₽. */
+  erpNomenclatureId: string | null;
+  erpCharacteristicId: string | null;
+  erpUnitId: string | null;
+  erpUnitPriceRub: string | null;
 
   /**
    * Этап 5 «Поставщики». Связь с карточкой `Supplier`:

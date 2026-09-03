@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
+  CutMaterialReadinessErpRollDto,
   CUT_BLOCKING_MATERIAL_ROLES,
   isCutBlockingMaterialRole,
   type CutMaterialArrivalOverrideRefDto,
@@ -402,7 +403,7 @@ export class CutReadinessService {
     // C.3. Активные критичные строки.
     for (const need of criticalNeeds) {
       materials.push(
-        this.buildMaterialDto(
+        await this.buildMaterialDto(
           need,
           /* critical */ true,
           overridesByNeedId.get(need.id) ?? [],
@@ -418,7 +419,7 @@ export class CutReadinessService {
     );
     for (const need of nonCriticalNeeds) {
       materials.push(
-        this.buildMaterialDto(
+        await this.buildMaterialDto(
           need,
           /* critical */ false,
           overridesByNeedId.get(need.id) ?? [],
@@ -550,11 +551,11 @@ export class CutReadinessService {
   // INTERNAL: build per-material DTO
   // ---------------------------------------------------------------------------
 
-  private buildMaterialDto(
+  private async buildMaterialDto(
     need: WorkshopNeedRowWithReceipts,
     critical: boolean,
     overrides: ManualArrivalOverrideRow[],
-  ): CutMaterialReadinessDto {
+  ): Promise<CutMaterialReadinessDto> {
     const role = (need.materialRole ?? '').trim() || 'UNKNOWN';
     const purchaseQty = need.purchaseQty
       ? new Prisma.Decimal(need.purchaseQty)
@@ -627,6 +628,37 @@ export class CutReadinessService {
     if (erpReceivedQty.greaterThan(0)) {
       receivedQty = receivedQty.add(erpReceivedQty);
       placedQty = placedQty.add(erpReceivedQty);
+    }
+    // Рулоны ERP этого материала — из зеркала остатка (по номенклатуре/характеристике ERP,
+    // которые ERP прислала вместе с заказом). Закройщику это «где лежит и сколько».
+    const erpRolls: CutMaterialReadinessErpRollDto[] = [];
+    if (need.erpManagedAt && need.erpNomenclatureId) {
+      const mirror = await this.prisma.erpShopStock.findMany({
+        where: {
+          erpProductId: need.erpNomenclatureId,
+          erpCharacteristicId: need.erpCharacteristicId ?? null,
+          qty: { gt: 0 },
+        },
+        orderBy: [{ rollNumber: 'asc' }],
+      });
+      for (const r of mirror) {
+        const bins = Array.isArray(r.bins) ? (r.bins as Record<string, unknown>[]) : [];
+        erpRolls.push({
+          seriesId: r.erpSeriesId,
+          rollNumber: r.rollNumber,
+          shade: r.shade,
+          widthCm: r.widthCm,
+          densityGsm: r.densityGsm,
+          qty: r.qty.toString(),
+          unit: r.unit,
+          bins: bins.map((b) => ({
+            binCode: (b['bin_code'] as string | undefined) ?? null,
+            warehouseName: (b['warehouse_name'] as string | undefined) ?? null,
+            qty: String(b['qty'] ?? '0'),
+          })),
+          syncedAt: r.syncedAt.toISOString(),
+        });
+      }
     }
 
     let manualArrivedQty = new Prisma.Decimal(0);
@@ -739,6 +771,7 @@ export class CutReadinessService {
       manualArrivedQty:
         manualArrivedQty.greaterThan(0) ? manualArrivedQty.toString() : null,
       erpReceivedQty: erpReceivedQty.greaterThan(0) ? erpReceivedQty.toString() : null,
+      erpRolls: erpRolls.length > 0 ? erpRolls : undefined,
       manuallyUnblocked,
       manualArrivalOverrides:
         manualArrivalRefs.length > 0 ? manualArrivalRefs : undefined,

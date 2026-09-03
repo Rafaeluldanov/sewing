@@ -649,6 +649,12 @@ export class WorkshopNeedsService {
           erpManagedAt: existing.erpManagedAt ?? now,
           erpPurchaseOrderId: dto.erpPurchaseOrderId,
           erpPurchaseOrderRef: dto.erpPurchaseOrderRef,
+          ...(dto.erpNomenclatureId !== undefined ? { erpNomenclatureId: dto.erpNomenclatureId } : {}),
+          ...(dto.erpCharacteristicId !== undefined ? { erpCharacteristicId: dto.erpCharacteristicId } : {}),
+          ...(dto.erpUnitId !== undefined ? { erpUnitId: dto.erpUnitId } : {}),
+          ...(dto.erpUnitPriceRub !== undefined
+            ? { erpUnitPriceRub: dto.erpUnitPriceRub === null ? null : new Prisma.Decimal(dto.erpUnitPriceRub) }
+            : {}),
           ...(receivedQty !== null
             ? {
                 erpReceivedQty: receivedQty.greaterThan(0) ? receivedQty : null,
@@ -706,6 +712,10 @@ export class WorkshopNeedsService {
           erpPurchaseOrderRef: null,
           erpReceivedQty: null,
           erpReceivedAt: null,
+          erpNomenclatureId: null,
+          erpCharacteristicId: null,
+          erpUnitId: null,
+          erpUnitPriceRub: null,
         },
       });
       await this.audit.log(
@@ -3858,6 +3868,10 @@ export class WorkshopNeedsService {
       erpPurchaseOrderRef: row.erpPurchaseOrderRef,
       erpReceivedQty: row.erpReceivedQty ? row.erpReceivedQty.toString() : null,
       erpReceivedAt: row.erpReceivedAt ? row.erpReceivedAt.toISOString() : null,
+      erpNomenclatureId: row.erpNomenclatureId,
+      erpCharacteristicId: row.erpCharacteristicId,
+      erpUnitId: row.erpUnitId,
+      erpUnitPriceRub: row.erpUnitPriceRub ? row.erpUnitPriceRub.toString() : null,
       selectedSupplierId: row.selectedSupplierId,
       selectedSupplierCatalogItemId: row.selectedSupplierCatalogItemId,
       selectedSupplierName: supplier?.name ?? null,

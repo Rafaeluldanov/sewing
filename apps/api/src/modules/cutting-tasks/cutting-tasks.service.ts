@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
+  CuttingTaskErpRollDto,
   CUTTING_LAY_BLOCKING_PASSPORTS_SHOWN,
   computeCuttingTotals,
   listCuttingCompletionProblems,
@@ -178,6 +179,8 @@ export class CuttingTasksService {
       sizeCodeSnapshot: r.sizeCodeSnapshot,
       qtyPlan: r.qtyPlan,
     }));
+    const erpRolls = await this.listErpRolls(task.orderId);
+
     const lays: CuttingTaskLayDto[] = task.lays.map((l) => {
       // Единица счёта — паспорт: тройка «расклад × размер × рулон» с qty > 0
       // даёт ровно один паспорт (тот же алгоритм, что в очереди выпуска).
@@ -211,6 +214,8 @@ export class CuttingTasksService {
           layers: r.layers,
           variantId: r.variantId,
           variantColor: r.variant?.color ?? null,
+          erpSeriesId: r.erpSeriesId ?? null,
+          erpRollLabel: r.erpRollLabel ?? null,
         })),
         completedAt: l.completedAt ? l.completedAt.toISOString() : null,
         completedByName: l.completedBy?.fullName ?? null,
@@ -229,6 +234,7 @@ export class CuttingTasksService {
       orderCustomer: task.order?.customer ?? null,
       sizeRows,
       lays,
+      erpRolls,
       variants: (task.order?.variants ?? []).map((v) => ({
         id: v.id,
         ordinal: v.ordinal,
@@ -567,6 +573,58 @@ export class CuttingTasksService {
    * переводит задачу в `DONE`. Всё в одной транзакции: либо прогресс
    * сохранён целиком (и, если просили, статус сменён), либо ничего.
    */
+  /**
+   * Рулоны ERP, доступные для настила по заказу: по материалам заказа под ERP
+   * (`erpNomenclatureId/erpCharacteristicId`) — строки зеркала остатка ERP с рулоном.
+   */
+  async listErpRolls(orderId: string): Promise<CuttingTaskErpRollDto[]> {
+    const needs = await this.prisma.workshopNeed.findMany({
+      where: {
+        orderId,
+        status: { not: 'CANCELLED' },
+        erpManagedAt: { not: null },
+        erpNomenclatureId: { not: null },
+      },
+      select: { erpNomenclatureId: true, erpCharacteristicId: true, description: true },
+    });
+    if (needs.length === 0) return [];
+    const out: CuttingTaskErpRollDto[] = [];
+    const seen = new Set<string>();
+    for (const n of needs) {
+      const rows = await this.prisma.erpShopStock.findMany({
+        where: {
+          erpProductId: n.erpNomenclatureId!,
+          erpCharacteristicId: n.erpCharacteristicId ?? null,
+          erpSeriesId: { not: null },
+          qty: { gt: 0 },
+        },
+        orderBy: [{ rollNumber: 'asc' }],
+      });
+      for (const r of rows) {
+        if (!r.erpSeriesId || seen.has(r.erpSeriesId)) continue;
+        seen.add(r.erpSeriesId);
+        const bins = Array.isArray(r.bins) ? (r.bins as Record<string, unknown>[]) : [];
+        const bits = [
+          r.rollNumber ? `№ ${r.rollNumber}` : null,
+          r.shade,
+          r.widthCm ? `${r.widthCm} см` : null,
+          r.densityGsm ? `${r.densityGsm} г/м²` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        out.push({
+          seriesId: r.erpSeriesId,
+          label: `${r.erpProductName}${bits ? ` (${bits})` : ''}`,
+          productName: r.erpProductName,
+          qty: r.qty.toString(),
+          unit: r.unit,
+          bins: bins.map((b) => String(b['bin_code'] ?? '')).filter(Boolean),
+        });
+      }
+    }
+    return out;
+  }
+
   private async persistProgress(
     id: string,
     dto: SaveCuttingTaskProgressDto,
@@ -682,6 +740,22 @@ export class CuttingTasksService {
         }
       }
     }
+    // Рулон ERP — только из зеркала остатка по материалам этого заказа: чужой рулон
+    // отправил бы ERP списывать не ту ткань.
+    const erpRollLabels = new Map<string, string>();
+    if (dto.lays.some((l) => l.rolls.some((r) => r.erpSeriesId))) {
+      const orderIdRow = await this.prisma.cuttingTask.findUnique({ where: { id }, select: { orderId: true } });
+      for (const er of await this.listErpRolls(orderIdRow?.orderId ?? '')) erpRollLabels.set(er.seriesId, er.label);
+      for (const lay of dto.lays) {
+        for (const r of lay.rolls) {
+          if (r.erpSeriesId && !erpRollLabels.has(r.erpSeriesId)) {
+            throw new CuttingTaskPayloadInvalidException(
+              `Рулон ERP ${r.erpSeriesId} не относится к материалам этого заказа`,
+            );
+          }
+        }
+      }
+    }
 
     // Гейт завершения: «Раскрой завершён» — только с полностью заполненным
     // настилом (иначе задача уйдёт на доску помощника с нулями и выпускать
@@ -724,6 +798,8 @@ export class CuttingTasksService {
             ordinal: r.ordinal,
             layers: r.layers,
             variantId: r.variantId ?? null,
+            erpSeriesId: r.erpSeriesId ?? null,
+            erpRollLabel: r.erpSeriesId ? (erpRollLabels.get(r.erpSeriesId) ?? null) : null,
           })),
         },
       },

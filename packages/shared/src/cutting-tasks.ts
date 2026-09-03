@@ -148,6 +148,11 @@ export const CuttingTaskRollInputSchema = z.object({
    * проверяет принадлежность расцветки заказу задачи.
    */
   variantId: z.string().min(1).nullable().optional(),
+  /**
+   * Рулон ERP (серия склада ERP), с которого настилали. Материал живёт в ERP; без рулона
+   * она спишет при выпуске «какой попало» (FIFO), с рулоном — именно этот и по его цене.
+   */
+  erpSeriesId: z.string().min(1).max(64).nullable().optional(),
 });
 export type CuttingTaskRollInputDto = z.infer<typeof CuttingTaskRollInputSchema>;
 
@@ -386,6 +391,19 @@ export interface CuttingTaskRollDto {
   variantId: string | null;
   /** Цвет расцветки рулона (подпись/свотч), `null` если не задана. */
   variantColor: string | null;
+  /** Рулон ERP (серия склада ERP) и его подпись, если закройщик указал. */
+  erpSeriesId: string | null;
+  erpRollLabel: string | null;
+}
+
+/** Рулон ERP, доступный для настила по материалам заказа (из зеркала остатка ERP). */
+export interface CuttingTaskErpRollDto {
+  seriesId: string;
+  label: string;
+  productName: string;
+  qty: string;
+  unit: string | null;
+  bins: string[];
 }
 
 /** Расцветка заказа для выбора цвета рулона в кабинете раскроя. */
@@ -481,6 +499,8 @@ export interface CuttingTaskDetailDto extends CuttingTaskSummaryDto {
    * заказ (выбор не нужен); несколько = раскройщик красит рулоны.
    */
   variants: CuttingTaskVariantDto[];
+  /** Рулоны ERP по материалам заказа под ERP; пусто — выбор рулона не показывается. */
+  erpRolls: CuttingTaskErpRollDto[];
 }
 
 // ---------------------------------------------------------------------------

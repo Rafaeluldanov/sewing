@@ -1200,6 +1200,8 @@ export class MaterialIssuesService {
         quotedPrice: true,
         quotedCurrency: true,
         orderVariantId: true,
+        erpManagedAt: true,
+        erpUnitPriceRub: true,
       },
     });
     if (needs.length === 0) {
@@ -1254,11 +1256,11 @@ export class MaterialIssuesService {
       const issuedQty = rawQty.toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
       if (issuedQty.lessThanOrEqualTo(0)) continue;
 
-      const unitCost = resolveAutoIssueUnitCost(
-        need.quotedPrice,
-        need.quotedCurrency,
-        usdRateRub,
-      );
+      // Материал под ERP: цена — её заказа поставщику (₽ за единицу цеха), а не план закупщика.
+      const unitCost =
+        need.erpManagedAt && need.erpUnitPriceRub
+          ? need.erpUnitPriceRub.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+          : resolveAutoIssueUnitCost(need.quotedPrice, need.quotedCurrency, usdRateRub);
       if (
         unitCost.isZero() &&
         need.quotedPrice != null &&
@@ -1295,7 +1297,9 @@ export class MaterialIssuesService {
         unitCost,
         totalCost,
         cellId: null,
-        comment: 'Автоматически при выдаче кроя',
+        comment: need.erpManagedAt
+          ? 'Автоматически при выдаче кроя (материал на складе ERP)'
+          : 'Автоматически при выдаче кроя',
       });
     }
 

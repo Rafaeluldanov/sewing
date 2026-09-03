@@ -398,6 +398,8 @@ export class OrderProductionDocumentService {
         calculatedQty: true,
         quotedPrice: true,
         quotedCurrency: true,
+        erpManagedAt: true,
+        erpUnitPriceRub: true,
       },
     });
     for (const wn of needs) {
@@ -425,6 +427,10 @@ export class OrderProductionDocumentService {
         } else {
           docWarnings.add('PLAN_USD_SKIPPED');
         }
+      } else if (wn.erpManagedAt && wn.erpUnitPriceRub) {
+        // Материал под ERP без цены закупщика цеха — план по цене заказа ERP.
+        planRub = new Prisma.Decimal(wn.calculatedQty).mul(wn.erpUnitPriceRub);
+        planSource = 'WORKSHOP_NEED';
       }
       ensure(wn.id, {
         name: wn.description || wn.sourceName || 'Материал',

@@ -314,6 +314,8 @@ export class ProductionCostV2Service {
             quotedCurrency: true,
             purchaseQty: true,
             calculatedQty: true,
+            erpManagedAt: true,
+            erpUnitPriceRub: true,
           },
         })
       : [];
@@ -788,8 +790,11 @@ export class ProductionCostV2Service {
         let otherRub = new Prisma.Decimal(0);
         let hasUsdWarning = false;
         for (const wn of wns) {
-          const currency = (wn.quotedCurrency ?? '').toUpperCase();
-          if (!wn.quotedPrice) continue;
+          // Материал под ERP без цены закупщика цеха — цена заказа ERP, рубли.
+          const erpPrice =
+            wn.erpManagedAt && wn.erpUnitPriceRub && !wn.quotedPrice ? wn.erpUnitPriceRub : null;
+          const currency = erpPrice ? 'RUB' : (wn.quotedCurrency ?? '').toUpperCase();
+          if (!wn.quotedPrice && !erpPrice) continue;
           const purchaseQty = wn.purchaseQty ?? wn.calculatedQty;
           if (!purchaseQty) continue;
           if (currency === 'USD') {
@@ -798,7 +803,7 @@ export class ProductionCostV2Service {
           }
           if (currency !== 'RUB') continue;
           const lineTotal = new Prisma.Decimal(purchaseQty).mul(
-            new Prisma.Decimal(wn.quotedPrice),
+            new Prisma.Decimal(wn.quotedPrice ?? erpPrice!),
           );
           // Каноническая классификация (роль-aware), как в смете
           // (`OrderCostEstimatesService` через line.kind) и в документе

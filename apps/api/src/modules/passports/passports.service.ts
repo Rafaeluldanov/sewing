@@ -334,6 +334,9 @@ export class PassportsService {
       rollNumber: string;
       rollOrdinal: number | null;
       cuttingLayOrdinal: number | null;
+      /** Рулон ERP настила (серия склада ERP) — для списания при выпуске. */
+      erpSeriesId?: string | null;
+      erpRollLabel?: string | null;
       cutDate: Date;
       qty: number;
       cutterId: string;
@@ -363,6 +366,8 @@ export class PassportsService {
         rollNumber: params.rollNumber,
         rollOrdinal: params.rollOrdinal,
         cuttingLayOrdinal: params.cuttingLayOrdinal,
+        erpSeriesId: params.erpSeriesId ?? null,
+        erpRollLabel: params.erpRollLabel ?? null,
         cutDate: params.cutDate,
         qtyPlan: params.qty,
         qtyCut: params.qty,
@@ -490,6 +495,8 @@ export class PassportsService {
               select: {
                 ordinal: true,
                 layers: true,
+                erpSeriesId: true,
+                erpRollLabel: true,
                 variant: { select: { id: true, color: true } },
               },
             },
@@ -539,6 +546,13 @@ export class PassportsService {
     // материала по расцветке). `null` у рулонов без расцветки.
     const rollVariantIdByOrdinal = new Map(
       lay.rolls.map((r) => [r.ordinal, r.variant?.id ?? null]),
+    );
+    // Рулон ERP настила — на паспорт: по нему ERP спишет при выпуске именно этот рулон.
+    const rollErpByOrdinal = new Map(
+      lay.rolls.map((r) => [
+        r.ordinal,
+        { erpSeriesId: r.erpSeriesId ?? null, erpRollLabel: r.erpRollLabel ?? null },
+      ]),
     );
 
     // Раскройщик для начислений — тот, кто выполнил задачу. Валидируем
@@ -649,6 +663,8 @@ export class PassportsService {
           rollNumber: `Расклад ${dto.layOrdinal} · Рулон ${ordinal}`,
           rollOrdinal: ordinal,
           cuttingLayOrdinal: dto.layOrdinal,
+          erpSeriesId: rollErpByOrdinal.get(ordinal)?.erpSeriesId ?? null,
+          erpRollLabel: rollErpByOrdinal.get(ordinal)?.erpRollLabel ?? null,
           cutDate: new Date(dto.cutDate),
           qty,
           cutterId: cutter.id,

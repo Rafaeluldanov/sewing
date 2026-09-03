@@ -380,7 +380,22 @@ function MaterialsTable({
       key: 'cells',
       header: 'Ячейки',
       render: (m) =>
-        m.cells.length === 0 ? (
+        m.cells.length === 0 && (m.erpRolls?.length ?? 0) > 0 ? (
+          <ul style={{ margin: 0, padding: 0, listStyle: 'none', fontSize: '0.78rem' }}>
+            {(m.erpRolls ?? []).map((r, i) => (
+              <li key={r.seriesId ?? i} style={{ marginBottom: 2 }}>
+                <strong>ERP {r.rollNumber ? `№ ${r.rollNumber}` : 'рулон'}</strong>
+                {r.shade ? ` · ${r.shade}` : ''}
+                {r.widthCm ? ` · ${r.widthCm} см` : ''}
+                {r.bins.length ? ` · ${r.bins.map((b) => b.binCode).filter(Boolean).join(', ')}` : ''}
+                <span className="admin-muted">
+                  {' — '}
+                  {r.qty} {r.unit ?? m.unit}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : m.cells.length === 0 ? (
           <span className="admin-muted">—</span>
         ) : (
           <ul

@@ -167,6 +167,19 @@ export interface CutMaterialReadinessCellDto {
  * заведомо помечает строку как `INFO`/`WARNING`, не превращая её в
  * BLOCKER — даже если поступлений нет. См. `CUT_BLOCKING_MATERIAL_ROLES`.
  */
+/** Рулон ERP из зеркала остатка: номер, реквизиты, сколько и в каких ячейках лежит. */
+export interface CutMaterialReadinessErpRollDto {
+  seriesId: string | null;
+  rollNumber: string | null;
+  shade: string | null;
+  widthCm: string | null;
+  densityGsm: string | null;
+  qty: string;
+  unit: string | null;
+  bins: { binCode: string | null; warehouseName: string | null; qty: string }[];
+  syncedAt: string;
+}
+
 export interface CutMaterialReadinessDto {
   materialRole: string;
   /** Лейбл роли из `MATERIAL_ROLE_LABELS`, если роль известная. */
@@ -193,6 +206,8 @@ export interface CutMaterialReadinessDto {
   workshopNeedStatus?: string | null;
   /** Принято по приёмке ERP (закупочный шов); входит в receivedQty и placedQty. */
   erpReceivedQty?: string | null;
+  /** Рулоны этого материала на складе ERP (из зеркала остатка) — где искать закройщику. */
+  erpRolls?: CutMaterialReadinessErpRollDto[];
 
   cells: CutMaterialReadinessCellDto[];
 

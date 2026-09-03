@@ -888,6 +888,7 @@ export class StockService {
                 sourceName: true,
                 materialRole: true,
                 unit: true,
+                erpManagedAt: true,
               },
             },
             cell: { select: { id: true, warehouseId: true } },
@@ -928,6 +929,7 @@ export class StockService {
             sourceName: true;
             materialRole: true;
             unit: true;
+            erpManagedAt: true;
           };
         };
         cell: { select: { id: true; warehouseId: true } };
@@ -937,6 +939,15 @@ export class StockService {
     employeeId: string | null,
     allowNegativeStock: boolean,
   ): Promise<StockMovement | null> {
+    // Материал под ERP: остаток живёт в ERP (решение владельца 02.09.2026), своего баланса у
+    // цеха нет — движение не пишем, иначе отрицательный «остаток» на пустом ключе.
+    if (line.workshopNeed?.erpManagedAt) {
+      this.logger.log(
+        `event=stock.material_issue.skip reason=erp_managed ` +
+          `materialIssueId=${materialIssueId} materialIssueLineId=${line.id}`,
+      );
+      return null;
+    }
     if (!line.workshopNeedId) {
       this.logger.log(
         `event=stock.material_issue.skip reason=no_workshop_need ` +
