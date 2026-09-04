@@ -1629,6 +1629,8 @@ model Order {
   erpCustomerOrderId String? @unique
   /// Номер заказа ERP снимком — чтобы цех видел «ФС-001922», а не uuid. Не ключ.
   erpCustomerOrderNumber String?
+  /// Ответ ERP по сдаче этого заказа (документ выпуска). `null` — заказ ещё в очереди.
+  erpProduction ErpProductionDocument?
   orderDate      DateTime
   /// Срок сдачи заказа (управленческое поле — UI «Срок сдачи»). Nullable
   /// — backward-compat для исторических заказов и для случаев, когда
@@ -9170,6 +9172,37 @@ model ErpMaterialConsumption {
 // `state`: `POSTED` — оприходовано; `EMPTY` — приходовать нечего (брак / изделие сознательно не
 // приходуется); `FAILED` — ERP не смогла (изделие не сопоставлено с её номенклатурой, нет склада);
 // `REVERSED` — приход сторнирован. Строки-детализации нет: у выпуска одна позиция.
+/// Ответ ERP по СДАННОМУ заказу: документ производства цеха стал документом выпуска ERP.
+///
+/// ⛔ Единица учёта — ДОКУМЕНТ, а не паспорт (решение владельца 04.09.2026): паспорт — документ
+/// ЦЕХА, он собирается в документ производства, и уже документ приходуется на склад ERP. Иначе
+/// на один заказ приходило по три десятка документов выпуска, и бухгалтерия читала бы шум.
+///
+/// Одна строка на заказ: `orderId @unique`. Пока строки нет — заказ стоит в очереди
+/// `GET /api/integrations/erp-production`; появилась — заказ из очереди исчез навсегда, поэтому
+/// ERP отвечает только по тому, что реально разложила (её ответ необратим).
+model ErpProductionDocument {
+  id                String    @id @default(cuid())
+  orderId           String    @unique
+  state             String    @default("POSTED")
+  erpDocumentId     String?
+  erpDocumentNumber String?
+  erpOrganizationId String?
+  erpWarehouseId    String?
+  qtyGood           Int?
+  postedAt          DateTime?
+  /// Почему не оприходовано — человеческим текстом от ERP (что именно поправить).
+  error             String?
+  /// Снимок того, что ERP получила (строки по цвету и размеру) — для разбора расхождений.
+  payload           Json?
+  syncedAt          DateTime  @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([syncedAt])
+  @@index([state])
+}
+
 model ErpFinishedGoodsReceipt {
   id                    String    @id @default(cuid())
   passportId            String    @unique

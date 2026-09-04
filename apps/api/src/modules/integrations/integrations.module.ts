@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ErpConsumptionController } from './erp-consumption.controller.js';
 import { ErpFinishedGoodsController } from './erp-finished-goods.controller.js';
+import { ErpProductionController } from './erp-production.controller.js';
+import { ErpProductionService } from './erp-production.service.js';
 import { ErpFinishedGoodsService } from './erp-finished-goods.service.js';
 import { ErpConsumptionService } from './erp-consumption.service.js';
 import { ErpStockController } from './erp-stock.controller.js';
@@ -24,12 +26,14 @@ import { UpgiftsClient } from './upgifts-client.service.js';
     ErpStockController,
     ErpConsumptionController,
     ErpFinishedGoodsController,
+    ErpProductionController,
   ],
   providers: [
     IntegrationsService,
     UpgiftsClient,
     ErpConsumptionService,
     ErpFinishedGoodsService,
+    ErpProductionService,
   ],
   exports: [IntegrationsService, UpgiftsClient],
 })
