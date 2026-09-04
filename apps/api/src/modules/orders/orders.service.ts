@@ -82,6 +82,9 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   ClientInactiveException,
   ClientNotFoundException,
+  ErpOrderAlreadyLinkedException,
+  ErpOrderPlanLockedException,
+  ErpOrderUnderproducedException,
   OrderClientRequiredException,
   OrderInvalidStatusTransitionException,
   OrderDeleteForbiddenException,
@@ -467,6 +470,25 @@ export class OrdersService {
     dto: CreateOrderDto,
     actorEmployeeId?: string | null,
   ): Promise<OrderDetailDto> {
+    // Прямой шов: одно лекало заказа покупателя ERP — один заказ цеха. Повтор с той же парой
+    // «заказ ERP + лекало» — это не второй тираж, а перепосланная отправка (сеть, двойное
+    // нажатие): второй заказ шился бы в никуда, потому что связь у ERP уже записана.
+    // ⛔ Ключ — именно ПАРА: строки одного заказа покупателя разложены по лекалам, и каждое
+    // лекало уезжает своим заказом цеха (§0.10). Проверка по одному заказу ERP отбивала бы
+    // вторую группу — заказ с футболкой и худи стал бы неотправляемым.
+    if (dto.erpCustomerOrderId) {
+      const linked = await this.prisma.order.findFirst({
+        where: {
+          erpCustomerOrderId: dto.erpCustomerOrderId,
+          patternItemId: dto.patternItemId ?? null,
+        },
+        select: { number: true },
+      });
+      if (linked) {
+        throw new ErpOrderAlreadyLinkedException(linked.number);
+      }
+    }
+
     // Inline-создание изделия из формы заказа (см.
     // `prisma/schema.prisma::Order.productCreationMode`). Backend сам
     // создаёт `PatternItem` + `PatternMaterialArea[]` + technical
@@ -2460,6 +2482,22 @@ export class OrdersService {
 
     const isDraft = current.status === OrderStatus.DRAFT;
 
+    // ⛔ Заказ, рождённый заказом покупателя ERP (`docs/kb/sewing.md` §0.10): тираж и состав
+    // приехали снаружи. В ERP строки такого заказа заблокированы, а реализация ждёт ПОЛНОГО
+    // прихода — правка здесь означала бы, что заказ покупателя не отгрузится никогда.
+    if (
+      current.erpCustomerOrderId &&
+      (wantsItemsChange ||
+        wantsProductChange ||
+        wantsPatternChange ||
+        wantsVariantsChange)
+    ) {
+      throw new ErpOrderPlanLockedException(
+        'Состав и тираж',
+        current.erpCustomerOrderNumber,
+      );
+    }
+
     if (
       wantsVariantsChange &&
       current.status !== OrderStatus.DRAFT &&
@@ -3680,6 +3718,14 @@ export class OrdersService {
         'Завершить можно только заказ в статусе IN_PRODUCTION',
       );
     }
+    // ⛔ Заказ из ERP закрывается только ЦЕЛИКОМ (`docs/kb/sewing.md` §0.10, решение владельца
+    // «заказ на 30 — значит 30, цех дошивает»). Закрытие — это сдача: заказ уходит в очередь
+    // `erp-production`, ERP заводит по нему документ производства и отвечает, после чего заказ
+    // исчезает из очереди НАВСЕГДА. Закрыть недовыпущенным = отгрузить заказ покупателя уже
+    // нечем: его строки в ERP заблокированы, а реализация ждёт полного прихода.
+    if (order.erpCustomerOrderId) {
+      await this.assertErpOrderFullyProduced(id);
+    }
     await this.prisma.order.update({
       where: { id },
       data: {
@@ -3694,6 +3740,29 @@ export class OrdersService {
     return this.getOne(id);
   }
 
+  /**
+   * Упаковано не меньше, чем заказано? Меряем ровно тем же, чем очередь сдачи собирает строки
+   * документа (`ErpProductionService.listPending`): упакованные паспорта с годным выпуском.
+   * Иначе гард пропускал бы то, что потом не приедет в ERP.
+   */
+  private async assertErpOrderFullyProduced(orderId: string): Promise<void> {
+    const [plan, packed] = await Promise.all([
+      this.prisma.orderItem.aggregate({
+        where: { orderId },
+        _sum: { qtyPlan: true },
+      }),
+      this.prisma.passport.aggregate({
+        where: { orderId, status: PassportStatus.PACKED },
+        _sum: { qtyGood: true },
+      }),
+    ]);
+    const planQty = plan._sum.qtyPlan ?? 0;
+    const packedQty = packed._sum.qtyGood ?? 0;
+    if (packedQty < planQty) {
+      throw new ErpOrderUnderproducedException(packedQty, planQty);
+    }
+  }
+
   async cancel(id: string): Promise<OrderDetailDto> {
     const order = await this.prisma.order.findUnique({ where: { id } });
     if (!order) {
@@ -3702,6 +3771,15 @@ export class OrdersService {
     if (order.status === OrderStatus.DONE || order.status === OrderStatus.CANCELLED) {
       throw new OrderInvalidTransitionException(
         'Заказ уже завершён или отменён',
+      );
+    }
+    // ⛔ Отмена ERP-заказа — решение ERP, а не цеха (`docs/kb/sewing.md` §0.10): там заказ
+    // покупателя с живой связью нельзя ни удалить, ни отменить, и отменённый здесь заказ
+    // оставил бы его ждать сдачи, которой уже не будет.
+    if (order.erpCustomerOrderId) {
+      throw new ErpOrderPlanLockedException(
+        'Отмена',
+        order.erpCustomerOrderNumber,
       );
     }
     // Этап «Себестоимость заказа»: cancel разрешён из любого

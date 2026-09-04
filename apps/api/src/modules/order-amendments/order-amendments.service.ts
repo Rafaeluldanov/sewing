@@ -25,6 +25,7 @@ import {
   AmendmentRouteStepHasWorkException,
   AmendmentSizeAlreadyInOrderException,
   AmendmentSizeHasWorkException,
+  ErpOrderPlanLockedException,
   OrderNotAmendableException,
   WorkshopNeedsHaveStockException,
 } from '../../common/errors.js';
@@ -78,6 +79,7 @@ export class OrderAmendmentsService {
       select: {
         id: true,
         status: true,
+        erpCustomerOrderId: true,
         items: {
           select: {
             sizeId: true,
@@ -111,7 +113,10 @@ export class OrderAmendmentsService {
 
     return {
       orderId,
-      editable: order.status === OrderStatus.IN_PRODUCTION,
+      // Заказ из ERP правке не подлежит вовсе (§0.10) — drawer должен быть закрыт заранее,
+      // а не отвечать 409 на заполненную форму.
+      editable:
+        order.status === OrderStatus.IN_PRODUCTION && !order.erpCustomerOrderId,
       multiVariant: order._count.variants >= 2,
       needsHaveStock,
       rows,
@@ -132,6 +137,8 @@ export class OrderAmendmentsService {
       select: {
         id: true,
         status: true,
+        erpCustomerOrderId: true,
+        erpCustomerOrderNumber: true,
         items: { select: { sizeId: true, qtyPlan: true } },
         variants: {
           orderBy: { ordinal: 'asc' },
@@ -148,6 +155,16 @@ export class OrderAmendmentsService {
     }
     if (order.status !== OrderStatus.IN_PRODUCTION) {
       throw new OrderNotAmendableException();
+    }
+    // ⛔ Тираж и состав заказа, рождённого заказом покупателя ERP, в цехе не правятся
+    // (`docs/kb/sewing.md` §0.10): в ERP его строки заблокированы, а реализация ждёт полного
+    // прихода — уменьшенный здесь тираж означал бы, что заказ покупателя не отгрузится никогда.
+    // Маршрут и операции правило НЕ трогает: технология — дело цеха.
+    if (order.erpCustomerOrderId) {
+      throw new ErpOrderPlanLockedException(
+        'Состав и тираж',
+        order.erpCustomerOrderNumber,
+      );
     }
     if (order.variants.length >= 2) {
       throw new AmendmentMultiVariantUnsupportedException();
@@ -268,6 +285,7 @@ export class OrderAmendmentsService {
         id: true,
         status: true,
         patternItemId: true,
+        erpCustomerOrderId: true,
         items: {
           select: {
             sizeId: true,
@@ -324,7 +342,10 @@ export class OrderAmendmentsService {
 
     return {
       orderId,
-      editable: order.status === OrderStatus.IN_PRODUCTION,
+      // Заказ из ERP правке не подлежит вовсе (§0.10) — drawer должен быть закрыт заранее,
+      // а не отвечать 409 на заполненную форму.
+      editable:
+        order.status === OrderStatus.IN_PRODUCTION && !order.erpCustomerOrderId,
       multiVariant: order._count.variants >= 2,
       needsHaveStock,
       current,
@@ -343,6 +364,8 @@ export class OrderAmendmentsService {
         id: true,
         status: true,
         patternItemId: true,
+        erpCustomerOrderId: true,
+        erpCustomerOrderNumber: true,
         items: { select: { sizeId: true, productId: true } },
         variants: { orderBy: { ordinal: 'asc' }, select: { id: true } },
         cuttingTask: {
@@ -359,6 +382,16 @@ export class OrderAmendmentsService {
     }
     if (order.status !== OrderStatus.IN_PRODUCTION) {
       throw new OrderNotAmendableException();
+    }
+    // ⛔ Тираж и состав заказа, рождённого заказом покупателя ERP, в цехе не правятся
+    // (`docs/kb/sewing.md` §0.10): в ERP его строки заблокированы, а реализация ждёт полного
+    // прихода — уменьшенный здесь тираж означал бы, что заказ покупателя не отгрузится никогда.
+    // Маршрут и операции правило НЕ трогает: технология — дело цеха.
+    if (order.erpCustomerOrderId) {
+      throw new ErpOrderPlanLockedException(
+        'Состав и тираж',
+        order.erpCustomerOrderNumber,
+      );
     }
     if (order.variants.length >= 2) {
       throw new AmendmentMultiVariantUnsupportedException();

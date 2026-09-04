@@ -10,6 +10,7 @@ import type {
   OrderColorwaysDto,
   UpsertOrderColorwayDto,
 } from '@sewing/shared';
+import { ErpOrderPlanLockedException } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { OrdersService } from '../orders/orders.service.js';
 
@@ -199,7 +200,11 @@ export class OrderColorwaysService {
   private async assertEditableOrder(orderId: string): Promise<void> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { status: true },
+      select: {
+        status: true,
+        erpCustomerOrderId: true,
+        erpCustomerOrderNumber: true,
+      },
     });
     if (!order) {
       throw new NotFoundException({
@@ -207,6 +212,16 @@ export class OrderColorwaysService {
         code: 'ORDER_NOT_FOUND',
         message: 'Заказ не найден',
       });
+    }
+    // ⛔ Расцветки ERP-заказа — это строки заказа покупателя, разложенные мастером в ERP
+    // (`docs/kb/sewing.md` §0.10). Окно правки расцветок (DRAFT/CALCULATION) — ровно тот
+    // промежуток, в котором живёт только что отправленный заказ, поэтому гард нужен здесь,
+    // а не только в статусах.
+    if (order.erpCustomerOrderId) {
+      throw new ErpOrderPlanLockedException(
+        'Расцветки и тираж',
+        order.erpCustomerOrderNumber,
+      );
     }
     if (
       order.status !== OrderStatus.DRAFT &&

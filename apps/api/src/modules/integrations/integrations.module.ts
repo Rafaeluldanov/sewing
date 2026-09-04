@@ -4,6 +4,7 @@ import { CostsModule } from '../costs/costs.module.js';
 import { ErpConsumptionController } from './erp-consumption.controller.js';
 import { ErpFinishedGoodsController } from './erp-finished-goods.controller.js';
 import { ErpOrderCostService } from './erp-order-cost.service.js';
+import { ErpOrderLookupController } from './erp-order-lookup.controller.js';
 import { ErpProductionController } from './erp-production.controller.js';
 import { ErpProductionService } from './erp-production.service.js';
 import { ErpFinishedGoodsService } from './erp-finished-goods.service.js';
@@ -33,6 +34,7 @@ import { UpgiftsClient } from './upgifts-client.service.js';
     ErpConsumptionController,
     ErpFinishedGoodsController,
     ErpProductionController,
+    ErpOrderLookupController,
   ],
   providers: [
     IntegrationsService,
