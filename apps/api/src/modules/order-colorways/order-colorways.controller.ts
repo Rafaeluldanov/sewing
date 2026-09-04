@@ -27,8 +27,12 @@ import { OrderColorwaysService } from './order-colorways.service.js';
  */
 @Controller('orders/:id/colorways')
 // Прямой шов: ERP создаёт заказ цеха с расцветками и должна узнать их id — по ним приход готовой
-// продукции ложится ровно в ту строку заказа покупателя, из которой изделие заказано. Только
-// чтение: расцветки правит цех.
+// продукции ложится ровно в ту строку заказа покупателя, из которой изделие заказано.
+//
+// Запись открыта (решение 04.09.2026, «одно окно»): блок расцветок живёт и в карточке заказа ERP.
+// ⛔ Правило §0.10 это не отменяет — у ERP-заказа сервис по-прежнему отвечает
+// `ERP_ORDER_PLAN_LOCKED`: цвета и тираж такого заказа задаёт заказ покупателя. Из ERP правятся
+// СОБСТВЕННЫЕ заказы цеха, и только пока план не заморожен (DRAFT/CALCULATION).
 @MachineScopes('orders:read')
 export class OrderColorwaysController {
   constructor(private readonly service: OrderColorwaysService) {}
@@ -38,6 +42,7 @@ export class OrderColorwaysController {
     return this.service.listForOrder(orderId);
   }
 
+  @MachineScopes('orders:write')
   @Post()
   @Roles('ADMIN', 'SHOP_MANAGER')
   create(
@@ -49,6 +54,7 @@ export class OrderColorwaysController {
     return this.service.create(orderId, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Patch(':variantId')
   @Roles('ADMIN', 'SHOP_MANAGER')
   update(
@@ -61,6 +67,7 @@ export class OrderColorwaysController {
     return this.service.update(orderId, variantId, dto, user.employeeId);
   }
 
+  @MachineScopes('orders:write')
   @Delete(':variantId')
   @Roles('ADMIN', 'SHOP_MANAGER')
   remove(
