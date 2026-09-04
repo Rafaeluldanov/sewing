@@ -16,7 +16,9 @@
  *   6. отмена ERP-заказа — не дело цеха;
  *   7. на собственных заказах цеха ничего из этого не действует;
  *   8. «Найти в цехе» отвечает по паре «заказ покупателя + лекало» — после молчания сети ERP
- *      спрашивает, а не шлёт второй POST.
+ *      спрашивает, а не шлёт второй POST;
+ *   9. «снять отправку» из ERP заказ отменяет — это единственный путь исправить ошибочную
+ *      отправку, человеку в цехе он закрыт.
  */
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
@@ -31,6 +33,8 @@ import {
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
+import { createHash } from 'node:crypto';
+
 import { ErpOrderLookupController } from '../../apps/api/src/modules/integrations/erp-order-lookup.controller.js';
 
 const ERP_ORDER = { erpCustomerOrderId: 'erp-co-1', erpCustomerOrderNumber: 'ФС-001922' };
@@ -278,6 +282,38 @@ describeWithDb('integration — заказ из ERP в цехе не прави�
     // Второе лекало того же заказа ещё не уехало — «найти» нечего, и ERP отправит его заново.
     expect((await lookup.lookup(ERP_ORDER.erpCustomerOrderId, second.id)).found).toBe(false);
     expect((await lookup.lookup('erp-co-нет', first.id)).found).toBe(false);
+  });
+
+  test('«снять отправку»: отмена по команде ERP проходит, человеку — нет', async () => {
+    const fromErp = await createOrder(true);
+
+    // Человек в цехе — отказ.
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${fromErp}/cancel`)
+      .set('Cookie', manager)
+      .expect(409);
+
+    // ERP — проходит машинным токеном: связь она снимает тем же действием, и заказ покупателя
+    // перестаёт ждать сдачу, которой не будет.
+    const raw = 'sew_test_cancel_token';
+    await t.prisma.serviceToken.create({
+      data: {
+        name: 'ERP (тест отмены)',
+        tokenHash: createHash('sha256').update(raw, 'utf8').digest('hex'),
+        tokenPrefix: raw.slice(0, 10),
+        roles: ['SHOP_MANAGER'],
+        scopes: ['orders:read', 'orders:write'],
+      },
+    });
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/integrations/erp-orders/${fromErp}/cancel`)
+      .set('Authorization', `Bearer ${raw}`)
+      .send({ reason: 'ошиблись тиражом' })
+      .expect(201);
+    expect(res.body.status).toBe('CANCELLED');
+    const after = await t.prisma.order.findUnique({ where: { id: fromErp } });
+    expect(after?.status).toBe('CANCELLED');
+    expect(after?.comment ?? '').toContain('ошиблись тиражом');
   });
 
   test('отмена ERP-заказа — не дело цеха, свой отменяется', async () => {

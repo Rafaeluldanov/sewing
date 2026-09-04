@@ -3763,7 +3763,16 @@ export class OrdersService {
     }
   }
 
-  async cancel(id: string): Promise<OrderDetailDto> {
+  /**
+   * `fromErp` — отмена пришла ИЗ ERP (машинный вызов «снять отправку»), а не от человека в цехе.
+   * Только в этом виде ERP-заказ отменяется: связь у ERP снимается тем же действием, и заказ
+   * покупателя перестаёт ждать сдачу. Человеку в цехе отмена такого заказа закрыта — он не знает
+   * ни о заказе покупателя, ни о его строках, которые после отмены надо разблокировать.
+   */
+  async cancel(
+    id: string,
+    opts: { fromErp?: boolean } = {},
+  ): Promise<OrderDetailDto> {
     const order = await this.prisma.order.findUnique({ where: { id } });
     if (!order) {
       throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Заказ не найден' });
@@ -3776,7 +3785,7 @@ export class OrdersService {
     // ⛔ Отмена ERP-заказа — решение ERP, а не цеха (`docs/kb/sewing.md` §0.10): там заказ
     // покупателя с живой связью нельзя ни удалить, ни отменить, и отменённый здесь заказ
     // оставил бы его ждать сдачи, которой уже не будет.
-    if (order.erpCustomerOrderId) {
+    if (order.erpCustomerOrderId && !opts.fromErp) {
       throw new ErpOrderPlanLockedException(
         'Отмена',
         order.erpCustomerOrderNumber,

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { CostsModule } from '../costs/costs.module.js';
+import { OrdersModule } from '../orders/orders.module.js';
 import { ErpConsumptionController } from './erp-consumption.controller.js';
 import { ErpFinishedGoodsController } from './erp-finished-goods.controller.js';
 import { ErpOrderCostService } from './erp-order-cost.service.js';
@@ -27,7 +28,10 @@ import { UpgiftsClient } from './upgifts-client.service.js';
 @Module({
   // Себестоимость сдачи считает движок цеха (`PassportRealCostService`): второй расчёт тех же
   // денег разъехался бы с первым — у одной цифры один хозяин.
-  imports: [CostsModule],
+  // `OrdersModule` — ради ОДНОГО действия: отмены заказа цеха по команде ERP («снять отправку»).
+  // Своя отмена была бы вторым описанием того же перехода: `completedAt` для зарплаты, аудит,
+  // проверки статуса — всё это живёт в `OrdersService.cancel`.
+  imports: [CostsModule, OrdersModule],
   controllers: [
     IntegrationsController,
     ErpStockController,

@@ -1,7 +1,8 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { MachineScopes } from '../auth/auth.decorators.js';
+import { OrdersService } from '../orders/orders.service.js';
 
 /**
  * «Найти в цехе»: заказ по паре «заказ покупателя ERP + лекало».
@@ -11,12 +12,18 @@ import { MachineScopes } from '../auth/auth.decorators.js';
  * молчания ERP не шлёт заказ заново, а СПРАШИВАЕТ: «мой заказ у тебя есть?». Есть — ERP
  * дописывает связь и живёт дальше; нет — снимает свою связь и отправляет заново.
  *
- * Ручка машинная (экрана у неё нет) и только читает.
+ * Рядом живёт «снять отправку»: отмена заказа цеха ПО КОМАНДЕ ERP. Человеку в цехе она закрыта
+ * (§0.10) — он не знает ни о заказе покупателя, ни о его строках, которые после отмены надо
+ * разблокировать; а без единственного пути отмены ошибочная отправка замуровывала бы обе стороны:
+ * в ERP заказ с живой связью нельзя ни удалить, ни отменить.
  */
 @Controller('integrations/erp-orders')
 @MachineScopes('orders:read')
 export class ErpOrderLookupController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly orders: OrdersService,
+  ) {}
 
   @Get('lookup')
   async lookup(
@@ -53,5 +60,28 @@ export class ErpOrderLookupController {
         created_at: order.createdAt.toISOString(),
       },
     };
+  }
+
+  /** Отменить заказ цеха по команде ERP — вместе со снятием связи на её стороне. */
+  @Post(':id/cancel')
+  @MachineScopes('orders:write')
+  async cancel(
+    @Param('id') id: string,
+    @Body() body: { reason?: string } = {},
+  ): Promise<{ id: string; number: string; status: string }> {
+    const order = await this.orders.cancel(id, { fromErp: true });
+    if (body?.reason) {
+      // Причина — в комментарий заказа: журнал цеха о заказе покупателя ничего не знает.
+      await this.prisma.order.update({
+        where: { id },
+        data: {
+          comment: [order.comment, `Отмена из ERP: ${body.reason}`]
+            .filter(Boolean)
+            .join('\n')
+            .slice(0, 2000),
+        },
+      });
+    }
+    return { id: order.id, number: order.number, status: order.status };
   }
 }
