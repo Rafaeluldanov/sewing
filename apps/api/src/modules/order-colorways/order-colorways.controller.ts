@@ -13,7 +13,7 @@ import {
   type UpsertOrderColorwayDto,
 } from '@sewing/shared';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderColorwaysService } from './order-colorways.service.js';
 
@@ -26,6 +26,10 @@ import { OrderColorwaysService } from './order-colorways.service.js';
  * UI обновлял состояние из одного источника (как `order-cut-issue-rules`).
  */
 @Controller('orders/:id/colorways')
+// Прямой шов: ERP создаёт заказ цеха с расцветками и должна узнать их id — по ним приход готовой
+// продукции ложится ровно в ту строку заказа покупателя, из которой изделие заказано. Только
+// чтение: расцветки правит цех.
+@MachineScopes('orders:read')
 export class OrderColorwaysController {
   constructor(private readonly service: OrderColorwaysService) {}
 

@@ -1026,6 +1026,16 @@ export const CreateOrderSchema = z.object({
    * дозаполнить.
    */
   clientId: z.string().min(1).nullable().optional(),
+  /**
+   * Заказ покупателя ERP, из которого рождён этот заказ (прямой шов, решение владельца
+   * 03.09.2026). Присылает только ERP; собственные заказы цеха его не несут.
+   *
+   * ⛔ Заказ с этим полем НЕ требует карточки клиента: справочник клиентов цеха выпиливается,
+   * единственный источник заказчиков — контрагенты ERP, и его имя приезжает снимком в `customer`.
+   * Уникальность на стороне БД делает повторную отправку из ERP безопасной.
+   */
+  erpCustomerOrderId: z.string().min(1).max(64).nullable().optional(),
+  erpCustomerOrderNumber: z.string().min(1).max(64).nullable().optional(),
   dueDate: DateStringSchema.nullable().optional(),
   /**
    * Soft-route MVP: опциональная привязка к шаблону маршрута. Шаги

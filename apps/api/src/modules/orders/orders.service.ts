@@ -648,6 +648,10 @@ export class OrdersService {
           routeTemplateId: dto.routeTemplateId ?? null,
           patternItemId: dto.patternItemId ?? null,
           clientId: dto.clientId ?? null,
+          // Прямой шов: заказ, рождённый заказом покупателя ERP. Клиента такой заказ не несёт —
+          // имя заказчика приезжает снимком в `customer` (§0.8: у цеха нет своих клиентов).
+          erpCustomerOrderId: dto.erpCustomerOrderId ?? null,
+          erpCustomerOrderNumber: dto.erpCustomerOrderNumber ?? null,
           customerUnitPrice:
             customerUnitPrice === null
               ? null
@@ -3467,7 +3471,11 @@ export class OrdersService {
     // закрывает и исторические заказы (созданные до этого требования),
     // и заказы, заведённые в обход UI (легаси `/orders/new`, прямой
     // POST, DRAFT из КБ-задачи). См. `OrderClientRequiredException`.
-    if (!order.clientId) {
+    // ⛔ Заказ, рождённый заказом покупателя ERP, карточки клиента НЕ требует: справочник
+    // клиентов цеха выпиливается (решение владельца 03.09.2026 — единственный источник
+    // заказчиков это контрагенты ERP), а имя заказчика приезжает снимком в `customer`.
+    // Для собственных заказов цеха гейт остаётся как был.
+    if (!order.clientId && !order.erpCustomerOrderId) {
       throw new OrderClientRequiredException();
     }
     // Сознательно НЕ блокируем переход в расчёт на DRAFT-pattern с

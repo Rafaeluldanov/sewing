@@ -71,7 +71,15 @@ export class ErpFinishedGoodsService {
           status: PassportStatus.PACKED,
           qtyGood: { gt: 0 },
           erpFinishedGoods: { is: null },
-          order: { status: { not: 'CANCELLED' } },
+          // ⛔ ТОЛЬКО заказы, рождённые заказом покупателя ERP (решение владельца 03.09.2026).
+          // Отсечка обязана быть СТРУКТУРНОЙ и стоять у источника: ответ ERP необратим (он
+          // создаёт здесь строку, и паспорт исчезает из очереди навсегда), а по чужому заказу
+          // ей нечего ответить, кроме «не смогли» — то есть сжечь чужую продукцию, лежащую на
+          // полке. Собственные заказы цеха в очередь не попадают вовсе.
+          order: {
+            status: { not: 'CANCELLED' },
+            erpCustomerOrderId: { not: null },
+          },
         },
       },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
