@@ -20,6 +20,8 @@ import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
 import { ErpProductionService } from '../../apps/api/src/modules/integrations/erp-production.service.js';
+import { ErpOrderCostService } from '../../apps/api/src/modules/integrations/erp-order-cost.service.js';
+import { PassportRealCostService } from '../../apps/api/src/modules/costs/passport-real-cost.service.js';
 
 describeWithDb('integration — сдача заказа цеха уходит в ERP документом производства', () => {
   let t: TestApp;
@@ -96,6 +98,13 @@ describeWithDb('integration — сдача заказа цеха уходит в
     return orderId;
   }
 
+  /** Сервис на тестовом prisma: у DI-версии свой клиент, требующий TenantContext HTTP-запроса. */
+  function service(): ErpProductionService {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const prisma = t.prisma as any;
+    return new ErpProductionService(prisma, new ErpOrderCostService(prisma, new PassportRealCostService(prisma)));
+  }
+
   async function setSince(value: Date | null): Promise<void> {
     await t.prisma.companySettings.upsert({
       where: { id: 'default' },
@@ -107,14 +116,14 @@ describeWithDb('integration — сдача заказа цеха уходит в
   test('без даты отсечки очередь пуста — архив сдач в ERP не уезжает', async () => {
     await closedOrder();
     await setSince(null);
-    const queue = await new ErpProductionService(t.prisma).listPending(10);
+    const queue = await service().listPending(10);
     expect(queue.count).toBe(0);
   });
 
   test('сданный заказ отдаётся ОДНОЙ строкой со строками по цвету и размеру', async () => {
     const orderId = await closedOrder();
     await setSince(new Date('2026-08-01T00:00:00.000Z'));
-    const queue = await new ErpProductionService(t.prisma).listPending(10);
+    const queue = await service().listPending(10);
     expect(queue.count).toBe(1);
     const item = queue.items[0] as Record<string, any>;
     expect(item.order_id).toBe(orderId);
@@ -130,14 +139,14 @@ describeWithDb('integration — сдача заказа цеха уходит в
   test('собственный заказ цеха в очередь не попадает', async () => {
     await closedOrder({ fromErp: false });
     await setSince(new Date('2026-08-01T00:00:00.000Z'));
-    const queue = await new ErpProductionService(t.prisma).listPending(10);
+    const queue = await service().listPending(10);
     expect(queue.count).toBe(0);
   });
 
   test('ответ ERP убирает заказ из очереди, повтор заменяет запись', async () => {
     const orderId = await closedOrder();
     await setSince(new Date('2026-08-01T00:00:00.000Z'));
-    const svc = new ErpProductionService(t.prisma);
+    const svc = service();
     const first = await svc.ack([
       { order_id: orderId, state: 'POSTED', erp_document_number: 'ШВЦ-000001', qty_good: 10 },
     ]);
@@ -154,7 +163,7 @@ describeWithDb('integration — сдача заказа цеха уходит в
   test('плохой элемент ответа не роняет пакет и не принимается по чужому заказу', async () => {
     const orderId = await closedOrder();
     const own = await closedOrder({ fromErp: false });
-    const svc = new ErpProductionService(t.prisma);
+    const svc = service();
     const res = await svc.ack([
       { state: 'POSTED' },
       { order_id: 'нет-такого', state: 'POSTED' },

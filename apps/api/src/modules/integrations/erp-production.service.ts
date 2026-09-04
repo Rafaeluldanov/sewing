@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OrderStatus, PassportStatus } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ErpOrderCostService } from './erp-order-cost.service.js';
 
 /** Что ERP отвечает по сданному заказу. */
 export type ProductionAckItem = {
@@ -37,7 +38,10 @@ export class ErpProductionService {
   private static readonly MAX_LIMIT = 100;
   private readonly logger = new Logger(ErpProductionService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cost: ErpOrderCostService,
+  ) {}
 
   /** Отсечка: раньше неё сданные заказы в очередь не попадают. Без неё очередь ПУСТА. */
   private async cutoff(closedFrom?: string): Promise<Date | null> {
@@ -122,7 +126,7 @@ export class ErpProductionService {
       byOrder.set(p.orderId, list);
     }
 
-    const items = orders.map((order) => {
+    const items = await Promise.all(orders.map(async (order) => {
       const own = byOrder.get(order.id) ?? [];
       const lines = new Map<string, Record<string, unknown>>();
       for (const p of own) {
@@ -145,6 +149,14 @@ export class ErpProductionService {
         lines.set(key, line);
       }
       const rows = [...lines.values()];
+      const qtyGood = rows.reduce((sum, r) => sum + Number(r.qty_good), 0);
+      // Себестоимость сдачи — компонентами и сразу все: что из них считать себестоимостью
+      // заказа, решает владелец, и решать надо на живых числах.
+      const cost = await this.cost.factCostForOrder(
+        order.id,
+        own.map((p) => p.id),
+        qtyGood,
+      );
       return {
         order_id: order.id,
         order_number: order.number,
@@ -159,8 +171,9 @@ export class ErpProductionService {
         qty_good: rows.reduce((sum, r) => sum + Number(r.qty_good), 0),
         qty_defect: rows.reduce((sum, r) => sum + Number(r.qty_defect), 0),
         lines: rows,
+        cost,
       };
-    });
+    }));
     return { count: items.length, items };
   }
 

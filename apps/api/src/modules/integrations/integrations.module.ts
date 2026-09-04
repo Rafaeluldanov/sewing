@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
+
+import { CostsModule } from '../costs/costs.module.js';
 import { ErpConsumptionController } from './erp-consumption.controller.js';
 import { ErpFinishedGoodsController } from './erp-finished-goods.controller.js';
+import { ErpOrderCostService } from './erp-order-cost.service.js';
 import { ErpProductionController } from './erp-production.controller.js';
 import { ErpProductionService } from './erp-production.service.js';
 import { ErpFinishedGoodsService } from './erp-finished-goods.service.js';
@@ -21,6 +24,9 @@ import { UpgiftsClient } from './upgifts-client.service.js';
  * (`secret-box.ts`). `AuditService` берётся из глобального `AuditModule`.
  */
 @Module({
+  // Себестоимость сдачи считает движок цеха (`PassportRealCostService`): второй расчёт тех же
+  // денег разъехался бы с первым — у одной цифры один хозяин.
+  imports: [CostsModule],
   controllers: [
     IntegrationsController,
     ErpStockController,
@@ -34,6 +40,7 @@ import { UpgiftsClient } from './upgifts-client.service.js';
     ErpConsumptionService,
     ErpFinishedGoodsService,
     ErpProductionService,
+    ErpOrderCostService,
   ],
   exports: [IntegrationsService, UpgiftsClient],
 })
