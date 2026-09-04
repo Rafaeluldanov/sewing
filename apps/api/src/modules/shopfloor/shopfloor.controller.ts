@@ -6,7 +6,7 @@ import {
   type ShopfloorStateQuery,
 } from '@sewing/shared/shopfloor';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ShopfloorService } from './shopfloor.service.js';
 
@@ -24,6 +24,10 @@ import { ShopfloorService } from './shopfloor.service.js';
 export class ShopfloorController {
   constructor(private readonly shopfloor: ShopfloorService) {}
 
+  // Матрица «размер × этап» карточки заказа рисуется и в ERP («одно окно»): читать её оттуда
+  // нужно тем же срезом, что видит менеджер цеха. Только `state` и только чтение — доска
+  // оборудования и монитор зала машинному токену не нужны.
+  @MachineScopes('orders:read')
   @Get('state')
   state(
     @Query(new ZodValidationPipe(ShopfloorStateQuerySchema))
