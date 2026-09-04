@@ -33,6 +33,11 @@ import { OrderAmendmentsService } from './order-amendments.service.js';
  * у ручки).
  */
 @Controller('orders/:id/amendments')
+// Прямой шов «одного окна»: менеджер правит заказ в производстве из ERP тем же drawer-ом.
+// Чтение состояний открыто целиком, запись — по ручкам (ниже). ⛔ Тираж и размерность
+// ERP-заказа сервис всё равно отбивает `ERP_ORDER_PLAN_LOCKED`: план такого заказа живёт в
+// заказе покупателя. Открыт скоуп — не открыто правило.
+@MachineScopes('orders:read')
 export class OrderAmendmentsController {
   constructor(private readonly service: OrderAmendmentsService) {}
 
@@ -45,6 +50,7 @@ export class OrderAmendmentsController {
   }
 
   /** Применить правку количества по размерам. */
+  @MachineScopes('orders:write')
   @Post('quantities')
   @Roles('ADMIN', 'SHOP_MANAGER')
   applyQuantity(
@@ -63,6 +69,7 @@ export class OrderAmendmentsController {
   }
 
   /** Применить правку размерности (добавить / убрать размеры). */
+  @MachineScopes('orders:write')
   @Post('sizes')
   @Roles('ADMIN', 'SHOP_MANAGER')
   applySizes(
@@ -83,6 +90,7 @@ export class OrderAmendmentsController {
   }
 
   /** Добавить операцию в маршрут заказа (вставка впереди фронта). */
+  @MachineScopes('orders:write')
   @Post('operations')
   @Roles('ADMIN', 'SHOP_MANAGER')
   applyOperation(
@@ -106,6 +114,7 @@ export class OrderAmendmentsController {
    * работу закрывают мимо маршрута. Количество, размерность и
    * расценки остаются у менеджера заказа — это план и деньги.
    */
+  @MachineScopes('orders:write')
   @Put('route')
   @Roles('ADMIN', 'SHOP_MANAGER', 'SHOPFLOOR_MASTER')
   applyRoute(
@@ -120,7 +129,6 @@ export class OrderAmendmentsController {
   /** Журнал правок заказа в производстве (read-only). */
   // Журнал правок тиража и размерности: ERP-заказы здесь править нельзя (§0.10), но по
   // собственным заказам цеха ERP должна видеть, почему тираж менялся.
-  @MachineScopes('orders:read')
   @Get('history')
   history(
     @Param('id') orderId: string,
