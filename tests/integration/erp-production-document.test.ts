@@ -113,6 +113,52 @@ describeWithDb('integration — сдача заказа цеха уходит в
     });
   }
 
+  test('карточка заказа отдаёт связь с ERP, дату сдачи и ответ ERP', async () => {
+    const orderId = await closedOrder();
+    const res = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    // Раньше ERP этих полей не получала и спрашивала о связи свою же таблицу.
+    expect(res.body.erpCustomerOrderId).toBe('erp-order-1');
+    expect(res.body.erpCustomerOrderNumber).toBe('ФС-001922');
+    expect(res.body.completedAt).toBeTruthy();
+    expect(res.body.erpProduction).toBeNull();
+
+    await t.prisma.erpProductionDocument.create({
+      data: {
+        orderId, state: 'POSTED', erpDocumentNumber: 'ВЦ-000001', qtyGood: 10,
+        postedAt: new Date('2026-09-04T10:00:00.000Z'),
+      },
+    });
+    const after = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    expect(after.body.erpProduction?.erpDocumentNumber).toBe('ВЦ-000001');
+    expect(after.body.erpProduction?.qtyGood).toBe(10);
+  });
+
+  test('в очередь сдачи едет брак по причинам, а не только сумма', async () => {
+    const orderId = await closedOrder();
+    await setSince(new Date('2026-09-01T00:00:00.000Z'));
+    const type = await t.prisma.defectType.create({
+      data: { code: `DEF-${Date.now()}`, name: 'Пропуск строчки', sortOrder: 1 },
+    });
+    const passport = await t.prisma.passport.findFirst({ where: { orderId } });
+    await t.prisma.passportDefect.create({
+      data: { passportId: passport!.id, defectTypeId: type.id, qty: 2, comment: 'на рукаве' },
+    });
+
+    const queue = await service().listPending(10);
+    const line = (queue.items[0].lines as Array<Record<string, unknown>>)[0];
+    const defects = line.defects as Array<Record<string, unknown>>;
+    expect(defects).toHaveLength(1);
+    expect(defects[0].name).toBe('Пропуск строчки');
+    expect(defects[0].qty).toBe(2);
+    expect(defects[0].comment).toBe('на рукаве');
+  });
+
   test('без даты отсечки очередь пуста — архив сдач в ERP не уезжает', async () => {
     await closedOrder();
     await setSince(null);

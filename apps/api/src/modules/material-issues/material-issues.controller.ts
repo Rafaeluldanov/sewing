@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import {
   CancelMaterialIssueSchema,
@@ -57,6 +57,8 @@ import { MaterialIssuesService } from './material-issues.service.js';
 export class MaterialIssuesController {
   constructor(private readonly materialIssues: MaterialIssuesService) {}
 
+  // Выдачи материала в крой: факт расхода цеха до того, как он доедет до ERP расходным швом.
+  @MachineScopes('stock:read')
   @Get()
   list(
     @Query(new ZodValidationPipe(ListMaterialIssuesQuerySchema))
@@ -65,6 +67,7 @@ export class MaterialIssuesController {
     return this.materialIssues.list(query);
   }
 
+  @MachineScopes('stock:read')
   @Get(':id')
   getById(@Param('id') id: string) {
     return this.materialIssues.getById(id);

@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import {
   CreateStockAdjustmentSchema,
@@ -69,6 +69,9 @@ import { StockService } from './stock.service.js';
 export class StockController {
   constructor(private readonly stock: StockService) {}
 
+  // Остаток материалов ЦЕХА: ERP отдаёт ему зеркало своего склада, а свой он ведёт сам —
+  // пока лестница остатков не доведена до конца, сверять их можно только чтением.
+  @MachineScopes('stock:read')
   @Get('balances')
   listBalances(
     @Query(new ZodValidationPipe(ListStockBalancesQuerySchema))
@@ -77,6 +80,7 @@ export class StockController {
     return this.stock.listBalances(query);
   }
 
+  @MachineScopes('stock:read')
   @Get('movements')
   listMovements(
     @Query(new ZodValidationPipe(ListStockMovementsQuerySchema))

@@ -137,6 +137,8 @@ type OrderWithItems = Prisma.OrderGetPayload<{
     outsourceRequirements: true;
     logisticsLines: true;
     client: true;
+    /** Ответ ERP по сдаче заказа (документ производства) — одна строка на заказ. */
+    erpProduction: true;
     patternItem: {
       include: {
         constructorTask: {
@@ -1601,6 +1603,11 @@ export class OrdersService {
     color: string | null;
     comment: string | null;
     customer: string | null;
+    /** Прямой шов: заказ покупателя ERP, из которого рождён заказ цеха (§0.10). */
+    erpCustomerOrderId?: string | null;
+    erpCustomerOrderNumber?: string | null;
+    /** Момент сдачи заказа: от него зависит очередь сдачи в ERP и отсечка зарплаты. */
+    completedAt?: Date | null;
     clientId: string | null;
     client: { id: string; name: string } | null;
     dueDate: Date | null;
@@ -1688,6 +1695,11 @@ export class OrdersService {
       color: o.color ?? product?.color ?? null,
       comment: o.comment,
       customer: o.customer,
+      // Прямой шов: по этим полям видно, что заказ рождён заказом покупателя ERP, и какой
+      // именно. Раньше ERP приходилось спрашивать об этом свою же таблицу связи.
+      erpCustomerOrderId: o.erpCustomerOrderId ?? null,
+      erpCustomerOrderNumber: o.erpCustomerOrderNumber ?? null,
+      completedAt: o.completedAt ? o.completedAt.toISOString() : null,
       clientId: o.clientId,
       client: o.client ? { id: o.client.id, name: o.client.name } : null,
       dueDate: o.dueDate ? o.dueDate.toISOString() : null,
@@ -1793,6 +1805,8 @@ export class OrdersService {
         // «Операции» карточки заказа. Сортируем по `sortOrder`.
         logisticsLines: { orderBy: { sortOrder: 'asc' } },
         client: true,
+        // Ответ ERP по сдаче этого заказа (документ производства). Одна строка на заказ.
+        erpProduction: true,
         // Soft-pattern MVP (этап 2 «Лекала»): полная карточка лекала
         // нужна детали для виджета `PatternPreviewCard` в UI карточки
         // заказа. Snapshot-поля лежат на `Order` напрямую.
@@ -3971,6 +3985,26 @@ export class OrdersService {
       color: color ?? product?.color ?? null,
       comment: order.comment,
       customer: order.customer,
+      // Прямой шов: чей это заказ покупателя и когда цех его сдал. Деталь собирает ответ
+      // сама (не через `toListItemDto`), поэтому поля дублируются осознанно.
+      erpCustomerOrderId: order.erpCustomerOrderId ?? null,
+      erpCustomerOrderNumber: order.erpCustomerOrderNumber ?? null,
+      completedAt: order.completedAt ? order.completedAt.toISOString() : null,
+      // Чем сдача стала в ERP: документ выпуска, склад, количество. Пусто — ERP ещё не
+      // отвечала (или заказ собственный). Цех должен видеть, принята ли его работа.
+      erpProduction: order.erpProduction
+        ? {
+            state: order.erpProduction.state,
+            erpDocumentId: order.erpProduction.erpDocumentId,
+            erpDocumentNumber: order.erpProduction.erpDocumentNumber,
+            erpWarehouseId: order.erpProduction.erpWarehouseId,
+            qtyGood: order.erpProduction.qtyGood,
+            postedAt: order.erpProduction.postedAt
+              ? order.erpProduction.postedAt.toISOString()
+              : null,
+            error: order.erpProduction.error,
+          }
+        : null,
       clientId: order.clientId,
       client: order.client
         ? { id: order.client.id, name: order.client.name }

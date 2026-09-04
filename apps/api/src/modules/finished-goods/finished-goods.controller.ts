@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import {
   CancelFinishedGoodsShipmentSchema,
@@ -61,6 +61,9 @@ import { FinishedGoodsService } from './finished-goods.service.js';
 export class FinishedGoodsController {
   constructor(private readonly finishedGoods: FinishedGoodsService) {}
 
+  // Остаток готовой продукции ЦЕХА. ERP приходует ту же продукцию к себе документом
+  // производства (§0.11), и без чтения этого остатка двойной учёт не с чем сверить.
+  @MachineScopes('stock:read')
   @Get('balances')
   listBalances(
     @Query(new ZodValidationPipe(ListFinishedGoodsBalancesQuerySchema))
@@ -69,6 +72,7 @@ export class FinishedGoodsController {
     return this.finishedGoods.listBalances(query);
   }
 
+  @MachineScopes('stock:read')
   @Get('movements')
   listMovements(
     @Query(new ZodValidationPipe(ListFinishedGoodsMovementsQuerySchema))
@@ -87,6 +91,7 @@ export class FinishedGoodsController {
    * `FinishedGoodsOrderShipmentsController`. Detail полезен для
    * перехода с любого UI (movement journal, audit log) и для тестов.
    */
+  @MachineScopes('stock:read')
   @Get('shipments/:id')
   getShipment(@Param('id') id: string) {
     return this.finishedGoods.getShipmentDetail(id);

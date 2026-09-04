@@ -48,7 +48,7 @@ import {
 } from './passport-print.js';
 import { buildPassportQrPayload, buildPassportWebUrl } from './qr.js';
 import * as QRCode from 'qrcode';
-import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Public, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 
 @Controller('passports')
@@ -170,6 +170,8 @@ export class PassportsController {
     return renderPassportsPrintHtml(items);
   }
 
+  // Карточка паспорта: из документа производства ERP по номеру-основанию.
+  @MachineScopes('orders:read')
   @Get(':id')
   getOne(@Param('id') id: string) {
     return this.passports.getOne(id);
@@ -186,6 +188,7 @@ export class PassportsController {
    * и швее endpoint недоступен (для них есть `/admin/passports/:id`
    * со своим UI).
    */
+  @MachineScopes('orders:read')
   @Get(':id/history')
   @Roles('SHOPFLOOR_MASTER', 'SHOP_MANAGER', 'ADMIN')
   getHistory(@Param('id') id: string) {

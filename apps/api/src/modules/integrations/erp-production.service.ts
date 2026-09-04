@@ -116,6 +116,15 @@ export class ErpProductionService {
         qtyDefect: true,
         sampleId: true,
         size: { select: { code: true } },
+        // Брак по причинам: в ERP до сих пор ехала только сумма, и «почему недосдали» не
+        // отвечал никто. Причина — свойство паспорта, поэтому и едет вместе с ним.
+        defects: {
+          select: {
+            qty: true,
+            comment: true,
+            defectType: { select: { code: true, name: true } },
+          },
+        },
       },
     });
 
@@ -141,11 +150,21 @@ export class ErpProductionService {
           qty_defect: 0,
           is_sample: !!p.sampleId,
           passports: [] as string[],
+          defects: [] as Array<Record<string, unknown>>,
         };
         line.qty_good = Number(line.qty_good) + (p.qtyGood ?? 0);
         line.qty_cut = Number(line.qty_cut) + (p.qtyCut ?? 0);
         line.qty_defect = Number(line.qty_defect) + (p.qtyDefect ?? 0);
         (line.passports as string[]).push(p.number ?? p.id);
+        for (const d of p.defects ?? []) {
+          (line.defects as Array<Record<string, unknown>>).push({
+            passport: p.number ?? p.id,
+            code: d.defectType?.code ?? null,
+            name: d.defectType?.name ?? null,
+            qty: d.qty,
+            comment: d.comment,
+          });
+        }
         lines.set(key, line);
       }
       const rows = [...lines.values()];

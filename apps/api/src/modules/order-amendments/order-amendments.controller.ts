@@ -18,7 +18,7 @@ import {
   type SizeAmendmentStateDto,
 } from '@sewing/shared';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderAmendmentsService } from './order-amendments.service.js';
 
@@ -118,6 +118,9 @@ export class OrderAmendmentsController {
   }
 
   /** Журнал правок заказа в производстве (read-only). */
+  // Журнал правок тиража и размерности: ERP-заказы здесь править нельзя (§0.10), но по
+  // собственным заказам цеха ERP должна видеть, почему тираж менялся.
+  @MachineScopes('orders:read')
   @Get('history')
   history(
     @Param('id') orderId: string,

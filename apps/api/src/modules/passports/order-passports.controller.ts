@@ -1,6 +1,6 @@
 import { Controller, Get, Param } from '@nestjs/common';
 import { PassportsService } from './passports.service.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { MachineScopes, Roles } from '../auth/auth.decorators.js';
 
 /**
  * Подресурс заказа: список паспортов конкретного заказа.
@@ -20,6 +20,9 @@ import { Roles } from '../auth/auth.decorators.js';
 export class OrderPassportsController {
   constructor(private readonly passports: PassportsService) {}
 
+  // Паспорта заказа: основание строк документа производства ERP. Без них в сдаче виден
+  // только номер паспорта строкой, а открыть его нечем.
+  @MachineScopes('orders:read')
   @Get(':id/passports')
   list(@Param('id') id: string) {
     return this.passports.listByOrder(id);

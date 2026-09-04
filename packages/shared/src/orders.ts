@@ -1610,6 +1610,20 @@ export interface OrderListItemDto {
   comment: string | null;
   customer: string | null;
   /**
+   * Прямой шов «заказ покупателя ERP → заказ цеха» (§0.10 в ERP): заказ, рождённый снаружи,
+   * несёт id и номер своего заказа покупателя. `null` — собственный заказ цеха.
+   *
+   * Опционально (`?`) для backward-compat: старые потребители без пересборки shared-пакета
+   * продолжают компилироваться.
+   */
+  erpCustomerOrderId?: string | null;
+  erpCustomerOrderNumber?: string | null;
+  /**
+   * Момент закрытия заказа (сдача цеха). От него зависят очередь сдачи в ERP и отсечка
+   * зарплаты («в расчёт идут заказы, закрытые до дня начисления»).
+   */
+  completedAt?: string | null;
+  /**
    * Управленческая привязка к карточке клиента (см. `model Client`).
    * `null` — заказ без явной связи (старый flow `customer`-free-text
    * либо клиент не выбран в новой форме). Краткие поля (`id`/`name`)
@@ -1904,6 +1918,19 @@ export interface OrderDetailDto
    * «техкарта не фиксировалась» (заказ либо ещё не запущен, либо
    * запущен без техкарты).
    */
+  /**
+   * Чем сдача этого заказа стала в ERP: документ производства, склад, принятое количество.
+   * `null` — ERP ещё не отвечала (или заказ собственный, и не ответит никогда).
+   */
+  erpProduction?: {
+    state: string;
+    erpDocumentId: string | null;
+    erpDocumentNumber: string | null;
+    erpWarehouseId: string | null;
+    qtyGood: number | null;
+    postedAt: string | null;
+    error: string | null;
+  } | null;
   materialRequirements: OrderMaterialRequirementDto[];
   /**
    * Snapshot строк внешних подрядных размещений на заказе. Семантика

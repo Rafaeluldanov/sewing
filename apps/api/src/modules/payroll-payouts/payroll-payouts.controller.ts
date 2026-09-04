@@ -24,7 +24,7 @@ import {
   type RecomputePayrollPayoutDto,
 } from '@sewing/shared/payroll-payouts';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { PayrollPayoutsService } from './payroll-payouts.service.js';
 
@@ -51,6 +51,9 @@ import { PayrollPayoutsService } from './payroll-payouts.service.js';
 export class PayrollPayoutsController {
   constructor(private readonly payouts: PayrollPayoutsService) {}
 
+  // Правило §0.2 (ERP): деньги выдаёт ERP по оплаченной заявке. Чтобы сверить «начислено
+  // в цехе — выплачено в ERP», ей нужно видеть выплаты цеха.
+  @MachineScopes('payroll:read')
   @Get()
   list(
     @Query(new ZodValidationPipe(PayrollPayoutListQuerySchema))
@@ -72,6 +75,7 @@ export class PayrollPayoutsController {
     return this.payouts.create(body, user);
   }
 
+  @MachineScopes('payroll:read')
   @Get(':id')
   get(
     @Param('id') id: string,
