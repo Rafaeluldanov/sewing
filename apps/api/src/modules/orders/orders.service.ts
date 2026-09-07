@@ -1443,7 +1443,7 @@ export class OrdersService {
     // выборки получаем и срез вкладки, и оба счётчика.
     const listFilters: Prisma.OrderWhereInput[] = [where];
     if (!useMemoryPagination) {
-      if (query.status) listFilters.push({ status: query.status });
+      if (query.status) listFilters.push({ status: { in: query.status } });
       if (tabWhere) listFilters.push(tabWhere);
     }
     const listWhere: Prisma.OrderWhereInput =
@@ -1556,8 +1556,9 @@ export class OrdersService {
       }
       // Выборка в этом режиме шла без `status`/вкладки — применяем их
       // здесь, вместе с deadline-бакетом.
-      let filtered = query.status
-        ? allItems.filter((i) => i.status === query.status)
+      const statusFilter = query.status;
+      let filtered = statusFilter
+        ? allItems.filter((i) => statusFilter.includes(i.status))
         : allItems;
       if (useDeadlineFilter) {
         filtered = filtered.filter((i) => i.deadline?.status === query.deadline);

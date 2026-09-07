@@ -1471,7 +1471,26 @@ export type OrderListTab = z.infer<typeof OrderListTabSchema>;
 
 export const ListOrdersQuerySchema = z.object({
   search: z.string().trim().max(100).optional(),
-  status: OrderStatusSchema.optional(),
+  /**
+   * Фильтр по статусу: один код или НЕСКОЛЬКО через запятую
+   * (`?status=IN_PRODUCTION,CUTTING`) — журналу нужен срез сразу по
+   * нескольким состояниям заказа («в раскрое» + «в производстве»), а не
+   * по одному. Одиночный `?status=<код>` работает как раньше: строка
+   * нормализуется в массив из одного элемента, потребители фильтра
+   * получают всегда массив.
+   */
+  status: z
+    .preprocess(
+      (v) =>
+        typeof v === 'string'
+          ? v
+              .split(',')
+              .map((code) => code.trim())
+              .filter(Boolean)
+          : v,
+      z.array(OrderStatusSchema).min(1),
+    )
+    .optional(),
   /**
    * Управленческая привязка: фильтр заказов по карточке клиента.
    * Используется блоком «Заказы клиента» в `/admin/clients/[id]` и

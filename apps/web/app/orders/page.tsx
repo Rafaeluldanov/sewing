@@ -58,9 +58,13 @@ export default async function OrdersListPage({ searchParams }: PageProps) {
   const role = me?.user.role;
   const isManager = role === 'ADMIN' || role === 'SHOP_MANAGER';
 
+  // Селект статуса на этой странице одиночный, а фильтр ручки принимает список
+  // (`?status=A,B`) — код из URL кладём в массив из одного элемента, а сам код
+  // держим отдельно для формы и ссылок.
+  const statusParam = parseStatus(searchParams?.status);
   const query: ListOrdersQuery = {
     search: searchParams?.search?.trim() || undefined,
-    status: parseStatus(searchParams?.status),
+    status: statusParam ? [statusParam] : undefined,
     sort: parseSort(searchParams?.sort),
     page: Math.max(1, Number(searchParams?.page ?? 1) || 1),
     pageSize: 50,
@@ -98,9 +102,9 @@ export default async function OrdersListPage({ searchParams }: PageProps) {
           placeholder="Номер заказа…"
           initial={query.search ?? ''}
           basePath="/orders"
-          preserveParams={{ status: query.status, sort: query.sort }}
+          preserveParams={{ status: statusParam, sort: query.sort }}
         />
-        <select name="status" defaultValue={query.status ?? ''}>
+        <select name="status" defaultValue={statusParam ?? ''}>
           <option value="">Все статусы</option>
           {ORDER_STATUSES.map((s) => (
             <option key={s} value={s}>

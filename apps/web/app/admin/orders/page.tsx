@@ -189,7 +189,9 @@ export default async function AdminOrdersPage({
     : parseStatus(searchParams?.status);
   const query: ListOrdersQuery = {
     search: searchParams?.search?.trim() || undefined,
-    status: statusFilter,
+    // Селект статуса здесь одиночный, а фильтр ручки принимает список —
+    // оборачиваем выбранный код в массив из одного элемента.
+    status: statusFilter ? [statusFilter] : undefined,
     clientId: searchParams?.clientId?.trim() || undefined,
     companyDivisionId: searchParams?.companyDivisionId?.trim() || undefined,
     deadline: deadlineFilter,
@@ -250,7 +252,7 @@ export default async function AdminOrdersPage({
   const tabParam = isArchive ? 'archive' : undefined;
   const preserveParams: Record<string, string | undefined> = {
     search: query.search,
-    status: query.status,
+    status: statusFilter,
     clientId: query.clientId,
     companyDivisionId: query.companyDivisionId,
     deadline: query.deadline,
@@ -319,7 +321,7 @@ export default async function AdminOrdersPage({
             active={deadlineFilter ?? null}
             preserve={{
               search: query.search,
-              status: query.status,
+              status: statusFilter,
               clientId: query.clientId,
               companyDivisionId: query.companyDivisionId,
               sort: query.sort,
@@ -350,7 +352,7 @@ export default async function AdminOrdersPage({
             initial={query.search ?? ''}
             basePath="/admin/orders"
             preserveParams={{
-              status: query.status,
+              status: statusFilter,
               clientId: query.clientId,
               companyDivisionId: query.companyDivisionId,
               deadline: query.deadline,
@@ -370,7 +372,7 @@ export default async function AdminOrdersPage({
               <select
                 id="orders-status"
                 name="status"
-                defaultValue={query.status ?? ''}
+                defaultValue={statusFilter ?? ''}
               >
                 <option value="">Все статусы</option>
                 {ORDER_STATUSES.filter((s) => !isOrderArchived(s)).map((s) => (
@@ -444,7 +446,7 @@ export default async function AdminOrdersPage({
           isArchive={isArchive}
           filtered={Boolean(
             query.search ||
-              query.status ||
+              statusFilter ||
               query.clientId ||
               query.companyDivisionId ||
               deadlineFilter,

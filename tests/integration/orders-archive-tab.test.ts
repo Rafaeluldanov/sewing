@@ -164,4 +164,27 @@ describeWithDb('integration — вкладка «Архив» в списке з
     expect(archive.body.items).toHaveLength(0);
     expect(archive.body.tabCounts).toEqual({ active: 1, archive: 1 });
   });
+
+  // -------------------------------------------------------------------------
+  // 7. Несколько статусов одним фильтром
+  // -------------------------------------------------------------------------
+
+  test('`status` принимает несколько кодов через запятую', async () => {
+    const draft = await createOrder();
+    const cancelled = await createOrder();
+    await cancelOrder(cancelled.id);
+
+    // Один код — как раньше.
+    const one = await list('?status=CANCELLED');
+    expect(ids(one.body)).toEqual([cancelled.id]);
+
+    // Два кода через запятую — срез сразу по обоим состояниям.
+    const two = await list('?status=DRAFT,CANCELLED');
+    expect(ids(two.body).sort()).toEqual([draft.id, cancelled.id].sort());
+    expect(two.body.total).toBe(2);
+
+    // Неизвестный код в списке — 400, а не молча пустой фильтр.
+    const bad = await list('?status=DRAFT,NOPE');
+    expect(bad.status).toBe(400);
+  });
 });

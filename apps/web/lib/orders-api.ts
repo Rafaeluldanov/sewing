@@ -34,7 +34,9 @@ export function listOrders(
   return apiFetch<OrderListResponse>('/orders', {
     searchParams: {
       search: query.search,
-      status: query.status,
+      // Статусов может быть несколько — ручка принимает их одной строкой
+      // через запятую (`?status=A,B`), см. `ListOrdersQuerySchema.status`.
+      status: query.status?.join(','),
       // Управленческие фильтры: `deadline` (бакет «контроля сроков»,
       // см. `OrdersService.list`) и `clientId` (карточка клиента,
       // блок «Заказы клиента»). Проброшены здесь, чтобы web-обёртка
