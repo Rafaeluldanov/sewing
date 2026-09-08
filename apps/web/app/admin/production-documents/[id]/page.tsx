@@ -48,6 +48,7 @@ import {
   type AdminTableColumn,
 } from '@/components/admin';
 import type { AdminStatusTone } from '@/lib/admin-labels';
+import { ProductionDocumentSyncButton } from '@/components/orders/view/production-document-sync-button.client';
 import { ProductionDocumentLines } from './production-document-lines.client';
 
 export const dynamic = 'force-dynamic';
@@ -293,6 +294,17 @@ export default async function AdminProductionDocumentDetailPage({
             <ExternalLink size={16} strokeWidth={1.6} aria-hidden />
             Открыть заказ
           </Link>
+          {/*
+            Пересборка по требованию. Обычно документ обновляется сам — на закрытии коробки и
+            при чтении, если факты изменились, — но человеку, который смотрит на цифры прямо
+            сейчас, нужна возможность подтянуть их, не дожидаясь события. Ничего не проводит и
+            не подтверждает: провести выпуск нельзя.
+          */}
+          <ProductionDocumentSyncButton
+            orderId={doc.orderId}
+            mode="refresh"
+            subtle
+          />
           <AdminStatusBadge tone={statusTone(doc.status)} withDot>
             {PRODUCTION_DOCUMENT_STATUS_LABELS[doc.status]}
           </AdminStatusBadge>

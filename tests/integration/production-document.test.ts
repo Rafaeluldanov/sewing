@@ -259,6 +259,40 @@ describeWithDb('integration — документ выпуска собирает
     expect(await t.prisma.productionDocument.count({ where: { orderId } })).toBe(1);
   });
 
+  test('кнопка на существующем документе пересобирает его по фактам, а не задваивает', async () => {
+    const orderId = await orderReadyToClose();
+    await close(orderId);
+    const before = await documentOf(orderId);
+    expect(before.cost.totalRub).toBe(0);
+
+    // Факт появился после фиксации — человек жмёт «обновить по фактам», не дожидаясь события.
+    await t.prisma.recutSession.create({
+      data: {
+        orderId,
+        employeeId: seed.employees.cutter.id,
+        status: 'DONE',
+        startedAt: new Date('2026-09-04T08:00:00.000Z'),
+        endedAt: new Date('2026-09-04T09:00:00.000Z'),
+        ratePerHour: '150',
+        workedSeconds: 3600,
+        amount: '150',
+      },
+    });
+
+    const synced = await request(t.app.getHttpServer())
+      .post(`/api/admin/orders/${orderId}/production-document`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+
+    expect(synced.body.cost.recutRub).toBe(150);
+    expect(synced.body.cost.totalRub).toBe(150);
+    expect(synced.body.id).toBe(before.id);
+    // Синхронизация — не второй документ и не «достройка»: отметки backfilledAt быть не должно.
+    expect(synced.body.backfilledAt).toBeNull();
+    expect(await t.prisma.productionDocument.count({ where: { orderId } })).toBe(1);
+  });
+
   test('достройка отказывает по незакрытому заказу и по заказу без упаковки', async () => {
     const inWork = await orderReadyToClose();
     // Заказ ещё в производстве — выпуска не было.
