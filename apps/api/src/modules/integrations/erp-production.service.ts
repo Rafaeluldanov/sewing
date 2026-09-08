@@ -171,11 +171,8 @@ export class ErpProductionService {
       const qtyGood = rows.reduce((sum, r) => sum + Number(r.qty_good), 0);
       // Себестоимость сдачи — компонентами и сразу все: что из них считать себестоимостью
       // заказа, решает владелец, и решать надо на живых числах.
-      const cost = await this.cost.factCostForOrder(
-        order.id,
-        own.map((p) => p.id),
-        qtyGood,
-      );
+      // Себестоимость — по всему заказу: паспорта документа задают строки выпуска, а не траты.
+      const cost = await this.cost.factCostForOrder(order.id, qtyGood);
       return {
         order_id: order.id,
         order_number: order.number,

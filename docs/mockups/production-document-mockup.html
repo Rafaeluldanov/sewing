@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Документ производства: где живёт и как выглядит (прототип)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-xs:0 1px 2px rgba(20,20,20,.04);
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --shadow-lg:0 10px 32px rgba(20,20,20,.16),0 2px 8px rgba(20,20,20,.08);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 90px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1320px; margin:0 auto; padding:0 20px; }
+
+  .topnav{ position:sticky; top:0; z-index:60; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1320px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:600; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:92ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:var(--title-hero); margin:0 0 .3rem; }
+  .sect > p.lead{ margin:0 0 1rem; color:var(--color-fg-muted); max-width:92ch; }
+  .note{ background:var(--color-bg-tint); border:1px solid #e7d9a8; border-radius:var(--radius-md); padding:.6rem .8rem; font-size:.85rem; margin:.8rem 0; max-width:96ch; }
+  .note--warn{ background:var(--color-warn-soft); border-color:#e5c37a; }
+  .note--danger{ background:var(--color-danger-soft); border-color:#edb9b3; }
+  .note--ok{ background:var(--color-ok-soft); border-color:#a9d9b5; }
+  .caption{ font-size:.78rem; color:var(--color-fg-subtle); padding:.4rem .1rem 0; }
+  code{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em; background:var(--color-bg-muted); padding:.05rem .3rem; border-radius:4px; }
+
+  /* каркас экрана */
+  .screen{ background:var(--color-bg-soft); border:1px solid var(--color-border-strong); border-radius:var(--radius-lg); box-shadow:var(--shadow-md); overflow:hidden; }
+  .screen__chrome{ background:#fff; border-bottom:1px solid var(--color-border); padding:.45rem .8rem; display:flex; align-items:center; gap:.5rem; font-size:.8rem; color:var(--color-fg-subtle); }
+  .screen__dot{ width:9px; height:9px; border-radius:50%; background:var(--color-border-strong); }
+  .screen__url{ background:var(--color-bg-muted); border-radius:var(--radius-pill); padding:.1rem .6rem; font-size:.78rem; color:var(--color-fg-muted); }
+  .screen__body{ padding:1.1rem 1.2rem 1.3rem; }
+  .screen__split{ display:grid; grid-template-columns:212px 1fr; min-height:200px; }
+  .screen__main{ padding:1.1rem 1.2rem 1.3rem; }
+
+  /* сайдбар админки */
+  .sb{ background:#fff; border-right:1px solid var(--color-border); padding:.7rem .5rem; }
+  .sb__grp{ font-size:var(--title-label); text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-subtle); font-weight:700; padding:.6rem .6rem .25rem; }
+  .sb__i{ display:flex; align-items:center; gap:.5rem; padding:.38rem .6rem; border-radius:var(--radius-sm); font-size:.86rem; color:var(--color-fg-muted); }
+  .sb__i .ic{ width:16px; text-align:center; opacity:.75; }
+  .sb__i--on{ background:var(--color-bg-tint); color:var(--color-fg); font-weight:700; }
+  .sb__i--new{ border:1px dashed var(--btn-primary-edge); background:#fffdf3; color:var(--color-fg); font-weight:700; }
+
+  .page-head{ display:flex; align-items:flex-start; gap:.8rem; margin-bottom:1rem; }
+  .page-head__icon{ width:38px; height:38px; border-radius:var(--radius-md); background:var(--color-bg-tint); border:1px solid #e7d9a8; display:flex; align-items:center; justify-content:center; font-size:1.1rem; }
+  .page-head h3{ margin:0; font-size:var(--title-page); }
+  .page-head .sub{ margin:.1rem 0 0; font-size:.86rem; color:var(--color-fg-muted); }
+  .page-head .acts{ margin-left:auto; display:flex; gap:.4rem; align-items:center; }
+
+  .card{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:1rem 1.05rem; box-shadow:var(--shadow-sm); }
+  .card + .card{ margin-top:.8rem; }
+  .card__title{ margin:0 0 .15rem; font-size:var(--title-section); display:flex; align-items:center; gap:.45rem; }
+  .card__cap{ margin:0 0 .85rem; font-size:.83rem; color:var(--color-fg-muted); }
+
+  .admin-tabs{ display:flex; gap:.3rem; border-bottom:1px solid var(--color-border); margin:-.2rem -.2rem .8rem; padding:0 .2rem; }
+  .admin-tabs a{ text-decoration:none; font-size:.88rem; font-weight:700; color:var(--color-fg-muted); padding:.45rem .7rem; border-bottom:2px solid transparent; }
+  .admin-tabs a.on{ color:var(--color-fg); border-bottom-color:var(--btn-primary-edge); }
+  .searchrow{ display:flex; gap:.4rem; align-items:center; margin-bottom:.7rem; flex-wrap:wrap; }
+  .searchrow input, .searchrow select{ font:inherit; font-size:.88rem; padding:.4rem .55rem; border:1px solid var(--color-border-strong); border-radius:var(--radius-sm); background:#fff; }
+  .searchrow input{ min-width:260px; }
+  .sec-head{ display:flex; align-items:baseline; gap:.5rem; font-size:.86rem; color:var(--color-fg-muted); margin:.2rem 0 .5rem; }
+  .sec-head b{ color:var(--color-fg); font-size:var(--title-section); }
+
+  table.t{ border-collapse:collapse; width:100%; font-size:.87rem; background:#fff; }
+  table.t th, table.t td{ border-bottom:1px solid var(--color-border); padding:.5rem .6rem; text-align:left; vertical-align:middle; }
+  table.t th{ background:var(--color-bg-soft); font-size:var(--title-label); text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); font-weight:700; }
+  table.t td.num, table.t th.num{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  table.t tr:last-child td{ border-bottom:0; }
+  table.t tr.tot td{ background:var(--color-bg-soft); font-weight:700; }
+  table.t tr.click td:first-child{ color:var(--color-accent-fg); font-weight:700; }
+  .tbl-wrap{ border:1px solid var(--color-border); border-radius:var(--radius-md); overflow:hidden; }
+  .sub-row td{ background:var(--color-bg-soft); font-size:.82rem; color:var(--color-fg-muted); }
+  .mono{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.82rem; }
+
+  .badge{ display:inline-block; font-size:.74rem; font-weight:700; padding:.1rem .5rem; border-radius:var(--radius-pill); background:var(--color-bg-muted); color:var(--color-fg-muted); white-space:nowrap; }
+  .badge--ok{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .badge--warn{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+  .badge--acc{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  .badge--danger{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+
+  .btn{ font:inherit; font-size:.86rem; font-weight:700; padding:.42rem .8rem; border-radius:var(--radius-sm); border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg); cursor:pointer; }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .btn--ghost{ border-color:transparent; color:var(--color-accent-fg); background:transparent; }
+  .btn--sm{ font-size:.8rem; padding:.28rem .6rem; }
+  .btn[disabled]{ opacity:.5; cursor:not-allowed; }
+
+  /* hero-шапка документа */
+  .hero{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:1rem 1.05rem; box-shadow:var(--shadow-sm); }
+  .hero__top{ display:flex; align-items:flex-start; gap:.7rem; flex-wrap:wrap; }
+  .hero__num{ font-size:var(--title-hero); font-weight:700; margin:0; }
+  .hero__acts{ margin-left:auto; display:flex; gap:.4rem; align-items:center; }
+  .hero__meta{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:.55rem 1.2rem; margin-top:.85rem; padding-top:.85rem; border-top:1px solid var(--color-border); }
+  .m__l{ font-size:var(--title-label); text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-subtle); font-weight:700; }
+  .m__v{ font-size:.92rem; }
+  .m__v a{ color:var(--color-accent-fg); text-decoration:none; font-weight:700; }
+
+  .kpi{ display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:.6rem; margin-top:.8rem; }
+  .kpi__c{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-md); padding:.6rem .7rem; }
+  .kpi__l{ font-size:var(--title-label); text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-subtle); font-weight:700; }
+  .kpi__v{ font-size:1.25rem; font-weight:700; font-variant-numeric:tabular-nums; margin-top:.1rem; }
+  .kpi__d{ font-size:.78rem; color:var(--color-fg-muted); }
+  .kpi__c--acc{ background:var(--color-bg-tint); border-color:#e7d9a8; }
+  .up{ color:var(--color-danger-fg); } .down{ color:var(--color-ok-fg); }
+
+  /* поток статусов */
+  .flow{ display:flex; align-items:stretch; gap:.4rem; flex-wrap:wrap; }
+  .flow__s{ flex:1 1 150px; background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-md); padding:.6rem .7rem; font-size:.83rem; }
+  .flow__s b{ display:block; font-size:.88rem; margin-bottom:.15rem; }
+  .flow__s span{ color:var(--color-fg-muted); }
+  .flow__s--now{ border-color:var(--btn-primary-edge); box-shadow:0 0 0 3px rgba(255,210,63,.25); }
+  .flow__a{ align-self:center; color:var(--color-fg-subtle); font-weight:700; }
+
+  .cost{ display:grid; grid-template-columns:1fr; gap:0; }
+  .cost__r{ display:flex; align-items:center; gap:.6rem; padding:.45rem .1rem; border-bottom:1px solid var(--color-border); font-size:.9rem; }
+  .cost__r:last-child{ border-bottom:0; }
+  .cost__n{ flex:1; }
+  .cost__n small{ display:block; color:var(--color-fg-subtle); font-size:.78rem; }
+  .cost__v{ font-variant-numeric:tabular-nums; font-weight:700; white-space:nowrap; }
+  .cost__r--tot{ background:var(--color-bg-soft); margin:0 -1.05rem; padding:.55rem 1.05rem; font-size:.98rem; }
+  .cost__bar{ width:64px; height:6px; border-radius:3px; background:var(--color-bg-muted); overflow:hidden; }
+  .cost__bar i{ display:block; height:100%; background:var(--color-accent); }
+
+  .two{ display:grid; grid-template-columns:1.35fr 1fr; gap:.8rem; align-items:start; }
+  @media (max-width:900px){ .two{ grid-template-columns:1fr; } .screen__split{ grid-template-columns:1fr; } .sb{ display:none; } }
+</style>
+</head>
+<body>
+
+<nav class="topnav"><div class="topnav__in">
+  <span class="topnav__brand">Документ производства</span>
+  <a href="#where">1 · Где живёт</a>
+  <a href="#list">2 · Список</a>
+  <a href="#draft">3 · Карточка: формируется</a>
+  <a href="#posted">4 · Карточка: сформирован</a>
+  <a href="#order">5 · Блок в заказе</a>
+  <a href="#moments">6 · Моменты</a>
+</div></nav>
+
+<div class="doc">
+
+<section class="intro">
+  <h1>Документ производства заказа — прототип экранов</h1>
+  <p>Паспорт — документ <b>цеха</b>: рождается на раскрое, живёт по операциям, закрывается упаковкой. Документ производства собирает паспорта заказа в один выпуск: строки «расцветка + размер + количество» и себестоимость компонентами. Это <b>документ выпуска</b>: он собирается сам из фактов производства — его не заводят руками, не проводят и не согласовывают. Документ становится окончательным, когда лёг последний факт. Сейчас такого документа нет: очередь <code>erp-production</code> собирается на лету и существует только ответом ERP.</p>
+  <p>Макет нарисован токенами <code>apps/web/app/globals.css</code>; каркас списка — правило «одна AdminCard: вкладки → поиск → счётчик → таблица» (эталон <code>/admin/routes</code>). Дельта к существующим экранам минимальная: новый раздел + один блок во вкладке «Производство» карточки заказа.</p>
+  <div class="principles">
+    <div class="principle"><b>Один заказ — один документ</b><span>Раньше ERP заводила документ на каждый паспорт: три десятка на заказ.</span></div>
+    <div class="principle"><b>Формируется сам</b><span>Ни кнопки, ни подтверждения: строки ложатся на закрытии заказа, деньги — на закрытии коробки.</span></div>
+    <div class="principle"><b>Себестоимость компонентами</b><span>Свой материал, материал ERP, сдельная, оклад, прочее — раздельно и все сразу. Что считать себестоимостью, решает владелец.</span></div>
+  </div>
+</section>
+
+<!-- ============================ 1 · ГДЕ ЖИВЁТ ============================ -->
+<section class="sect" id="where">
+  <h2>1 · Где живёт</h2>
+  <p class="lead">Новый пункт <b>«Документы производства»</b> — первым в группе «Производство» сайдбара админки. Группа «Снабжение» уже держит цепочку документов закупа (заказ поставщику → приёмка → склад); документ выпуска — её зеркало на стороне производства.</p>
+
+  <div class="screen">
+    <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/production-documents</span></div>
+    <div class="screen__split">
+      <aside class="sb">
+        <div class="sb__i"><span class="ic">▣</span>Обзор</div>
+        <div class="sb__grp">Продажи</div>
+        <div class="sb__i"><span class="ic">▤</span>Заказы</div>
+        <div class="sb__i"><span class="ic">▤</span>Клиенты</div>
+        <div class="sb__grp">Технология</div>
+        <div class="sb__i"><span class="ic">✂</span>Номенклатура</div>
+        <div class="sb__i"><span class="ic">↝</span>Маршруты</div>
+        <div class="sb__i"><span class="ic">✂</span>Операции</div>
+        <div class="sb__grp">Производство</div>
+        <div class="sb__i sb__i--new"><span class="ic">▦</span>Документы производства</div>
+        <div class="sb__i"><span class="ic">▭</span>Цеховой монитор</div>
+        <div class="sb__i"><span class="ic">⚙</span>Оборудование</div>
+        <div class="sb__i"><span class="ic">⎙</span>Принтеры</div>
+        <div class="sb__grp">Снабжение</div>
+        <div class="sb__i"><span class="ic">▤</span>Потребность цеха</div>
+        <div class="sb__i"><span class="ic">▤</span>Заказы поставщикам</div>
+        <div class="sb__i"><span class="ic">▣</span>Склады</div>
+        <div class="sb__grp">Финансы</div>
+        <div class="sb__i"><span class="ic">₽</span>Себестоимость</div>
+      </aside>
+      <div class="screen__main">
+        <div class="page-head">
+          <div class="page-head__icon">▦</div>
+          <div>
+            <h3>Документы производства</h3>
+            <p class="sub">Сдача заказов: что цех выпустил, почём и что ответила ERP.</p>
+          </div>
+        </div>
+        <div class="note"><b>Три входа в один и тот же документ.</b> Раздел админки (этот экран) · блок «Документ производства» во вкладке «Производство» карточки заказа · ссылка из отчёта себестоимости <code>/admin/production-cost/order/&lt;id&gt;</code> — там план→факт, здесь сданный факт.</div>
+        <div class="tbl-wrap">
+          <table class="t">
+            <thead><tr><th>Экран</th><th>Адрес</th><th>Кто видит</th></tr></thead>
+            <tbody>
+              <tr><td>Список документов</td><td class="mono">/admin/production-documents</td><td>ADMIN · SHOP_MANAGER</td></tr>
+              <tr><td>Карточка документа</td><td class="mono">/admin/production-documents/[id]</td><td>ADMIN · SHOP_MANAGER</td></tr>
+              <tr><td>Блок в карточке заказа</td><td class="mono">/admin/orders/[id]?tab=production</td><td>как вкладка «Производство»</td></tr>
+              <tr><td>Выгрузка для ЕРП (без экрана)</td><td class="mono">GET /api/integrations/erp-production</td><td>машинный токен · только чтение</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Пункт под тем же модульным гейтом, что и остальные разделы: тенанту без ERP он всё равно нужен — документ цеховой, ERP лишь его потребитель.</p>
+</section>
+
+<!-- ============================ 2 · СПИСОК ============================ -->
+<section class="sect" id="list">
+  <h2>2 · Список документов</h2>
+  <p class="lead">Каркас — ровно как во всех списках админки: одна <code>AdminCard</code>, внутри вкладки → поиск → «Сформированные · Всего: N» → таблица. Строка кликабельна целиком (<code>rowHref</code>).</p>
+
+  <div class="screen">
+    <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/production-documents?tab=posted</span></div>
+    <div class="screen__body">
+      <div class="page-head">
+        <div class="page-head__icon">▦</div>
+        <div><h3>Документы производства</h3><p class="sub">Сдача заказов цеха: выпуск, себестоимость, ответ ERP.</p></div>
+        <div class="acts"><button class="btn btn--sm">Выгрузить в CSV</button></div>
+      </div>
+
+      <div class="card">
+        <div class="admin-tabs">
+          <a href="#" >Формируются <span class="badge badge--warn">2</span></a>
+          <a href="#" class="on">Сформированные</a>
+          <a href="#">Все</a>
+        </div>
+        <div class="searchrow">
+          <input type="text" placeholder="Номер документа, номер заказа, клиент" />
+          <select><option>Все подразделения</option><option>Пошив</option><option>Маркетплейс</option></select>
+          <select><option>Сентябрь 2026</option></select>
+          <button class="btn btn--sm">Найти</button>
+        </div>
+        <div class="sec-head"><b>Сформированные</b> · Всего: 34</div>
+        <div class="tbl-wrap">
+          <table class="t">
+            <thead>
+              <tr>
+                <th>Документ</th><th>Заказ</th><th>Клиент</th><th class="num">Годных</th>
+                <th class="num">Себестоимость</th><th class="num">За ед.</th><th>Сдан</th><th>Последний факт</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="click">
+                <td>ПР-20260904-0001</td><td>02-00020</td><td>Аврора</td><td class="num">240</td>
+                <td class="num">131 040 ₽</td><td class="num">546 ₽</td><td>04.09 14:12</td>
+                <td>04.09 15:12 · коробка Б-0006</td>
+              </tr>
+              <tr class="click">
+                <td>ПР-20260903-0002</td><td>02-00019</td><td>Аврора</td><td class="num">120</td>
+                <td class="num">61 200 ₽</td><td class="num">510 ₽</td><td>03.09 17:40</td>
+                <td>03.09 18:02 · начисления</td>
+              </tr>
+              <tr class="click">
+                <td>ПР-20260903-0001</td><td>02-00018</td><td>Тритон</td><td class="num">96</td>
+                <td class="num">44 160 ₽</td><td class="num">460 ₽</td><td>03.09 11:05</td>
+                <td>03.09 11:40 · списание материала</td>
+              </tr>
+              <tr class="click">
+                <td>ПР-20260902-0003</td><td>05-00007</td><td>Свой заказ цеха</td><td class="num">60</td>
+                <td class="num">18 900 ₽</td><td class="num">315 ₽</td><td>02.09 16:20</td>
+                <td>02.09 16:30 · коробка Б-0004</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Вкладка «Формируются» со счётчиком — не задача человеку, а видимость: по этим заказам факты ещё не легли (открыта коробка, не подтверждены начисления). Ничего нажимать не нужно — они уйдут в «Сформированные» сами.</p>
+</section>
+
+<!-- ============================ 3 · ЧЕРНОВИК ============================ -->
+<section class="sect" id="draft">
+  <h2>3 · Карточка документа — формируется</h2>
+  <p class="lead">Сразу после закрытия заказа. Строки уже окончательны (после <code>PACKED</code> количество не правится), а деньги — ещё нет: пока не закрыта последняя коробка, часть сдельной висит <code>PENDING_RELEASE</code> и в сумму не входит. Поэтому документ показывает цифры «на сейчас» и честно говорит, какого факта ещё ждёт.</p>
+
+  <div class="screen">
+    <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/production-documents/ckd91…  ·  формируется</span></div>
+    <div class="screen__body">
+      <div class="hero">
+        <div class="hero__top">
+          <div>
+            <p class="hero__num">Документ производства ПР-20260904-0002 <span class="badge badge--warn">Формируется</span></p>
+            <p class="sub" style="margin:.2rem 0 0;font-size:.86rem;color:var(--color-fg-muted)">Создан автоматически при закрытии заказа · 04.09.2026 15:58</p>
+          </div>
+          <div class="hero__acts">
+            <button class="btn btn--sm">Печать</button>
+          </div>
+        </div>
+        <div class="hero__meta">
+          <div><div class="m__l">Заказ</div><div class="m__v"><a href="#">02-00021</a> · Футболка классик</div></div>
+          <div><div class="m__l">Клиент</div><div class="m__v">Аврора</div></div>
+          <div><div class="m__l">Заказ покупателя ERP</div><div class="m__v">ЗП-000437</div></div>
+          <div><div class="m__l">Закрыт</div><div class="m__v">04.09.2026 15:58</div></div>
+          <div><div class="m__l">Закрыл</div><div class="m__v">Авто · полная упаковка</div></div>
+          <div><div class="m__l">Окончателен</div><div class="m__v" style="color:var(--color-fg-subtle)">ещё нет</div></div>
+        </div>
+      </div>
+
+      <div class="note note--warn" style="margin:.8rem 0"><b>Документ ещё дособирается:</b> по заказу открыта 1 коробка (<span class="mono">Б-20260904-0007</span>, 12 изделий) — начисления по ней ждут подтверждения, 4 500 ₽ сдельной пока не в сумме. Упаковщик закроет коробку — документ дособерётся и зафиксируется сам, без чьего-либо действия.</div>
+
+      <div class="two">
+        <div class="card">
+          <h4 class="card__title">Состав сдачи</h4>
+          <p class="card__cap">Строки собраны из упакованных паспортов: расцветка + размер. Раскройте строку — увидите паспорта.</p>
+          <div class="tbl-wrap">
+            <table class="t">
+              <thead><tr><th>Расцветка</th><th>Размер</th><th class="num">Годных</th><th class="num">Раскроено</th><th class="num">Брак</th><th class="num">Паспортов</th></tr></thead>
+              <tbody>
+                <tr><td>Чёрный</td><td>S</td><td class="num">20</td><td class="num">21</td><td class="num">1</td><td class="num">2 ▾</td></tr>
+                <tr class="sub-row"><td colspan="6">P-20260902-0014 · 12 шт · P-20260902-0021 · 8 шт</td></tr>
+                <tr><td>Чёрный</td><td>M</td><td class="num">40</td><td class="num">41</td><td class="num">1</td><td class="num">3</td></tr>
+                <tr><td>Чёрный</td><td>L</td><td class="num">40</td><td class="num">41</td><td class="num">1</td><td class="num">3</td></tr>
+                <tr><td>Белый</td><td>M</td><td class="num">40</td><td class="num">41</td><td class="num">1</td><td class="num">3</td></tr>
+                <tr><td>Белый</td><td>L</td><td class="num">28</td><td class="num">30</td><td class="num">2</td><td class="num">2</td></tr>
+                <tr class="tot"><td colspan="2">Итого</td><td class="num">168</td><td class="num">174</td><td class="num">6</td><td class="num">13</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="note" style="margin:.8rem 0 0"><b>План заказа — 180 шт.</b> Заказ из ERP закрывается только целиком; эти 168 — то, что легло на момент снимка макета.</div>
+        </div>
+
+        <div>
+          <div class="card">
+            <h4 class="card__title">Себестоимость сдачи <span class="badge badge--warn">неполная</span></h4>
+            <p class="card__cap">Компоненты раздельно. Пересчитывается, пока идут факты, и фиксируется, когда лёг последний.</p>
+            <div class="cost">
+              <div class="cost__r"><div class="cost__n">Свой материал цеха<small>списано минус возвраты</small></div><div class="cost__bar"><i style="width:38%"></i></div><div class="cost__v">28 900 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Материал, списанный ERP<small>по выпуску</small></div><div class="cost__bar"><i style="width:21%"></i></div><div class="cost__v">15 800 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Сдельная<small>подтверждённая — то, что уже начислено людям</small></div><div class="cost__bar"><i style="width:20%"></i></div><div class="cost__v">18 200 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Подкрой<small>повременная доплата за переделку</small></div><div class="cost__bar"><i style="width:1%"></i></div><div class="cost__v">1 200 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Оклад, разнесённый<small>по окну производства заказа</small></div><div class="cost__bar"><i style="width:28%"></i></div><div class="cost__v">21 400 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Прочие расходы<small>в т.ч. разработка лекала 2 500 ₽</small></div><div class="cost__bar"><i style="width:5%"></i></div><div class="cost__v">3 900 ₽</div></div>
+              <div class="cost__r cost__r--tot"><div class="cost__n">Итого на сейчас</div><div class="cost__v">89 400 ₽</div></div>
+              <div class="cost__r"><div class="cost__n" style="color:var(--color-warn-fg)">Не подтверждено<small>сдельная по незакрытой коробке — в сумму не входит</small></div><div class="cost__v" style="color:var(--color-warn-fg)">4 500 ₽</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <h4 class="card__title">Откуда берутся цифры</h4>
+            <p class="card__cap">Документ ничего не спрашивает у человека — он читает то, что уже произошло в цехе.</p>
+            <div class="cost">
+              <div class="cost__r"><div class="cost__n">Строки выпуска<small>упакованные паспорта заказа, годное количество</small></div><div class="cost__v"><span class="badge badge--ok">легло</span></div></div>
+              <div class="cost__r"><div class="cost__n">Свой материал<small>проведённые списания минус возвраты</small></div><div class="cost__v"><span class="badge badge--ok">легло</span></div></div>
+              <div class="cost__r"><div class="cost__n">Материал ЕРП<small>списания по выпуску</small></div><div class="cost__v"><span class="badge badge--ok">легло</span></div></div>
+              <div class="cost__r"><div class="cost__n">Сдельная<small>подтверждённые начисления по паспортам</small></div><div class="cost__v"><span class="badge badge--warn">ждём коробку</span></div></div>
+              <div class="cost__r"><div class="cost__n">Подкрой<small>завершённые сессии переделки по заказу</small></div><div class="cost__v"><span class="badge badge--ok">легло</span></div></div>
+              <div class="cost__r"><div class="cost__n">Оклад<small>разнесение по окну производства заказа</small></div><div class="cost__v"><span class="badge badge--ok">легло</span></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 4 · ПРОВЕДЁН ============================ -->
+<section class="sect" id="posted">
+  <h2>4 · Карточка документа — сформирован</h2>
+  <p class="lead">Тот же экран, когда все факты легли: цифры перестали двигаться. Никто ничего не нажимал — документ закрылся сам, последним фактом стало закрытие коробки.</p>
+
+  <div class="screen">
+    <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/production-documents/ckd77…</span></div>
+    <div class="screen__body">
+      <div class="hero">
+        <div class="hero__top">
+          <div>
+            <p class="hero__num">Документ производства ПР-20260904-0001 <span class="badge badge--ok">Сформирован</span></p>
+            <p class="sub" style="margin:.2rem 0 0;font-size:.86rem;color:var(--color-fg-muted)">Сформирован автоматически · последний факт 04.09.2026 15:12 — закрыта коробка Б-20260904-0006</p>
+          </div>
+          <div class="hero__acts">
+            <button class="btn btn--sm">Печать</button>
+            <button class="btn btn--sm">Выгрузить</button>
+          </div>
+        </div>
+        <div class="hero__meta">
+          <div><div class="m__l">Заказ</div><div class="m__v"><a href="#">02-00020</a> · Футболка классик</div></div>
+          <div><div class="m__l">Клиент</div><div class="m__v">Аврора</div></div>
+          <div><div class="m__l">Заказ покупателя ERP</div><div class="m__v">ЗП-000431</div></div>
+          <div><div class="m__l">Закрыт</div><div class="m__v">04.09.2026 14:12</div></div>
+          <div><div class="m__l">Паспортов</div><div class="m__v">13</div></div>
+          <div><div class="m__l">Склад</div><div class="m__v">Готовая продукция</div></div>
+        </div>
+      </div>
+
+      <div class="kpi">
+        <div class="kpi__c"><div class="kpi__l">Годных</div><div class="kpi__v">240</div><div class="kpi__d">план 240 · брак 6</div></div>
+        <div class="kpi__c"><div class="kpi__l">Раскроено</div><div class="kpi__v">246</div><div class="kpi__d">13 паспортов</div></div>
+        <div class="kpi__c kpi__c--acc"><div class="kpi__l">Себестоимость</div><div class="kpi__v">131 040 ₽</div><div class="kpi__d">зафиксирована 15:12</div></div>
+        <div class="kpi__c"><div class="kpi__l">За единицу</div><div class="kpi__v">546 ₽</div><div class="kpi__d">план 520 ₽</div></div>
+        <div class="kpi__c"><div class="kpi__l">Δ к смете</div><div class="kpi__v up">+6 240 ₽</div><div class="kpi__d">перерасход 5,0 %</div></div>
+      </div>
+
+      <div class="two" style="margin-top:.8rem">
+        <div class="card">
+          <h4 class="card__title">Состав сдачи</h4>
+          <p class="card__cap">240 годных · 13 паспортов · собрано из упакованных паспортов заказа.</p>
+          <div class="tbl-wrap">
+            <table class="t">
+              <thead><tr><th>Расцветка</th><th>Размер</th><th class="num">Годных</th><th class="num">Раскроено</th><th class="num">Брак</th><th class="num">Паспортов</th></tr></thead>
+              <tbody>
+                <tr><td>Чёрный</td><td>S</td><td class="num">20</td><td class="num">21</td><td class="num">1</td><td class="num">2</td></tr>
+                <tr><td>Чёрный</td><td>M</td><td class="num">40</td><td class="num">41</td><td class="num">1</td><td class="num">2</td></tr>
+                <tr><td>Чёрный</td><td>L</td><td class="num">40</td><td class="num">41</td><td class="num">1</td><td class="num">2</td></tr>
+                <tr><td>Чёрный</td><td>XL</td><td class="num">20</td><td class="num">20</td><td class="num">0</td><td class="num">1</td></tr>
+                <tr><td>Белый</td><td>S</td><td class="num">20</td><td class="num">21</td><td class="num">1</td><td class="num">1</td></tr>
+                <tr><td>Белый</td><td>M</td><td class="num">40</td><td class="num">41</td><td class="num">1</td><td class="num">2</td></tr>
+                <tr><td>Белый</td><td>L</td><td class="num">40</td><td class="num">41</td><td class="num">1</td><td class="num">2</td></tr>
+                <tr><td>Белый</td><td>XL</td><td class="num">20</td><td class="num">20</td><td class="num">0</td><td class="num">1</td></tr>
+                <tr class="tot"><td colspan="2">Итого</td><td class="num">240</td><td class="num">246</td><td class="num">6</td><td class="num">13</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <div class="card">
+            <h4 class="card__title">Себестоимость сдачи</h4>
+            <p class="card__cap">Зафиксирована, когда лёг последний факт. Что из компонентов считать себестоимостью — решение владельца.</p>
+            <div class="cost">
+              <div class="cost__r"><div class="cost__n">Свой материал цеха</div><div class="cost__bar"><i style="width:32%"></i></div><div class="cost__v">41 280 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Материал, списанный ERP</div><div class="cost__bar"><i style="width:18%"></i></div><div class="cost__v">22 560 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Сдельная</div><div class="cost__bar"><i style="width:22%"></i></div><div class="cost__v">28 800 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Подкрой<small>переделка, 16 ч по 150 ₽</small></div><div class="cost__bar"><i style="width:2%"></i></div><div class="cost__v">2 400 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Оклад, разнесённый<small>окно 28.08 – 04.09</small></div><div class="cost__bar"><i style="width:24%"></i></div><div class="cost__v">31 200 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Прочие расходы</div><div class="cost__bar"><i style="width:4%"></i></div><div class="cost__v">4 800 ₽</div></div>
+              <div class="cost__r cost__r--tot"><div class="cost__n">Итого факт</div><div class="cost__v">131 040 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">План по смете<small>активный вариант просчёта</small></div><div class="cost__v" style="font-weight:400">124 800 ₽</div></div>
+              <div class="cost__r"><div class="cost__n">Отклонение</div><div class="cost__v up">+6 240 ₽ · +5,0 %</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note note--ok"><b>Что попадает в компоненты.</b> Материал считается по заказу целиком — включая списания, оформленные без паспорта (раньше они терялись). Подкрой — отдельной строкой: это прямые деньги по заказу. Прочие расходы берутся только рублёвые, валютные видны предупреждением, а не молча складываются как рубли. Политика «материалы вне себестоимости» гасит и свой материал, и материал ЕРП.</div>
+  <div class="note"><b>Куда делся блок согласования.</b> Раньше здесь стоял «Ответ ERP» с номером чужого документа выпуска и статусом приёмки. Его больше нет: документ выпуска — наш, и его состояние не зависит от того, ответила ЕРП или нет. ЕРП забирает проведённые документы чтением и приходует их у себя; расхождения разбираются по нашему номеру, а не по её ответу.</div>
+</section>
+
+<!-- ============================ 5 · БЛОК В ЗАКАЗЕ ============================ -->
+<section class="sect" id="order">
+  <h2>5 · Блок в карточке заказа</h2>
+  <p class="lead">Минимальная дельта: во вкладке «Производство» карточки заказа — один блок над существующей «Отгрузкой готовой продукции». Воронка вкладки становится связной: <b>План → В цеху сейчас → Выпуск (документ) → Отгрузка</b>.</p>
+
+  <div class="screen">
+    <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/orders/02-00020?tab=production</span></div>
+    <div class="screen__body">
+      <div class="admin-tabs" style="margin-bottom:1rem">
+        <a href="#" class="on">Производство</a><a href="#">Паспорта</a><a href="#">Операции</a>
+        <a href="#">Сводно по заказу</a><a href="#">Потребности</a><a href="#">Сигнальный образец</a><a href="#">История</a>
+      </div>
+
+      <div class="card" style="opacity:.55">
+        <h4 class="card__title">План и прогресс по размерам</h4>
+        <p class="card__cap">Существующая матрица «План · В цеху сейчас · Отгрузка» — без изменений.</p>
+      </div>
+
+      <div class="card" style="border-color:var(--btn-primary-edge);box-shadow:0 0 0 3px rgba(255,210,63,.25)">
+        <h4 class="card__title">Документ производства <span class="badge badge--ok">Сформирован</span></h4>
+        <p class="card__cap">Сдача заказа: собран из 13 упакованных паспортов при закрытии заказа.</p>
+        <div class="hero__meta" style="border-top:0;padding-top:0;margin-top:0">
+          <div><div class="m__l">Документ</div><div class="m__v"><a href="#">ПР-20260904-0001</a></div></div>
+          <div><div class="m__l">Годных</div><div class="m__v">240 из 240</div></div>
+          <div><div class="m__l">Себестоимость</div><div class="m__v">131 040 ₽ · 546 ₽/шт</div></div>
+          <div><div class="m__l">Окончателен с</div><div class="m__v">04.09 15:12</div></div>
+        </div>
+        <div style="display:flex;gap:.4rem;margin-top:.9rem">
+          <button class="btn btn--sm">Открыть документ</button>
+          <button class="btn btn--sm btn--ghost">Печать</button>
+        </div>
+      </div>
+
+      <div class="card" style="opacity:.55">
+        <h4 class="card__title">Отгрузка готовой продукции</h4>
+        <p class="card__cap">Существующий блок: остатки + журнал отгрузок + «Создать отгрузку» — без изменений.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note"><b>Пока факты не легли</b>, тот же блок показывает жёлтый чип «Формируется» и причину («ждём закрытия коробки Б-20260904-0007»). Кнопок здесь нет: документ дособирается сам, человеку остаётся закрыть коробку в терминале упаковки.</div>
+</section>
+
+<!-- ============================ 6 · МОМЕНТЫ ============================ -->
+<section class="sect" id="moments">
+  <h2>6 · Когда что происходит</h2>
+  <p class="lead">Экран следует за жизненным циклом, а не наоборот: рождение и фиксация — два разных момента, и оба наступают сами. Физика замерзает раньше денег, поэтому одним моментом не обойтись.</p>
+
+  <div class="flow">
+    <div class="flow__s"><b>Упаковка</b><span>паспорт PACKED, выпуск на склад готовой продукции. <code>qtyGood</code> дальше не правится</span></div>
+    <div class="flow__a">→</div>
+    <div class="flow__s flow__s--now"><b>Закрытие заказа</b><span>DONE вручную или авто при полной упаковке → в той же транзакции документ рождается сам: номер, шапка, строки</span></div>
+    <div class="flow__a">→</div>
+    <div class="flow__s"><b>Закрытие коробок</b><span>начисления подтверждаются — это и есть последний недостающий факт</span></div>
+    <div class="flow__a">→</div>
+    <div class="flow__s"><b>Фиксация</b><span>последний факт лёг — себестоимость записана снимком, документ окончателен. Без кнопки</span></div>
+  </div>
+
+  <div class="note note--warn"><b>Почему не одним моментом.</b> Авто-закрытие заказа срабатывает при добавлении последнего паспорта в коробку, а сдельная подтверждается только при закрытии коробки. Посчитать себестоимость прямо в транзакции закрытия — значит недосчитать всю последнюю коробку.</div>
+  <div class="note"><b>Что даёт документ помимо экрана:</b> себестоимость считается один раз при фиксации, а не заново на каждый опрос; у выпуска появляется свой номер, на который ссылаются обе стороны; собственный заказ цеха получает такой же документ — он про выпуск, а не про интеграцию.</div>
+  <div class="note note--warn"><b>Чем ЕРП отмечает забранное.</b> Раньше это делал её ответ: он создавал строку, и заказ уходил из очереди. Без согласования выгрузка идёт по курсору — <code>?ready_from=</code> по дате, когда документ стал окончательным, а повтор гасится на стороне ЕРП по номеру нашего документа.</div>
+</section>
+
+</div>
+</body>
+</html>

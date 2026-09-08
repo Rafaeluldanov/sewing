@@ -11,6 +11,13 @@
  *   4. ответ ERP убирает заказ из очереди навсегда, повторный ответ его заменяет;
  *   5. плохой элемент ответа не роняет весь пакет;
  *   6. собственный заказ цеха ответа не принимает — ERP по нему ничего не решает.
+ *
+ * Себестоимость сдачи (08.09.2026) — четыре грабли, каждая теряла деньги молча:
+ *   7. списание, оформленное на заказ без паспорта, в сумму не попадало;
+ *   8. политика «материалы вне себестоимости» обнуляла свой материал, но не материал ERP;
+ *   9. прочие расходы в валюте складывались с рублёвыми как рубли;
+ *  10. подкрой (повременная доплата по заказу) не считался вовсе;
+ *  11. неподтверждённая сдельная не была видна — сумма молча занижена на незакрытую коробку.
  */
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
@@ -219,5 +226,157 @@ describeWithDb('integration — сдача заказа цеха уходит в
     expect(res.accepted).toBe(1);
     expect(res.skipped).toHaveLength(3);
     expect(await t.prisma.erpProductionDocument.count()).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // СЕБЕСТОИМОСТЬ СДАЧИ
+  // ---------------------------------------------------------------------------
+
+  /** Себестоимость сдачи по всем упакованным паспортам заказа — как её считает очередь. */
+  async function costOf(orderId: string) {
+    const passports = await t.prisma.passport.findMany({
+      where: { orderId, status: 'PACKED' },
+      select: { id: true, qtyGood: true },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const prisma = t.prisma as any;
+    return new ErpOrderCostService(prisma, new PassportRealCostService(prisma)).factCostForOrder(
+      orderId,
+      passports.reduce((sum, p) => sum + (p.qtyGood ?? 0), 0),
+    );
+  }
+
+  test('списание на заказ БЕЗ паспорта входит в себестоимость, возврат по нему вычитается', async () => {
+    const orderId = await closedOrder();
+    // Ручное списание менеджера: паспорт не указан — документ на заказ целиком.
+    const issue = await t.prisma.materialIssue.create({
+      data: {
+        orderId, status: 'POSTED', totalCost: '1000', postedAt: new Date(),
+        lines: {
+          create: [{
+            description: 'Кулирка чёрная', unit: 'кг',
+            issuedQty: '10', unitCost: '100', totalCost: '1000',
+          }],
+        },
+      },
+    });
+    const only = await costOf(orderId);
+    expect(only.materials_own_rub).toBe(1000);
+
+    await t.prisma.materialIssueReturn.create({
+      data: {
+        materialIssueId: issue.id, orderId, status: 'POSTED',
+        reason: 'остаток рулона', totalCost: '250',
+      },
+    });
+    const net = await costOf(orderId);
+    // Возврат обязан фильтроваться той же выборкой, иначе минус потеряется вместе с плюсом.
+    expect(net.materials_own_rub).toBe(750);
+    expect(net.warnings).not.toContain('NO_MATERIAL_FACT');
+  });
+
+  test('работа по паспорту, не дошедшему до упаковки, из трат не выпадает', async () => {
+    const orderId = await closedOrder();
+    const operationId = Object.values(seed.operations)[0].id;
+    // Паспорт отменён (весь тираж в брак), но люди по нему работали и деньги получили.
+    const cancelled = await t.prisma.passport.create({
+      data: {
+        number: `P-CANCELLED-${Date.now()}`, qrCode: `QR-CANCELLED-${Date.now()}`,
+        orderId, productId: seed.product.id, sizeId: seed.sizes.M, color: 'Чёрный',
+        status: 'CANCELLED', qtyPlan: 3, qtyCut: 3, qtyGood: 0,
+        rollNumber: 'R-PD-X', cutDate: new Date('2026-09-01T00:00:00.000Z'),
+        cutterId: seed.employees.cutter.id, creatorId: seed.employees['shop-chief'].id,
+      },
+    });
+    await t.prisma.operationEntry.create({
+      data: {
+        passportId: cancelled.id, operationId, employeeId: seed.employees.cutter.id,
+        qty: 3, ratePerUnit: '10', amount: '30', status: 'APPROVED',
+      },
+    });
+    const cost = await costOf(orderId);
+    expect(cost.piecework_rub).toBe(30);
+    expect(cost.total_rub).toBe(30);
+  });
+
+  test('политика «материалы вне себестоимости» обнуляет и материал ERP', async () => {
+    const orderId = await closedOrder();
+    const passport = await t.prisma.passport.findFirst({ where: { orderId } });
+    await t.prisma.erpMaterialConsumption.create({
+      data: { passportId: passport!.id, orderId, state: 'POSTED', amountRub: '4000' },
+    });
+    const before = await costOf(orderId);
+    expect(before.materials_erp_rub).toBe(4000);
+
+    await t.prisma.order.update({
+      where: { id: orderId },
+      data: { materialsAndHardwareCostPolicy: 'EXCLUDE' },
+    });
+    const after = await costOf(orderId);
+    // Политика — про материал, а не про то, чей склад.
+    expect(after.materials_erp_rub).toBe(0);
+    expect(after.materials_own_rub).toBe(0);
+    expect(after.warnings).toContain('MATERIALS_EXCLUDED_BY_POLICY');
+  });
+
+  test('прочие расходы в валюте не складываются с рублёвыми', async () => {
+    const orderId = await closedOrder();
+    await t.prisma.orderExtraCost.createMany({
+      data: [
+        { orderId, description: 'Доставка', amount: '500', currency: 'RUB', includeInCostPrice: true },
+        { orderId, description: 'Фурнитура из Китая', amount: '100', currency: 'USD', includeInCostPrice: true },
+        { orderId, description: 'Не в себестоимость', amount: '900', currency: 'RUB', includeInCostPrice: false },
+      ],
+    });
+    const cost = await costOf(orderId);
+    expect(cost.other_rub).toBe(500);
+    // Пропущенный расход должен быть слышен: конвертации на MVP нет.
+    expect(cost.warnings).toContain('EXTRA_COSTS_NON_RUB_SKIPPED');
+  });
+
+  test('подкрой входит в себестоимость отдельным компонентом', async () => {
+    const orderId = await closedOrder();
+    await t.prisma.recutSession.create({
+      data: {
+        orderId, employeeId: seed.employees.cutter.id, status: 'DONE',
+        startedAt: new Date('2026-09-02T08:00:00.000Z'),
+        endedAt: new Date('2026-09-02T10:00:00.000Z'),
+        ratePerHour: '150', workedSeconds: 7200, amount: '300',
+      },
+    });
+    // Незавершённая сессия — не расход: денег по ней ещё нет.
+    await t.prisma.recutSession.create({
+      data: {
+        orderId, employeeId: seed.employees.cutter.id, status: 'ACTIVE',
+        startedAt: new Date('2026-09-02T11:00:00.000Z'), ratePerHour: '150',
+      },
+    });
+    const cost = await costOf(orderId);
+    expect(cost.recut_rub).toBe(300);
+    expect(cost.total_rub).toBe(300);
+  });
+
+  test('неподтверждённая сдельная видна отдельно и в сумму не входит', async () => {
+    const orderId = await closedOrder();
+    const passports = await t.prisma.passport.findMany({ where: { orderId } });
+    const operationId = Object.values(seed.operations)[0].id;
+    await t.prisma.operationEntry.create({
+      data: {
+        passportId: passports[0].id, operationId, employeeId: seed.employees.cutter.id,
+        qty: 4, ratePerUnit: '10', amount: '40', status: 'APPROVED',
+      },
+    });
+    await t.prisma.operationEntry.create({
+      data: {
+        passportId: passports[1].id, operationId, employeeId: seed.employees.cutter.id,
+        qty: 6, ratePerUnit: '10', amount: '60', status: 'PENDING_RELEASE',
+      },
+    });
+    const cost = await costOf(orderId);
+    expect(cost.piecework_rub).toBe(40);
+    expect(cost.piecework_pending_rub).toBe(60);
+    // Обещание — не трата: в сумме только подтверждённое, но разрыв виден.
+    expect(cost.total_rub).toBe(40);
+    expect(cost.warnings).toContain('PIECEWORK_PENDING');
   });
 });
