@@ -41,6 +41,22 @@ export function getProductionDocument(id: string): Promise<ProductionDocumentDto
 }
 
 /**
+ * ДОСТРОИТЬ документ по уже закрытому заказу (кнопка в карточке заказа).
+ *
+ * ⛔ Единственная пишущая ручка раздела — ради заказов, закрытых ДО его появления: документ
+ * рождается закрытием, а их закрывали, когда рождаться было нечему. Новый выпуск ею не создать:
+ * заказ обязан быть закрыт, а упакованные паспорта — существовать.
+ */
+export function backfillProductionDocumentForOrder(
+  orderId: string,
+): Promise<ProductionDocumentDto> {
+  return apiFetch<ProductionDocumentDto>(
+    `/admin/orders/${encodeURIComponent(orderId)}/production-document`,
+    { method: 'POST', cache: 'no-store' },
+  );
+}
+
+/**
  * Документ выпуска по заказу — для блока в карточке заказа.
  *
  * `null` — заказ ещё не закрыт: документ рождается закрытием, и до него показывать нечего.

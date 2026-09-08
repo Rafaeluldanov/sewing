@@ -226,6 +226,66 @@ describeWithDb('integration — документ выпуска собирает
     expect(await t.prisma.productionDocument.count({ where: { orderId } })).toBe(1);
   });
 
+  test('достройка: заказ, закрытый до появления раздела, получает документ кнопкой', async () => {
+    const orderId = await orderReadyToClose();
+    // Имитируем «старый» закрытый заказ: статус и дата закрытия есть, документа нет —
+    // ровно то состояние, в котором заказы застали появление раздела.
+    await t.prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'DONE', completedAt: new Date('2026-08-20T10:00:00.000Z') },
+    });
+    expect(await t.prisma.productionDocument.count({ where: { orderId } })).toBe(0);
+
+    const built = await request(t.app.getHttpServer())
+      .post(`/api/admin/orders/${orderId}/production-document`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+
+    expect(built.body.qtyGood).toBe(10);
+    expect(built.body.lines).toHaveLength(1);
+    // Номер несёт дату ЗАКРЫТИЯ заказа, а не сегодняшнюю: порядок номеров обязан совпадать
+    // с порядком выпуска.
+    expect(built.body.number).toMatch(/^ПР-20260820-\d{4}$/);
+    // И честно помечен как достроенный: строка появилась позже события.
+    expect(built.body.backfilledAt).toBeTruthy();
+
+    // Идемпотентно: повтор второй документ не заводит.
+    await request(t.app.getHttpServer())
+      .post(`/api/admin/orders/${orderId}/production-document`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    expect(await t.prisma.productionDocument.count({ where: { orderId } })).toBe(1);
+  });
+
+  test('достройка отказывает по незакрытому заказу и по заказу без упаковки', async () => {
+    const inWork = await orderReadyToClose();
+    // Заказ ещё в производстве — выпуска не было.
+    await request(t.app.getHttpServer())
+      .post(`/api/admin/orders/${inWork}/production-document`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(409);
+
+    // Закрыт, но паспорта не упакованы: пустой документ выпуска — не документ.
+    await t.prisma.passport.updateMany({
+      where: { orderId: inWork },
+      data: { status: 'IN_PROGRESS' },
+    });
+    await t.prisma.order.update({
+      where: { id: inWork },
+      data: { status: 'DONE', completedAt: new Date('2026-08-21T10:00:00.000Z') },
+    });
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/admin/orders/${inWork}/production-document`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(409);
+    expect(res.body.code).toBe('PRODUCTION_DOCUMENT_NOTHING_RELEASED');
+    expect(await t.prisma.productionDocument.count({ where: { orderId: inWork } })).toBe(0);
+  });
+
   test('список отдаёт документ и счётчик формирующихся, а писать в раздел нечем', async () => {
     const orderId = await orderReadyToClose();
     await close(orderId);

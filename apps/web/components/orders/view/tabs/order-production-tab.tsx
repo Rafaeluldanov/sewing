@@ -488,6 +488,10 @@ export async function OrderProductionTab({
         doc={productionDocument}
         error={productionDocumentError}
         canManage={canManage}
+        orderId={order.id}
+        // Заказ закрыт, а документа нет — значит закрывали до появления раздела: выпуск можно
+        // достроить кнопкой. В живом потоке этого не случается, документ рождается закрытием.
+        canBackfill={order.status === 'DONE' && productionDocument == null}
       />
 
       <OrderAmendmentHistoryCard entries={amendmentHistory} />

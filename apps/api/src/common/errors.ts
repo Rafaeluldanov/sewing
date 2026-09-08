@@ -3115,6 +3115,42 @@ export class PassportNotYoursToEditException extends BusinessException {
  * инвариантами): после первого скана/размещения паспорт правится
  * только через master-actions и операционные сервисы.
  */
+// ---------------------------------------------------------------------------
+// Документы выпуска (`apps/api/src/modules/production-documents/*`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Достроить документ выпуска можно только по ЗАКРЫТОМУ заказу.
+ *
+ * Пока заказ в работе, документа быть не должно: выпуск ещё не состоялся, и «сформировать»
+ * его — значит объявить сдачей то, что цех ещё шьёт.
+ */
+export class ProductionDocumentOrderNotClosedException extends BusinessException {
+  constructor() {
+    super(
+      'PRODUCTION_DOCUMENT_ORDER_NOT_CLOSED',
+      'Документ выпуска существует только у закрытого заказа. Закройте заказ — документ появится сам.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * По заказу нет ни одного упакованного паспорта с годным выпуском.
+ *
+ * Пустой документ выпуска — это не документ: он сообщал бы, что цех что-то сдал, хотя сдавать
+ * было нечего. Такие заказы (закрытые без упаковки) остаются без документа осознанно.
+ */
+export class ProductionDocumentNothingReleasedException extends BusinessException {
+  constructor() {
+    super(
+      'PRODUCTION_DOCUMENT_NOTHING_RELEASED',
+      'По заказу нет упакованных паспортов — выпускать нечего, документ пустым не заводим.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class PassportNotEditableException extends BusinessException {
   constructor() {
     super(

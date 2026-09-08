@@ -1,6 +1,14 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UnauthorizedException,
+} from '@nestjs/common';
 
-import { Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ProductionDocumentsService } from './production-documents.service.js';
 
 /**
@@ -54,5 +62,22 @@ export class OrderProductionDocumentController {
   @Get(':orderId/production-document')
   async forOrder(@Param('orderId') orderId: string) {
     return this.documents.forOrder(orderId);
+  }
+
+  /**
+   * ДОСТРОИТЬ документ по уже закрытому заказу.
+   *
+   * ⛔ Единственная пишущая ручка раздела и единственное место, где документ заводит человек.
+   * Она существует ради заказов, закрытых ДО появления раздела: документ рождается закрытием, а
+   * их закрывали, когда рождаться было нечему. Новый выпуск через неё не появляется — заказ
+   * обязан быть закрыт, и упакованные паспорта обязаны существовать.
+   */
+  @Post(':orderId/production-document')
+  async backfill(
+    @Param('orderId') orderId: string,
+    @CurrentUser() user: AuthPrincipal | undefined,
+  ) {
+    if (!user) throw new UnauthorizedException();
+    return this.documents.backfillForClosedOrder(orderId, user.employeeId);
   }
 }

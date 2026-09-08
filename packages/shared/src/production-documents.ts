@@ -124,6 +124,12 @@ export interface ProductionDocumentDto extends ProductionDocumentListItemDto {
   /** Пусто, когда документ сформирован. */
   pendingReasons: ProductionDocumentPendingReasonDto[];
   recalcReason: string | null;
+  /**
+   * Документ ДОСТРОЕН вручную по уже закрытому заказу, а не рождён закрытием (заказы, закрытые
+   * до появления раздела). Номер у него от даты закрытия, а строка появилась позже — показывать
+   * это обязательно, иначе выпуск читается как оформленный задним числом.
+   */
+  backfilledAt: string | null;
 }
 
 export interface ProductionDocumentListDto {

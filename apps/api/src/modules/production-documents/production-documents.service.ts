@@ -10,6 +10,10 @@ import type {
   ProductionDocumentStatus,
 } from '@sewing/shared/production-documents';
 
+import {
+  ProductionDocumentNothingReleasedException,
+  ProductionDocumentOrderNotClosedException,
+} from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrderFactCostService } from '../costs/order-fact-cost.service.js';
@@ -175,6 +179,84 @@ export class ProductionDocumentsService {
       byKey.set(key, line);
     }
     return [...byKey.values()];
+  }
+
+  /**
+   * ДОСТРОИТЬ документ по уже закрытому заказу — кнопкой из карточки.
+   *
+   * Заказы, закрытые до появления раздела, документа не получили: он рождается закрытием, а его
+   * тогда не существовало. Это единственное место, где документ заводит человек, и исключение
+   * честное: все входы — исторические факты (упакованные паспорта, списания, начисления,
+   * подкрой, события паспортов для разноски оклада), поэтому выпуск ВОССТАНАВЛИВАЕТСЯ, а не
+   * выдумывается.
+   *
+   * ⛔ Номер берёт дату ЗАКРЫТИЯ заказа, а не сегодняшнюю: иначе прошлогодняя сдача встала бы в
+   * сегодняшний суточный счётчик, и порядок номеров разошёлся бы с порядком выпуска.
+   *
+   * ⛔ Отмечаем `backfilledAt`: строка появилась позже события, которое описывает. Без отметки
+   * достроенный документ неотличим от оформленного задним числом.
+   *
+   * Идемпотентно: у заказа уже есть документ — возвращаем его, второй не заводим.
+   */
+  async backfillForClosedOrder(
+    orderId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<ProductionDocumentDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, status: true, completedAt: true },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    const existing = await this.prisma.productionDocument.findUnique({
+      where: { orderId },
+      select: { id: true },
+    });
+    if (!existing) {
+      // Отменённый заказ сюда не проходит: приходовать выпуск отменённого тиража нельзя.
+      if (order.status !== 'DONE') {
+        throw new ProductionDocumentOrderNotClosedException();
+      }
+      const packed = await this.prisma.passport.count({
+        where: { orderId, status: PassportStatus.PACKED, qtyGood: { gt: 0 } },
+      });
+      if (packed === 0) throw new ProductionDocumentNothingReleasedException();
+
+      const closedAt = order.completedAt ?? new Date();
+      await this.prisma.$transaction(async (tx) => {
+        const id = await this.createOnOrderClose(tx, orderId, closedAt, actorEmployeeId);
+        if (id) {
+          await tx.productionDocument.update({
+            where: { id },
+            data: { backfilledAt: new Date() },
+          });
+          await this.audit.log(
+            {
+              event: 'PRODUCTION_DOCUMENT_BACKFILLED',
+              entityType: 'PRODUCTION_DOCUMENT',
+              entityId: id,
+              employeeId: actorEmployeeId ?? null,
+              payload: { orderId, closedAt: closedAt.toISOString() },
+            },
+            tx,
+          );
+        }
+      });
+    }
+    // Себестоимость считает общая пересборка — второго расчёта тех же денег не заводим.
+    await this.refresh(orderId, 'ORDER_CLOSED');
+    const dto = await this.forOrder(orderId);
+    if (!dto) {
+      throw new NotFoundException({
+        code: 'PRODUCTION_DOCUMENT_NOT_FOUND',
+        message: 'Документ выпуска не найден',
+      });
+    }
+    return dto;
   }
 
   // ---------------------------------------------------------------------------
@@ -594,6 +676,7 @@ export class ProductionDocumentsService {
         planPerUnitRub: true,
         costWarnings: true,
         recalcReason: true,
+        backfilledAt: true,
         order: {
           select: {
             number: true,
@@ -654,6 +737,7 @@ export class ProductionDocumentsService {
       qtyCut: row.qtyCut,
       qtyDefect: row.qtyDefect,
       recalcReason: row.recalcReason,
+      backfilledAt: row.backfilledAt?.toISOString() ?? null,
       cost: {
         materialsOwnRub: num(row.materialsOwnRub),
         materialsErpRub: num(row.materialsErpRub),
