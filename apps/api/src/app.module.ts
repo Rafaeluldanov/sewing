@@ -74,6 +74,7 @@ import { PushModule } from './modules/push/push.module.js';
 import { TreasuryModule } from './modules/treasury/treasury.module.js';
 import { SuperadminModule } from './modules/superadmin/superadmin.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
+import { ProductionDocumentsModule } from './modules/production-documents/production-documents.module.js';
 import { AssistantModule } from './modules/assistant/assistant.module.js';
 import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 
@@ -154,6 +155,7 @@ import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
     PushModule,
     SuperadminModule,
     IntegrationsModule,
+    ProductionDocumentsModule,
     AssistantModule,
     KnowledgeModule,
   ],

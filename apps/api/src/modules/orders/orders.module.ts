@@ -1,3 +1,4 @@
+import { ProductionDocumentsModule } from '../production-documents/production-documents.module.js';
 import { Module } from '@nestjs/common';
 import { OrderCostEstimatesModule } from './order-cost-estimates.module.js';
 import { OrderOperationPlanService } from './order-operation-plan.service.js';
@@ -30,6 +31,7 @@ import { WorkshopNeedsModule } from '../workshop-needs/workshop-needs.module.js'
   // (`OrdersModule` → `WorkshopNeedsModule` → `OrdersModule`).
   // Модуль без `imports`, поэтому цикла не образуется.
   imports: [
+    ProductionDocumentsModule,
     RoutesModule,
         WorkshopNeedsModule,
     OrderCostEstimatesModule,

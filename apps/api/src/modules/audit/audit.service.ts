@@ -23,6 +23,17 @@ export type AuditEntityType =
   | 'KNOWLEDGE_ARTICLE'
   | 'PASSPORT'
   | 'ORDER'
+  /**
+   * Документ выпуска по заказу (`prisma/schema.prisma::ProductionDocument`,
+   * `apps/api/src/modules/production-documents/*`). События —
+   * `PRODUCTION_DOCUMENT_CREATED` (родился вместе с закрытием заказа),
+   * `PRODUCTION_DOCUMENT_READY` (лёг последний факт, себестоимость
+   * зафиксирована), `PRODUCTION_DOCUMENT_RECALCULATED` (факт пришёл
+   * после фиксации и изменил сумму). `entityId` — `ProductionDocument.id`.
+   * Документ никто не заводит руками, поэтому «почему сумма поменялась»
+   * восстанавливается только по этим событиям.
+   */
+  | 'PRODUCTION_DOCUMENT'
   | 'QC'
   | 'WTO'
   | 'PACKING'

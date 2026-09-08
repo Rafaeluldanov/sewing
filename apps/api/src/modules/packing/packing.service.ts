@@ -1,3 +1,4 @@
+import { ProductionDocumentsService } from '../production-documents/production-documents.service.js';
 import {
   Injectable,
   Logger,
@@ -102,6 +103,9 @@ export class PackingService {
     private readonly audit: AuditService,
     private readonly finishedGoods: FinishedGoodsService,
     private readonly workInProgress: WorkInProgressService,
+    // Документ выпуска: рождается при авто-закрытии заказа и дособирается на закрытии
+    // коробки — именно тогда сдельная становится подтверждённой.
+    private readonly productionDocuments: ProductionDocumentsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -575,6 +579,28 @@ export class PackingService {
       );
     });
 
+    // Закрытие коробки — тот самый ПОСЛЕДНИЙ ФАКТ: начисления по её паспортам только что стали
+    // подтверждёнными. Документы затронутых заказов дособираем сразу, чтобы менеджеру не
+    // приходилось открывать карточку ради пересчёта. Вне транзакции: расчёт тяжёлый, а падение
+    // пересборки не должно откатывать закрытие коробки — документ дособерётся при следующем
+    // чтении.
+    try {
+      const orderIds = await this.prisma.passport.findMany({
+        where: { boxItems: { some: { boxId } } },
+        select: { orderId: true },
+        distinct: ['orderId'],
+      });
+      for (const row of orderIds) {
+        if (row.orderId) {
+          await this.productionDocuments.refresh(row.orderId, 'BOX_CLOSED');
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `event=packing.production_document.refresh_failed boxId=${boxId} error=${String(error)}`,
+      );
+    }
+
     return this.getOne(boxId);
   }
 
@@ -650,6 +676,15 @@ export class PackingService {
     });
     // Аудит: автоматический перевод статуса — из тех, что менеджер
     // потом захочет объяснить («почему заказ стал Готов сам»).
+    // Документ выпуска — в этой же транзакции, что и `DONE`: закрытие и есть сдача, и заказ
+    // не должен уметь закрыться без документа. Себестоимость положит `refresh` позже: сдельная
+    // по последней коробке ещё не подтверждена, считать её сейчас — недосчитать.
+    await this.productionDocuments.createOnOrderClose(
+      tx,
+      orderId,
+      new Date(),
+      actorEmployeeId,
+    );
     await this.audit.log(
       {
         event: 'ORDER_AUTO_COMPLETED',

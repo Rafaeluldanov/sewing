@@ -35,9 +35,16 @@ describe('дата закрытия заказа', () => {
   const packing = read('apps/api/src/modules/packing/packing.service.ts');
 
   test('ручное завершение проставляет completedAt', () => {
+    // 08.09.2026 форма изменилась: закрытие уехало в транзакцию вместе с рождением документа
+    // выпуска, и метка времени вычисляется ОДИН раз в `const closedAt`, чтобы у заказа и у его
+    // документа стоял один и тот же миг. Поэтому допускаем обе записи — и inline `new Date()`,
+    // и переменную; важно, что дата проставляется вместе со статусом.
     expect(orders).toMatch(
-      /status: OrderStatus\.DONE,[\s\S]{0,600}completedAt: new Date\(\)/,
+      /status: OrderStatus\.DONE,[\s\S]{0,600}completedAt: (new Date\(\)|closedAt)/,
     );
+    // Один миг на оба факта: два независимых `new Date()` дали бы документу и заказу разное
+    // время закрытия, а по нему ERP забирает выпуск курсором.
+    expect(orders).toMatch(/const closedAt = new Date\(\);/);
   });
 
   test('отмена заказа тоже закрывает его для зарплаты', () => {

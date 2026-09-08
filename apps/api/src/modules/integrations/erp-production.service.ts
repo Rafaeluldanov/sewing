@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OrderStatus, PassportStatus } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { ErpOrderCostService } from './erp-order-cost.service.js';
+import { OrderFactCostService } from '../costs/order-fact-cost.service.js';
 
 /** Что ERP отвечает по сданному заказу. */
 export type ProductionAckItem = {
@@ -40,13 +40,13 @@ export class ErpProductionService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly cost: ErpOrderCostService,
+    private readonly cost: OrderFactCostService,
   ) {}
 
-  /** Отсечка: раньше неё сданные заказы в очередь не попадают. Без неё очередь ПУСТА. */
-  private async cutoff(closedFrom?: string): Promise<Date | null> {
-    if (closedFrom) {
-      const parsed = new Date(closedFrom);
+  /** Отсечка: документы, готовые раньше неё, в выгрузку не попадают. Без неё выгрузка ПУСТА. */
+  private async cutoff(readyFrom?: string): Promise<Date | null> {
+    if (readyFrom) {
+      const parsed = new Date(readyFrom);
       if (!Number.isNaN(parsed.getTime())) return parsed;
     }
     const settings = await this.prisma.companySettings.findFirst({
@@ -56,139 +56,173 @@ export class ErpProductionService {
   }
 
   /**
-   * Сданные заказы, по которым ERP ещё не ответила: строки по цвету и размеру, собранные из
-   * упакованных паспортов. Старейшие первыми — по дате закрытия.
+   * Готовые документы выпуска для ERP: она их ЧИТАЕТ и приходует у себя.
+   *
+   * ⛔ Согласования нет (решение владельца 08.09.2026): документ выпуска — наш, и его состояние
+   * не зависит от того, ответила ERP или нет. Раньше очередь держалась на ответе (`ack` создавал
+   * строку, и заказ уходил навсегда); теперь это КУРСОР — `?ready_from=` по дате готовности.
+   * Повтор гасит ERP у себя по номеру нашего документа: он стабилен и не меняется.
+   *
+   * ⛔ Отсечка обязательна: без неё очередь ПУСТА, а не «без фильтра». `gte: undefined` в Prisma
+   * молча исчезает из запроса, и первый же опрос отдал бы весь архив сдач.
+   *
+   * Документы, ПЕРЕСОБРАННЫЕ после фиксации (поздний факт — списание задним числом, правка
+   * начисления), попадают в выборку повторно по `recalculatedAt`: у ERP должна быть возможность
+   * увидеть исправленную сумму, иначе расхождение осталось бы только у нас.
    */
   async listPending(
     limit?: number,
-    closedFrom?: string,
+    readyFrom?: string,
   ): Promise<{ count: number; items: Array<Record<string, unknown>> }> {
     const take = Math.min(
       Math.max(1, limit ?? ErpProductionService.DEFAULT_LIMIT),
       ErpProductionService.MAX_LIMIT,
     );
-    const since = await this.cutoff(closedFrom);
-    // ⛔ Нет отсечки — пустая очередь: `gte: undefined` в Prisma молча исчезает из запроса, и
-    // «фильтр по умолчанию» отдал бы весь архив сданных заказов.
+    const since = await this.cutoff(readyFrom);
     if (!since) return { count: 0, items: [] };
 
-    const orders = await this.prisma.order.findMany({
+    const docs = await this.prisma.productionDocument.findMany({
       where: {
-        status: OrderStatus.DONE,
-        completedAt: { gte: since },
-        erpCustomerOrderId: { not: null },
-        erpProduction: { is: null },
+        status: 'READY',
+        OR: [{ readyAt: { gte: since } }, { recalculatedAt: { gte: since } }],
+        // Собственный заказ цеха ERP не касается: приходовать его ей некуда.
+        order: { erpCustomerOrderId: { not: null } },
       },
-      orderBy: [{ completedAt: 'asc' }, { id: 'asc' }],
+      orderBy: [{ readyAt: 'asc' }, { number: 'asc' }],
       take,
       select: {
         id: true,
         number: true,
-        erpCustomerOrderId: true,
-        erpCustomerOrderNumber: true,
-        completedAt: true,
-        patternItemId: true,
-        patternNameSnapshot: true,
-        patternArticleSnapshot: true,
-        customer: true,
-        items: { select: { sizeId: true, qtyPlan: true, size: { select: { code: true } } } },
-      },
-    });
-    if (orders.length === 0) return { count: 0, items: [] };
-
-    // Паспорта сданных заказов: упакованные и с годным выпуском. Это и есть содержимое
-    // документа производства — из них собираются строки «цвет + размер + количество».
-    const passports = await this.prisma.passport.findMany({
-      where: {
-        orderId: { in: orders.map((o) => o.id) },
-        status: PassportStatus.PACKED,
-        qtyGood: { gt: 0 },
-      },
-      select: {
-        id: true,
-        number: true,
         orderId: true,
-        orderVariantId: true,
-        color: true,
-        sizeId: true,
+        readyAt: true,
+        recalculatedAt: true,
+        recalcReason: true,
+        closedAt: true,
+        qtyPlan: true,
         qtyGood: true,
-        qtyCut: true,
         qtyDefect: true,
-        sampleId: true,
-        size: { select: { code: true } },
-        // Брак по причинам: в ERP до сих пор ехала только сумма, и «почему недосдали» не
-        // отвечал никто. Причина — свойство паспорта, поэтому и едет вместе с ним.
-        defects: {
+        materialsOwnRub: true,
+        materialsErpRub: true,
+        pieceworkRub: true,
+        pieceworkPendingRub: true,
+        recutRub: true,
+        salaryRub: true,
+        otherRub: true,
+        totalRub: true,
+        perUnitRub: true,
+        planTotalRub: true,
+        planPerUnitRub: true,
+        costWarnings: true,
+        order: {
           select: {
-            qty: true,
-            comment: true,
-            defectType: { select: { code: true, name: true } },
+            number: true,
+            customer: true,
+            erpCustomerOrderId: true,
+            erpCustomerOrderNumber: true,
+            patternItemId: true,
+            patternNameSnapshot: true,
+            patternArticleSnapshot: true,
+          },
+        },
+        lines: {
+          select: {
+            orderVariantId: true,
+            color: true,
+            sizeId: true,
+            qtyGood: true,
+            qtyCut: true,
+            qtyDefect: true,
+            isSample: true,
+            passportNumbers: true,
+            size: { select: { code: true } },
           },
         },
       },
     });
+    if (docs.length === 0) return { count: 0, items: [] };
 
-    const byOrder = new Map<string, typeof passports>();
-    for (const p of passports) {
-      const list = byOrder.get(p.orderId) ?? [];
-      list.push(p);
-      byOrder.set(p.orderId, list);
+    // Брак ПО ПРИЧИНАМ: в ERP до сих пор ехала только сумма, и «почему недосдали» не отвечал
+    // никто. Причина — свойство паспорта, поэтому берётся живой выборкой по паспортам строки:
+    // в документе хранится состав выпуска, а не разбор брака.
+    const passportNumbers = docs.flatMap((d) =>
+      d.lines.flatMap((l) => l.passportNumbers),
+    );
+    const defects = passportNumbers.length
+      ? await this.prisma.passportDefect.findMany({
+          where: { passport: { number: { in: passportNumbers } } },
+          select: {
+            qty: true,
+            comment: true,
+            passport: { select: { number: true } },
+            defectType: { select: { code: true, name: true } },
+          },
+        })
+      : [];
+    const defectsByPassport = new Map<string, Array<Record<string, unknown>>>();
+    for (const d of defects) {
+      const key = d.passport?.number ?? '';
+      const list = defectsByPassport.get(key) ?? [];
+      list.push({
+        passport: key,
+        code: d.defectType?.code ?? null,
+        name: d.defectType?.name ?? null,
+        qty: d.qty,
+        comment: d.comment,
+      });
+      defectsByPassport.set(key, list);
     }
 
-    const items = await Promise.all(orders.map(async (order) => {
-      const own = byOrder.get(order.id) ?? [];
-      const lines = new Map<string, Record<string, unknown>>();
-      for (const p of own) {
-        const key = `${p.orderVariantId ?? ''}|${p.color ?? ''}|${p.sizeId}`;
-        const line = lines.get(key) ?? {
-          variant_id: p.orderVariantId,
-          color: p.color,
-          size_id: p.sizeId,
-          size_code: p.size?.code ?? null,
-          qty_good: 0,
-          qty_cut: 0,
-          qty_defect: 0,
-          is_sample: !!p.sampleId,
-          passports: [] as string[],
-          defects: [] as Array<Record<string, unknown>>,
-        };
-        line.qty_good = Number(line.qty_good) + (p.qtyGood ?? 0);
-        line.qty_cut = Number(line.qty_cut) + (p.qtyCut ?? 0);
-        line.qty_defect = Number(line.qty_defect) + (p.qtyDefect ?? 0);
-        (line.passports as string[]).push(p.number ?? p.id);
-        for (const d of p.defects ?? []) {
-          (line.defects as Array<Record<string, unknown>>).push({
-            passport: p.number ?? p.id,
-            code: d.defectType?.code ?? null,
-            name: d.defectType?.name ?? null,
-            qty: d.qty,
-            comment: d.comment,
-          });
-        }
-        lines.set(key, line);
-      }
-      const rows = [...lines.values()];
-      const qtyGood = rows.reduce((sum, r) => sum + Number(r.qty_good), 0);
-      // Себестоимость сдачи — компонентами и сразу все: что из них считать себестоимостью
-      // заказа, решает владелец, и решать надо на живых числах.
-      // Себестоимость — по всему заказу: паспорта документа задают строки выпуска, а не траты.
-      const cost = await this.cost.factCostForOrder(order.id, qtyGood);
-      return {
-        order_id: order.id,
-        order_number: order.number,
-        erp_customer_order_id: order.erpCustomerOrderId,
-        erp_customer_order_number: order.erpCustomerOrderNumber,
-        customer: order.customer,
-        closed_at: order.completedAt?.toISOString() ?? null,
-        pattern_item_id: order.patternItemId,
-        pattern_name: order.patternNameSnapshot,
-        pattern_article: order.patternArticleSnapshot,
-        qty_plan: order.items.reduce((sum, i) => sum + (i.qtyPlan ?? 0), 0),
-        qty_good: rows.reduce((sum, r) => sum + Number(r.qty_good), 0),
-        qty_defect: rows.reduce((sum, r) => sum + Number(r.qty_defect), 0),
-        lines: rows,
-        cost,
-      };
+    const items = docs.map((doc) => ({
+      document_id: doc.id,
+      // Номер НАШЕГО документа — ключ идемпотентности на стороне ERP: он стабилен и переживает
+      // пересборку, поэтому повторное чтение не заводит второй приход.
+      document_number: doc.number,
+      order_id: doc.orderId,
+      order_number: doc.order.number,
+      erp_customer_order_id: doc.order.erpCustomerOrderId,
+      erp_customer_order_number: doc.order.erpCustomerOrderNumber,
+      customer: doc.order.customer,
+      closed_at: doc.closedAt.toISOString(),
+      ready_at: doc.readyAt?.toISOString() ?? null,
+      recalculated_at: doc.recalculatedAt?.toISOString() ?? null,
+      recalc_reason: doc.recalcReason,
+      pattern_item_id: doc.order.patternItemId,
+      pattern_name: doc.order.patternNameSnapshot,
+      pattern_article: doc.order.patternArticleSnapshot,
+      qty_plan: doc.qtyPlan,
+      qty_good: doc.qtyGood,
+      qty_defect: doc.qtyDefect,
+      lines: doc.lines.map((l) => ({
+        variant_id: l.orderVariantId,
+        color: l.color,
+        size_id: l.sizeId,
+        size_code: l.size?.code ?? null,
+        qty_good: l.qtyGood,
+        qty_cut: l.qtyCut,
+        qty_defect: l.qtyDefect,
+        is_sample: l.isSample,
+        passports: l.passportNumbers,
+        defects: l.passportNumbers.flatMap(
+          (numberValue) => defectsByPassport.get(numberValue) ?? [],
+        ),
+      })),
+      // Себестоимость — снимок документа, а не пересчёт на каждый опрос: у одной цифры один
+      // хозяин, и ERP должна видеть ровно то, что видит цех.
+      cost: {
+        materials_own_rub: Number(doc.materialsOwnRub),
+        materials_erp_rub: Number(doc.materialsErpRub),
+        piecework_rub: Number(doc.pieceworkRub),
+        piecework_pending_rub: Number(doc.pieceworkPendingRub),
+        recut_rub: Number(doc.recutRub),
+        salary_rub: Number(doc.salaryRub),
+        other_rub: Number(doc.otherRub),
+        total_rub: Number(doc.totalRub),
+        per_unit_rub: Number(doc.perUnitRub),
+        plan_total_rub: doc.planTotalRub == null ? null : Number(doc.planTotalRub),
+        plan_per_unit_rub:
+          doc.planPerUnitRub == null ? null : Number(doc.planPerUnitRub),
+        warnings: doc.costWarnings,
+      },
     }));
     return { count: items.length, items };
   }

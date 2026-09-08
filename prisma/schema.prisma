@@ -668,6 +668,11 @@ model Size {
   /// которому уже была отгрузка, нельзя удалять.
   finishedGoodsShipmentLines FinishedGoodsShipmentLine[]
 
+  /// Строки документа выпуска (см. `model ProductionDocumentLine`).
+  /// Restrict — размер, по которому уже выпускали, из справочника не
+  /// вычёркивают.
+  productionDocumentLines ProductionDocumentLine[]
+
   /// Сигнальные образцы (см. `model OrderSample`). Без cascade —
   /// размер из справочника удалять «вживую» нельзя, если на него
   /// уже завязан образец.
@@ -1636,6 +1641,11 @@ model Order {
   erpCustomerOrderNumber String?
   /// Ответ ERP по сдаче этого заказа (документ выпуска). `null` — заказ ещё в очереди.
   erpProduction ErpProductionDocument?
+
+  /// ДОКУМЕНТ ВЫПУСКА заказа (см. `model ProductionDocument`). Один
+  /// заказ — один документ: он рождается закрытием заказа и собирается
+  /// сам из фактов производства.
+  productionDocument ProductionDocument?
   orderDate      DateTime
   /// Срок сдачи заказа (управленческое поле — UI «Срок сдачи»). Nullable
   /// — backward-compat для исторических заказов и для случаев, когда
@@ -9190,6 +9200,114 @@ model ErpMaterialConsumption {
 /// Одна строка на заказ: `orderId @unique`. Пока строки нет — заказ стоит в очереди
 /// `GET /api/integrations/erp-production`; появилась — заказ из очереди исчез навсегда, поэтому
 /// ERP отвечает только по тому, что реально разложила (её ответ необратим).
+/// ДОКУМЕНТ ВЫПУСКА ПО ЗАКАЗУ (решение владельца 04.09 + 08.09.2026).
+///
+/// Паспорт — документ ЦЕХА: рождается на раскрое, живёт по операциям, закрывается упаковкой.
+/// Паспорта заказа собираются в ОДИН документ выпуска, и уже он говорит, что цех сдал и почём.
+/// Это не заявка на согласование: снаружи его никто не подтверждает, ЕРП лишь читает готовые.
+///
+/// ⛔ ЧЕЛОВЕК ЕГО НЕ ЗАВОДИТ И НЕ ПРОВОДИТ. Документ рождается в транзакции закрытия заказа
+/// (`OrdersService.complete()` и авто-закрытие в `PackingService`) и дособирается сам:
+///   `FORMING` — факты ещё идут (открыта коробка, начисления не подтверждены);
+///   `READY`   — лёг последний факт, себестоимость записана снимком.
+/// Поздний факт (списание задним числом, правка начисления) документ пересобирает и помечает
+/// `recalculatedAt`/`recalcReason` — учёт обязан сходиться с цехом, а не с моментом фиксации.
+model ProductionDocument {
+  id      String @id @default(cuid())
+  /// `ПР-YYYYMMDD-NNNN`, суточный счётчик по Москве — как у паспорта и заказа.
+  number  String @unique
+  /// Один заказ — один документ. UNIQUE держит это на уровне БД: повторное закрытие
+  /// (ретрай, гонка авто- и ручного закрытия) второй документ не заведёт.
+  orderId String @unique
+
+  status String @default("FORMING")
+
+  /// Момент закрытия заказа — рождение документа.
+  closedAt   DateTime
+  /// Момент, когда документ стал окончательным (лёг последний факт).
+  readyAt    DateTime?
+  /// Чем именно он закрылся — для строки «последний факт» в списке.
+  lastFactAt   DateTime?
+  lastFactKind String?
+
+  /// Пересборка ПОСЛЕ фиксации: факт пришёл задним числом.
+  recalculatedAt DateTime?
+  recalcReason   String?
+
+  /// Отпечаток фактов, из которых собран документ (суммы списаний, начислений, подкроя,
+  /// количество событий по паспортам). Дешёвыми агрегатами сравнивается при чтении: совпал —
+  /// пересчитывать нечего, разошёлся — документ пересобирается.
+  ///
+  /// ⛔ Без него сформированный документ не замечал позднего факта: пересборка шла только у
+  /// формирующихся, и списание, проведённое после фиксации, оставалось невидимым — сумма
+  /// расходилась с цехом молча.
+  factSignature String?
+
+  qtyPlan   Int @default(0)
+  qtyGood   Int @default(0)
+  qtyCut    Int @default(0)
+  qtyDefect Int @default(0)
+
+  /// Себестоимость — КОМПОНЕНТАМИ и все сразу (`ErpOrderCostService`): что из них считать
+  /// себестоимостью заказа, решает владелец, и решать надо на живых числах.
+  /// `pieceworkPendingRub` в `totalRub` НЕ входит — это обещание, а не трата.
+  materialsOwnRub     Decimal @default(0) @db.Decimal(14, 2)
+  materialsErpRub     Decimal @default(0) @db.Decimal(14, 2)
+  pieceworkRub        Decimal @default(0) @db.Decimal(14, 2)
+  pieceworkPendingRub Decimal @default(0) @db.Decimal(14, 2)
+  recutRub            Decimal @default(0) @db.Decimal(14, 2)
+  salaryRub           Decimal @default(0) @db.Decimal(14, 2)
+  otherRub            Decimal @default(0) @db.Decimal(14, 2)
+  totalRub            Decimal @default(0) @db.Decimal(14, 2)
+  perUnitRub          Decimal @default(0) @db.Decimal(14, 2)
+  planTotalRub        Decimal? @db.Decimal(14, 2)
+  planPerUnitRub      Decimal? @db.Decimal(14, 2)
+  /// Предупреждения расчёта (`NO_MATERIAL_FACT`, `PIECEWORK_PENDING`, …) — снимком, чтобы
+  /// потом было видно, почему сумма такая.
+  costWarnings        String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lines ProductionDocumentLine[]
+
+  @@index([status])
+  @@index([readyAt])
+  @@index([closedAt])
+  @@index([recalculatedAt])
+}
+
+/// Строка документа выпуска: «расцветка + размер + количество», собранная из упакованных
+/// паспортов. Два паспорта одного размера дают ОДНУ строку — паспорт здесь основание, а не
+/// строка документа.
+model ProductionDocumentLine {
+  id                   String @id @default(cuid())
+  productionDocumentId String
+
+  /// Расцветка заказа (`OrderVariant`) — id снимком, без FK: документ переживает правку
+  /// расцветок, а строка обязана остаться такой, какой её выпустили.
+  orderVariantId String?
+  color          String?
+  sizeId         String
+
+  qtyGood   Int @default(0)
+  qtyCut    Int @default(0)
+  qtyDefect Int @default(0)
+
+  /// Сигнальный образец не тираж — в строке помечаем, чтобы не смешивать.
+  isSample Boolean @default(false)
+
+  /// Номера паспортов, из которых собрана строка: основание выпуска, видно в раскрытии строки.
+  passportNumbers String[]
+
+  document ProductionDocument @relation(fields: [productionDocumentId], references: [id], onDelete: Cascade)
+  size     Size               @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+
+  @@index([productionDocumentId])
+  @@index([sizeId])
+}
+
 model ErpProductionDocument {
   id                String    @id @default(cuid())
   orderId           String    @unique

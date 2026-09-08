@@ -111,6 +111,7 @@ import { aggregateOrder } from './order-aggregator.js';
 import { mapConstructorTaskSummary } from '../constructor-tasks/constructor-task-mappers.js';
 import { OrderCostEstimatesService } from './order-cost-estimates.service.js';
 import { OrderNumberService } from './order-number.service.js';
+import { ProductionDocumentsService } from '../production-documents/production-documents.service.js';
 import { OrderOperationPlanService } from './order-operation-plan.service.js';
 import { RoutesService } from '../routes/routes.service.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -462,6 +463,9 @@ export class OrdersService {
     // и пишет три snapshot-поля + warnings в `Order` (см.
     // `docs/operation-time-norms-recon.md §11`).
     private readonly orderOperationPlan: OrderOperationPlanService,
+    // Документ выпуска рождается ВМЕСТЕ с закрытием заказа: заказ не может быть закрыт
+    // без документа, иначе сдача существует, а сказать о ней нечем.
+    private readonly productionDocuments: ProductionDocumentsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -3741,17 +3745,26 @@ export class OrdersService {
     if (order.erpCustomerOrderId) {
       await this.assertErpOrderFullyProduced(id);
     }
-    await this.prisma.order.update({
-      where: { id },
-      data: {
-        status: OrderStatus.DONE,
-        // Момент закрытия — вместе со сменой статуса, как
-        // `inProductionAt` у запуска. От него зависит зарплата: правило
-        // отсечки «в расчёт идут заказы, закрытые до дня начисления»
-        // читает именно эту дату (`PayrollAccrualSchedule`).
-        completedAt: new Date(),
-      },
+    const closedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id },
+        data: {
+          status: OrderStatus.DONE,
+          // Момент закрытия — вместе со сменой статуса, как
+          // `inProductionAt` у запуска. От него зависит зарплата: правило
+          // отсечки «в расчёт идут заказы, закрытые до дня начисления»
+          // читает именно эту дату (`PayrollAccrualSchedule`).
+          completedAt: closedAt,
+        },
+      });
+      // Закрытие — это сдача. Документ выпуска заводится здесь же, атомарно: если он появится
+      // отдельным шагом, падение между шагами оставит закрытый заказ без документа навсегда.
+      await this.productionDocuments.createOnOrderClose(tx, id, closedAt);
     });
+    // Себестоимость и состояние — уже вне транзакции: расчёт тяжёлый, а держать на нём
+    // блокировку закрытия незачем.
+    await this.productionDocuments.refresh(id, 'ORDER_CLOSED');
     return this.getOne(id);
   }
 

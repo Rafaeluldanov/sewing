@@ -1,3 +1,4 @@
+import { ProductionDocumentsModule } from '../production-documents/production-documents.module.js';
 import { Module } from '@nestjs/common';
 import { PackingService } from './packing.service.js';
 import { PackingController } from './packing.controller.js';
@@ -23,7 +24,12 @@ import { WorkInProgressModule } from '../work-in-progress/work-in-progress.modul
  * `docs/current-state.md §«Готовая продукция»`.
  */
 @Module({
-  imports: [EarningsModule, FinishedGoodsModule, WorkInProgressModule],
+  imports: [
+    EarningsModule,
+    FinishedGoodsModule,
+    WorkInProgressModule,
+    ProductionDocumentsModule,
+  ],
   controllers: [PackingController],
   providers: [PackingService, BoxNumberService],
   exports: [PackingService],

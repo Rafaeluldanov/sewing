@@ -50,6 +50,7 @@ import {
   ClipboardCheck,
   ClipboardList,
   Factory,
+  FileCheck2,
   Home,
   LogOut,
   Menu,
@@ -143,6 +144,15 @@ function buildGroups(modules: ModuleFlags): NavGroup[] {
       key: 'production',
       label: 'Производство',
       items: [
+        // Документ выпуска рождается закрытием заказа и собирается сам из
+        // фактов цеха — его не заводят руками, поэтому реестр открывает
+        // группу: это итог производства, а не ещё одна настройка.
+        // Модульного ключа под раздел нет — пункт виден всегда.
+        {
+          href: '/admin/production-documents',
+          label: 'Документы выпуска',
+          Icon: FileCheck2,
+        },
         {
           href: '/admin/display-screens',
           label: 'Цеховой монитор',

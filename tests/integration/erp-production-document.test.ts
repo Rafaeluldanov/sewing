@@ -27,7 +27,7 @@ import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
 import { ErpProductionService } from '../../apps/api/src/modules/integrations/erp-production.service.js';
-import { ErpOrderCostService } from '../../apps/api/src/modules/integrations/erp-order-cost.service.js';
+import { OrderFactCostService } from '../../apps/api/src/modules/costs/order-fact-cost.service.js';
 import { PassportRealCostService } from '../../apps/api/src/modules/costs/passport-real-cost.service.js';
 
 describeWithDb('integration — сдача заказа цеха уходит в ERP документом производства', () => {
@@ -98,10 +98,13 @@ describeWithDb('integration — сдача заказа цеха уходит в
         data: { status: 'PACKED', qtyGood: qty },
       });
     }
-    await t.prisma.order.update({
-      where: { id: orderId },
-      data: { status: 'DONE', completedAt: new Date('2026-09-03T10:00:00.000Z') },
-    });
+    // Закрываем заказ настоящей ручкой: документ выпуска рождается в транзакции закрытия,
+    // и подмена статуса через prisma оставила бы очередь пустой — как это и было в проде.
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/complete`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
     return orderId;
   }
 
@@ -109,7 +112,7 @@ describeWithDb('integration — сдача заказа цеха уходит в
   function service(): ErpProductionService {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const prisma = t.prisma as any;
-    return new ErpProductionService(prisma, new ErpOrderCostService(prisma, new PassportRealCostService(prisma)));
+    return new ErpProductionService(prisma, new OrderFactCostService(prisma, new PassportRealCostService(prisma)));
   }
 
   async function setSince(value: Date | null): Promise<void> {
@@ -180,6 +183,9 @@ describeWithDb('integration — сдача заказа цеха уходит в
     expect(queue.count).toBe(1);
     const item = queue.items[0] as Record<string, any>;
     expect(item.order_id).toBe(orderId);
+    // Единица выгрузки — ДОКУМЕНТ: у него свой номер, он же ключ идемпотентности у ERP.
+    expect(String(item.document_number)).toMatch(/^ПР-\d{8}-\d{4}$/);
+    expect(item.ready_at).toBeTruthy();
     expect(item.erp_customer_order_number).toBe('ФС-001922');
     // Два паспорта одного размера — ОДНА строка документа: паспорт основание, а не документ.
     expect(item.lines).toHaveLength(1);
@@ -196,7 +202,7 @@ describeWithDb('integration — сдача заказа цеха уходит в
     expect(queue.count).toBe(0);
   });
 
-  test('ответ ERP убирает заказ из очереди, повтор заменяет запись', async () => {
+  test('ответ ERP — журнал, а не гейт: документ из выгрузки не исчезает', async () => {
     const orderId = await closedOrder();
     await setSince(new Date('2026-08-01T00:00:00.000Z'));
     const svc = service();
@@ -204,7 +210,9 @@ describeWithDb('integration — сдача заказа цеха уходит в
       { order_id: orderId, state: 'POSTED', erp_document_number: 'ШВЦ-000001', qty_good: 10 },
     ]);
     expect(first.accepted).toBe(1);
-    expect((await svc.listPending(10)).count).toBe(0);
+    // Согласования нет: выгрузка идёт по курсору готовности, и ответ ERP на неё не влияет.
+    // Раньше здесь было `0` — именно этот гейт и убрали.
+    expect((await svc.listPending(10)).count).toBe(1);
     const row = await t.prisma.erpProductionDocument.findUnique({ where: { orderId } });
     expect(row?.erpDocumentNumber).toBe('ШВЦ-000001');
     await svc.ack([{ order_id: orderId, state: 'REVERSED', error: 'сторно' }]);
@@ -240,7 +248,7 @@ describeWithDb('integration — сдача заказа цеха уходит в
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const prisma = t.prisma as any;
-    return new ErpOrderCostService(prisma, new PassportRealCostService(prisma)).factCostForOrder(
+    return new OrderFactCostService(prisma, new PassportRealCostService(prisma)).factCostForOrder(
       orderId,
       passports.reduce((sum, p) => sum + (p.qtyGood ?? 0), 0),
     );

@@ -2,8 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EntryStatus, Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { PassportRealCostService } from '../costs/passport-real-cost.service.js';
-import { erpMaterialCostByPassport } from '../costs/erp-material-fact.js';
+import { PassportRealCostService } from './passport-real-cost.service.js';
+import { erpMaterialCostByPassport } from './erp-material-fact.js';
 
 const POSTED = 'POSTED';
 /** Завершённая сессия подкроя — та же выборка, что и у зарплаты (`computeRecutSeconds`). */
@@ -37,7 +37,10 @@ export type OrderFactCost = {
 };
 
 /**
- * Фактическая себестоимость СДАННОГО заказа — по документу производства, а не по паспорту.
+ * ФАКТИЧЕСКАЯ СЕБЕСТОИМОСТЬ ЗАКАЗА — то, что легло в документ выпуска.
+ *
+ * Живёт в `costs`, а не в `integrations`: это себестоимость цеха, а ERP лишь один из её
+ * читателей. Считается по заказу, а не по паспорту.
  *
  * ⛔ Компоненты отдаются РАЗДЕЛЬНО (свой материал, материал ERP, сдельная, подкрой, разнесённый
  * оклад, прочие расходы) и все сразу. Что из них считать себестоимостью заказа — решение
@@ -65,8 +68,8 @@ export type OrderFactCost = {
  *      возникают они именно на проблемных тиражах, где себестоимость и смотрят.
  */
 @Injectable()
-export class ErpOrderCostService {
-  private readonly logger = new Logger(ErpOrderCostService.name);
+export class OrderFactCostService {
+  private readonly logger = new Logger(OrderFactCostService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -167,7 +170,7 @@ export class ErpOrderCostService {
       } else if (num(row._sum.amount) !== 0) {
         warnings.push('EXTRA_COSTS_NON_RUB_SKIPPED');
         this.logger.warn(
-          `event=erp-order-cost.extra.non_rub orderId=${orderId} ` +
+          `event=order-fact-cost.extra.non_rub orderId=${orderId} ` +
             `currency=${row.currency} amount=${String(row._sum.amount)}`,
         );
       }
@@ -187,7 +190,7 @@ export class ErpOrderCostService {
       } catch (error) {
         warnings.push('SALARY_APPORTION_FAILED');
         this.logger.warn(
-          `event=erp-order-cost.salary.failed orderId=${orderId} error=${String(error)}`,
+          `event=order-fact-cost.salary.failed orderId=${orderId} error=${String(error)}`,
         );
       }
     } else if (!from) {

@@ -94,6 +94,9 @@ import { RouteModeToggle } from '@/components/orders/view/route-mode-toggle';
 import { OrderColorwaysBlock } from '@/components/orders/colorways/order-colorways-block';
 import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
 import { OrderApplicationsCard } from '@/components/orders/order-applications-card';
+import { OrderProductionDocumentSection } from '@/components/orders/view/order-production-document-section';
+import { getProductionDocumentForOrder } from '@/lib/production-documents-api';
+import type { ProductionDocumentDto } from '@sewing/shared/production-documents';
 
 interface Props {
   order: OrderDetailDto;
@@ -313,6 +316,23 @@ export async function OrderProductionTab({
     }
   }
 
+  // Документ выпуска по заказу. Тянем ЗДЕСЬ, а не внутри блока: сделай блок
+  // самозагружающимся async-компонентом — и его запрос стартовал бы только
+  // после всей цепочки await выше. Статусом не гейтим: когда документ
+  // существует, решает бэкенд (до закрытия заказа отдаёт `null`), а фронт
+  // не должен второй раз описывать это правило. Ошибка не поднимается наверх:
+  // упавший документ не имеет права унести весь производственный срез.
+  let productionDocument: ProductionDocumentDto | null = null;
+  let productionDocumentError: string | null = null;
+  try {
+    productionDocument = await getProductionDocumentForOrder(order.id);
+  } catch (e) {
+    productionDocumentError =
+      e instanceof ApiRequestError
+        ? errorText(e)
+        : 'Не удалось загрузить документ выпуска';
+  }
+
   return (
     <div className="order-prod-tab">
       {/*
@@ -458,6 +478,17 @@ export async function OrderProductionTab({
           />
         )}
       </AdminCard>
+
+      {/*
+        ВЫПУСК — между «Производство по размерам» и журналом правок, чтобы
+        вкладка читалась воронкой: План → В цеху сейчас → ВЫПУСК → Отгрузка.
+        Блок read-only: документ собирается сам из фактов, его не проводят.
+      */}
+      <OrderProductionDocumentSection
+        doc={productionDocument}
+        error={productionDocumentError}
+        canManage={canManage}
+      />
 
       <OrderAmendmentHistoryCard entries={amendmentHistory} />
 
