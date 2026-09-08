@@ -1424,6 +1424,34 @@ export const UpdateOrderSchema = z.object({
 });
 export type UpdateOrderDto = z.infer<typeof UpdateOrderSchema>;
 
+/**
+ * Тело `PATCH /api/integrations/erp-orders/:id/plan` — ERP переписывает план
+ * СВОЕГО заказа целиком (все расцветки со всеми размерами).
+ *
+ * Зачем отдельная ручка, а не `PATCH /orders/:id`: человеку в цехе план
+ * ERP-заказа закрыт (`ErpOrderPlanLockedException`) — он не знает ни о заказе
+ * покупателя, ни о заблокированных там строках. А самой ERP менять его надо:
+ * менеджер дописал в заказ покупателя строки по ТОМУ ЖЕ лекалу, и второй заказ
+ * цеха на то же лекало — это два раскроя вместо одного.
+ *
+ * ⛔ Только ПОЛНАЯ картина, а не дельта: `variants` заменяют расцветки целиком
+ * (тот же путь, что у формы правки), и присланное становится планом заказа.
+ * Окно то же, что у расцветок: DRAFT / CALCULATION, дальше 409
+ * `ORDER_COLORWAYS_LOCKED` — после заморозки ERP оформляет добор отдельным
+ * заказом.
+ */
+export const ReplaceErpOrderPlanSchema = z.object({
+  variants: z
+    .array(
+      z.object({
+        color: z.string().trim().min(1, 'Укажите цвет расцветки').max(60),
+        sizes: z.array(ColorwaySizeInputSchema).default([]),
+      }),
+    )
+    .min(1, 'План заказа не может быть пустым'),
+});
+export type ReplaceErpOrderPlanDto = z.infer<typeof ReplaceErpOrderPlanSchema>;
+
 // ---------------------------------------------------------------------------
 // Route mode override (адаптивный сплит-распошив)
 // ---------------------------------------------------------------------------

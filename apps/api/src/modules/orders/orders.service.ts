@@ -2436,6 +2436,7 @@ export class OrdersService {
     id: string,
     dto: UpdateOrderDto,
     actorEmployeeId?: string | null,
+    opts: { fromErp?: boolean } = {},
   ): Promise<OrderDetailDto> {
     const current = await this.prisma.order.findUnique({
       where: { id },
@@ -2504,12 +2505,18 @@ export class OrdersService {
     // ⛔ Заказ, рождённый заказом покупателя ERP (`docs/kb/sewing.md` §0.10): тираж и состав
     // приехали снаружи. В ERP строки такого заказа заблокированы, а реализация ждёт ПОЛНОГО
     // прихода — правка здесь означала бы, что заказ покупателя не отгрузится никогда.
+    //
+    // ⚠️ `fromErp` — правка пришла ИЗ ERP (машинная ручка «дослать план», см.
+    // `ErpOrderLookupController.replacePlan`): там дописали строки в заказ покупателя по ТОМУ ЖЕ
+    // лекалу, и план заказа цеха обязан их догнать — иначе на одно лекало заводится второй заказ,
+    // то есть второй раскрой. Разрешаются только РАСЦВЕТКИ: изделие, лекало и прямая запись
+    // `items` закрыты и для ERP — агрегат пересобирается ресинком из расцветок.
     if (
       current.erpCustomerOrderId &&
       (wantsItemsChange ||
         wantsProductChange ||
         wantsPatternChange ||
-        wantsVariantsChange)
+        (wantsVariantsChange && !opts.fromErp))
     ) {
       throw new ErpOrderPlanLockedException(
         'Состав и тираж',

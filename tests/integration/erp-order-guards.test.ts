@@ -284,6 +284,101 @@ describeWithDb('integration — заказ из ERP в цехе не прави�
     expect((await lookup.lookup('erp-co-нет', first.id)).found).toBe(false);
   });
 
+  test('«дослать»: ERP переписывает план своего заказа, человеку это по-прежнему закрыто', async () => {
+    // Решение владельца 08.09.2026 (`docs/kb/sewing.md` §0.10): одно лекало — ОДИН заказ цеха.
+    // Менеджер дописал строки в заказ покупателя по тому же лекалу — они досылаются сюда, иначе
+    // на одно изделие завёлся бы второй заказ, то есть второй раскрой.
+    const fromErp = await createOrder(true);
+
+    // Человеку в цехе план ERP-заказа закрыт — и остаётся закрытым.
+    const byHuman = await request(t.app.getHttpServer())
+      .patch(`/api/orders/${fromErp}`)
+      .set('Cookie', manager)
+      .send({ variants: [{ color: 'Чёрный', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 25 }] }] })
+      .expect(409);
+    expect(byHuman.body.code).toBe('ERP_ORDER_PLAN_LOCKED');
+
+    const raw = 'sew_test_plan_token';
+    await t.prisma.serviceToken.create({
+      data: {
+        name: 'ERP (тест досылки)',
+        tokenHash: createHash('sha256').update(raw, 'utf8').digest('hex'),
+        tokenPrefix: raw.slice(0, 10),
+        roles: ['SHOP_MANAGER'],
+        scopes: ['orders:read', 'orders:write'],
+      },
+    });
+    // Полная картина плана, а не дельта: было 10 в M, стало 10 в M + 7 в L второй расцветкой.
+    const res = await request(t.app.getHttpServer())
+      .patch(`/api/integrations/erp-orders/${fromErp}/plan`)
+      .set('Authorization', `Bearer ${raw}`)
+      .send({
+        variants: [
+          { color: 'Чёрный', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 10 }] },
+          { color: 'Синий', sizes: [{ sizeId: seed.sizes.L, qtyPlan: 7 }] },
+        ],
+      })
+      .expect(200);
+    expect(res.body.qtyPlan).toBe(17);
+
+    const variants = await t.prisma.orderVariant.findMany({
+      where: { orderId: fromErp },
+      include: { sizes: true },
+    });
+    expect(variants.map((v) => v.color).sort()).toEqual(['Синий', 'Чёрный']);
+    const items = await t.prisma.orderItem.findMany({ where: { orderId: fromErp } });
+    expect(items.reduce((sum, i) => sum + i.qtyPlan, 0)).toBe(17);
+
+    // Повтор той же картины не удваивает тираж: ERP шлёт запрос заново после молчания сети.
+    await request(t.app.getHttpServer())
+      .patch(`/api/integrations/erp-orders/${fromErp}/plan`)
+      .set('Authorization', `Bearer ${raw}`)
+      .send({
+        variants: [
+          { color: 'Чёрный', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 10 }] },
+          { color: 'Синий', sizes: [{ sizeId: seed.sizes.L, qtyPlan: 7 }] },
+        ],
+      })
+      .expect(200);
+    const after = await t.prisma.orderItem.findMany({ where: { orderId: fromErp } });
+    expect(after.reduce((sum, i) => sum + i.qtyPlan, 0)).toBe(17);
+  });
+
+  test('«дослать» после запуска производства отбито, свой заказ этой ручкой не правится', async () => {
+    const fromErp = await createOrder(true);
+    const own = await createOrder(false);
+    const raw = 'sew_test_plan_frozen';
+    await t.prisma.serviceToken.create({
+      data: {
+        name: 'ERP (тест заморозки)',
+        tokenHash: createHash('sha256').update(raw, 'utf8').digest('hex'),
+        tokenPrefix: raw.slice(0, 10),
+        roles: ['SHOP_MANAGER'],
+        scopes: ['orders:read', 'orders:write'],
+      },
+    });
+    const plan = { variants: [{ color: 'Чёрный', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 99 }] }] };
+
+    // Собственный заказ цеха ERP не переписывает: его план ведёт цех.
+    const alien = await request(t.app.getHttpServer())
+      .patch(`/api/integrations/erp-orders/${own}/plan`)
+      .set('Authorization', `Bearer ${raw}`)
+      .send(plan)
+      .expect(409);
+    expect(alien.body.code).toBe('ORDER_NOT_FROM_ERP');
+
+    // После запуска производства план заморожен — добор оформляется отдельным заказом ERP.
+    await start(fromErp);
+    const frozen = await request(t.app.getHttpServer())
+      .patch(`/api/integrations/erp-orders/${fromErp}/plan`)
+      .set('Authorization', `Bearer ${raw}`)
+      .send(plan)
+      .expect(409);
+    expect(frozen.body.code).toBe('ORDER_COLORWAYS_LOCKED');
+    const items = await t.prisma.orderItem.findMany({ where: { orderId: fromErp } });
+    expect(items.reduce((sum, i) => sum + i.qtyPlan, 0)).toBe(10);
+  });
+
   test('«снять отправку»: отмена по команде ERP проходит, человеку — нет', async () => {
     const fromErp = await createOrder(true);
 

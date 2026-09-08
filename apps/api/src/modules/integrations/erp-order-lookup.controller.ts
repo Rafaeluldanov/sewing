@@ -1,5 +1,20 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  ConflictException,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
+import {
+  ReplaceErpOrderPlanSchema,
+  type ReplaceErpOrderPlanDto,
+} from '@sewing/shared/orders';
 
+import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { MachineScopes } from '../auth/auth.decorators.js';
 import { OrdersService } from '../orders/orders.service.js';
@@ -59,6 +74,60 @@ export class ErpOrderLookupController {
         erp_customer_order_number: order.erpCustomerOrderNumber,
         created_at: order.createdAt.toISOString(),
       },
+    };
+  }
+
+  /**
+   * «Дослать»: ERP переписывает план СВОЕГО заказа цеха целиком.
+   *
+   * ⛔ Зачем ручка. Менеджер дописал в заказ покупателя строки по ТОМУ ЖЕ лекалу — второй заказ
+   * цеха на то же лекало означал бы второй раскрой того же изделия. Человеку в цехе план
+   * ERP-заказа закрыт (`ErpOrderPlanLockedException`), а ERP им как раз владеет: строки заказа
+   * покупателя и есть план.
+   *
+   * ⛔ Приезжает ПОЛНАЯ картина, а не дельта: расцветки заменяются целиком тем же путём, что у
+   * формы правки (`OrdersService.update` → `resyncColorwayDerived`), поэтому повтор запроса
+   * безопасен — ERP шлёт его после молчания сети, не рискуя удвоить тираж.
+   *
+   * Окно — DRAFT / CALCULATION (гард `update`, 409 `ORDER_COLORWAYS_LOCKED`): после заморозки
+   * плана ERP оформляет добор отдельным заказом.
+   */
+  @Patch(':id/plan')
+  @MachineScopes('orders:write')
+  async replacePlan(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(ReplaceErpOrderPlanSchema))
+    dto: ReplaceErpOrderPlanDto,
+  ): Promise<{ id: string; number: string; status: string; qtyPlan: number }> {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      select: { id: true, erpCustomerOrderId: true },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    // Чужой заказ этой ручкой не правится: у собственного заказа цеха план ведёт цех, и ERP о
+    // нём ничего не знает — переписать его её списком расцветок значило бы стереть чужую работу.
+    if (!order.erpCustomerOrderId) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'ORDER_NOT_FROM_ERP',
+        message:
+          'Это собственный заказ цеха — его план ведёт цех, из ERP он не переписывается',
+      });
+    }
+    const updated = await this.orders.update(id, { variants: dto.variants }, null, {
+      fromErp: true,
+    });
+    return {
+      id: updated.id,
+      number: updated.number,
+      status: updated.status,
+      qtyPlan: updated.items.reduce((sum, i) => sum + i.qtyPlan, 0),
     };
   }
 
