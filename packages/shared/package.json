@@ -12,6 +12,7 @@
     "./auth": "./src/auth.ts",
     "./orders": "./src/orders.ts",
     "./passports": "./src/passports.ts",
+    "./material-policy": "./src/material-policy.ts",
     "./production-documents": "./src/production-documents.ts",
     "./shifts": "./src/shifts.ts",
     "./equipment": "./src/equipment.ts",

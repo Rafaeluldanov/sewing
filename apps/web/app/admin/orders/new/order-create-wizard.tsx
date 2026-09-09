@@ -59,6 +59,12 @@
  * `POST /orders/:id/start-calculation` и те же Zod-контракты.
  */
 
+import {
+  ORDER_MATERIAL_RECOGNITIONS,
+  ORDER_MATERIAL_RECOGNITION_HINTS,
+  ORDER_MATERIAL_RECOGNITION_LABELS,
+  type OrderMaterialRecognitionValue,
+} from '@sewing/shared/material-policy';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useMemo, useRef, useState, useTransition } from 'react';
@@ -199,6 +205,10 @@ export function OrderCreateWizard({
   const [finishedGoodsWarehouseId, setFinishedGoodsWarehouseId] = useState('');
   const [materialsAndHardwareCostPolicy, setMaterialsPolicy] =
     useState<OrderMaterialsAndHardwareCostPolicy>('INCLUDE');
+  // Признание материала по заказу: расход или вся закупка под этот тираж. Соседка политики
+  // выше — та решает, входит ли материал в себестоимость вообще.
+  const [materialRecognition, setMaterialRecognition] =
+    useState<OrderMaterialRecognitionValue>('BY_CONSUMPTION');
   const [extrasOpen, setExtrasOpen] = useState(false);
 
   // --- Шаг 2: изделие ----------------------------------------------------
@@ -464,6 +474,7 @@ export function OrderCreateWizard({
       orderDate: today,
       clientId,
       materialsAndHardwareCostPolicy,
+      materialRecognition,
     };
     if (companyDivisionId) dto.companyDivisionId = companyDivisionId;
     if (finishedGoodsWarehouseId)
@@ -478,6 +489,7 @@ export function OrderCreateWizard({
     today,
     clientId,
     materialsAndHardwareCostPolicy,
+    materialRecognition,
     companyDivisionId,
     finishedGoodsWarehouseId,
     dueDate,
@@ -987,6 +999,29 @@ export function OrderCreateWizard({
                     <span className="admin-field__hint">
                       Потребность по количеству считается всегда; политика
                       влияет только на себестоимость.
+                    </span>
+                  </div>
+                  <div className="admin-field">
+                    <label htmlFor="wiz-recognition">
+                      Признание материала по заказу
+                    </label>
+                    <select
+                      id="wiz-recognition"
+                      value={materialRecognition}
+                      onChange={(e) =>
+                        setMaterialRecognition(
+                          e.target.value as OrderMaterialRecognitionValue,
+                        )
+                      }
+                    >
+                      {ORDER_MATERIAL_RECOGNITIONS.map((r) => (
+                        <option key={r} value={r}>
+                          {ORDER_MATERIAL_RECOGNITION_LABELS[r]}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="admin-field__hint">
+                      {ORDER_MATERIAL_RECOGNITION_HINTS[materialRecognition]}
                     </span>
                   </div>
                 </div>

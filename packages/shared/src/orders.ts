@@ -14,6 +14,10 @@
  *   изменения этого DTO-контракта.
  */
 
+import {
+  ORDER_MATERIAL_RECOGNITIONS,
+  type OrderMaterialRecognitionValue,
+} from './material-policy';
 import { z } from 'zod';
 
 import { normalizeColor } from './colors';
@@ -1136,6 +1140,7 @@ export const CreateOrderSchema = z.object({
    * `undefined` / `null` / пустая строка трактуется как `INCLUDE`.
    */
   materialsAndHardwareCostPolicy: OrderMaterialsAndHardwareCostPolicyField,
+  materialRecognition: z.enum(ORDER_MATERIAL_RECOGNITIONS).optional(),
   /**
    * Inline-создание изделия из формы заказа (см.
    * `OrderProductCreationModeSchema` выше). Default `EXISTING_PATTERN`
@@ -1383,6 +1388,7 @@ export const UpdateOrderSchema = z.object({
    * строка — `INCLUDE`.
    */
   materialsAndHardwareCostPolicy: OrderMaterialsAndHardwareCostPolicyField,
+  materialRecognition: z.enum(ORDER_MATERIAL_RECOGNITIONS).optional(),
   items: z
     .array(CreateOrderItemSchema)
     .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
@@ -1832,6 +1838,11 @@ export interface OrderListItemDto {
    * заказов после миграции).
    */
   materialsAndHardwareCostPolicy?: OrderMaterialsAndHardwareCostPolicy;
+  /**
+   * Что считать затратой материала по ЭТОМУ заказу: расход или вся закупка под заказ.
+   * Соседка политики выше — та решает, входит ли материал в себестоимость вообще.
+   */
+  materialRecognition?: OrderMaterialRecognitionValue;
 
   /**
    * Этап 2 «План операций на заказе» (см.

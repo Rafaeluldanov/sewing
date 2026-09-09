@@ -1,5 +1,11 @@
 'use client';
 
+import {
+  MATERIAL_PRICE_SOURCES,
+  MATERIAL_PRICE_SOURCE_LABELS,
+  MATERIAL_QTY_SOURCES,
+  MATERIAL_QTY_SOURCE_LABELS,
+} from '@sewing/shared/material-policy';
 import { useFormState, useFormStatus } from 'react-dom';
 import { CheckCircle, Save, XCircle } from 'lucide-react';
 import type { CompanySettingsDto } from '@sewing/shared/company-settings';
@@ -332,6 +338,50 @@ export function MaterialStockSettingsForm({
           <span className="admin-field__hint">
             Использует плановую потребность заказа и распределяет расход
             пропорционально количеству паспорта.
+          </span>
+        </div>
+        {/*
+          ДВЕ ОСИ, А НЕ ОДНА. План и факт различаются двумя признаками — количеством и ценой.
+          Закупка делает настоящей ЦЕНУ, но не расход: рулон берут на 60 м, когда нужно 47, и
+          остаток принадлежит складу, а не тиражу. Один переключатель на оба вопроса зашил бы в
+          отчёт перерасход, которого не было, — и выглядел бы он как вина цеха.
+        */}
+        <div className="admin-field">
+          <label htmlFor="company-materialQtySource">
+            Количество материала в себестоимости
+          </label>
+          <select
+            id="company-materialQtySource"
+            name="materialQtySource"
+            defaultValue={settings.materialQtySource}
+          >
+            {MATERIAL_QTY_SOURCES.map((value) => (
+              <option key={value} value={value}>
+                {MATERIAL_QTY_SOURCE_LABELS[value]}
+              </option>
+            ))}
+          </select>
+          <span className="admin-field__hint">
+            «Списано, иначе расчёт» не даёт документу показывать ноль там, где ткань потратили, а
+            расход просто не оформили: строка будет подписана, откуда взята цифра.
+          </span>
+        </div>
+        <div className="admin-field">
+          <label htmlFor="company-materialPriceSource">Цена материала</label>
+          <select
+            id="company-materialPriceSource"
+            name="materialPriceSource"
+            defaultValue={settings.materialPriceSource}
+          >
+            {MATERIAL_PRICE_SOURCES.map((value) => (
+              <option key={value} value={value}>
+                {MATERIAL_PRICE_SOURCE_LABELS[value]}
+              </option>
+            ))}
+          </select>
+          <span className="admin-field__hint">
+            Плановая котировка — предположение закупщика; настоящая цена появляется в закупке.
+            Материал ERP настройка не трогает: он приходит по цене своей партии.
           </span>
         </div>
         <div className="admin-field">

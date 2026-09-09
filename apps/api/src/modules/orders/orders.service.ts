@@ -698,6 +698,8 @@ export class OrdersService {
           // пришло / пустое / null → default `INCLUDE` (старая
           // семантика — материалы и фурнитура учитываются в
           // себестоимости).
+          // Признание материала по заказу: расход или вся закупка под этот тираж.
+          materialRecognition: dto.materialRecognition ?? undefined,
           materialsAndHardwareCostPolicy:
             resolveMaterialsAndHardwareCostPolicy(
               dto.materialsAndHardwareCostPolicy,
@@ -1264,6 +1266,8 @@ export class OrdersService {
           customerCurrency: customerCurrency ?? null,
           finishedGoodsWarehouseId:
             finishedGoodsWarehouseIdForCreate ?? null,
+          // Признание материала по заказу: расход или вся закупка под этот тираж.
+          materialRecognition: dto.materialRecognition ?? undefined,
           materialsAndHardwareCostPolicy:
             resolveMaterialsAndHardwareCostPolicy(
               dto.materialsAndHardwareCostPolicy,
@@ -1658,6 +1662,7 @@ export class OrdersService {
      * `OrderMaterialsAndHardwareCostPolicy`.
      */
     materialsAndHardwareCostPolicy: string;
+    materialRecognition: string;
     operationCostPlanRub: Prisma.Decimal | null;
     operationTimePlanSec: number | null;
     operationPlanCalculatedAt: Date | null;
@@ -1758,6 +1763,9 @@ export class OrdersService {
       // нормализованная политика учёта (`INCLUDE` / `EXCLUDE`).
       // Backend кладёт всегда — default `INCLUDE` для исторических
       // заказов после миграции.
+      materialRecognition:
+        (o.materialRecognition as OrderDetailDto['materialRecognition']) ??
+        'BY_CONSUMPTION',
       materialsAndHardwareCostPolicy:
         normalizeMaterialsAndHardwareCostPolicy(
           o.materialsAndHardwareCostPolicy,
@@ -4084,6 +4092,9 @@ export class OrdersService {
       // «Не учитываются», когда `EXCLUDE`; backend по этой же
       // политике решает, включать ли MATERIAL/HARDWARE в
       // себестоимость.
+      materialRecognition:
+        (order.materialRecognition as OrderDetailDto['materialRecognition']) ??
+        'BY_CONSUMPTION',
       materialsAndHardwareCostPolicy:
         normalizeMaterialsAndHardwareCostPolicy(
           order.materialsAndHardwareCostPolicy,

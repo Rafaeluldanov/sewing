@@ -9,6 +9,7 @@
  * `ShiftSession` (оклад) и `PassportEvent` (длительности стадий).
  */
 import { OrderFactCostService } from './order-fact-cost.service.js';
+import { OrderMaterialCostService } from './order-material-cost.service.js';
 import { Module } from '@nestjs/common';
 import { CostsController } from './costs.controller.js';
 import { CostsService } from './costs.service.js';
@@ -29,6 +30,7 @@ import { OrderProductionDocumentService } from './order-production-document.serv
   providers: [
     CostsService,
     OrderFactCostService,
+    OrderMaterialCostService,
     PassportDurationsService,
     PassportRealCostService,
     ProductionCostV2Service,

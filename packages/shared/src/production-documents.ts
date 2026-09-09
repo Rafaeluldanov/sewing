@@ -1,3 +1,5 @@
+import type { ProductionMaterialLineDto } from './material-policy';
+
 /**
  * Контракт «ДОКУМЕНТ ВЫПУСКА ПО ЗАКАЗУ» (`ProductionDocument`).
  *
@@ -121,6 +123,11 @@ export interface ProductionDocumentDto extends ProductionDocumentListItemDto {
   qtyDefect: number;
   cost: ProductionDocumentCostDto;
   lines: ProductionDocumentLineDto[];
+  /**
+   * Материал построчно на момент фиксации: сколько, почём и откуда взята каждая цифра.
+   * Пусто у документов, собранных до появления настройки источников материала.
+   */
+  materialLines: ProductionMaterialLineDto[];
   /** Пусто, когда документ сформирован. */
   pendingReasons: ProductionDocumentPendingReasonDto[];
   recalcReason: string | null;

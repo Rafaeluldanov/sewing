@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Политика материала: где настройки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    color-scheme:light;
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-item:1.05rem;
+    --title-section:1rem; --title-label:.78rem;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 90px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1180px; margin:0 auto; padding:0 20px; }
+
+  .topnav{ position:sticky; top:0; z-index:60; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1180px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:600; padding:.35rem .75rem; border-radius:var(--radius-pill); }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:92ch; }
+  .intro b{ color:var(--color-fg); }
+  .axes{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:.6rem; margin-top:1rem; }
+  .axis{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.85rem .95rem; font-size:.88rem; }
+  .axis b{ display:block; margin-bottom:.2rem; }
+  .axis span{ color:var(--color-fg-muted); }
+  .axis--company{ border-left:3px solid var(--color-accent); }
+  .axis--order{ border-left:3px solid var(--btn-primary-edge); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:var(--title-hero); margin:0 0 .3rem; }
+  .sect > p.lead{ margin:0 0 1rem; color:var(--color-fg-muted); max-width:92ch; }
+  .note{ background:var(--color-bg-tint); border:1px solid #e7d9a8; border-radius:var(--radius-md); padding:.6rem .8rem; font-size:.85rem; margin:.8rem 0; max-width:96ch; }
+  .note--ok{ background:var(--color-ok-soft); border-color:#a9d9b5; }
+  .note--warn{ background:var(--color-warn-soft); border-color:#e5c37a; }
+  .caption{ font-size:.78rem; color:var(--color-fg-subtle); padding:.4rem .1rem 0; }
+  code{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em; background:var(--color-bg-muted); padding:.05rem .3rem; border-radius:4px; }
+
+  .screen{ background:var(--color-bg-soft); border:1px solid var(--color-border-strong); border-radius:var(--radius-lg); box-shadow:var(--shadow-md); overflow:hidden; }
+  .screen__chrome{ background:#fff; border-bottom:1px solid var(--color-border); padding:.45rem .8rem; display:flex; align-items:center; gap:.5rem; font-size:.8rem; color:var(--color-fg-subtle); }
+  .screen__dot{ width:9px; height:9px; border-radius:50%; background:var(--color-border-strong); }
+  .screen__url{ background:var(--color-bg-muted); border-radius:var(--radius-pill); padding:.1rem .6rem; font-size:.78rem; color:var(--color-fg-muted); }
+  .screen__body{ padding:1.1rem 1.2rem 1.3rem; }
+
+  .page-head{ display:flex; align-items:flex-start; gap:.8rem; margin-bottom:1rem; }
+  .page-head__icon{ width:38px; height:38px; border-radius:var(--radius-md); background:var(--color-bg-tint); border:1px solid #e7d9a8; display:flex; align-items:center; justify-content:center; font-size:1.1rem; }
+  .page-head h3{ margin:0; font-size:var(--title-page); }
+  .page-head .sub{ margin:.1rem 0 0; font-size:.86rem; color:var(--color-fg-muted); }
+
+  .card{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:1rem 1.05rem; box-shadow:var(--shadow-sm); }
+  .card + .card{ margin-top:.8rem; }
+  .card__title{ margin:0 0 .9rem; font-size:var(--title-section); }
+  .card--new{ border-color:var(--btn-primary-edge); box-shadow:0 0 0 3px rgba(255,210,63,.22); }
+  .card--dim{ opacity:.55; }
+
+  .field{ display:flex; flex-direction:column; gap:.3rem; }
+  .field + .field{ margin-top:1rem; }
+  .field > label{ font-size:var(--title-label); text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); font-weight:700; }
+  .field select{ font:inherit; font-size:.9rem; padding:.45rem .55rem; border:1px solid var(--color-border-strong); border-radius:var(--radius-sm); background:#fff; color:var(--color-fg); width:100%; max-width:420px; }
+  .hint{ font-size:.82rem; color:var(--color-fg-subtle); max-width:80ch; }
+  .chk{ display:flex; gap:.5rem; align-items:flex-start; font-size:.92rem; }
+  .chk input{ margin-top:.25rem; accent-color:var(--color-accent); width:16px; height:16px; flex:0 0 auto; }
+  .new-badge{ display:inline-block; font-size:.7rem; font-weight:700; padding:.05rem .45rem; border-radius:var(--radius-pill); background:var(--color-bg-tint); border:1px solid #e7d9a8; color:var(--color-warn-fg); margin-left:.4rem; vertical-align:middle; }
+
+  .radio{ display:flex; gap:.55rem; align-items:flex-start; padding:.55rem .65rem; border:1px solid var(--color-border); border-radius:var(--radius-sm); background:#fff; }
+  .radio + .radio{ margin-top:.35rem; }
+  .radio--on{ border-color:var(--color-accent); background:var(--color-accent-soft); box-shadow:0 0 0 3px rgba(47,127,209,.12); }
+  .radio input{ margin-top:.22rem; accent-color:var(--color-accent); width:16px; height:16px; flex:0 0 auto; }
+  .radio__t{ font-size:.92rem; font-weight:700; }
+  .radio__d{ font-size:.82rem; color:var(--color-fg-muted); }
+
+  table.t{ border-collapse:collapse; width:100%; font-size:.87rem; background:#fff; }
+  table.t th, table.t td{ border-bottom:1px solid var(--color-border); padding:.5rem .6rem; text-align:left; vertical-align:top; }
+  table.t th{ background:var(--color-bg-soft); font-size:var(--title-label); text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); font-weight:700; }
+  table.t td.num, table.t th.num{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  table.t tr:last-child td{ border-bottom:0; }
+  .tbl-wrap{ border:1px solid var(--color-border); border-radius:var(--radius-md); overflow:hidden; overflow-x:auto; }
+
+  .badge{ display:inline-block; font-size:.74rem; font-weight:700; padding:.1rem .5rem; border-radius:var(--radius-pill); background:var(--color-bg-muted); color:var(--color-fg-muted); white-space:nowrap; }
+  .badge--ok{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .badge--acc{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  .badge--warn{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+
+  .ladder{ display:flex; gap:.4rem; flex-wrap:wrap; align-items:stretch; }
+  .ladder__s{ flex:1 1 150px; background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-md); padding:.6rem .7rem; font-size:.83rem; }
+  .ladder__s b{ display:block; font-size:.88rem; margin-bottom:.15rem; }
+  .ladder__s span{ color:var(--color-fg-muted); }
+  .ladder__s--pick{ border-color:var(--color-ok); box-shadow:0 0 0 3px rgba(46,158,74,.16); }
+  .ladder__a{ align-self:center; color:var(--color-fg-subtle); font-weight:700; }
+</style>
+</head>
+<body>
+
+<nav class="topnav"><div class="topnav__in">
+  <span class="topnav__brand">Политика материала</span>
+  <a href="#axes">1 · Две оси</a>
+  <a href="#company">2 · Настройки компании</a>
+  <a href="#order">3 · На заказе</a>
+  <a href="#doc">4 · Как видно в документе</a>
+  <a href="#matrix">5 · Что получится</a>
+</div></nav>
+
+<div class="doc">
+
+<section class="intro">
+  <h1>Где настраивается поведение материала</h1>
+  <p>Обсуждение свелось к двум разным вопросам, и они живут в разных местах. <b>Когда списывать</b> — это процесс цеха, одинаковый для всех заказов: настройка компании. <b>Что считать затратой заказа</b> — управленческое решение по конкретному тиражу: переопределение на заказе, рядом с уже существующей политикой «материалы в себестоимости».</p>
+  <p>Новых экранов не добавляется. Всё встаёт в две формы, которые уже есть: карточку «Материалы и склад» в настройках компании и блок «Дополнительно» заказа.</p>
+  <div class="axes">
+    <div class="axis axis--company"><b>Компания · процесс</b><span>Момент списания, источник количества, источник цены. Одинаково для всего цеха.</span></div>
+    <div class="axis axis--order"><b>Заказ · признание</b><span>Материалы в себестоимости (есть уже) и признание закупленного под заказ — для эксклюзивных тканей.</span></div>
+  </div>
+</section>
+
+<!-- ============================ 1 · ОСИ ============================ -->
+<section class="sect" id="axes">
+  <h2>1 · Почему две оси, а не один переключатель</h2>
+  <p class="lead">План и факт различаются не одним признаком, а двумя: <b>количеством</b> и <b>ценой</b>. Закупка делает настоящей цену, но не количество: рулон берут на 60 м, когда нужно 47, и остаток принадлежит складу, а не тиражу. Смешивать их в один переключатель — значит зашить в отчёт перерасход, которого не было.</p>
+
+  <div class="ladder">
+    <div class="ladder__s"><b>Расчёт</b><span>норма × выпуск. Есть всегда, цена — догадка закупщика</span></div>
+    <div class="ladder__a">→</div>
+    <div class="ladder__s"><b>Заказано</b><span>что попросили у поставщика. Первая настоящая цена</span></div>
+    <div class="ladder__a">→</div>
+    <div class="ladder__s"><b>Принято</b><span>что физически приехало и почём</span></div>
+    <div class="ladder__a">→</div>
+    <div class="ladder__s ladder__s--pick"><b>Списано</b><span>что ушло в производство, минус возвраты</span></div>
+  </div>
+  <p class="caption">Строки закупки привязаны к потребности (<code>PurchaseOrderLine.workshopNeedId</code>), поэтому «заказано под этот заказ» считается даже в сводной закупке на несколько заказов.</p>
+</section>
+
+<!-- ============================ 2 · КОМПАНИЯ ============================ -->
+<section class="sect" id="company">
+  <h2>2 · Настройки компании — карточка «Материалы и склад»</h2>
+  <p class="lead">Карточка уже существует: в ней два чекбокса. Добавляются три поля, а нынешний чекбокс автосписания в них растворяется — он становится одним из значений «момента».</p>
+
+  <div class="screen">
+    <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/company-settings</span></div>
+    <div class="screen__body">
+      <div class="page-head">
+        <div class="page-head__icon">⚙</div>
+        <div>
+          <h3>Настройки компании</h3>
+          <p class="sub">Реквизиты, подразделения и склад, производство, интеграции</p>
+        </div>
+      </div>
+
+      <div class="card card--dim">
+        <h4 class="card__title">Реквизиты организации · Контакты · Банковские реквизиты</h4>
+        <p class="hint">Без изменений.</p>
+      </div>
+
+      <div class="card card--new">
+        <h4 class="card__title">Материалы и склад</h4>
+
+        <div class="field">
+          <label for="m1">Момент списания материала <span class="new-badge">новое</span></label>
+          <select id="m1">
+            <option>Не списывать автоматически — только вручную</option>
+            <option selected>На закрытии расклада — ткань разрезана</option>
+            <option>На выдаче кроя сотруднику</option>
+            <option>По упаковке — как списывает ЕРП</option>
+            <option>При закрытии заказа — одним документом</option>
+          </select>
+          <span class="hint">Заменяет чекбокс «Автосписание материалов при выдаче кроя»: он становится значением «на выдаче кроя». Существующее поведение при обновлении сохраняется — выключенный чекбокс превращается в «не списывать».</span>
+          <span class="hint">Раскрой — единственный момент, который не зависит от управленческих решений: рулон разрезан и назад не соберётся.</span>
+        </div>
+
+        <div class="field">
+          <label for="m2">Количество материала в себестоимости <span class="new-badge">новое</span></label>
+          <select id="m2">
+            <option selected>Списано, иначе расчёт по норме</option>
+            <option>Только списанное</option>
+            <option>Только расчёт по норме</option>
+            <option>Заказано поставщику под этот заказ</option>
+            <option>Принято по этому заказу</option>
+          </select>
+          <span class="hint">«Списано, иначе расчёт» закрывает сегодняшнюю дыру: по заказам, где списания не оформляли, документ показывает ноль материала. Строка будет подписана, откуда взята цифра.</span>
+        </div>
+
+        <div class="field">
+          <label for="m3">Цена материала <span class="new-badge">новое</span></label>
+          <select id="m3">
+            <option selected>Подтверждённая закупка, иначе цена заказа поставщику, иначе плановая</option>
+            <option>Плановая котировка закупщика</option>
+            <option>Цена приёмки</option>
+          </select>
+          <span class="hint">Сегодня всегда берётся плановая котировка — то есть предположение закупщика, а не то, что мы заплатили. Материал ЕРП настройка не трогает: он и так приходит по цене конкретной партии.</span>
+        </div>
+
+        <div class="field">
+          <div class="chk"><input type="checkbox" checked /><span>Разрешать отрицательный остаток материала</span></div>
+          <span class="hint">Существующий чекбокс, остаётся как есть.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Форма и её server action уже есть — <code>apps/web/app/admin/company-settings/settings-form.tsx</code>, карточка «Материалы и склад».</p>
+</section>
+
+<!-- ============================ 3 · ЗАКАЗ ============================ -->
+<section class="sect" id="order">
+  <h2>3 · На заказе — там же, где политика материалов</h2>
+  <p class="lead">Переключатель «материалы в себестоимости» уже задаётся при создании заказа в блоке «Дополнительно» (и в правке заказа). Рядом с ним встаёт второй — признание закупленного. Это единственное, что переопределяется по заказу: момент списания и источник цены остаются общими для цеха.</p>
+
+  <div class="screen">
+    <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/orders/new · шаг «Заказ» → Дополнительно</span></div>
+    <div class="screen__body">
+      <div class="card">
+        <h4 class="card__title">Дополнительно</h4>
+
+        <div class="field">
+          <label>Материалы и фурнитура в себестоимости</label>
+          <div class="radio radio--on"><input type="radio" checked /><div><div class="radio__t">Входят</div><div class="radio__d">Обычный заказ: материал покупает цех.</div></div></div>
+          <div class="radio"><input type="radio" /><div><div class="radio__t">Не входят</div><div class="radio__d">Давальческое сырьё: материал клиента, в себестоимость не идёт.</div></div></div>
+          <span class="hint">Существующее поле, без изменений.</span>
+        </div>
+
+        <div class="field">
+          <label>Признание материала по заказу <span class="new-badge">новое</span></label>
+          <div class="radio radio--on"><input type="radio" checked /><div><div class="radio__t">По расходу</div><div class="radio__d">Как в настройках компании: затрата — то, что ушло в производство. Остаток остаётся на складе и достаётся следующему заказу.</div></div></div>
+          <div class="radio"><input type="radio" /><div><div class="radio__t">Весь закупленный под заказ</div><div class="radio__d">Ткань куплена под этот тираж и больше никуда не годится — эксклюзивная расцветка. Тогда затрата заказа — вся закупка, включая остаток рулона.</div></div></div>
+          <span class="hint">Осознанный выбор, а не следствие того, какой документ прочитали. По умолчанию — «по расходу».</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note"><b>Почему не во вкладке «Материалы».</b> Вкладка показывает потребности и закупки, но политику не редактирует — она задаётся при создании и правке заказа. Заводить второе место для одного и того же правила не стоит: настройка должна лежать там, где уже лежит её соседка.</div>
+</section>
+
+<!-- ============================ 4 · ДОКУМЕНТ ============================ -->
+<section class="sect" id="doc">
+  <h2>4 · Как это видно в документе выпуска</h2>
+  <p class="lead">Три настройки без подписи превратят сумму в загадку: одна и та же строка может значить разное. Поэтому в карточке документа материал перестаёт быть анонимной суммой — появляется разбивка со ступенью у каждой строки.</p>
+
+  <div class="screen">
+    <div class="screen__chrome"><span class="screen__dot"></span><span class="screen__url">/admin/production-documents/ПР-20260811-0001</span></div>
+    <div class="screen__body">
+      <div class="card">
+        <h4 class="card__title">Материалы выпуска</h4>
+        <div class="tbl-wrap">
+          <table class="t">
+            <thead><tr><th>Материал</th><th>Количество</th><th>Откуда количество</th><th>Цена</th><th>Откуда цена</th><th class="num">Сумма</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Кулирка чёрная</td><td>151,0 кг</td>
+                <td><span class="badge badge--ok">списано</span></td>
+                <td>430,00 ₽</td>
+                <td><span class="badge badge--acc">подтверждённая закупка</span></td>
+                <td class="num">64 930,00 ₽</td>
+              </tr>
+              <tr>
+                <td>Рибана чёрная</td><td>12,4 кг</td>
+                <td><span class="badge badge--warn">расчёт по норме</span></td>
+                <td>510,00 ₽</td>
+                <td><span class="badge badge--acc">заказ поставщику</span></td>
+                <td class="num">6 324,00 ₽</td>
+              </tr>
+              <tr>
+                <td>Нитки 40/2, чёрные</td><td>18 шт</td>
+                <td><span class="badge">принято</span></td>
+                <td>62,00 ₽</td>
+                <td><span class="badge">цена приёмки</span></td>
+                <td class="num">1 116,00 ₽</td>
+              </tr>
+              <tr>
+                <td>Бирка вшивная</td><td>302 шт</td>
+                <td><span class="badge badge--warn">расчёт по норме</span></td>
+                <td>4,10 ₽</td>
+                <td><span class="badge badge--warn">плановая котировка</span></td>
+                <td class="num">1 238,20 ₽</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note note--warn" style="margin-bottom:0"><b>Жёлтая подпись — сигнал, а не украшение.</b> «Расчёт по норме» означает, что списание не оформляли, «плановая котировка» — что цену никто не подтверждал закупкой. Обе цифры правдоподобны, но это оценка, и человек должен видеть разницу, не открывая отчёт.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 5 · МАТРИЦА ============================ -->
+<section class="sect" id="matrix">
+  <h2>5 · Что получится при разных настройках</h2>
+  <p class="lead">Один и тот же заказ: нужно 47 кг по норме, закуплен рулон 60 кг по 430 ₽, списано 51 кг, возвращён остаток 4 кг. Плановая котировка была 400 ₽.</p>
+
+  <div class="tbl-wrap">
+    <table class="t">
+      <thead><tr><th>Количество</th><th>Цена</th><th>Признание на заказе</th><th class="num">Материал в документе</th><th>Что это значит</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Списано, иначе расчёт</td><td>Закупка</td><td>По расходу</td>
+          <td class="num"><b>20 210 ₽</b></td>
+          <td>47 кг нетто возвратов × 430 ₽ — сколько ушло и сколько заплатили. <span class="badge badge--ok">рекомендую</span></td>
+        </tr>
+        <tr>
+          <td>Только списанное</td><td>Плановая</td><td>По расходу</td>
+          <td class="num">18 800 ₽</td>
+          <td>Сегодняшнее поведение: количество фактическое, цена — предположение закупщика.</td>
+        </tr>
+        <tr>
+          <td>Заказано</td><td>Закупка</td><td>По расходу</td>
+          <td class="num">25 800 ₽</td>
+          <td>60 кг × 430 ₽. В себестоимость тиража попал остаток, который ещё лежит на складе.</td>
+        </tr>
+        <tr>
+          <td>Списано, иначе расчёт</td><td>Закупка</td><td>Весь закупленный</td>
+          <td class="num">25 800 ₽</td>
+          <td>То же число, но как <b>осознанное решение</b>: ткань эксклюзивная, остаток мёртвый и честно принадлежит этому заказу.</td>
+        </tr>
+        <tr>
+          <td>Только расчёт</td><td>Плановая</td><td>По расходу</td>
+          <td class="num">18 800 ₽</td>
+          <td>Чистый план: ни списаний, ни закупок не требуется. Годится, пока склад ведут отдельно.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note note--ok"><b>Умолчания, которые предлагаю:</b> момент списания — «на закрытии расклада», количество — «списано, иначе расчёт», цена — «подтверждённая закупка, иначе заказ поставщику, иначе плановая», признание на заказе — «по расходу». Это даёт настоящую цену без чужого остатка в себестоимости и перестаёт показывать ноль там, где списания просто не оформили.</div>
+</section>
+
+</div>
+</body>
+</html>

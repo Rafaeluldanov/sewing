@@ -390,6 +390,14 @@ export class CompanySettingsService {
     }
     // Строгость гейта «работа мимо маршрута» — единственное enum-поле
     // настроек, поэтому обрабатывается отдельно от строк и boolean-ов.
+    // Источники материала — те же enum-поля, обрабатываются так же.
+    for (const key of ['materialQtySource', 'materialPriceSource'] as const) {
+      const next = dto[key];
+      if (next !== undefined && next !== current[key]) {
+        (data as Record<string, unknown>)[key] = next;
+        changed[key] = { before: current[key], after: next };
+      }
+    }
     if (
       dto.offRouteWorkPolicy !== undefined &&
       dto.offRouteWorkPolicy !== current.offRouteWorkPolicy
@@ -657,6 +665,8 @@ function toDto(c: CompanySettingsRow): CompanySettingsDto {
     autoIssueMaterialsOnCutRelease: c.autoIssueMaterialsOnCutRelease,
     allowNegativeMaterialStock: c.allowNegativeMaterialStock,
     offRouteWorkPolicy: c.offRouteWorkPolicy,
+    materialQtySource: c.materialQtySource,
+    materialPriceSource: c.materialPriceSource,
     sessionIdleTimeoutMinutes: c.sessionIdleTimeoutMinutes,
     shiftAutoCloseTime: c.shiftAutoCloseTime,
     shiftMaxDurationHours: c.shiftMaxDurationHours,

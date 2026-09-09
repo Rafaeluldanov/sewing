@@ -24,6 +24,7 @@ export * from './admin';
 export * from './diagnostics';
 export * from './cutting-closure';
 export * from './passport-qty-corrections';
+export * from './material-policy';
 export * from './production-documents';
 export * from './warehouses';
 export * from './operations';

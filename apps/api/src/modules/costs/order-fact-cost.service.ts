@@ -3,7 +3,9 @@ import { EntryStatus, Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
+import { OrderMaterialCostService } from './order-material-cost.service.js';
 import { erpMaterialCostByPassport } from './erp-material-fact.js';
+import type { ProductionMaterialLineDto } from '@sewing/shared/material-policy';
 
 const POSTED = 'POSTED';
 /** Завершённая сессия подкроя — та же выборка, что и у зарплаты (`computeRecutSeconds`). */
@@ -34,6 +36,12 @@ export type OrderFactCost = {
   plan_total_rub: number | null;
   plan_per_unit_rub: number | null;
   warnings: string[];
+  /**
+   * Материал построчно: сколько, почём и ОТКУДА каждая цифра. Три настройки без подписи
+   * превращают сумму в загадку — одна и та же строка может значить «списано по цене закупки» и
+   * «норма по плановой котировке».
+   */
+  material_lines: ProductionMaterialLineDto[];
 };
 
 /**
@@ -74,6 +82,7 @@ export class OrderFactCostService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly passportCost: PassportRealCostService,
+    private readonly materials: OrderMaterialCostService,
   ) {}
 
   /**
@@ -95,6 +104,7 @@ export class OrderFactCostService {
         inProductionAt: true,
         completedAt: true,
         costEstimateTotalRub: true,
+        materialRecognition: true,
         items: { select: { qtyPlan: true } },
       },
     });
@@ -104,7 +114,7 @@ export class OrderFactCostService {
         piecework_rub: 0, piecework_pending_rub: 0, recut_rub: 0,
         salary_rub: 0, other_rub: 0, total_rub: 0, per_unit_rub: 0,
         plan_total_rub: null, plan_per_unit_rub: null,
-        warnings: ['ORDER_NOT_FOUND'],
+        warnings: ['ORDER_NOT_FOUND'], material_lines: [],
       };
     }
     const excluded = order.materialsAndHardwareCostPolicy === 'EXCLUDE';
@@ -115,17 +125,10 @@ export class OrderFactCostService {
       select: { id: true },
     });
     const passportIds = passports.map((p) => p.id);
-    // Расход материала — по заказу: и документы паспортов, и оформленные на заказ целиком.
-    const materialWhere = { status: POSTED, orderId };
-
-    const [issues, returns, piecework, pending, recut, extras] = await Promise.all([
-      this.prisma.materialIssue.aggregate({
-        where: materialWhere,
-        _sum: { totalCost: true },
-      }),
-      this.prisma.materialIssueReturn.aggregate({
-        where: materialWhere,
-        _sum: { totalCost: true },
+    const [settings, piecework, pending, recut, extras] = await Promise.all([
+      // Источники материала — настройка компании: это свойство процесса, одинаковое для цеха.
+      this.prisma.companySettings.findFirst({
+        select: { materialQtySource: true, materialPriceSource: true },
       }),
       this.prisma.operationEntry.aggregate({
         where: { passportId: { in: passportIds }, status: EntryStatus.APPROVED },
@@ -149,19 +152,45 @@ export class OrderFactCostService {
         _sum: { amount: true },
       }),
     ]);
+    const qtyPlan = order.items.reduce((sum, i) => sum + (i.qtyPlan ?? 0), 0);
+    // Материал считает отдельный движок по двум осям: количество и цена настраиваются
+    // РАЗДЕЛЬНО. Закупка делает настоящей цену, но не расход — остаток рулона принадлежит
+    // складу, а не тиражу.
+    const material = await this.materials.forOrder(orderId, {
+      qtySource: settings?.materialQtySource ?? 'ISSUED_OR_CALCULATED',
+      priceSource: settings?.materialPriceSource ?? 'PURCHASE',
+      recognition: order.materialRecognition ?? 'BY_CONSUMPTION',
+      qtyGood,
+      qtyPlan,
+    });
+
+    // ⛔ Сумма материала ERP — из ШАПКИ списания, а не из строк разбивки: строки ERP может не
+    // прислать или не привязать к потребности, и тогда деньги исчезли бы молча.
     const erpByPassport = await erpMaterialCostByPassport(this.prisma, passportIds);
     let materialsErpFact = 0;
     for (const value of erpByPassport.values()) materialsErpFact += num(value);
 
     // Политика «материалы вне себестоимости» — про материал, а не про то, чей склад (грабля 2).
-    const materialsOwn = excluded
-      ? 0
-      : num(issues._sum.totalCost) - num(returns._sum.totalCost);
+    const materialsOwn = excluded ? 0 : material.totalRub;
     const materialsErp = excluded ? 0 : materialsErpFact;
-    if (excluded) warnings.push('MATERIALS_EXCLUDED_BY_POLICY');
-    if (!excluded && materialsOwn === 0 && materialsErp === 0) {
-      warnings.push('NO_MATERIAL_FACT');
+    const materialLines = excluded ? [] : [...material.lines];
+    // Разница между итогом ERP и её же разбивкой — не потеря, а нераспределённый остаток:
+    // показываем строкой, чтобы сумма документа сходилась со списком.
+    const erpUnassigned = round2(materialsErpFact - material.erpLinesTotalRub);
+    if (!excluded && erpUnassigned > 0.01) {
+      materialLines.push({
+        workshopNeedId: null,
+        description: 'Материал ERP без разбивки по потребностям',
+        unit: null,
+        qty: 0,
+        qtyStep: 'ERP',
+        unitPriceRub: null,
+        priceStep: 'ERP',
+        totalRub: erpUnassigned,
+      });
     }
+    if (excluded) warnings.push('MATERIALS_EXCLUDED_BY_POLICY');
+    if (!excluded) warnings.push(...material.warnings);
 
     let extraRub = 0;
     for (const row of extras) {
@@ -214,7 +243,6 @@ export class OrderFactCostService {
       materialsOwn + materialsErp + pieceworkRub + recutRub + salary + other,
     );
     const planTotal = order.costEstimateTotalRub == null ? null : num(order.costEstimateTotalRub);
-    const qtyPlan = order.items.reduce((sum, i) => sum + (i.qtyPlan ?? 0), 0);
     return {
       materials_own_rub: round2(materialsOwn),
       materials_erp_rub: round2(materialsErp),
@@ -228,7 +256,8 @@ export class OrderFactCostService {
       plan_total_rub: planTotal == null ? null : round2(planTotal),
       plan_per_unit_rub:
         planTotal == null || qtyPlan <= 0 ? null : round2(planTotal / qtyPlan),
-      warnings,
+      warnings: [...new Set(warnings)],
+      material_lines: materialLines,
     };
   }
 }

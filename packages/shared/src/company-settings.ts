@@ -22,6 +22,12 @@
  *   - `apps/web/app/admin/company-settings/*`
  */
 
+import {
+  MATERIAL_PRICE_SOURCES,
+  MATERIAL_QTY_SOURCES,
+  type MaterialPriceSourceValue,
+  type MaterialQtySourceValue,
+} from './material-policy';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -197,6 +203,16 @@ const CorrespondentAccountField = optionalDigitsField({
  * не дублируем, чтобы не было двух источников истины.
  */
 const AutoIssueMaterialsOnCutReleaseField = z.boolean().optional();
+
+/**
+ * Источники материала в себестоимости — ДВЕ РАЗНЫЕ оси, а не одна.
+ *
+ * Заказ поставщику делает настоящей ЦЕНУ, но не расход: рулон берут на 60 м, когда нужно 47, и
+ * остаток принадлежит складу, а не тиражу. Свести их в один переключатель — значит зашить в
+ * отчёт перерасход, которого не было.
+ */
+const MaterialQtySourceField = z.enum(MATERIAL_QTY_SOURCES).optional();
+const MaterialPriceSourceField = z.enum(MATERIAL_PRICE_SOURCES).optional();
 const AllowNegativeMaterialStockField = z.boolean().optional();
 
 /**
@@ -417,6 +433,8 @@ export const UpdateCompanySettingsSchema = z
     correspondentAccount: CorrespondentAccountField,
     settlementAccount: SettlementAccountField,
     autoIssueMaterialsOnCutRelease: AutoIssueMaterialsOnCutReleaseField,
+    materialQtySource: MaterialQtySourceField,
+    materialPriceSource: MaterialPriceSourceField,
     allowNegativeMaterialStock: AllowNegativeMaterialStockField,
     offRouteWorkPolicy: OffRouteWorkPolicyField,
     sessionIdleTimeoutMinutes: SessionIdleTimeoutMinutesField,
@@ -470,6 +488,10 @@ export interface CompanySettingsDto {
    */
   autoIssueMaterialsOnCutRelease: boolean;
   allowNegativeMaterialStock: boolean;
+  /** Откуда берётся КОЛИЧЕСТВО материала в себестоимости (см. `material-policy.ts`). */
+  materialQtySource: MaterialQtySourceValue;
+  /** Откуда берётся ЦЕНА материала. */
+  materialPriceSource: MaterialPriceSourceValue;
   /**
    * Автовыход по бездействию, минуты (`0` — выключен). См.
    * `prisma/schema.prisma::CompanySettings.sessionIdleTimeoutMinutes`.

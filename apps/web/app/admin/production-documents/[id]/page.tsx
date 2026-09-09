@@ -19,6 +19,11 @@
  * ⛔ Не путать с `/admin/production-cost/order/[orderId]` — там read-модель
  * «план → факт», которая ничего не хранит. Здесь — документ со снимком.
  */
+import {
+  MATERIAL_FACT_STEP_LABELS,
+  MATERIAL_PRICE_STEP_LABELS,
+  isEstimatedStep,
+} from '@sewing/shared/material-policy';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
@@ -479,6 +484,73 @@ export default async function AdminProductionDocumentDetailPage({
         />
         <ProductionDocumentLines lines={doc.lines} />
       </AdminCard>
+
+      {/*
+        Материал построчно. Появился вместе с настройкой источников: три настройки без подписи
+        превращают сумму в загадку — одна и та же строка может значить «списано по цене закупки»
+        и «норма по плановой котировке». Поэтому у каждой цифры видна ступень, а оценка (расчёт
+        по норме, плановая котировка) помечена предупреждающим тоном.
+      */}
+      {doc.materialLines.length > 0 && (
+        <AdminCard>
+          <AdminSectionHeader
+            icon={<Layers size={18} strokeWidth={1.6} aria-hidden />}
+            title="Материалы выпуска"
+            hint={`${fmtInt(doc.materialLines.length)} строк · снимок на момент фиксации`}
+          />
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Материал</th>
+                  <th>Количество</th>
+                  <th>Откуда количество</th>
+                  <th>Цена</th>
+                  <th>Откуда цена</th>
+                  <th style={{ textAlign: 'right' }}>Сумма</th>
+                </tr>
+              </thead>
+              <tbody>
+                {doc.materialLines.map((line, index) => (
+                  <tr key={`${line.workshopNeedId ?? 'free'}-${index}`}>
+                    <td data-label="Материал">{line.description}</td>
+                    <td data-label="Количество">
+                      {line.qty.toLocaleString('ru-RU', {
+                        maximumFractionDigits: 3,
+                      })}
+                      {line.unit ? ` ${line.unit}` : ''}
+                    </td>
+                    <td data-label="Откуда количество">
+                      <AdminStatusBadge
+                        tone={isEstimatedStep(line.qtyStep) ? 'warning' : 'success'}
+                      >
+                        {MATERIAL_FACT_STEP_LABELS[line.qtyStep]}
+                      </AdminStatusBadge>
+                    </td>
+                    <td data-label="Цена">
+                      {line.unitPriceRub == null ? (
+                        <span className="admin-muted">—</span>
+                      ) : (
+                        fmtRub(line.unitPriceRub)
+                      )}
+                    </td>
+                    <td data-label="Откуда цена">
+                      <AdminStatusBadge
+                        tone={isEstimatedStep(line.priceStep) ? 'warning' : 'info'}
+                      >
+                        {MATERIAL_PRICE_STEP_LABELS[line.priceStep]}
+                      </AdminStatusBadge>
+                    </td>
+                    <td data-label="Сумма" style={{ textAlign: 'right' }}>
+                      {fmtRub(line.totalRub)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </AdminCard>
+      )}
 
       {/* 5. Себестоимость выпуска — компонентами */}
       <AdminCard>

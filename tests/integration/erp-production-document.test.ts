@@ -29,6 +29,7 @@ import { createSpecPattern } from '../utils/spec';
 import { ErpProductionService } from '../../apps/api/src/modules/integrations/erp-production.service.js';
 import { OrderFactCostService } from '../../apps/api/src/modules/costs/order-fact-cost.service.js';
 import { PassportRealCostService } from '../../apps/api/src/modules/costs/passport-real-cost.service.js';
+import { OrderMaterialCostService } from '../../apps/api/src/modules/costs/order-material-cost.service.js';
 
 describeWithDb('integration — сдача заказа цеха уходит в ERP документом производства', () => {
   let t: TestApp;
@@ -112,7 +113,11 @@ describeWithDb('integration — сдача заказа цеха уходит в
   function service(): ErpProductionService {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const prisma = t.prisma as any;
-    return new ErpProductionService(prisma, new OrderFactCostService(prisma, new PassportRealCostService(prisma)));
+    return new ErpProductionService(prisma, new OrderFactCostService(
+      prisma,
+      new PassportRealCostService(prisma),
+      new OrderMaterialCostService(prisma),
+    ));
   }
 
   async function setSince(value: Date | null): Promise<void> {
@@ -248,7 +253,11 @@ describeWithDb('integration — сдача заказа цеха уходит в
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const prisma = t.prisma as any;
-    return new OrderFactCostService(prisma, new PassportRealCostService(prisma)).factCostForOrder(
+    return new OrderFactCostService(
+      prisma,
+      new PassportRealCostService(prisma),
+      new OrderMaterialCostService(prisma),
+    ).factCostForOrder(
       orderId,
       passports.reduce((sum, p) => sum + (p.qtyGood ?? 0), 0),
     );

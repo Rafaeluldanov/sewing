@@ -90,6 +90,15 @@ const SETTINGS_BOOLEAN_FIELDS = [
   'allowNegativeMaterialStock',
 ] as const;
 
+/**
+ * Источники материала в себестоимости — enum-селекты блока «Материалы и склад».
+ * Пустое значение (селект не рендерился) поле не трогает; валидность проверит Zod на backend.
+ */
+const SETTINGS_ENUM_FIELDS = [
+  'materialQtySource',
+  'materialPriceSource',
+] as const;
+
 function buildSettingsDto(form: FormData): UpdateCompanySettingsDto {
   // Семантика — как в `clients/actions.ts::buildUpdateDto`: поле есть в
   // форме (`!== null`) → передаём как строку (включая пустую, которая
@@ -108,6 +117,12 @@ function buildSettingsDto(form: FormData): UpdateCompanySettingsDto {
     // блок не рендерился вовсе — поле не трогаем.
     if (form.get(`${key}__present`) === null) continue;
     dto[key] = form.get(key) !== null;
+  }
+  for (const key of SETTINGS_ENUM_FIELDS) {
+    const v = form.get(key);
+    if (v === null) continue;
+    const value = String(v).trim();
+    if (value) dto[key] = value;
   }
   return dto as UpdateCompanySettingsDto;
 }

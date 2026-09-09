@@ -368,6 +368,8 @@ export class ProductionDocumentsService {
           planPerUnitRub:
             cost.plan_per_unit_rub == null ? null : money(cost.plan_per_unit_rub),
           costWarnings: cost.warnings,
+          // Снимок строк материала: настройки могут смениться, документ — нет.
+          materialsSnapshot: cost.material_lines as unknown as Prisma.InputJsonValue,
           factSignature: signature,
           lines: { create: lines },
         },
@@ -693,6 +695,7 @@ export class ProductionDocumentsService {
         costWarnings: true,
         recalcReason: true,
         backfilledAt: true,
+        materialsSnapshot: true,
         order: {
           select: {
             number: true,
@@ -769,6 +772,9 @@ export class ProductionDocumentsService {
         warnings: row.costWarnings,
       },
       lines,
+      materialLines: Array.isArray(row.materialsSnapshot)
+        ? (row.materialsSnapshot as unknown as ProductionDocumentDto['materialLines'])
+        : [],
       pendingReasons:
         row.status === FORMING ? await this.pendingReasons(orderId) : [],
     };
