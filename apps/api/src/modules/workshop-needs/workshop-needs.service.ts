@@ -1868,6 +1868,118 @@ export class WorkshopNeedsService {
       }
     }
 
+    // -----------------------------------------------------------------------
+    // Материал БЕЗ ЦВЕТА — одна строка на весь заказ, а не по строке на
+    // каждую расцветку.
+    //
+    // Цикл выше считает ПО РАСЦВЕТКАМ, поэтому дублерин, нитки или бирка, у
+    // которых цвета нет вовсе, выходили из него N раз — N строк с одинаковым
+    // описанием, которые в списке потребности и в закупке ничем друг от
+    // друга не отличаются (расцветку таблица потребности не показывает
+    // вообще). Закупщик покупает такой материал ОДИН раз на заказ — значит и
+    // позиция должна быть одна, с суммой по всем расцветкам.
+    //
+    // «Без цвета» = итоговый цвет строки пуст (см. `resolveColor`): это
+    // `NO_COLOR`, `FIXED_COLOR` с пустым текстом и `ORDER_COLOR` у заказа
+    // без цвета. Строка С цветом (кулирка, рибана) остаётся за своей
+    // расцветкой: по ней кроят и по ней же делится расход на паспорт.
+    //
+    // Схлопнутая строка становится order-level (`orderVariantId = null`) —
+    // ровно тот вид, в котором уже живут нанесения, и потребители его
+    // понимают: `passport-need-share` делит такую строку на ВЕСЬ тираж
+    // заказа, а «Сводно» кладёт её в блок «Общее по заказу».
+    // -----------------------------------------------------------------------
+    let collapsedColorless = 0;
+    if (variantGroups.length > 1) {
+      // Ключ идентичности материала ПОПЕРЁК расцветок. `sourceId` в него не
+      // годится: у строк снимка (`OrderMaterialRequirement`) он свой в
+      // каждой расцветке. Зато описание уже несёт всё, чем материалы
+      // отличаются друг от друга, — тип, плотность, ширину, характеристики:
+      // правка спецификации одной расцветки разведёт описания, и строки
+      // останутся раздельными, как и должны.
+      const colorlessKey = (c: ComputedNeed): string =>
+        [
+          c.sourceType,
+          c.materialRole ?? '',
+          normalizeUnit(c.unit),
+          c.calculationMethod,
+          c.description,
+        ].join(' ');
+      const isColorless = (c: ComputedNeed): boolean =>
+        c.orderVariantId != null && (c.resolvedColorText ?? '').trim() === '';
+
+      const byKey = new Map<string, ComputedNeed[]>();
+      for (const c of computed) {
+        if (!isColorless(c)) continue;
+        const key = colorlessKey(c);
+        const bucket = byKey.get(key) ?? [];
+        bucket.push(c);
+        byKey.set(key, bucket);
+      }
+
+      const collapsedByKey = new Map<string, ComputedNeed>();
+      for (const [key, group] of byKey) {
+        // Одна расцветка на материал — схлопывать нечего, строка остаётся
+        // за своей расцветкой (например, дублерин добавлен руками только
+        // в один цвет).
+        if (group.length < 2) continue;
+        const head = group[0];
+        const note = [
+          head.calculationNote,
+          `Материал без цвета: одна позиция на весь заказ (сложено по ` +
+            `${group.length} расцветкам).`,
+        ].filter((p): p is string => p != null && p !== '');
+        collapsedByKey.set(key, {
+          ...head,
+          orderVariantId: null,
+          variantColor: null,
+          calculatedQty: group.reduce(
+            (sum, c) => sum.plus(c.calculatedQty),
+            new Prisma.Decimal(0),
+          ),
+          // Площадь складываем, только если она вообще считалась:
+          // у QTY_PER_UNIT-строк её нет, и ноль вместо `null` соврал бы.
+          totalAreaM2: group.some((c) => c.totalAreaM2 != null)
+            ? group.reduce(
+                (sum, c) => sum.plus(c.totalAreaM2 ?? 0),
+                new Prisma.Decimal(0),
+              )
+            : null,
+          calculationNote: note.length > 0 ? note.join(' ') : null,
+          // След «из каких строк сложено» — нужен ТОЛЬКО переносу
+          // закупочного блока (см. `takePurchaseCarry`): до этой правки
+          // цена закупщика лежала на строке РАСЦВЕТКИ, и без следа первый
+          // же пересчёт потерял бы её у каждого такого материала.
+          mergedFrom: group.map((c) => ({
+            sourceId: c.sourceId,
+            orderVariantId: c.orderVariantId ?? null,
+          })),
+        });
+      }
+
+      if (collapsedByKey.size > 0) {
+        const collapsed: ComputedNeed[] = [];
+        const taken = new Set<string>();
+        for (const c of computed) {
+          const key = isColorless(c) ? colorlessKey(c) : null;
+          const row = key == null ? undefined : collapsedByKey.get(key);
+          if (row == null || key == null) {
+            collapsed.push(c);
+            continue;
+          }
+          // Схлопнутая строка встаёт на место ПЕРВОЙ из группы — порядок
+          // потребности не скачет относительно расчёта по расцветкам.
+          if (taken.has(key)) {
+            collapsedColorless++;
+            continue;
+          }
+          taken.add(key);
+          collapsed.push(row);
+        }
+        computed.splice(0, computed.length, ...collapsed);
+      }
+    }
+
     // Этап «Нанесение на заказе покупателя»: считаем ОДИН раз, order-level
     // (`orderVariantId = null`). Нанесение не варьируется по цвету —
     // расчёт по расцветкам дал бы двойной счёт. Для каждого активного
@@ -2048,6 +2160,9 @@ export class WorkshopNeedsService {
               LINEAR_M_BY_SIZE: methodLinearBySize,
               PATTERN_MATERIAL_AREA: methodMaterialArea,
             },
+            // Сколько строк убрало схлопывание материалов без цвета
+            // (одна позиция на весь заказ вместо строки на расцветку).
+            collapsedColorless,
             warningsCount: warnings.length,
           },
         },
@@ -4428,16 +4543,28 @@ function takePurchaseCarry(
   carry: Map<string, PurchaseCarryFields | null>,
   computed: ComputedNeed,
 ): PurchaseCarryFields | Record<string, never> {
-  const found = carry.get(
+  const keyAt = (sourceId: string, orderVariantId: string | null): string =>
     purchaseCarryKey({
       sourceType: computed.sourceType,
-      sourceId: computed.sourceId,
-      orderVariantId: computed.orderVariantId ?? null,
+      sourceId,
+      orderVariantId,
       materialRole: computed.materialRole,
       unit: computed.unit,
-    }),
-  );
-  return found ?? {};
+    });
+
+  const primary = keyAt(computed.sourceId, computed.orderVariantId ?? null);
+  if (carry.has(primary)) return carry.get(primary) ?? {};
+
+  // Материал без цвета, схлопнутый в одну строку на заказ: до схлопывания
+  // цена лежала на строке РАСЦВЕТКИ, по order-level ключу её не найти.
+  // Идём по расцветкам в их порядке и берём первую введённую — материал
+  // один и тот же, цена у него одна. `has` без значения (неоднозначный
+  // ключ) уважаем как и раньше: молча приписать чужую цену нельзя.
+  for (const from of computed.mergedFrom ?? []) {
+    const legacy = keyAt(from.sourceId, from.orderVariantId);
+    if (carry.has(legacy)) return carry.get(legacy) ?? {};
+  }
+  return {};
 }
 
 // ---------------------------------------------------------------------------
@@ -4574,4 +4701,14 @@ interface ComputedNeed {
    */
   orderVariantId?: string | null;
   variantColor?: string | null;
+  /**
+   * Материал БЕЗ ЦВЕТА, схлопнутый из строк нескольких расцветок в одну
+   * order-level строку (см. `calculateForOrder`): пары «источник +
+   * расцветка», из которых строка сложена.
+   *
+   * В БД не едет — нужно ТОЛЬКО переносу закупочного блока
+   * (`takePurchaseCarry`): цена закупщика лежит на строке РАСЦВЕТКИ, и без
+   * этого следа первый же пересчёт после схлопывания потерял бы её.
+   */
+  mergedFrom?: Array<{ sourceId: string; orderVariantId: string | null }>;
 }
