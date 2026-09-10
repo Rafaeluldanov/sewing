@@ -55,11 +55,33 @@ const SnapshotRouteOverrideSchema = z.object({
   rateOverride: decimalString.nullable(),
   timeNormSecOverride: z.number().int().nullable(),
   pricingModeOverride: z.string().nullable(),
+  /**
+   * СТОРОННИЕ УСЛУГИ: метка «делаем на стороне» и цена размещения — это
+   * решение по ВАРИАНТУ («сами» против «отдаём подрядчику» — типичная
+   * пара вкладок), поэтому едут в снимок наравне с расценкой.
+   *
+   * `nullish` + дефолт, а не `boolean`/`nullable`: снимки неактивных
+   * вариантов уже лежат в БД без этих полей, и обязательное поле уронило
+   * бы их разбор в `SNAPSHOT_INVALID`.
+   */
+  outsourced: z
+    .boolean()
+    .nullish()
+    .transform((v) => v ?? false),
+  outsourcePriceRub: decimalString
+    .nullish()
+    .transform((v) => v ?? null),
   sizeOverrides: z.array(
     z.object({
       sizeId: z.string().min(1),
       rate: decimalString.nullable(),
       seconds: z.number().int().nullable(),
+      /** Объём размера, отданный на сторону (`nullish` — см. выше). */
+      outsourcedQty: z
+        .number()
+        .int()
+        .nullish()
+        .transform((v) => v ?? null),
     }),
   ),
 });

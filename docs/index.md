@@ -149,6 +149,10 @@ Seed-данные (справочники MVP): `prisma/seed.ts`
   `OrdersService.syncOrderRouteStepsSnapshot()` в
   `create`/`update`/`recalculateOperationPlan`/`startCalculation`,
   а не только в `start()`; в `start()` остаётся defensive fallback).
+- [ADR-0023 Операция заказа «на стороне» (сторонние услуги)](./adr/0023-outsourced-order-operation.md)
+  (решение владельца 10.09.2026: по отданному подрядчику объёму в план
+  идёт цена размещения вместо своей расценки; время, паспорта и
+  зарплата не затронуты — метка только про деньги).
 
 ---
 

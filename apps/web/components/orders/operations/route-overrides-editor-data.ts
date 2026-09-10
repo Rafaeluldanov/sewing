@@ -31,23 +31,39 @@ export function canEditRouteOverrides(status: string): boolean {
   return !LOCKED_STATUSES.has(status);
 }
 
-/** Размеры заказа в порядке размерного ряда (колонки поразмерной сетки). */
+/**
+ * Размеры заказа в порядке размерного ряда (колонки поразмерной сетки).
+ *
+ * `qtyPlan` СУММИРУЕТСЯ по всем строкам плана с этим размером: в
+ * многовариантном заказе один размер живёт в нескольких изделиях
+ * (`order.items` — строка на пару «изделие × размер»), а объём «на
+ * сторону» менеджер расписывает по размеру целиком. Тот же смысл потолка
+ * держит бэкенд, отбивая `outsourcedQty` больше плана размера.
+ */
 export function buildRouteOverrideEditorSizes(
   order: OrderDetailDto,
 ): RouteOverrideEditorSize[] {
-  const m = new Map<string, { id: string; code: string; sortOrder: number }>();
+  const m = new Map<
+    string,
+    { id: string; code: string; sortOrder: number; qtyPlan: number }
+  >();
   for (const it of order.items) {
-    if (!m.has(it.sizeId)) {
-      m.set(it.sizeId, {
-        id: it.sizeId,
-        code: it.sizeCode,
-        sortOrder: it.sizeSortOrder,
-      });
+    const qty = Number.isFinite(it.qtyPlan) ? it.qtyPlan : 0;
+    const prev = m.get(it.sizeId);
+    if (prev) {
+      prev.qtyPlan += qty;
+      continue;
     }
+    m.set(it.sizeId, {
+      id: it.sizeId,
+      code: it.sizeCode,
+      sortOrder: it.sizeSortOrder,
+      qtyPlan: qty,
+    });
   }
   return [...m.values()]
     .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(({ id, code }) => ({ id, code }));
+    .map(({ id, code, qtyPlan }) => ({ id, code, qtyPlan }));
 }
 
 /**
@@ -73,10 +89,21 @@ export function buildRouteOverrideEditorSteps(
       }
       const sizeOverrides: Record<
         string,
-        { rate: number | null; seconds: number | null }
+        {
+          rate: number | null;
+          seconds: number | null;
+          outsourcedQty: number | null;
+        }
       > = {};
       for (const o of step.sizeOverrides) {
-        sizeOverrides[o.sizeId] = { rate: o.rate, seconds: o.seconds };
+        sizeOverrides[o.sizeId] = {
+          rate: o.rate,
+          seconds: o.seconds,
+          // `?? null` — снимок мог приехать от API без поля (старый
+          // билд бэкенда): редактор должен показать «объём не расписан»,
+          // а не `undefined` в инпуте.
+          outsourcedQty: o.outsourcedQty ?? null,
+        };
       }
       return {
         stepId: step.id,
@@ -92,6 +119,11 @@ export function buildRouteOverrideEditorSteps(
         pricingModeOverride: step.pricingModeOverride,
         rateOverride: step.rateOverride,
         timeNormSecOverride: step.timeNormSecOverride,
+        // СТОРОННИЕ УСЛУГИ: метка и цена размещения — тоже часть снимка
+        // маршрута заказа. `=== true` / `?? null` держат строку живой,
+        // если поля в ответе ещё нет.
+        outsourced: step.outsourced === true,
+        outsourcePriceRub: step.outsourcePriceRub ?? null,
         sizeOverrides,
       };
     });

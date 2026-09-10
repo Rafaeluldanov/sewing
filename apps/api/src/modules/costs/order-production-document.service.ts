@@ -40,7 +40,13 @@ const FACT_ENTRY_STATUSES: EntryStatus[] = [
  *     подтверждённая часть подсвечивается отдельно;
  *   - идентичность материала = `WorkshopNeed` (на неё ссылаются строка
  *     сметы, списание и приёмка); непривязанный факт собирается в
- *     синтетические строки.
+ *     синтетические строки;
+ *   - СТОРОННИЕ УСЛУГИ (решение владельца 10.09.2026): по объёму, отданному
+ *     подрядчику (`OrderRouteStep.outsourced` + `outsourcedQty` по
+ *     размерам), в план идёт цена размещения вместо своей расценки, а
+ *     строка получает метку `outsourced` и расшифровку `outsourcePlanRub`.
+ *     Факта по такому объёму не будет — его никто не сканирует, и это
+ *     НОРМА, а не недовыпуск. Плановое ВРЕМЯ метка не трогает.
  *
  * Себестоимость ПОТРЕБЛЯЕТ факт — проводок не пишет.
  */
@@ -221,11 +227,23 @@ export class OrderProductionDocumentService {
       issuedMaterials = issuedMaterials.add(r.issuedRub);
       receivedMaterials = receivedMaterials.add(r.receivedRub);
     }
+    // План операций — ПОЛНЫЙ: своя работа + стоимость стороннего размещения
+    // (`outsourcePlanRub` внутри строки — только расшифровка «в том числе»,
+    // складывать её отдельно нельзя, иначе подряд задвоится). Так же устроен
+    // `Order.operationCostPlanRub` — итоги документа и карточка заказа
+    // должны сходиться.
     let planOperations = new Prisma.Decimal(0);
     let factOperations = new Prisma.Decimal(0);
+    // Стороннее размещение внутри плана: и расшифровка для экрана, и база
+    // для честного отклонения — по отданному подрядчику объёму факта в
+    // цеху не будет никогда.
+    let planOutsource = new Prisma.Decimal(0);
     for (const r of operations) {
       if (r.planRub != null) planOperations = planOperations.add(r.planRub);
       factOperations = factOperations.add(r.factRub);
+      if (r.outsourcePlanRub != null) {
+        planOutsource = planOutsource.add(r.outsourcePlanRub);
+      }
     }
 
     planMaterials = this.m(planMaterials);
@@ -233,8 +251,16 @@ export class OrderProductionDocumentService {
     receivedMaterials = this.m(receivedMaterials);
     planOperations = this.m(planOperations);
     factOperations = this.m(factOperations);
+    planOutsource = this.m(planOutsource);
     const planDirect = this.m(planMaterials.add(planOperations));
-    const factDirect = this.m(issuedMaterials.add(factOperations));
+    // ⛔ Подряд признаётся в факте ПЛАНОВОЙ суммой. Своего факта у него в
+    // цехе нет и не появится: акт подрядчика — документ ERP
+    // (`docs/kb/sewing.md §6`), а сканов по отданному объёму не бывает.
+    // Без этого слагаемого прямая себестоимость занижена, а МАРЖА
+    // завышена ровно на деньги, уплаченные подрядчику.
+    const factDirect = this.m(
+      issuedMaterials.add(factOperations).add(planOutsource),
+    );
 
     // Выручка — только в RUB (как в OrderActualMaterialsService / v2).
     let revenueRub: string | null = null;
@@ -304,8 +330,10 @@ export class OrderProductionDocumentService {
         ),
         planOperationsRub: planOperations.toFixed(2),
         factOperationsRub: factOperations.toFixed(2),
+        planOutsourceRub: planOutsource.toFixed(2),
+        // Отклонение — только по СВОЕЙ работе: план за вычетом размещения.
         varianceOperationsRub: this.m(
-          factOperations.sub(planOperations),
+          factOperations.sub(planOperations.sub(planOutsource)),
         ).toFixed(2),
         planDirectRub: planDirect.toFixed(2),
         factDirectRub: factDirect.toFixed(2),
@@ -690,7 +718,14 @@ export class OrderProductionDocumentService {
         rateOverride: true,
         timeNormSecOverride: true,
         pricingModeOverride: true,
-        sizeOverrides: { select: { sizeId: true, rate: true, seconds: true } },
+        // СТОРОННИЕ УСЛУГИ: подряд назначается на шаге ЗАКАЗА (снимок), а
+        // объём — по размерам (`outsourcedQty`). По отданному объёму в план
+        // идёт цена размещения вместо своей расценки — см. плановый цикл ниже.
+        outsourced: true,
+        outsourcePriceRub: true,
+        sizeOverrides: {
+          select: { sizeId: true, rate: true, seconds: true, outsourcedQty: true },
+        },
         operation: { select: opSelect },
       },
     });
@@ -700,7 +735,14 @@ export class OrderProductionDocumentService {
       rateOverride: Prisma.Decimal | null;
       timeNormSecOverride: number | null;
       pricingModeOverride: PricingMode | null;
-      sizeOverrides: { sizeId: string; rate: Prisma.Decimal | null; seconds: number | null }[];
+      outsourced: boolean;
+      outsourcePriceRub: Prisma.Decimal | null;
+      sizeOverrides: {
+        sizeId: string;
+        rate: Prisma.Decimal | null;
+        seconds: number | null;
+        outsourcedQty: number | null;
+      }[];
       operation: (typeof snapshot)[number]['operation'];
     };
     let steps: Step[] = snapshot;
@@ -733,6 +775,12 @@ export class OrderProductionDocumentService {
           rateOverride: s.rateOverride,
           timeNormSecOverride: null,
           pricingModeOverride: null,
+          // Подряда у шаблона маршрута нет и быть не может: «делаем на
+          // стороне» — решение по КОНКРЕТНОМУ тиражу, оно живёт только в
+          // снимке заказа (`OrderRouteStep.outsourced`). Пока снимка нет,
+          // план считается целиком своей расценкой — как и раньше.
+          outsourced: false,
+          outsourcePriceRub: null,
           sizeOverrides: [],
           operation: s.operation,
         }));
@@ -755,6 +803,22 @@ export class OrderProductionDocumentService {
         string,
         { sizeCode: string | null; color: string | null; qty: number; rub: Prisma.Decimal }
       >;
+      /**
+       * СТОРОННИЕ УСЛУГИ: хотя бы один шаг строки помечен «делаем на
+       * стороне». Флаг, а не счётчик: `ops` ключуется `op.id`, и если
+       * операция стоит в маршруте дважды (например, ВТО до и после
+       * пришива), обе строки схлопываются в одну — «есть подряд» верно
+       * и для такой склейки.
+       */
+      outsourced: boolean;
+      /**
+       * Сколько из `planRub` — стоимость стороннего размещения
+       * (`outsourcePriceRub × отданное количество`). `null` — по строке
+       * ничего не размещали: план целиком свой. Копится отдельно от
+       * `planRub`, потому что `planRub` остаётся ПОЛНЫМ планом операции
+       * (своё + размещение), а UI показывает расшифровку «в том числе».
+       */
+      outsourceRub: Prisma.Decimal | null;
       /** Строка-замена (PF3): факт замещающей операции + суммарный план
        *  замещённых ею плановых шагов. */
       substituteFolded?: boolean;
@@ -777,6 +841,8 @@ export class OrderProductionDocumentService {
         factRub: new Prisma.Decimal(0),
         factApprovedRub: new Prisma.Decimal(0),
         breakdown: new Map(),
+        outsourced: false,
+        outsourceRub: null,
       };
 
       const ratesBySize = new Map(op.ratesBySize.map((r) => [r.sizeId, r.rate]));
@@ -785,10 +851,24 @@ export class OrderProductionDocumentService {
       );
       const sizeOvRate = new Map<string, Prisma.Decimal>();
       const sizeOvSec = new Map<string, number>();
+      // Остаток объёма, отданного подрядчику, по размерам: его «раздаём» по
+      // строкам плана ниже (размер может встретиться в нескольких items —
+      // это разные изделия одного заказа).
+      const outQtyLeftBySize = new Map<string, number>();
       for (const o of step.sizeOverrides) {
         if (o.rate != null) sizeOvRate.set(o.sizeId, o.rate);
         if (o.seconds != null) sizeOvSec.set(o.sizeId, o.seconds);
+        if (o.outsourcedQty != null) {
+          outQtyLeftBySize.set(o.sizeId, o.outsourcedQty);
+        }
       }
+      // Подряд отмечен, но объём по размерам не расписан ⇒ на стороне ВЕСЬ
+      // тираж операции (правило расчёта).
+      const outsourceWholeStep = step.outsourced && outQtyLeftBySize.size === 0;
+      // Метку строки ставим по самому шагу, а не по посчитанному объёму:
+      // «делаем на стороне» — решение менеджера, и оно должно быть видно в
+      // документе, даже если размеры в переопределениях разошлись с планом.
+      if (step.outsourced) acc.outsourced = true;
       const salaryPerSec =
         op.salaryPlanRubPerShift != null
           ? op.salaryPlanRubPerShift.div(
@@ -803,9 +883,29 @@ export class OrderProductionDocumentService {
       let stepTimeCounted = false;
       let stepCost = new Prisma.Decimal(0);
       let stepCostCounted = false;
+      let stepOutsource = new Prisma.Decimal(0);
+      let stepOutsourceCounted = false;
       for (const item of items) {
         if (item.qtyPlan <= 0) continue;
         const qty = item.qtyPlan;
+        // СТОРОННИЕ УСЛУГИ: делим плановое количество строки на «своё» и
+        // «отданное». Остаток подряда по размеру расходуем жадно, по
+        // порядку items, и никогда больше, чем есть в самой строке;
+        // размеры без `outsourcedQty` подрядчику не отдавались.
+        let outQty = 0;
+        if (step.outsourced) {
+          if (outsourceWholeStep) {
+            outQty = qty;
+          } else {
+            // `Math.max(0, …)` — защита от отрицательного объёма в БД
+            // (через API он невозможен, но ручная правка данных иначе
+            // раздула бы СВОЮ часть плана сверх тиража).
+            const left = Math.max(0, outQtyLeftBySize.get(item.sizeId) ?? 0);
+            outQty = Math.min(qty, left);
+            if (outQty > 0) outQtyLeftBySize.set(item.sizeId, left - outQty);
+          }
+        }
+        const ownQty = qty - outQty;
         // Время.
         let timeSec: number | null = null;
         if (op.timeNormMode === 'FIXED') {
@@ -813,36 +913,58 @@ export class OrderProductionDocumentService {
         } else {
           timeSec = sizeOvSec.get(item.sizeId) ?? timeBySize.get(item.sizeId) ?? null;
         }
+        // Плановое время считаем по ПОЛНОМУ количеству, включая отданное
+        // подрядчику: метка «на стороне» — решение владельца ТОЛЬКО про
+        // деньги, узкое место и загрузку цеха она не двигает.
         if (timeSec != null) {
           stepTime += timeSec * qty;
           stepTimeCounted = true;
         } else {
           docWarnings.add('OP_PLAN_INCOMPLETE');
         }
-        // Деньги.
-        if (effMode === 'SALARY_ONLY') {
-          if (salaryPerSec != null && timeSec != null) {
-            stepCost = stepCost.add(salaryPerSec.mul(timeSec).mul(qty));
-            stepCostCounted = true;
-          } else {
-            docWarnings.add('OP_PLAN_INCOMPLETE');
+        // Деньги: своя расценка — только на то, что цех делает сам. Ставку
+        // ищем лишь при `ownQty > 0`: у полностью отданной операции своей
+        // ставки может не быть вовсе, и OP_PLAN_INCOMPLETE звал бы завести
+        // ставку, которая этому заказу не нужна.
+        if (ownQty > 0) {
+          if (effMode === 'SALARY_ONLY') {
+            if (salaryPerSec != null && timeSec != null) {
+              stepCost = stepCost.add(salaryPerSec.mul(timeSec).mul(ownQty));
+              stepCostCounted = true;
+            } else {
+              docWarnings.add('OP_PLAN_INCOMPLETE');
+            }
+          } else if (effMode === 'FIXED') {
+            const rate = step.rateOverride ?? op.fixedRate ?? null;
+            if (rate != null) {
+              stepCost = stepCost.add(rate.mul(ownQty));
+              stepCostCounted = true;
+            } else {
+              docWarnings.add('OP_PLAN_INCOMPLETE');
+            }
+          } else if (effMode === 'BY_SIZE') {
+            const rate = sizeOvRate.get(item.sizeId) ?? ratesBySize.get(item.sizeId) ?? null;
+            if (rate != null) {
+              stepCost = stepCost.add(rate.mul(ownQty));
+              stepCostCounted = true;
+            } else {
+              docWarnings.add('OP_PLAN_INCOMPLETE');
+            }
           }
-        } else if (effMode === 'FIXED') {
-          const rate = step.rateOverride ?? op.fixedRate ?? null;
-          if (rate != null) {
-            stepCost = stepCost.add(rate.mul(qty));
+        }
+        // Отданный объём: вместо своей расценки в план идёт стоимость
+        // размещения (цена за ОДНО изделие × штуки). Цена не задана —
+        // размещение считается как 0, но строка всё равно помечается как
+        // «есть подряд»: сигнал «заведите цену» даёт плановый контур заказа
+        // (`operationPlanWarnings`), а документу подряд — норма, не проблема.
+        if (outQty > 0) {
+          if (step.outsourcePriceRub != null) {
+            const placedRub = step.outsourcePriceRub.mul(outQty);
+            stepCost = stepCost.add(placedRub);
             stepCostCounted = true;
-          } else {
-            docWarnings.add('OP_PLAN_INCOMPLETE');
+            stepOutsource = stepOutsource.add(placedRub);
           }
-        } else if (effMode === 'BY_SIZE') {
-          const rate = sizeOvRate.get(item.sizeId) ?? ratesBySize.get(item.sizeId) ?? null;
-          if (rate != null) {
-            stepCost = stepCost.add(rate.mul(qty));
-            stepCostCounted = true;
-          } else {
-            docWarnings.add('OP_PLAN_INCOMPLETE');
-          }
+          stepOutsourceCounted = true;
         }
       }
       if (stepTimeCounted) {
@@ -850,6 +972,14 @@ export class OrderProductionDocumentService {
       }
       if (stepCostCounted) {
         acc.planRub = (acc.planRub ?? new Prisma.Decimal(0)).add(stepCost);
+      }
+      if (stepOutsourceCounted) {
+        // Складываем, а не присваиваем: одна и та же операция может стоять
+        // в маршруте несколькими шагами (ключ строки — `op.id`), и подряд
+        // мог быть отдан на каждом из них.
+        acc.outsourceRub = (acc.outsourceRub ?? new Prisma.Decimal(0)).add(
+          stepOutsource,
+        );
       }
       ops.set(op.id, acc);
     }
@@ -889,6 +1019,12 @@ export class OrderProductionDocumentService {
           factRub: new Prisma.Decimal(0),
           factApprovedRub: new Prisma.Decimal(0),
           breakdown: new Map(),
+          // Строка без планового шага: подряд назначается только на шаге
+          // маршрута, поэтому у «сироты» его быть не может. Если строка
+          // окажется замещающей операцией — метку и сумму размещения ей
+          // перенесёт сворачивание PF3 ниже, вместе с планом.
+          outsourced: false,
+          outsourceRub: null,
         };
       acc.factQty += e.qty;
       acc.factRub = acc.factRub.add(e.amount);
@@ -945,15 +1081,28 @@ export class OrderProductionDocumentService {
         if (merged.length === 0) continue;
         let planRub: Prisma.Decimal | null = null;
         let planTimeSec: number | null = null;
+        // Метка подряда и стоимость размещения — часть ПЛАНА замещённых
+        // шагов, поэтому переезжают на строку-замену вместе с ним: иначе
+        // расшифровка «в том числе размещение» потерялась бы, а `planRub`
+        // остался бы с деньгами подрядчика без объяснения, откуда они.
+        let outsourceRub: Prisma.Decimal | null = null;
+        let outsourced = false;
         for (const p of merged) {
           if (p.planRub != null)
             planRub = (planRub ?? new Prisma.Decimal(0)).add(p.planRub);
           if (p.planTimeSec != null)
             planTimeSec = (planTimeSec ?? 0) + p.planTimeSec;
+          if (p.outsourceRub != null)
+            outsourceRub = (outsourceRub ?? new Prisma.Decimal(0)).add(
+              p.outsourceRub,
+            );
+          if (p.outsourced) outsourced = true;
           ops.delete(p.key);
         }
         subAcc.planRub = planRub;
         subAcc.planTimeSec = planTimeSec;
+        subAcc.outsourceRub = outsourceRub;
+        subAcc.outsourced = outsourced;
         subAcc.planQty = qtyPlanTotal > 0 ? qtyPlanTotal : null;
         // Встаём на место самого раннего замещённого шага (не в конец).
         subAcc.index = Math.min(...merged.map((p) => p.index));
@@ -968,6 +1117,12 @@ export class OrderProductionDocumentService {
       .map((acc) => {
         const planRub = acc.planRub != null ? this.m(acc.planRub) : null;
         const factRub = this.m(acc.factRub);
+        // «В том числе размещение» — расшифровка внутри `planRub`, а не
+        // отдельное слагаемое: план операции остаётся полным (своё +
+        // подряд), чтобы итоги документа и `Order.operationCostPlanRub`
+        // сходились копейка в копейку.
+        const outsourcePlanRub =
+          acc.outsourceRub != null ? this.m(acc.outsourceRub) : null;
         const breakdown: OrderProductionBreakdownDto[] = [...acc.breakdown.values()]
           .map((b) => ({
             sizeCode: b.sizeCode,
@@ -994,8 +1149,26 @@ export class OrderProductionDocumentService {
           factQty: acc.factQty,
           factRub: factRub.toFixed(2),
           factApprovedRub: this.m(acc.factApprovedRub).toFixed(2),
+          // Метка «делаем на стороне»: по отданному объёму факта не будет —
+          // его никто не сканирует, и это НОРМА, а не недовыпуск. Поэтому
+          // отдельным полем, а не кодом в `warnings` (там UI рисует ⚠).
+          outsourced: acc.outsourced,
+          outsourcePlanRub:
+            outsourcePlanRub != null ? outsourcePlanRub.toFixed(2) : null,
+          // Отклонение строки — от СВОЕЙ части плана (план за вычетом
+          // размещения): по отданному подрядчику объёму скана не будет, и
+          // сравнивать факт цеха с деньгами подрядчика бессмысленно —
+          // строка вечно показывала бы «недовыпуск» на всю сумму подряда.
           varianceRub:
-            planRub != null ? this.m(factRub.sub(planRub)).toFixed(2) : null,
+            planRub != null
+              ? this.m(
+                  factRub.sub(
+                    outsourcePlanRub != null
+                      ? planRub.sub(outsourcePlanRub)
+                      : planRub,
+                  ),
+                ).toFixed(2)
+              : null,
           // Факт без плана и без легальной замены = работа мимо
           // маршрута заказа. Считаем ЗДЕСЬ, а не на месте `index: 9000`:
           // там в «сиротах» лежат и замещающие операции, которые сворачиваются

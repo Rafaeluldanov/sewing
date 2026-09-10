@@ -278,7 +278,20 @@
 - **`OrderRouteStep`** — snapshot маршрута на заказе.
   `(orderId, index)` uniq, cascade от `Order`. Заполняется
   `OrdersService.syncOrderRouteStepsSnapshot()` (см.
-  ADR-0022 и комментарий ниже).
+  ADR-0022 и комментарий ниже). Кроме структуры (`index`,
+  `parallelGroup`) несёт переопределения **на этот заказ**:
+  `rateOverride: Decimal(12,2)?`, `timeNormSecOverride: Int?`,
+  `pricingModeOverride: PricingMode?` и сторонние услуги —
+  `outsourced: Boolean @default(false)`,
+  `outsourcePriceRub: Decimal(12,2)?` (цена размещения за одно
+  изделие; ADR-0023, `docs/domain.md §2.4a`). Пустое поле = «по
+  справочнику операции», а не «нет».
+- **`OrderRouteStepSizeOverride`** — поразмерная строка того же
+  шага: `rate: Decimal(12,2)?`, `seconds: Int?`,
+  `outsourcedQty: Int?` (сколько штук размера отдано подрядчику).
+  `(orderRouteStepId, sizeId)` uniq, cascade от `OrderRouteStep`.
+  Строка с одним `outsourcedQty` законна — «объём на стороне без
+  переопределения расценки».
 
 <a id="24-tech-cards--materials"></a>
 ### 2.4 Tech cards / materials

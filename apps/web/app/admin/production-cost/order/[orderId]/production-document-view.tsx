@@ -9,6 +9,11 @@
  * order/:orderId/document`). Подсветка Δ: перерасход (факт > план) —
  * красным, экономия — зелёным. На незавершённом заказе факт частичный
  * (см. плашку готовности в шапке).
+ *
+ * Исключение из подсветки — строки операций, отданных подрядчику
+ * (`outsourced`): по отданному объёму скана в цеху не будет никогда, и
+ * пустой факт там — плановое решение менеджера, а не провал цеха. Такие
+ * строки получают спокойную метку «на стороне» и НЕЙТРАЛЬНУЮ Δ.
  */
 import { Fragment, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -20,7 +25,11 @@ import {
   type OrderProductionMaterialRowDto,
   type OrderProductionOperationRowDto,
 } from '@sewing/shared/order-production-document';
-import { AdminCard, AdminSectionHeader } from '@/components/admin';
+import {
+  AdminCard,
+  AdminSectionHeader,
+  AdminStatusBadge,
+} from '@/components/admin';
 
 function fmtRub(value: string | null): string {
   if (value == null) return '—';
@@ -62,15 +71,38 @@ function varianceColor(value: string | null): string | undefined {
   return undefined;
 }
 
-function Variance({ value }: { value: string | null }) {
-  if (value == null) return <span className="admin-muted">—</span>;
+/**
+ * Δ по строке. `neutral` гасит красное/зелёное и жирность: есть строки,
+ * где расхождение — не сигнал, а форма плана (операция размещена у
+ * подрядчика: факта по отданному объёму в цеху не появится). Красная
+ * цифра там читалась бы как провал цеха и уводила разбор не туда, поэтому
+ * число остаётся видимым, но в тоне обычного текста; `title` объясняет,
+ * почему оно такое.
+ */
+function Variance({
+  value,
+  neutral = false,
+  title,
+}: {
+  value: string | null;
+  neutral?: boolean;
+  title?: string;
+}) {
+  if (value == null)
+    return (
+      <span className="admin-muted" title={title}>
+        —
+      </span>
+    );
   const n = Number(value);
   return (
     <span
+      title={title}
+      className={neutral ? 'admin-muted' : undefined}
       style={{
-        color: varianceColor(value),
+        color: neutral ? undefined : varianceColor(value),
         fontVariantNumeric: 'tabular-nums',
-        fontWeight: n !== 0 ? 600 : undefined,
+        fontWeight: !neutral && n !== 0 ? 600 : undefined,
       }}
     >
       {n > 0 ? '+' : ''}
@@ -281,6 +313,34 @@ function OperationsTable({ rows }: { rows: OrderProductionOperationRowDto[] }) {
           {rows.map((r) => {
             const isOpen = open.has(r.key);
             const pendingRub = Number(r.factRub) - Number(r.factApprovedRub);
+            // СТОРОННИЕ УСЛУГИ. Деньги подрядчика уже сидят ВНУТРИ
+            // `planRub` (`outsourcePlanRub` — расшифровка «в том числе»,
+            // не отдельное слагаемое), поэтому своя часть плана — это
+            // разность, а не отдельное поле. Считаем её здесь, чтобы
+            // подсказка могла показать план/факт именно по тому объёму,
+            // который цех действительно делает сам.
+            const outsourcePlan =
+              r.outsourced && r.outsourcePlanRub != null
+                ? Number(r.outsourcePlanRub)
+                : null;
+            const ownPlanRub =
+              outsourcePlan != null &&
+              Number.isFinite(outsourcePlan) &&
+              r.planRub != null
+                ? Number(r.planRub) - outsourcePlan
+                : null;
+            const outsourceTitle = r.outsourced
+              ? [
+                  'Операция (полностью или частично) размещена на стороне.',
+                  outsourcePlan != null
+                    ? `Размещение: ${fmtRub(r.outsourcePlanRub)} внутри плана операции.`
+                    : 'Цена стороннего размещения не задана — в плане оно посчитано как 0.',
+                  ownPlanRub != null && ownPlanRub > 0.004
+                    ? `Своя часть: план ${fmtRub(String(ownPlanRub))}, факт ${fmtRub(r.factRub)}.`
+                    : 'Своей части в плане нет — факт по строке ожидается пустым.',
+                  'Пустой или неполный факт здесь — норма, а не расхождение.',
+                ].join(' ')
+              : undefined;
             return (
               <Fragment key={r.key}>
                 <tr onClick={() => toggle(r.key)} style={{ cursor: 'pointer' }}>
@@ -293,6 +353,19 @@ function OperationsTable({ rows }: { rows: OrderProductionOperationRowDto[] }) {
                     >
                       {r.operationCode}
                     </span>
+                    {/* Метка подряда — отдельно от warnings и ДО них:
+                        иконки ⚠/🚫 ниже означают нарушение (замена вне
+                        маршрута, работа мимо плана), а «на стороне» —
+                        обычное плановое решение менеджера. Спокойная
+                        пилюля `info`, без иконки и без цвета тревоги:
+                        владельцу в план-факте нужна именно метка. */}
+                    {r.outsourced && (
+                      <span style={{ marginLeft: 6 }} title={outsourceTitle}>
+                        <AdminStatusBadge tone="info">
+                          на стороне
+                        </AdminStatusBadge>
+                      </span>
+                    )}
                     {/* Пометки строки читала только таблица материалов —
                         из-за этого «факт без плана» в операциях был
                         неотличим от законно свёрнутой замены. */}
@@ -311,10 +384,38 @@ function OperationsTable({ rows }: { rows: OrderProductionOperationRowDto[] }) {
                     {r.planQty != null ? fmtInt(r.planQty) : '—'}
                   </td>
                   <td style={{ textAlign: 'right' }}>{fmtInt(r.factQty)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmtRub(r.planRub)}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    {fmtRub(r.planRub)}
+                    {/* Расшифровка «в том числе размещение» — второй
+                        строкой мелким, как «+… в работе» у подтверждённой
+                        суммы: колонок в документе не прибавляется
+                        (COLS = 9), раскладка не едет. */}
+                    {outsourcePlan != null && (
+                      <span
+                        className="admin-muted"
+                        style={{ display: 'block', fontSize: 11 }}
+                        title="Стоимость стороннего размещения — она уже внутри плана операции, а не сверх него"
+                      >
+                        в т.ч. на стороне {fmtRub(r.outsourcePlanRub)}
+                      </span>
+                    )}
+                  </td>
                   <td style={{ textAlign: 'right' }}>{fmtRub(r.factRub)}</td>
                   <td style={{ textAlign: 'right' }}>
-                    <Variance value={r.varianceRub} />
+                    <Variance
+                      value={r.varianceRub}
+                      // Δ считается уже от СВОЕЙ части плана (бэкенд
+                      // вычитает размещение), поэтому у частичного
+                      // подряда это нормальный сигнал и гасить его
+                      // нельзя. Нейтральной строка становится, только
+                      // когда своей части нет вовсе: там и план, и факт
+                      // цеха — ноль по определению.
+                      neutral={
+                        r.outsourced &&
+                        (ownPlanRub == null || ownPlanRub <= 0.004)
+                      }
+                      title={outsourceTitle}
+                    />
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     <span className="admin-muted">
@@ -452,6 +553,25 @@ export function ProductionDocumentView({
               fact={t.factOperationsRub}
               variance={t.varianceOperationsRub}
             />
+            {Number(t.planOutsourceRub) > 0.004 && (
+              /* Стороннее размещение сидит ВНУТРИ плана операций и в
+                 факте признаётся той же плановой суммой (своего факта у
+                 подряда в цехе нет). Показываем строкой-расшифровкой:
+                 без неё «Операции: план 15 000, факт 0» читалось бы как
+                 провал цеха, а Δ выше уже посчитана по своей работе. */
+              <tr>
+                <td className="admin-muted" style={{ fontSize: 12 }}>
+                  в т.ч. стороннее размещение (факта в цехе не будет)
+                </td>
+                <td style={{ textAlign: 'right' }} className="admin-muted">
+                  {fmtRub(t.planOutsourceRub)}
+                </td>
+                <td style={{ textAlign: 'right' }} className="admin-muted">
+                  {fmtRub(t.planOutsourceRub)}
+                </td>
+                <td />
+              </tr>
+            )}
             <TotalRow
               label="Прямая себестоимость"
               plan={t.planDirectRub}

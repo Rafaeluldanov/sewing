@@ -1664,6 +1664,8 @@ export class OrdersService {
     materialsAndHardwareCostPolicy: string;
     materialRecognition: string;
     operationCostPlanRub: Prisma.Decimal | null;
+    /** СТОРОННИЕ УСЛУГИ: «в том числе размещение» внутри плана операций. */
+    operationOutsourceCostPlanRub: Prisma.Decimal | null;
     operationTimePlanSec: number | null;
     operationPlanCalculatedAt: Date | null;
     operationPlanWarnings: Prisma.JsonValue | null;
@@ -1776,6 +1778,12 @@ export class OrdersService {
       // (исторические/ручные правки могут лежать в JSONB как угодно).
       operationCostPlanRub: o.operationCostPlanRub
         ? o.operationCostPlanRub.toString()
+        : null,
+      // СТОРОННИЕ УСЛУГИ: расшифровка «в том числе размещение» внутри
+      // `operationCostPlanRub`, а НЕ отдельное слагаемое — складывать их
+      // нельзя. `null` — план не считался, `0` — подряда в заказе нет.
+      operationOutsourceCostPlanRub: o.operationOutsourceCostPlanRub
+        ? o.operationOutsourceCostPlanRub.toString()
         : null,
       operationTimePlanSec: o.operationTimePlanSec ?? null,
       operationPlanCalculatedAt: o.operationPlanCalculatedAt
@@ -2016,8 +2024,18 @@ export class OrdersService {
         rateOverride: true,
         timeNormSecOverride: true,
         pricingModeOverride: true,
+        // СТОРОННИЕ УСЛУГИ: метка подряда, цена размещения и поразмерный
+        // объём — такие же per-order правки, как расценка, и переезжают в
+        // новый снимок вместе с ней (см. `preserved`-carry ниже).
+        outsourced: true,
+        outsourcePriceRub: true,
         sizeOverrides: {
-          select: { sizeId: true, rate: true, seconds: true },
+          select: {
+            sizeId: true,
+            rate: true,
+            seconds: true,
+            outsourcedQty: true,
+          },
         },
       },
     });
@@ -2062,13 +2080,29 @@ export class OrdersService {
     // `operationId`, операция в маршруте не повторяется). Новые операции
     // получают сид расценки из шаблона (`RouteTemplateStep.rateOverride`);
     // норма времени и поразмерные оверрайды — только из правок заказа.
+    //
+    // Метка стороннего размещения (`outsourced` + `outsourcePriceRub` +
+    // поразмерный `outsourcedQty`) переносится наравне с расценкой: в
+    // шаблоне маршрута подряда нет и взяться ему при пересоздании неоткуда,
+    // а «структура изменилась» здесь — это любое сохранение формы заказа с
+    // другим набором шагов. Без carry менеджерская отметка «делаем на
+    // стороне» молча слетала бы на первом же ре-синке, и план операций
+    // тихо вернулся бы к полной своей стоимости.
     const preserved = new Map(
       currentSteps.map((s) => [s.operationId, s] as const),
     );
 
     await tx.orderRouteStep.deleteMany({ where: { orderId } });
+    // Подряд переносим только на ПЕРВОЕ вхождение операции в новый
+    // маршрут. Расценка от повтора не страдает (она за штуку), а объём
+    // страдает: «100 шт на сторону», разложенные на два вхождения одной
+    // операции (ОТК/ВТО до и после), дали бы двойную стоимость размещения.
+    const outsourceCarried = new Set<string>();
     for (const s of desiredSteps) {
       const carry = preserved.get(s.operationId);
+      const takesOutsource =
+        carry != null && !outsourceCarried.has(s.operationId);
+      if (takesOutsource) outsourceCarried.add(s.operationId);
       await tx.orderRouteStep.create({
         data: {
           orderId,
@@ -2078,6 +2112,8 @@ export class OrdersService {
           rateOverride: carry ? carry.rateOverride : (s.rateOverride ?? null),
           timeNormSecOverride: carry?.timeNormSecOverride ?? null,
           pricingModeOverride: carry?.pricingModeOverride ?? null,
+          outsourced: takesOutsource ? (carry?.outsourced ?? false) : false,
+          outsourcePriceRub: takesOutsource ? carry!.outsourcePriceRub : null,
           sizeOverrides:
             carry && carry.sizeOverrides.length > 0
               ? {
@@ -2085,6 +2121,7 @@ export class OrdersService {
                     sizeId: o.sizeId,
                     rate: o.rate,
                     seconds: o.seconds,
+                    outsourcedQty: takesOutsource ? o.outsourcedQty : null,
                   })),
                 }
               : undefined,
@@ -2215,10 +2252,16 @@ export class OrdersService {
    *   - `rateOverride` / `timeNormSecOverride` (FIXED-режимы): `undefined`
    *     — не трогать; `null` — снять переопределение (вернуться к дефолту
    *     операции); число — задать.
-   *   - `sizeOverrides` (BY_SIZE-режимы): если массив передан, он —
-   *     ПОЛНЫЙ набор поразмерных правок шага (replace-all): строки с
-   *     `rate=null && seconds=null` удаляются, остальные — пересоздаются.
-   *     `undefined` — поразмерные правки не трогаем.
+   *   - `sizeOverrides` (BY_SIZE-режимы и поразмерный подряд): если массив
+   *     передан, он — ПОЛНЫЙ набор поразмерных правок шага (replace-all):
+   *     пустые строки (`rate`, `seconds` и `outsourcedQty` — все `null`)
+   *     удаляются, остальные — пересоздаются. `undefined` — поразмерные
+   *     правки не трогаем.
+   *   - `outsourced` / `outsourcePriceRub` (СТОРОННИЕ УСЛУГИ): та же
+   *     семантика «`undefined` — не менять». Явное `outsourced = false`
+   *     дополнительно обнуляет цену размещения и все поразмерные объёмы
+   *     шага — выключенный подряд не должен всплыть при повторном
+   *     включении метки.
    *
    * Разрешено во всех статусах, кроме `DONE` / `CANCELLED`. Плановый
    * snapshot (`Order.operationCostPlanRub` / `operationTimePlanSec`)
@@ -2235,10 +2278,26 @@ export class OrdersService {
       select: {
         id: true,
         status: true,
-        items: { select: { sizeId: true } },
+        // `qtyPlan` — потолок для объёма, отданного на сторону: больше
+        // плана размера подрядчику отдать нельзя. `size.code` нужен
+        // только для человекочитаемого текста ошибки («размер L»).
+        items: {
+          select: {
+            sizeId: true,
+            qtyPlan: true,
+            size: { select: { code: true } },
+          },
+        },
         routeSteps: {
           select: {
             id: true,
+            // Текущее состояние подряда по шагу: правка приезжает
+            // частичной (`undefined` = не менять), поэтому «уходит ли шаг
+            // на сторону ЦЕЛИКОМ» считается по эффективному состоянию
+            // «переданное ?? текущее», а не по одному только запросу.
+            outsourced: true,
+            outsourcePriceRub: true,
+            sizeOverrides: { select: { sizeId: true, outsourcedQty: true } },
             operation: {
               select: { code: true, name: true, fixedRate: true },
             },
@@ -2264,12 +2323,34 @@ export class OrdersService {
     }
 
     const stepById = new Map(order.routeSteps.map((s) => [s.id, s] as const));
-    const orderSizeIds = new Set(order.items.map((it) => it.sizeId));
+    // План по размеру — СУММА `qtyPlan` всех строк с этим размером: один
+    // размер может встретиться в нескольких строках заказа (разные изделия),
+    // а подряд расписывается по размеру, а не по строке.
+    const planQtyBySizeId = new Map<string, number>();
+    const sizeCodeById = new Map<string, string>();
+    for (const it of order.items) {
+      planQtyBySizeId.set(
+        it.sizeId,
+        (planQtyBySizeId.get(it.sizeId) ?? 0) + it.qtyPlan,
+      );
+      if (it.size.code) sizeCodeById.set(it.sizeId, it.size.code);
+    }
+    // Что по этой паре «шаг × размер» уже лежит в снимке — чтобы отличить
+    // НОВОЕ значение объёма (опечатка менеджера, отбиваем) от прежнего,
+    // которое стало больше плана из-за правки тиража (обрезаем, см. ниже).
+    const storedOutsourcedQty = (
+      stepId: string,
+      sizeId: string,
+    ): number | null =>
+      stepById
+        .get(stepId)
+        ?.sizeOverrides.find((o) => o.sizeId === sizeId)?.outsourcedQty ?? null;
 
     // Валидация до записи: каждый шаг принадлежит заказу, каждый размер —
-    // из плана заказа (защита от чужих snapshot-ов и опечаток); при
-    // переключении операции на сделку (`FIXED`) обязана быть расценка,
-    // иначе payroll упадёт `OperationRateMissingException` на сканировании.
+    // из плана заказа (защита от чужих snapshot-ов и опечаток); объём на
+    // сторону не больше плана этого размера; при переключении операции на
+    // сделку (`FIXED`) обязана быть расценка, иначе payroll упадёт
+    // `OperationRateMissingException` на сканировании.
     for (const step of dto.steps) {
       const orderStep = stepById.get(step.stepId);
       if (!orderStep) {
@@ -2278,23 +2359,57 @@ export class OrdersService {
           message: `Шаг маршрута ${step.stepId} не принадлежит заказу.`,
         });
       }
+      const stepLabel = orderStep.operation.name || orderStep.operation.code;
       for (const so of step.sizeOverrides ?? []) {
-        if (!orderSizeIds.has(so.sizeId)) {
+        const planQty = planQtyBySizeId.get(so.sizeId);
+        if (planQty === undefined) {
           throw new BadRequestException({
             code: 'ORDER_ROUTE_OVERRIDE_SIZE_INVALID',
             message: `Размер ${so.sizeId} не входит в план заказа.`,
           });
         }
+        // Отдать подрядчику больше, чем вообще запланировано по размеру,
+        // нельзя: остаток «своими силами» ушёл бы в минус, и план операций
+        // посчитал бы отрицательную свою часть.
+        //
+        // ⚠️ Отбиваем только НОВОЕ значение. Уже лежащий в снимке объём
+        // может стать больше плана сам собой — менеджер уменьшил тираж
+        // размера ПОСЛЕ того, как расписал подряд. Форма правки маршрута
+        // присылает поразмерный набор целиком (replace-all), поэтому
+        // жёсткий 400 на неизменённое значение запер бы всю форму:
+        // нельзя было бы поправить даже расценку соседней операции, а
+        // причина («уменьшили тираж на прошлой неделе») в сообщении не
+        // видна. Такое значение обрезаем по плану — ровно так же, как это
+        // делает сам расчёт (`OrderOperationPlanService`: лишние штуки
+        // сгорают, платить за несуществующие изделия нельзя).
+        if (so.outsourcedQty != null && so.outsourcedQty > planQty) {
+          const storedQty = storedOutsourcedQty(step.stepId, so.sizeId);
+          if (so.outsourcedQty !== storedQty) {
+            const sizeLabel = sizeCodeById.get(so.sizeId) ?? so.sizeId;
+            throw new BadRequestException({
+              code: 'ORDER_ROUTE_OUTSOURCED_QTY_OVER_PLAN',
+              message: `Операция «${stepLabel}», размер ${sizeLabel}: план ${planQty} шт, на сторону нельзя отдать ${so.outsourcedQty}.`,
+            });
+          }
+          so.outsourcedQty = planQty;
+        }
       }
       if (step.pricingModeOverride === 'FIXED') {
+        // ⛔ Расценка обязательна ДАЖЕ у операции, целиком отданной
+        // подрядчику. Соблазн «на стороне — своя ставка не нужна» ломает
+        // цех: метка меняет только ДЕНЬГИ ПЛАНА, шаг из маршрута никуда не
+        // девается, паспорт по-прежнему идёт через него, и приёмщик
+        // закрывает операцию сканом, когда партия вернулась от подрядчика.
+        // Сдельная операция без расценки роняет этот скан
+        // (`OperationsService.resolveRate` → `OperationRateMissingException`),
+        // то есть партия встанет — причём у человека, который к подряду
+        // отношения не имеет.
         const hasRate =
           step.rateOverride != null || orderStep.operation.fixedRate != null;
         if (!hasRate) {
-          const label =
-            orderStep.operation.name || orderStep.operation.code;
           throw new BadRequestException({
             code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
-            message: `Операция «${label}»: при переводе на сделку задайте расценку (₽/шт).`,
+            message: `Операция «${stepLabel}»: при переводе на сделку задайте расценку (₽/шт).`,
           });
         }
       }
@@ -2312,19 +2427,42 @@ export class OrdersService {
         if (step.timeNormSecOverride !== undefined) {
           data.timeNormSecOverride = step.timeNormSecOverride;
         }
+        if (step.outsourced !== undefined) {
+          data.outsourced = step.outsourced;
+        }
+        if (step.outsourcePriceRub !== undefined) {
+          data.outsourcePriceRub = step.outsourcePriceRub;
+        }
+        // Снятие метки подряда гасит и цену размещения, и поразмерные
+        // объёмы (ниже). Иначе выключенный подряд остаётся в БД целиком и
+        // всплывает при следующем включении метки: менеджер поставил
+        // галочку «делаем на стороне» ради другого объёма, а в план уехали
+        // прошлогодние штуки и прошлогодняя цена. Обнуление стоит ПОСЛЕ
+        // присваивания цены — при `outsourced = false` оно главнее.
+        const clearsOutsource = step.outsourced === false;
+        if (clearsOutsource) {
+          data.outsourcePriceRub = null;
+        }
         if (Object.keys(data).length > 0) {
           await tx.orderRouteStep.update({ where: { id: step.stepId }, data });
         }
 
         if (step.sizeOverrides !== undefined) {
           // Replace-all поразмерных правок шага: сносим прежние и
-          // создаём только непустые (задан rate и/или seconds).
+          // создаём только непустые (задан rate, seconds и/или объём на
+          // сторону — строка с одним `outsourcedQty` законна).
           await tx.orderRouteStepSizeOverride.deleteMany({
             where: { orderRouteStepId: step.stepId },
           });
-          const rows = step.sizeOverrides.filter(
-            (o) => o.rate != null || o.seconds != null,
-          );
+          const rows = step.sizeOverrides
+            .map((o) => ({
+              ...o,
+              outsourcedQty: clearsOutsource ? null : o.outsourcedQty,
+            }))
+            .filter(
+              (o) =>
+                o.rate != null || o.seconds != null || o.outsourcedQty != null,
+            );
           if (rows.length > 0) {
             await tx.orderRouteStepSizeOverride.createMany({
               data: rows.map((o) => ({
@@ -2332,9 +2470,27 @@ export class OrdersService {
                 sizeId: o.sizeId,
                 rate: o.rate,
                 seconds: o.seconds,
+                outsourcedQty: o.outsourcedQty,
               })),
             });
           }
+        } else if (clearsOutsource) {
+          // Поразмерный набор не прислали, но подряд выключили — объёмы
+          // снимаем сами, иначе они переживут выключение метки. Строки,
+          // которые держались ТОЛЬКО объёмом, после этого пусты — сносим
+          // их по тому же правилу, что и replace-all выше.
+          await tx.orderRouteStepSizeOverride.updateMany({
+            where: { orderRouteStepId: step.stepId },
+            data: { outsourcedQty: null },
+          });
+          await tx.orderRouteStepSizeOverride.deleteMany({
+            where: {
+              orderRouteStepId: step.stepId,
+              rate: null,
+              seconds: null,
+              outsourcedQty: null,
+            },
+          });
         }
       }
 
@@ -4106,6 +4262,12 @@ export class OrdersService {
       operationCostPlanRub: order.operationCostPlanRub
         ? order.operationCostPlanRub.toString()
         : null,
+      // СТОРОННИЕ УСЛУГИ: та же расшифровка «в том числе размещение», что
+      // в `toListItemDto`. Карточка заказа показывает её строкой ПОД
+      // планом операций — это часть его суммы, не добавка к ней.
+      operationOutsourceCostPlanRub: order.operationOutsourceCostPlanRub
+        ? order.operationOutsourceCostPlanRub.toString()
+        : null,
       operationTimePlanSec: order.operationTimePlanSec ?? null,
       operationPlanCalculatedAt: order.operationPlanCalculatedAt
         ? order.operationPlanCalculatedAt.toISOString()
@@ -4172,10 +4334,20 @@ export class OrdersService {
             s.rateOverride != null ? s.rateOverride.toNumber() : null,
           timeNormSecOverride: s.timeNormSecOverride ?? null,
           pricingModeOverride: s.pricingModeOverride ?? null,
+          // СТОРОННИЕ УСЛУГИ: метка и цена размещения. Decimal → число,
+          // как у `rateOverride` — форма правки маршрута работает с
+          // числами, а не со строками.
+          outsourced: s.outsourced,
+          outsourcePriceRub:
+            s.outsourcePriceRub != null ? s.outsourcePriceRub.toNumber() : null,
           sizeOverrides: s.sizeOverrides.map((o) => ({
             sizeId: o.sizeId,
             rate: o.rate != null ? o.rate.toNumber() : null,
             seconds: o.seconds ?? null,
+            // `null` — объём по размеру не расписан; при `outsourced` это
+            // означает «на стороне весь тираж операции» (см. правило
+            // расчёта в `OrderOperationPlanService`).
+            outsourcedQty: o.outsourcedQty ?? null,
           })),
         })),
       materialRequirements: order.materialRequirements

@@ -714,8 +714,20 @@ export class OrderCalculationsService {
             rateOverride: true,
             timeNormSecOverride: true,
             pricingModeOverride: true,
+            // СТОРОННИЕ УСЛУГИ: «делаем сами» против «отдаём подрядчику» —
+            // типичная пара вкладок просчёта, поэтому метка и цена
+            // размещения принадлежат ВАРИАНТУ и едут в снимок наравне с
+            // расценкой. Без них вариант «на стороне» терял бы подряд при
+            // первом же переключении вкладки.
+            outsourced: true,
+            outsourcePriceRub: true,
             sizeOverrides: {
-              select: { sizeId: true, rate: true, seconds: true },
+              select: {
+                sizeId: true,
+                rate: true,
+                seconds: true,
+                outsourcedQty: true,
+              },
             },
           },
         },
@@ -840,12 +852,22 @@ export class OrderCalculationsService {
       })),
       // Только шаги, где есть хоть один оверрайд — restore пишет
       // остальным явные null.
+      //
+      // СТОРОННИЕ УСЛУГИ: метка «на стороне» — самостоятельный оверрайд,
+      // и чаще всего ЕДИНСТВЕННЫЙ на шаге (владелец отдал операцию
+      // подрядчику, расценку и норму не трогал). По прежнему условию
+      // такой шаг в снимок не попадал, и вариант «шьём на стороне»
+      // возвращался с потерянной меткой. Поразмерный объём
+      // (`outsourcedQty`) отдельной проверки не требует: он живёт строкой
+      // `sizeOverrides`, а непустой набор строк условие уже ловит.
       routeOverrides: order.routeSteps
         .filter(
           (s) =>
             s.rateOverride != null ||
             s.timeNormSecOverride != null ||
             s.pricingModeOverride != null ||
+            s.outsourced ||
+            s.outsourcePriceRub != null ||
             s.sizeOverrides.length > 0,
         )
         .map((s) => ({
@@ -853,10 +875,13 @@ export class OrderCalculationsService {
           rateOverride: dec(s.rateOverride),
           timeNormSecOverride: s.timeNormSecOverride,
           pricingModeOverride: s.pricingModeOverride,
+          outsourced: s.outsourced,
+          outsourcePriceRub: dec(s.outsourcePriceRub),
           sizeOverrides: s.sizeOverrides.map((so) => ({
             sizeId: so.sizeId,
             rate: dec(so.rate),
             seconds: so.seconds,
+            outsourcedQty: so.outsourcedQty,
           })),
         })),
       techCardParameters: order.techCardParameters
@@ -1035,45 +1060,94 @@ export class OrderCalculationsService {
    * варианта). Побочный кейс: операция, добавленная в шаблон после
    * снятия снимка, теряет сид расценки из шаблона — детерминированно и
    * самолечится правкой в UI.
+   *
+   * СТОРОННИЕ УСЛУГИ подчиняются тому же правилу, и сброс им нужен
+   * сильнее прочего: пара вкладок «шьём сами» / «шьём на стороне» — это
+   * ровно тот случай, когда carry по operationId притащил бы метку и
+   * цену подрядчика в вариант, где операцию делает цех, и «своя» часть
+   * плана молча обнулилась бы. Поэтому шагам вне снимка пишем явные
+   * `outsourced = false` / `outsourcePriceRub = null`, а поразмерные
+   * строки (в них живёт `outsourcedQty`) пересоздаются replace-all
+   * набором — пустой массив сносит отданный объём предыдущего варианта.
    */
   private async overlayRouteOverrides(
     orderId: string,
     snap: OrderCalculationSnapshotV1,
     actorEmployeeId?: string | null,
   ): Promise<void> {
+    // Порядок ВАЖЕН: подряд восстанавливается только на ПЕРВОЕ вхождение
+    // операции в маршрут (см. ниже), и «первое» должно быть первым по
+    // маршруту, а не случайным порядком выдачи БД.
     const freshSteps = await this.prisma.orderRouteStep.findMany({
       where: { orderId },
+      orderBy: { index: 'asc' },
       select: { id: true, operationId: true },
     });
     if (freshSteps.length === 0) return;
 
-    const planSizeIds = new Set(
-      (
-        await this.prisma.orderItem.findMany({
-          where: { orderId },
-          select: { sizeId: true },
-        })
-      ).map((i) => i.sizeId),
-    );
+    // План восстановленного варианта по размерам: и фильтр «размер ещё
+    // существует», и потолок для объёма, отданного на сторону.
+    const planQtyBySizeId = new Map<string, number>();
+    for (const it of await this.prisma.orderItem.findMany({
+      where: { orderId },
+      select: { sizeId: true, qtyPlan: true },
+    })) {
+      planQtyBySizeId.set(
+        it.sizeId,
+        (planQtyBySizeId.get(it.sizeId) ?? 0) + it.qtyPlan,
+      );
+    }
     const byOperation = new Map(
       snap.routeOverrides.map((o) => [o.operationId, o] as const),
     );
 
+    // Подряд в снимке ключуется операцией, а операция может стоять в
+    // маршруте дважды (ОТК/ВТО до и после). Расценка от повтора не
+    // страдает — она за штуку; ОБЪЁМ страдает: «100 шт на сторону»,
+    // разложенные на два вхождения, дали бы двойную стоимость
+    // размещения. Поэтому подряд восстанавливаем только на ПЕРВОЕ
+    // вхождение, остальным пишем явное «своё».
+    const outsourceGiven = new Set<string>();
+
     const dto: UpdateOrderRouteOverridesDto = {
       steps: freshSteps.map((s) => {
         const o = byOperation.get(s.operationId);
+        const takesOutsource = o != null && !outsourceGiven.has(s.operationId);
+        if (takesOutsource) outsourceGiven.add(s.operationId);
         return {
           stepId: s.id,
           pricingModeOverride: (o?.pricingModeOverride ??
             null) as PricingMode | null,
           rateOverride: o?.rateOverride == null ? null : Number(o.rateOverride),
           timeNormSecOverride: o?.timeNormSecOverride ?? null,
+          // Метку восстанавливаем только из снимка: `o` нет → шаг этого
+          // варианта цех делает сам, и метку соседнего варианта надо
+          // погасить явно (`undefined` бэкенд читает как «не менять»).
+          outsourced: takesOutsource ? (o?.outsourced ?? false) : false,
+          outsourcePriceRub:
+            takesOutsource && o?.outsourcePriceRub != null
+              ? Number(o.outsourcePriceRub)
+              : null,
           sizeOverrides: (o?.sizeOverrides ?? [])
-            .filter((so) => planSizeIds.has(so.sizeId))
+            // Размеры, которых нет в плане восстановленного варианта,
+            // отбрасываем — вместе с расписанным по ним объёмом на
+            // сторону (иначе правка не прошла бы валидацию плана).
+            .filter((so) => planQtyBySizeId.has(so.sizeId))
             .map((so) => ({
               sizeId: so.sizeId,
               rate: so.rate == null ? null : Number(so.rate),
               seconds: so.seconds,
+              // Объём режем планом ВОССТАНОВЛЕННОГО варианта: снимок мог
+              // быть снят с большего тиража, а машинный путь активации
+              // обязан пройти без 400 — иначе вкладка просчёта
+              // переключается наполовину (фазы A–C уже закоммичены).
+              outsourcedQty:
+                takesOutsource && so.outsourcedQty != null
+                  ? Math.min(
+                      so.outsourcedQty,
+                      planQtyBySizeId.get(so.sizeId) ?? 0,
+                    )
+                  : null,
             })),
         };
       }),

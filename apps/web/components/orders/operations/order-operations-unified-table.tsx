@@ -21,6 +21,13 @@
  *     стоимость и время напрямую (rate × qty / Σ rate×qty), для
  *     SALARY_ONLY используем сводный snapshot `Order.operationCostPlanRub`,
  *     если backend его уже посчитал, иначе показываем «окладная».
+ *
+ * Сторонние услуги (решение владельца 10.09.2026): операция, помеченная
+ * «делаем на стороне», получает нейтральный бейдж рядом с названием, а
+ * под итогом «Стоимость операций» появляется расшифровка «в т.ч.
+ * стороннее размещение» (`Order.operationOutsourceCostPlanRub`). Это
+ * часть той же суммы, а не добавка к ней — отдельной строки итога
+ * подряд не получает.
  */
 import { AlertTriangle } from 'lucide-react';
 import type { OperationDetailDto } from '@sewing/shared/operations';
@@ -147,6 +154,33 @@ function NumberCell({ row }: { row: OrderOperationTableRow }) {
   );
 }
 
+/**
+ * Подсказка бейджа «на стороне»: сколько штук ушло подрядчику, по какой
+ * цене и на какую сумму. Сумма размещения — расшифровка ВНУТРИ стоимости
+ * операции, поэтому так и написано: иначе менеджер сложит её с итогом
+ * второй раз.
+ */
+function outsourceHint(row: OrderOperationTableRow): string {
+  const parts: string[] = [];
+  parts.push(
+    row.outsourcedQty > 0
+      ? `На стороне ${row.outsourcedQty.toLocaleString('ru-RU')} из ${row.plannedQty.toLocaleString('ru-RU')} шт`
+      : 'Операция помечена «делаем на стороне»',
+  );
+  parts.push(
+    row.outsourcePriceRub != null
+      ? `Цена размещения ${formatRub(row.outsourcePriceRub)}/шт`
+      : 'Цена размещения не задана — в плане 0 ₽',
+  );
+  if (row.outsourceCostRub != null && row.outsourceCostRub > 0) {
+    parts.push(
+      `Размещение ${formatRub(row.outsourceCostRub)} — уже внутри стоимости операции`,
+    );
+  }
+  parts.push('Плановое время и статусы метка не меняет.');
+  return parts.join('\n');
+}
+
 function OperationCell({ row }: { row: OrderOperationTableRow }) {
   // ТЗ §1: показываем только название операции, без колонки/префикса
   // «Категория». Код операции остаётся в data-attribute для дебага и
@@ -157,6 +191,18 @@ function OperationCell({ row }: { row: OrderOperationTableRow }) {
       data-operation-code={row.operationCode}
     >
       {row.operationName}
+      {row.isOutsourced && (
+        // Метка «делаем на стороне» — факт организации работы, а не
+        // проблема: тон нейтральный (muted), чтобы не путать её с
+        // warning-ами «нет ставки / нет нормы» в соседней колонке.
+        <span
+          style={{ marginLeft: 6 }}
+          title={outsourceHint(row)}
+          data-testid="order-operation-outsourced-badge"
+        >
+          <AdminStatusBadge tone="muted">на стороне</AdminStatusBadge>
+        </span>
+      )}
     </span>
   );
 }
@@ -397,6 +443,19 @@ function SummaryBlock({
     snapshotTime != null && Number.isFinite(snapshotTime)
       ? snapshotTime
       : summary.totalTimeSec;
+  // «В том числе стороннее размещение» — РАСШИФРОВКА внутри плана
+  // операций (`Order.operationOutsourceCostPlanRub` живёт внутри
+  // `operationCostPlanRub`), а не отдельное слагаемое: в `totalCost` она
+  // уже учтена, складывать нельзя. Источник тот же, что у соседних
+  // чисел: снимок backend-а, а если его ещё нет — web-сумма по строкам.
+  const snapshotOutsource =
+    order.operationOutsourceCostPlanRub != null
+      ? Number(order.operationOutsourceCostPlanRub)
+      : null;
+  const outsourceCost =
+    snapshotOutsource != null && Number.isFinite(snapshotOutsource)
+      ? snapshotOutsource
+      : summary.totalOutsourceCostRub;
 
   const unitCost = totalCost != null && qty > 0 ? totalCost / qty : null;
   const unitTimeSec = totalTime != null && qty > 0 ? totalTime / qty : null;
@@ -437,6 +496,20 @@ function SummaryBlock({
               <span className="admin-muted">за тираж</span>
             </span>
           </li>
+          {outsourceCost != null && outsourceCost > 0 && (
+            <li
+              className="order-operations-summary__item"
+              data-testid="order-operations-summary-outsource"
+            >
+              <span className="order-operations-summary__label">
+                в т.ч. стороннее размещение
+              </span>
+              <span className="order-operations-summary__value">
+                <strong>{formatRub(outsourceCost)}</strong>{' '}
+                <span className="admin-muted">внутри плана операций</span>
+              </span>
+            </li>
+          )}
           <li
             className="order-operations-summary__item"
             data-testid="order-operations-summary-unit-cost"

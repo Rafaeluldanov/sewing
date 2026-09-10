@@ -105,7 +105,15 @@ export class OrderActualMaterialsService {
     // 2. Номера заказов.
     const orders = await this.prisma.order.findMany({
       where: { id: { in: orderIds } },
-      select: { id: true, number: true, operationCostPlanRub: true },
+      select: {
+        id: true,
+        number: true,
+        operationCostPlanRub: true,
+        // СТОРОННИЕ УСЛУГИ: сколько из плана операций — деньги подрядчика
+        // (см. `OrderOperationPlanService`). Своего ФАКТА у них в цехе нет:
+        // по отданному объёму никто не сканирует.
+        operationOutsourceCostPlanRub: true,
+      },
     });
     const orderById = new Map(orders.map((o) => [o.id, o]));
 
@@ -261,17 +269,28 @@ export class OrderActualMaterialsService {
       const factLabor = this.okr1c(
         factLaborByOrder.get(orderId) ?? new Prisma.Decimal(0),
       );
-      const varianceLabor = this.okr1c(factLabor.sub(planLabor));
+      // СТОРОННИЕ УСЛУГИ. Размещение у подрядчика сидит ВНУТРИ planLabor, а
+      // в факт цеха попасть не может: по отданному объёму никто не
+      // сканирует. Признаём его в ФАКТЕ той же ПЛАНОВОЙ суммой (акт
+      // подрядчика живёт документом в ERP, `docs/kb/sewing.md §6`) —
+      // тогда отклонение по подряду ноль, а не «экономия» на всю его
+      // сумму, и прямая себестоимость не занижена на деньги, которые
+      // заказ реально стоил. Формулы ниже от этого не меняются.
+      const outsourceLabor = this.okr1c(
+        new Prisma.Decimal(order?.operationOutsourceCostPlanRub ?? 0),
+      );
+      const factLaborTotal = this.okr1c(factLabor.add(outsourceLabor));
+      const varianceLabor = this.okr1c(factLaborTotal.sub(planLabor));
 
       // --- ПРЯМАЯ СЕБЕСТОИМОСТЬ (материалы + труд) ---
       const planDirect = this.okr1c(plan.add(planLabor));
-      const factDirect = this.okr1c(fact.add(factLabor));
+      const factDirect = this.okr1c(fact.add(factLaborTotal));
       const varianceDirect = this.okr1c(factDirect.sub(planDirect));
 
       totalPlan = totalPlan.add(plan);
       totalFact = totalFact.add(fact);
       totalPlanLabor = totalPlanLabor.add(planLabor);
-      totalFactLabor = totalFactLabor.add(factLabor);
+      totalFactLabor = totalFactLabor.add(factLaborTotal);
 
       const row: OrderActualMaterialsRowDto = {
         orderId,
@@ -282,7 +301,9 @@ export class OrderActualMaterialsService {
         varianceRub: variance.toFixed(2),
         receiptLinesCount: countedLines,
         planLaborRub: planLabor.toFixed(2),
-        factLaborRub: factLabor.toFixed(2),
+        // Труд по факту = свои сканы + подряд по плану (см. выше): столбец
+        // обязан складываться в свой же итог и в «прямую себестоимость».
+        factLaborRub: factLaborTotal.toFixed(2),
         varianceLaborRub: varianceLabor.toFixed(2),
         planDirectRub: planDirect.toFixed(2),
         factDirectRub: factDirect.toFixed(2),

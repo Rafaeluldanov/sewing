@@ -718,6 +718,17 @@ export const ORDER_COST_ESTIMATE_LINE_KINDS = [
 
 ## 11. Алгоритм расчёта стоимости и времени заказа
 
+> ⚠️ **Псевдокод ниже — исторический** (каким recon предлагал сделать
+> контур). Реализованный алгоритм с тех пор оброс per-order
+> переопределениями снимка (`OrderRouteStep.rateOverride` /
+> `timeNormSecOverride` / `pricingModeOverride`), плановой окладной
+> стоимостью `SALARY_ONLY` и сторонними услугами (метка «на стороне»:
+> по отданному подрядчику объёму в план идёт цена размещения вместо
+> своей расценки, ADR-0023). Действующее описание —
+> `docs/order-flow.md §5` и §5.1; код —
+> `OrderOperationPlanService.computeTotals`. Не «чинить» код по этому
+> псевдокоду.
+
 Псевдокод (для нового хелпера, например
 `OrderOperationPlanService.recalculate(orderId, tx?)` —
 вызывается из `OrdersService.create` /

@@ -22,7 +22,8 @@ interface PlanOperation {
 
 /**
  * Нормализованный шаг плана: операция + ЭФФЕКТИВНЫЕ per-order
- * переопределения (расценка/норма/режим/поразмерные). Источник структуры
+ * переопределения (расценка/норма/режим/поразмерные + сторонние
+ * услуги: метка, цена размещения и отданный объём). Источник структуры
  * — либо шаги шаблона (`calculateForOrder`), либо снимок `OrderRouteStep`
  * (`calculateFromSnapshot`); дальше оба идут в общий `computeTotals`.
  */
@@ -34,6 +35,27 @@ interface NormalizedPlanStep {
   pricingModeOverride: string | null;
   rateBySize: Map<string, Prisma.Decimal>;
   secondsBySize: Map<string, number>;
+  /**
+   * СТОРОННИЕ УСЛУГИ (решение владельца 10.09.2026): шаг целиком или
+   * частично выполняет подрядчик (`OrderRouteStep.outsourced`). Метка
+   * живёт только на снимке заказа — в шаблоне маршрута её нет: подряд
+   * решается по конкретному тиражу, а не по технологии.
+   */
+  outsourced: boolean;
+  /**
+   * Цена стороннего размещения за ОДНО изделие (₽). `null` — цена не
+   * задана: размещение считается как 0 и поднимается warning (молчаливый
+   * ноль читался бы как «подряд бесплатный»).
+   */
+  outsourcePriceRub: Prisma.Decimal | null;
+  /**
+   * Сколько ШТУК каждого размера отдано подрядчику
+   * (`OrderRouteStepSizeOverride.outsourcedQty`, только заданные
+   * значения). Пустая карта при `outsourced = true` ⇒ на стороне ВЕСЬ
+   * тираж операции; иначе на стороне ровно эти штуки, остальное цех
+   * считает своей расценкой.
+   */
+  outsourcedQtyBySize: Map<string, number>;
 }
 
 /** Строка плана по размеру. */
@@ -99,6 +121,32 @@ const PLAN_OPERATION_SELECT = {
  *   - `step.isOptional === true` ⇒ шаг **полностью** пропускается
  *     (на MVP — ровно так, см. recon §11 «Контракты»).
  *
+ * Сторонние услуги (решение владельца 10.09.2026 «если указали, что это
+ * будет делаться на стороне, тогда мы не берём стоимость операций, а
+ * считаем стоимость стороннего размещения»):
+ *   - шаг снимка с `outsourced = true` делит плановый тираж на две
+ *     части — отданную подрядчику (`OrderRouteStepSizeOverride.
+ *     outsourcedQty` по размерам; ни одного заданного размера ⇒ на
+ *     стороне весь тираж) и оставшуюся у цеха;
+ *   - по отданной части своя расценка (любой из трёх `PricingMode`) НЕ
+ *     считается — вместо неё в план идёт `outsourcePriceRub × штуки`;
+ *   - `operationCostPlanRub` остаётся ПОЛНЫМ планом операций (своё +
+ *     размещение), а `outsourceCostRub` — расшифровка «в том числе»,
+ *     которая ложится в `Order.operationOutsourceCostPlanRub`. Иначе
+ *     каждый потребитель (карточка заказа, «Сводно», ERP) складывал бы
+ *     два числа по-своему;
+ *   - warnings: цена размещения не задана ⇒ «Не задана цена стороннего
+ *     размещения по операции «…»» (в план идёт 0). И наоборот: если
+ *     своей части не осталось ни в одной строке плана, warnings про
+ *     отсутствующую ставку операции подавляются — эта ставка плану уже
+ *     не нужна, а `operationPlanWarnings` читают и цех, и ERP;
+ *   - ⛔ **время и payroll метка не трогает**: `totalTimeSec` считается
+ *     по ПОЛНОМУ `qtyPlan`, шаг из маршрута не исчезает, паспорта,
+ *     доска, гейты ОТК/упаковки и сдельное начисление
+ *     (`OperationsService.resolveRate`) её не читают — часть тиража по
+ *     той же операции цех может делать сам, и «пропуск шага» сломал бы
+ *     движение паспортов («в план-факте достаточно метки»).
+ *
  * Стиль/паттерны:
  *   - вызывается ВНУТРИ транзакции `OrdersService.{create|update|
  *     startCalculation}` через переданный `tx`. Это гарантирует, что
@@ -121,6 +169,9 @@ export class OrderOperationPlanService {
    *     все qtyPlan ≤ 0);
    *   - `totalTimeSec` — целое число секунд или `null` (по той же
    *     логике, что и `totalCostRub`);
+   *   - `outsourceCostRub` — сколько из `totalCostRub` приходится на
+   *     стороннее размещение (`null` там же, где `null` стоимость;
+   *     `0` — подряда в заказе нет);
    *   - `warnings` — массив человекочитаемых сообщений (может быть
    *     пустым).
    *
@@ -134,6 +185,7 @@ export class OrderOperationPlanService {
   ): Promise<{
     totalCostRub: Prisma.Decimal | null;
     totalTimeSec: number | null;
+    outsourceCostRub: Prisma.Decimal | null;
     warnings: string[];
   }> {
     const order = await tx.order.findUnique({
@@ -196,6 +248,7 @@ export class OrderOperationPlanService {
       return {
         totalCostRub: null,
         totalTimeSec: null,
+        outsourceCostRub: null,
         warnings: [
           'Заказ не найден — план операций не рассчитан',
         ],
@@ -206,6 +259,7 @@ export class OrderOperationPlanService {
       return {
         totalCostRub: null,
         totalTimeSec: null,
+        outsourceCostRub: null,
         warnings: ['Маршрут не выбран — план операций не рассчитан'],
       };
     }
@@ -215,6 +269,7 @@ export class OrderOperationPlanService {
       return {
         totalCostRub: null,
         totalTimeSec: null,
+        outsourceCostRub: null,
         warnings: [
           'Не заполнен план по размерам — план операций не рассчитан',
         ],
@@ -239,16 +294,35 @@ export class OrderOperationPlanService {
         rateOverride: true,
         timeNormSecOverride: true,
         pricingModeOverride: true,
-        sizeOverrides: { select: { sizeId: true, rate: true, seconds: true } },
+        // Сторонние услуги: метка, цена размещения и поразмерный объём,
+        // отданный подрядчику. Живут только в снимке заказа — шаблон о
+        // подряде не знает (подряд решается по тиражу, не по технологии).
+        outsourced: true,
+        outsourcePriceRub: true,
+        sizeOverrides: {
+          select: {
+            sizeId: true,
+            rate: true,
+            seconds: true,
+            outsourcedQty: true,
+          },
+        },
       },
     });
     const overridesByOp = new Map(
       snapshotSteps.map((s) => {
         const rateBySize = new Map<string, Prisma.Decimal>();
         const secondsBySize = new Map<string, number>();
+        const outsourcedQtyBySize = new Map<string, number>();
         for (const o of s.sizeOverrides) {
           if (o.rate != null) rateBySize.set(o.sizeId, o.rate);
           if (o.seconds != null) secondsBySize.set(o.sizeId, o.seconds);
+          // Ноль тоже кладём: «по этому размеру на сторону ничего не
+          // отдаём» — это заданный объём, а не «размеры не расписаны»
+          // (пустая карта означала бы «на стороне весь тираж»).
+          if (o.outsourcedQty != null) {
+            outsourcedQtyBySize.set(o.sizeId, o.outsourcedQty);
+          }
         }
         return [
           s.operationId,
@@ -256,8 +330,11 @@ export class OrderOperationPlanService {
             rateOverride: s.rateOverride,
             timeNormSecOverride: s.timeNormSecOverride,
             pricingModeOverride: s.pricingModeOverride,
+            outsourced: s.outsourced === true,
+            outsourcePriceRub: s.outsourcePriceRub,
             rateBySize,
             secondsBySize,
+            outsourcedQtyBySize,
           },
         ] as const;
       }),
@@ -277,8 +354,14 @@ export class OrderOperationPlanService {
           rateOverride: ov ? ov.rateOverride : step.rateOverride,
           timeNormSecOverride: ov?.timeNormSecOverride ?? null,
           pricingModeOverride: ov?.pricingModeOverride ?? null,
+          // Подряд — свойство ЗАКАЗА: без строки снимка (шаблонный шаг,
+          // до материализации маршрута) операция считается своей.
+          outsourced: ov?.outsourced ?? false,
+          outsourcePriceRub: ov?.outsourcePriceRub ?? null,
           rateBySize: ov?.rateBySize ?? new Map<string, Prisma.Decimal>(),
           secondsBySize: ov?.secondsBySize ?? new Map<string, number>(),
+          outsourcedQtyBySize:
+            ov?.outsourcedQtyBySize ?? new Map<string, number>(),
         };
       });
 
@@ -290,7 +373,9 @@ export class OrderOperationPlanService {
    * Вызывается из `calculateForOrder` (структура из шаблона) и
    * `calculateFromSnapshot` (структура из снимка `OrderRouteStep`) — вся
    * денежно-временна́я логика по трём режимам `PricingMode` живёт здесь в
-   * одном месте.
+   * одном месте. Здесь же живёт и деление тиража между цехом и
+   * подрядчиком (`outsourced`): правило одно на оба входа, иначе план
+   * заказа менялся бы от того, правили маршрут холстом или нет.
    */
   private computeTotals(
     steps: NormalizedPlanStep[],
@@ -298,10 +383,14 @@ export class OrderOperationPlanService {
   ): {
     totalCostRub: Prisma.Decimal | null;
     totalTimeSec: number | null;
+    outsourceCostRub: Prisma.Decimal | null;
     warnings: string[];
   } {
     const warningsSet = new Set<string>();
     let totalCost = new Prisma.Decimal(0);
+    // «В том числе размещение» — отдельный аккумулятор: сумма уже входит
+    // в `totalCost`, но потребителям нужна расшифровка (см. шапку).
+    let totalOutsource = new Prisma.Decimal(0);
     let totalTimeSec = 0;
 
     for (const step of steps) {
@@ -339,9 +428,67 @@ export class OrderOperationPlanService {
             )
           : null;
 
-      for (const item of itemsWithQty) {
+      // ----- Сторонние услуги: делим тираж шага на «своё» и «подряд» -----
+      // Раскладку считаем ДО цикла по items: во-первых, размер может
+      // встретиться в нескольких строках плана (разные изделия одного
+      // заказа) и остаток по нему надо расходовать жадно, по порядку
+      // строк; во-вторых, warnings про отсутствующую расценку надо
+      // подавить, только если своей части не осталось НИ В ОДНОЙ строке
+      // — внутри цикла это ещё неизвестно.
+      const outQtyByItem: number[] = new Array(itemsWithQty.length).fill(0);
+      if (step.outsourced) {
+        // outMap: sizeId → остаток к раздаче. Пустая карта ⇒ размеры не
+        // расписаны ⇒ на стороне ВЕСЬ объём операции (решение владельца:
+        // метка без объёма означает «делаем на стороне целиком»).
+        const outMap = new Map<string, number>();
+        for (const [sizeId, qtyOut] of step.outsourcedQtyBySize) {
+          outMap.set(sizeId, qtyOut > 0 ? qtyOut : 0);
+        }
+        const wholeStepOutsourced = outMap.size === 0;
+        for (const [i, item] of itemsWithQty.entries()) {
+          if (wholeStepOutsourced) {
+            outQtyByItem[i] = item.qtyPlan;
+            continue;
+          }
+          const left = outMap.get(item.sizeId);
+          if (left == null || left <= 0) continue;
+          // Не больше, чем есть в строке: остаток перетечёт в следующую
+          // строку того же размера, а лишнее (объём больше тиража)
+          // просто сгорит — платить за несуществующие изделия нельзя.
+          const take = Math.min(left, item.qtyPlan);
+          outQtyByItem[i] = take;
+          outMap.set(item.sizeId, left - take);
+        }
+        // Объём расписан, но ни одна штука не легла на план: размеры в
+        // подряде — не те, что в заказе (типично после смены размерного
+        // ряда — строки переопределений остаются от прежнего плана).
+        // Молча это выглядит как «метка стоит, а денег подрядчика нет»,
+        // и план тихо возвращается к полной своей стоимости.
+        const anyRequested = [...step.outsourcedQtyBySize.values()].some(
+          (v) => v > 0,
+        );
+        const anyPlaced = outQtyByItem.some((v) => v > 0);
+        if (!wholeStepOutsourced && anyRequested && !anyPlaced) {
+          warningsSet.add(
+            `Объём стороннего размещения по операции «${opLabel}» расписан по ` +
+              `размерам, которых нет в плане заказа — на сторону ничего не отдано`,
+          );
+        }
+      }
+      // Своей части не осталось нигде ⇒ ставка операции нам не нужна, и
+      // warnings про неё — шум: `operationPlanWarnings` читают и цех, и
+      // ERP. Цена размещения при этом по-прежнему обязательна.
+      const fullyOutsourced =
+        step.outsourced &&
+        itemsWithQty.every((item, i) => outQtyByItem[i] >= item.qtyPlan);
+
+      for (const [itemIndex, item] of itemsWithQty.entries()) {
         const qty = item.qtyPlan;
         const sizeCode = item.size?.code ?? item.sizeId;
+        // Отдано подрядчику / осталось цеху по ЭТОЙ строке плана.
+        // Деньги считаются по `ownQty`, время — по полному `qty`.
+        const outQty = outQtyByItem[itemIndex] ?? 0;
+        const ownQty = qty - outQty;
 
         // ----- Время (считаем первым; SALARY_ONLY-деньги зависят от него) -----
         let timeSec: number | null = null;
@@ -381,27 +528,33 @@ export class OrderOperationPlanService {
         //   - BY_SIZE     → размерная матрица `OperationRateBySize`;
         //   - SALARY_ONLY → плановая стоимость по нормам времени:
         //     cost = timeSec × (salaryPlanRubPerShift /
-        //                       salaryPlanShiftSeconds) × qty.
+        //                       salaryPlanShiftSeconds) × ownQty.
         //     Если плановая ставка не задана — cost = 0 + warning,
         //     заказ не блокируется (см. ТЗ §6).
         // Эффективный способ оплаты: переопределение заказа (оклад ⇄
         // сделка, `pricingModeOverride`) вытесняет дефолт операции — план
         // должен совпадать с фактическим начислением (`resolveRate`).
+        // Во всех трёх режимах умножаем на `ownQty`: за отданные
+        // подрядчику штуки цех своей ставки не платит.
         const effMode = step.pricingModeOverride ?? op.pricingMode;
         let rate: Prisma.Decimal | null = null;
         if (effMode === 'SALARY_ONLY') {
           if (salaryCostPerSec === null) {
             // Плановая ставка не задана — добавляем warning один раз
             // на операцию (Set схлопнет повторы) и не считаем деньги.
-            warningsSet.add(
-              `Не задана плановая окладная ставка операции «${opLabel}» — ` +
-                `план себестоимости по ней посчитан как 0`,
-            );
+            if (!fullyOutsourced) {
+              warningsSet.add(
+                `Не задана плановая окладная ставка операции «${opLabel}» — ` +
+                  `план себестоимости по ней посчитан как 0`,
+              );
+            }
             rate = null;
           } else if (timeSec != null) {
-            // cost = timeSec * costPerSecond * qty, считаем через
+            // cost = timeSec * costPerSecond * ownQty, считаем через
             // Prisma.Decimal, чтобы не терять точность.
-            totalCost = totalCost.add(salaryCostPerSec.mul(timeSec).mul(qty));
+            totalCost = totalCost.add(
+              salaryCostPerSec.mul(timeSec).mul(ownQty),
+            );
             rate = null; // ниже не складываем повторно
           } else {
             // Без нормы времени для этой пары (item × op) деньги
@@ -417,9 +570,11 @@ export class OrderOperationPlanService {
           if (effectiveRate != null) {
             rate = effectiveRate;
           } else {
-            warningsSet.add(
-              `Нет ставки операции «${opLabel}» — план по этой операции не учтён`,
-            );
+            if (!fullyOutsourced) {
+              warningsSet.add(
+                `Нет ставки операции «${opLabel}» — план по этой операции не учтён`,
+              );
+            }
             rate = null;
           }
         } else if (effMode === 'BY_SIZE') {
@@ -429,15 +584,37 @@ export class OrderOperationPlanService {
           if (r != null) {
             rate = r;
           } else {
-            warningsSet.add(
-              `Нет ставки операции «${opLabel}» для размера ${sizeCode}`,
-            );
+            if (!fullyOutsourced) {
+              warningsSet.add(
+                `Нет ставки операции «${opLabel}» для размера ${sizeCode}`,
+              );
+            }
             rate = null;
           }
         }
 
         if (rate != null) {
-          totalCost = totalCost.add(rate.mul(qty));
+          totalCost = totalCost.add(rate.mul(ownQty));
+        }
+
+        // ----- Деньги: стороннее размещение -----
+        // Вместо своей стоимости по отданным штукам в план идёт цена
+        // подрядчика. Сумма ложится и в `totalCost` (план операций всегда
+        // полный), и в `totalOutsource` (расшифровка «в том числе»).
+        if (outQty > 0) {
+          if (step.outsourcePriceRub != null) {
+            const placement = step.outsourcePriceRub.mul(outQty);
+            totalCost = totalCost.add(placement);
+            totalOutsource = totalOutsource.add(placement);
+          } else {
+            // Цену не задали — молчаливый ноль читался бы как «подряд
+            // бесплатный». Warning один на операцию (Set схлопнет повторы
+            // по размерам и строкам плана).
+            warningsSet.add(
+              `Не задана цена стороннего размещения по операции «${opLabel}» — ` +
+                `размещение посчитано как 0`,
+            );
+          }
         }
       }
     }
@@ -449,10 +626,17 @@ export class OrderOperationPlanService {
       2,
       Prisma.Decimal.ROUND_HALF_UP,
     );
+    // Тот же режим округления, что и у полной суммы: расшифровка «в том
+    // числе размещение» должна сходиться с планом по копейке.
+    const totalOutsourceRounded = totalOutsource.toDecimalPlaces(
+      2,
+      Prisma.Decimal.ROUND_HALF_UP,
+    );
 
     return {
       totalCostRub: totalCostRounded,
       totalTimeSec,
+      outsourceCostRub: totalOutsourceRounded,
       warnings: Array.from(warningsSet),
     };
   }
@@ -474,6 +658,7 @@ export class OrderOperationPlanService {
   ): Promise<{
     totalCostRub: Prisma.Decimal | null;
     totalTimeSec: number | null;
+    outsourceCostRub: Prisma.Decimal | null;
     warnings: string[];
   }> {
     const order = await tx.order.findUnique({
@@ -494,6 +679,7 @@ export class OrderOperationPlanService {
       return {
         totalCostRub: null,
         totalTimeSec: null,
+        outsourceCostRub: null,
         warnings: ['Заказ не найден — план операций не рассчитан'],
       };
     }
@@ -503,6 +689,7 @@ export class OrderOperationPlanService {
       return {
         totalCostRub: null,
         totalTimeSec: null,
+        outsourceCostRub: null,
         warnings: [
           'Не заполнен план по размерам — план операций не рассчитан',
         ],
@@ -517,7 +704,19 @@ export class OrderOperationPlanService {
         rateOverride: true,
         timeNormSecOverride: true,
         pricingModeOverride: true,
-        sizeOverrides: { select: { sizeId: true, rate: true, seconds: true } },
+        // Сторонние услуги — см. одноимённый select в `calculateForOrder`:
+        // подряд правится по КАЖДОМУ вхождению операции в маршрут, и здесь
+        // мы идём именно по строкам снимка.
+        outsourced: true,
+        outsourcePriceRub: true,
+        sizeOverrides: {
+          select: {
+            sizeId: true,
+            rate: true,
+            seconds: true,
+            outsourcedQty: true,
+          },
+        },
         operation: { select: PLAN_OPERATION_SELECT },
       },
     });
@@ -543,9 +742,14 @@ export class OrderOperationPlanService {
     const normalizedSteps: NormalizedPlanStep[] = snapshotSteps.map((s) => {
       const rateBySize = new Map<string, Prisma.Decimal>();
       const secondsBySize = new Map<string, number>();
+      const outsourcedQtyBySize = new Map<string, number>();
       for (const o of s.sizeOverrides) {
         if (o.rate != null) rateBySize.set(o.sizeId, o.rate);
         if (o.seconds != null) secondsBySize.set(o.sizeId, o.seconds);
+        // Ноль — тоже расписанный объём (см. `calculateForOrder`).
+        if (o.outsourcedQty != null) {
+          outsourcedQtyBySize.set(o.sizeId, o.outsourcedQty);
+        }
       }
       return {
         isOptional: optionalOpIds.has(s.operationId),
@@ -553,8 +757,11 @@ export class OrderOperationPlanService {
         rateOverride: s.rateOverride,
         timeNormSecOverride: s.timeNormSecOverride,
         pricingModeOverride: s.pricingModeOverride,
+        outsourced: s.outsourced === true,
+        outsourcePriceRub: s.outsourcePriceRub,
         rateBySize,
         secondsBySize,
+        outsourcedQtyBySize,
       };
     });
 
@@ -573,6 +780,7 @@ export class OrderOperationPlanService {
   ): Promise<{
     totalCostRub: Prisma.Decimal | null;
     totalTimeSec: number | null;
+    outsourceCostRub: Prisma.Decimal | null;
     warnings: string[];
   }> {
     const result = await this.calculateFromSnapshot(orderId, tx);
@@ -580,6 +788,9 @@ export class OrderOperationPlanService {
       where: { id: orderId },
       data: {
         operationCostPlanRub: result.totalCostRub,
+        // Расшифровка «в том числе размещение» пишется тем же update-ом,
+        // что и полный план: разъехаться они не должны ни на копейку.
+        operationOutsourceCostPlanRub: result.outsourceCostRub,
         operationTimePlanSec: result.totalTimeSec,
         operationPlanCalculatedAt: new Date(),
         operationPlanWarnings:
@@ -591,6 +802,7 @@ export class OrderOperationPlanService {
     this.logger.log(
       `event=order.operation_plan.recalculate_from_snapshot orderId=${orderId} ` +
         `costRub=${result.totalCostRub?.toString() ?? 'null'} ` +
+        `outsourceRub=${result.outsourceCostRub?.toString() ?? 'null'} ` +
         `timeSec=${result.totalTimeSec ?? 'null'} ` +
         `warnings=${result.warnings.length}`,
     );
@@ -612,6 +824,8 @@ export class OrderOperationPlanService {
    * Если расчёт получился null/null (нет маршрута / нет items / etc),
    * мы всё равно обновляем snapshot:
    *   - `operationCostPlanRub = null`,
+   *   - `operationOutsourceCostPlanRub = null` (расшифровка «в том числе
+   *     размещение» пуста ровно тогда же, когда пуст сам план),
    *   - `operationTimePlanSec = null`,
    *   - `operationPlanCalculatedAt = new Date()` (фиксируем момент
    *     попытки),
@@ -626,6 +840,7 @@ export class OrderOperationPlanService {
   ): Promise<{
     totalCostRub: Prisma.Decimal | null;
     totalTimeSec: number | null;
+    outsourceCostRub: Prisma.Decimal | null;
     warnings: string[];
   }> {
     // Маршрут заказа правили холстом — источник истины снимок, а не
@@ -647,6 +862,9 @@ export class OrderOperationPlanService {
       where: { id: orderId },
       data: {
         operationCostPlanRub: result.totalCostRub,
+        // «В том числе размещение» — расшифровка внутри полного плана
+        // (см. `Order.operationOutsourceCostPlanRub`), не слагаемое.
+        operationOutsourceCostPlanRub: result.outsourceCostRub,
         operationTimePlanSec: result.totalTimeSec,
         operationPlanCalculatedAt: new Date(),
         operationPlanWarnings:
@@ -658,6 +876,7 @@ export class OrderOperationPlanService {
     this.logger.log(
       `event=order.operation_plan.recalculate orderId=${orderId} ` +
         `costRub=${result.totalCostRub?.toString() ?? 'null'} ` +
+        `outsourceRub=${result.outsourceCostRub?.toString() ?? 'null'} ` +
         `timeSec=${result.totalTimeSec ?? 'null'} ` +
         `warnings=${result.warnings.length}`,
     );

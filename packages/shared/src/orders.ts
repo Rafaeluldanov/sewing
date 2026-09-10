@@ -1868,6 +1868,14 @@ export interface OrderListItemDto {
    * DTO-консьюмерами, которые могли ожидать число.
    */
   operationCostPlanRub?: string | number | null;
+  /**
+   * СТОРОННИЕ УСЛУГИ: сколько из `operationCostPlanRub` — стоимость
+   * стороннего размещения (шаги маршрута с `outsourced`, цена × отданный
+   * объём). Это РАСШИФРОВКА «в том числе», а не отдельное слагаемое:
+   * складывать её с планом операций нельзя, она уже внутри.
+   * `null` — план не считался, `0` — подряда в заказе нет.
+   */
+  operationOutsourceCostPlanRub?: string | number | null;
   operationTimePlanSec?: number | null;
   /** ISO-string `Order.operationPlanCalculatedAt` или `null`. */
   operationPlanCalculatedAt?: string | null;

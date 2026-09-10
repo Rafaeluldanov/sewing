@@ -756,7 +756,9 @@ export class OrderAmendmentsService {
     await this.prisma.$transaction(async (tx) => {
       // Сдвигаем хвост снимка вверх (index+1). От большего индекса к
       // меньшему — иначе @@unique([orderId, index]) ловит промежуточную
-      // коллизию.
+      // коллизию. Двигаем СТРОКИ, а не пересоздаём их, поэтому per-order
+      // правки шагов (расценка, норма, поразмерные строки, метка
+      // стороннего размещения с ценой и объёмом) остаются на месте.
       const toShift = order.routeSteps
         .filter((s) => s.index >= insertIndex)
         .sort((a, b) => b.index - a.index);
@@ -774,6 +776,10 @@ export class OrderAmendmentsService {
         data: { currentRouteStepIndex: { increment: 1 } },
       });
 
+      // Шаг рождается чистым — без расценки, нормы и метки «на стороне»:
+      // подрядчика назначают в «Редактировать маршрут заказа»
+      // (`PUT /route-overrides`), сюда операция приходит только своим
+      // составом.
       await tx.orderRouteStep.create({
         data: {
           orderId,
@@ -988,7 +994,8 @@ export class OrderAmendmentsService {
     // Ключ — ПОЗИЦИЯ снимка (`index`), а не операция: при повторах операции
     // в маршруте (чередующиеся ОТК/ВТО) по `operationId` строки неразличимы,
     // и вторая позиция затирала бы первую вместе с её per-order расценкой,
-    // нормой времени и поразмерными переопределениями.
+    // нормой времени, поразмерными переопределениями и меткой стороннего
+    // размещения (`outsourced` / `outsourcePriceRub` / `outsourcedQty`).
     const stepByIndex = new Map(order.routeSteps.map((s) => [s.index, s]));
     const removedStepIds = order.routeSteps
       .filter((s) => plan.removedIndexes.includes(s.index))
@@ -1024,6 +1031,15 @@ export class OrderAmendmentsService {
         });
       }
 
+      // Переставленный шаг — та же СТРОКА снимка: меняем только позицию и
+      // параллельную группу, поэтому per-order правки (расценка, норма,
+      // поразмерные строки, метка «на стороне» с ценой размещения и
+      // отданным объёмом) переезжают вместе с ней и переписывать их
+      // поимённо не нужно. Именно поэтому здесь `update`, а не
+      // delete+create: пересборка строки потеряла бы всё перечисленное
+      // молча — план бы сошёлся, а подряд из заказа исчез.
+      // Новый шаг рождается чистым: подрядчика назначают в «Редактировать
+      // маршрут заказа» (`PUT /route-overrides`), а не холстом правки.
       for (const p of plan.placements) {
         if (p.index <= frontier) continue; // замороженный префикс не трогаем
         const existing =

@@ -6,7 +6,9 @@
  * **в рамках этого заказа** (не меняя справочник операций и шаблон):
  *   - способ оплаты операции: Оклад ⇄ Сделка ⇄ Сделка по размерам;
  *   - расценку (₽/шт) — для сделки;
- *   - норму времени (сек/шт) — FIXED одно значение или BY_SIZE поразмерно.
+ *   - норму времени (сек/шт) — FIXED одно значение или BY_SIZE поразмерно;
+ *   - СТОРОННИЕ УСЛУГИ: метку «на стороне», цену размещения (₽/шт) и —
+ *     если подрядчику отдан не весь тираж — объём по размерам.
  *
  * Вне режима редактирования рендерится `children` — обычная серверная
  * таблица операций. По кнопке вся таблица заменяется формой с инпутами и
@@ -16,7 +18,9 @@
  * Пустой инпут = «без переопределения» (берётся дефолт операции,
  * показанный в placeholder). При переводе операции на сделку расценку
  * нужно задать, если у операции нет своей (`fixedRate`/поразмерной) —
- * иначе сохранение заблокировано. Источник истины — снимок маршрута
+ * иначе сохранение заблокировано. Исключение — операция, целиком ушедшая
+ * на сторону: своя ставка по ней не нужна вовсе, требовать её значило бы
+ * запереть форму на ровном месте. Источник истины — снимок маршрута
  * заказа; справочник операции не меняется.
  */
 
@@ -24,13 +28,22 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { Pencil } from 'lucide-react';
 import type { PricingMode } from '@sewing/shared/operations';
-import type { UpdateOrderRouteOverridesDto } from '@sewing/shared/routes';
+import {
+  ROUTE_STEP_OUTSOURCED_QTY_MAX,
+  type UpdateOrderRouteOverridesDto,
+} from '@sewing/shared/routes';
 import { saveOrderRouteOverridesAction } from '@/app/admin/orders/[id]/route-overrides-actions';
 import { initialRouteOverridesFormState } from '@/app/admin/orders/[id]/route-overrides-form-state';
 
 export interface RouteOverrideEditorSize {
   id: string;
   code: string;
+  /**
+   * План по размеру, шт — сумма всех строк заказа с этим размером (в
+   * многовариантном заказе размер живёт в нескольких изделиях). Нужен
+   * как потолок объёма, отдаваемого на сторону.
+   */
+  qtyPlan: number;
 }
 
 export interface RouteOverrideEditorStep {
@@ -50,7 +63,27 @@ export interface RouteOverrideEditorStep {
   pricingModeOverride: PricingMode | null;
   rateOverride: number | null;
   timeNormSecOverride: number | null;
-  sizeOverrides: Record<string, { rate: number | null; seconds: number | null }>;
+  /**
+   * СТОРОННИЕ УСЛУГИ: операцию (частью или целиком) выполняет подрядчик.
+   * Метка только про деньги — плановое время, доска, паспорта и ЗП её не
+   * читают (решение владельца 10.09.2026).
+   */
+  outsourced: boolean;
+  /** Цена стороннего размещения за одно изделие (₽) или `null`. */
+  outsourcePriceRub: number | null;
+  sizeOverrides: Record<
+    string,
+    {
+      rate: number | null;
+      seconds: number | null;
+      /**
+       * Сколько штук размера отдано подрядчику. `null` — объём по
+       * размеру не расписан; если не расписан ни один размер, а метка
+       * стоит — на стороне вся операция.
+       */
+      outsourcedQty: number | null;
+    }
+  >;
 }
 
 interface Props {
@@ -77,6 +110,8 @@ interface Props {
 
 type FieldMap = Record<string, string>;
 type ModeMap = Record<string, PricingMode>;
+/** Метки «операция на стороне» по шагам маршрута. */
+type FlagMap = Record<string, boolean>;
 
 const MODE_LABELS: Record<PricingMode, string> = {
   SALARY_ONLY: 'Оклад',
@@ -89,6 +124,10 @@ const rateKey = (stepId: string, sizeId?: string) =>
   sizeId ? `r:${stepId}:${sizeId}` : `r:${stepId}`;
 const timeKey = (stepId: string, sizeId?: string) =>
   sizeId ? `t:${stepId}:${sizeId}` : `t:${stepId}`;
+/** Цена стороннего размещения по операции, ₽/шт. */
+const outPriceKey = (stepId: string) => `op:${stepId}`;
+/** Объём этого размера, отданный подрядчику, шт. */
+const outQtyKey = (stepId: string, sizeId: string) => `oq:${stepId}:${sizeId}`;
 
 const numToStr = (v: number | null): string =>
   v != null && Number.isFinite(v) ? String(v) : '';
@@ -104,6 +143,12 @@ function buildInitialModes(steps: RouteOverrideEditorStep[]): ModeMap {
   return out;
 }
 
+function buildInitialFlags(steps: RouteOverrideEditorStep[]): FlagMap {
+  const out: FlagMap = {};
+  for (const s of steps) out[s.stepId] = s.outsourced;
+  return out;
+}
+
 function buildInitial(
   steps: RouteOverrideEditorStep[],
   sizes: RouteOverrideEditorSize[],
@@ -114,10 +159,12 @@ function buildInitial(
   for (const step of steps) {
     out[rateKey(step.stepId)] = numToStr(step.rateOverride);
     out[timeKey(step.stepId)] = numToStr(step.timeNormSecOverride);
+    out[outPriceKey(step.stepId)] = numToStr(step.outsourcePriceRub);
     for (const sz of sizes) {
       const ov = step.sizeOverrides[sz.id];
       out[rateKey(step.stepId, sz.id)] = numToStr(ov?.rate ?? null);
       out[timeKey(step.stepId, sz.id)] = numToStr(ov?.seconds ?? null);
+      out[outQtyKey(step.stepId, sz.id)] = numToStr(ov?.outsourcedQty ?? null);
     }
   }
   return out;
@@ -149,33 +196,82 @@ function parseSec(s: string | undefined): Parsed {
   return { value: n, invalid: false };
 }
 
+/**
+ * Объём размера, отдаваемый подрядчику: формат тот же, что у нормы
+ * времени (целое ≥ 0), плюс потолок «не больше плана этого размера».
+ * Потолок проверяет и бэкенд (400), но кнопка не должна отправлять
+ * заведомо плохое — менеджер увидит подсветку сразу, а не после сабмита.
+ */
+function parseOutQty(s: string | undefined, qtyPlan: number): Parsed {
+  const p = parseSec(s);
+  if (p.invalid || p.value == null) return p;
+  if (p.value > qtyPlan || p.value > ROUTE_STEP_OUTSOURCED_QTY_MAX) {
+    return { value: p.value, invalid: true };
+  }
+  return p;
+}
+
 type StepOverrideOut = {
   stepId: string;
   pricingModeOverride?: PricingMode | null;
   rateOverride?: number | null;
   timeNormSecOverride?: number | null;
-  sizeOverrides?: { sizeId: string; rate: number | null; seconds: number | null }[];
+  outsourced?: boolean;
+  outsourcePriceRub?: number | null;
+  sizeOverrides?: {
+    sizeId: string;
+    rate: number | null;
+    seconds: number | null;
+    outsourcedQty: number | null;
+  }[];
 };
 
 function buildPayload(
   values: FieldMap,
   modes: ModeMap,
+  flags: FlagMap,
   steps: RouteOverrideEditorStep[],
   sizes: RouteOverrideEditorSize[],
 ): { dto: UpdateOrderRouteOverridesDto; invalid: boolean } {
   let invalid = false;
   const outSteps: StepOverrideOut[] = steps.map((step) => {
     const selMode = modes[step.stepId] ?? effectiveMode(step);
+    const isOut = flags[step.stepId] ?? step.outsourced;
     const out: StepOverrideOut = { stepId: step.stepId };
     // null — если совпадает с дефолтом операции (нет переопределения).
     out.pricingModeOverride =
       step.pricingMode != null && selMode === step.pricingMode ? null : selMode;
 
+    // Объём на сторону разбираем ПЕРВЫМ: от него зависит, нужна ли шагу
+    // своя расценка. «Метка есть, поразмерных количеств нет» = на стороне
+    // ВЕСЬ тираж операции (ПРАВИЛО РАСЧЁТА), своя ставка тогда в план не
+    // берётся вовсе — требовать её значило бы запереть форму.
+    const outQtyBySize = new Map<string, number | null>();
+    let hasOutQty = false;
+    if (isOut) {
+      for (const sz of sizes) {
+        const p = parseOutQty(
+          values[outQtyKey(step.stepId, sz.id)],
+          sz.qtyPlan,
+        );
+        if (p.invalid) invalid = true;
+        if (p.value != null) hasOutQty = true;
+        outQtyBySize.set(sz.id, p.value);
+      }
+    }
+
     if (selMode === 'FIXED') {
       const p = parseRate(values[rateKey(step.stepId)]);
       if (p.invalid) invalid = true;
-      // При сделке нужна расценка, если у операции нет своей fixedRate.
-      if (p.value == null && step.fixedRate == null) invalid = true;
+      // При сделке нужна расценка, если у операции нет своей fixedRate —
+      // ⛔ в том числе у операции, целиком отданной подрядчику: метка
+      // меняет только деньги плана, шаг остаётся в маршруте, и приёмщик
+      // закрывает его сканом на возврате партии. Сделка без расценки этот
+      // скан роняет (`OperationRateMissingException`), см. гард
+      // `ORDER_ROUTE_OVERRIDE_RATE_REQUIRED` на бэкенде.
+      if (p.value == null && step.fixedRate == null) {
+        invalid = true;
+      }
       out.rateOverride = p.value;
     }
     if (step.timeNormMode === 'FIXED') {
@@ -183,14 +279,57 @@ function buildPayload(
       if (p.invalid) invalid = true;
       out.timeNormSecOverride = p.value;
     }
-    if (selMode === 'BY_SIZE' || step.timeNormMode === 'BY_SIZE') {
+
+    // Метку и цену шлём, только когда подряд при чём: у обычной правки
+    // расценки состав payload-а остаётся прежним. Снятую метку (`false`)
+    // отправить обязаны — не переданное поле бэкенд трактует как
+    // «не менять», и подряд остался бы включённым.
+    if (isOut || step.outsourced) {
+      out.outsourced = isOut;
+      if (isOut) {
+        const p = parseRate(values[outPriceKey(step.stepId)]);
+        if (p.invalid) invalid = true;
+        // Пустая цена законна: план посчитает размещение как 0 и вернёт
+        // предупреждение — сохранить метку без цены менеджеру можно.
+        out.outsourcePriceRub = p.value;
+      } else {
+        // Явный null: выключенный подряд не должен всплыть ценой при
+        // повторном включении метки.
+        out.outsourcePriceRub = null;
+      }
+    }
+
+    const hadOutQty = Object.values(step.sizeOverrides).some(
+      (o) => o.outsourcedQty != null,
+    );
+    const bySizeFields =
+      selMode === 'BY_SIZE' || step.timeNormMode === 'BY_SIZE';
+    // Поразмерный набор нужен не только BY_SIZE-режимам: объём на
+    // сторону живёт в тех же строках. И наоборот — если объём уже
+    // проставлен в снимке, набор надо слать даже ради его снятия, иначе
+    // replace-all на бэкенде до этих строк просто не доберётся.
+    // Набор уезжает replace-all, поэтому у шага с подрядом поле, которого
+    // в форме сейчас нет (режим не поразмерный), переносим из снимка —
+    // иначе строка с одним объёмом стёрла бы заведённые ранее поразмерные
+    // ставки/нормы. Когда подряд ни при чём, поведение прежнее: поле не
+    // показано — значит null.
+    const keepHidden = isOut || step.outsourced;
+    if (bySizeFields || hasOutQty || hadOutQty) {
       out.sizeOverrides = sizes.map((sz) => {
-        let rate: number | null = null;
-        let seconds: number | null = null;
+        const stored = step.sizeOverrides[sz.id];
+        let rate: number | null = keepHidden ? (stored?.rate ?? null) : null;
+        let seconds: number | null = keepHidden
+          ? (stored?.seconds ?? null)
+          : null;
         if (selMode === 'BY_SIZE') {
           const p = parseRate(values[rateKey(step.stepId, sz.id)]);
           if (p.invalid) invalid = true;
-          if (p.value == null && step.ratesBySize[sz.id] == null) invalid = true;
+          // Поразмерная сделка — та же причина, что у FIXED выше: ставка
+          // нужна и по отданному подрядчику размеру, иначе скан возврата
+          // упадёт.
+          if (p.value == null && step.ratesBySize[sz.id] == null) {
+            invalid = true;
+          }
           rate = p.value;
         }
         if (step.timeNormMode === 'BY_SIZE') {
@@ -198,7 +337,12 @@ function buildPayload(
           if (p.invalid) invalid = true;
           seconds = p.value;
         }
-        return { sizeId: sz.id, rate, seconds };
+        return {
+          sizeId: sz.id,
+          rate,
+          seconds,
+          outsourcedQty: outQtyBySize.get(sz.id) ?? null,
+        };
       });
     }
     return out;
@@ -226,10 +370,22 @@ const inputStyle: React.CSSProperties = {
   fontSize: '0.8rem',
 };
 
+/**
+ * Подсветка поля, значение которого бэкенд заведомо отобьёт (объём на
+ * сторону больше плана размера). Кнопка в этот момент и так заблокирована
+ * — подсветка показывает, КАКАЯ из строк виновата.
+ */
+const invalidInputStyle: React.CSSProperties = {
+  borderColor: '#dc2626',
+  background: '#fef2f2',
+};
+
 // Единая раскладка колонок строки операции: № · Операция · Оплата ·
-// Цена · Норма. Одинаковый шаблон в шапке и в строках выравнивает поля
-// по столбцам (фикс-ширины + одна гибкая колонка имени).
-const GRID_COLS = '30px minmax(140px, 1fr) 188px 116px 116px';
+// Цена · Норма · На стороне. Одинаковый шаблон в шапке и в строках
+// выравнивает поля по столбцам (фикс-ширины + одна гибкая колонка
+// имени). Последняя колонка держит чекбокс подряда и цену размещения —
+// узкое окно правки маршрута (1040px) такую строку ещё вмещает.
+const GRID_COLS = '30px minmax(140px, 1fr) 188px 116px 116px 168px';
 const headerTitleStyle: React.CSSProperties = {
   fontSize: '0.7rem',
 };
@@ -249,6 +405,7 @@ export function OrderRouteOverridesEditor({
     buildInitial(steps, sizes),
   );
   const [modes, setModes] = useState<ModeMap>(() => buildInitialModes(steps));
+  const [flags, setFlags] = useState<FlagMap>(() => buildInitialFlags(steps));
   const [state, formAction] = useFormState(
     saveOrderRouteOverridesAction.bind(null, orderId),
     initialRouteOverridesFormState,
@@ -264,18 +421,21 @@ export function OrderRouteOverridesEditor({
   }, [state.ok, state.doneToken, embedded, onSaved]);
 
   const built = useMemo(
-    () => buildPayload(values, modes, steps, sizes),
-    [values, modes, steps, sizes],
+    () => buildPayload(values, modes, flags, steps, sizes),
+    [values, modes, flags, steps, sizes],
   );
 
   const setField = (key: string, val: string) =>
     setValues((prev) => ({ ...prev, [key]: val }));
   const setMode = (stepId: string, mode: PricingMode) =>
     setModes((prev) => ({ ...prev, [stepId]: mode }));
+  const setFlag = (stepId: string, on: boolean) =>
+    setFlags((prev) => ({ ...prev, [stepId]: on }));
 
   const startEditing = () => {
     setValues(buildInitial(steps, sizes));
     setModes(buildInitialModes(steps));
+    setFlags(buildInitialFlags(steps));
     setEditing(true);
   };
 
@@ -325,7 +485,9 @@ export function OrderRouteOverridesEditor({
         <strong>Редактирование маршрута заказа</strong>
         <span className="admin-muted" style={{ fontSize: '0.78rem' }}>
           Способ оплаты, расценки и нормы действуют только в этом заказе и не
-          меняют справочник операций.
+          меняют справочник операций. Метка «На стороне» меняет только деньги:
+          по отданному объёму в план идёт цена размещения вместо своей
+          стоимости, а плановое время, доска и ЗП остаются как были.
         </span>
       </div>
 
@@ -353,11 +515,15 @@ export function OrderRouteOverridesEditor({
         <div className="admin-muted" style={headerTitleStyle}>
           Норма, сек/шт
         </div>
+        <div className="admin-muted" style={headerTitleStyle}>
+          На стороне
+        </div>
 
         {steps.map((step, i) => {
           const selMode = modes[step.stepId] ?? effectiveMode(step);
           const showSizeGrid =
             selMode === 'BY_SIZE' || step.timeNormMode === 'BY_SIZE';
+          const isOut = flags[step.stepId] ?? step.outsourced;
 
           return (
             <Fragment key={step.stepId}>
@@ -447,6 +613,44 @@ export function OrderRouteOverridesEditor({
                 ) : (
                   <span className="admin-muted" style={{ fontSize: '0.74rem' }}>
                     {step.timeNormMode === 'BY_SIZE' ? 'по размерам ↓' : '—'}
+                  </span>
+                )}
+              </div>
+
+              {/* На стороне: метка подряда + цена размещения. Цена
+                  показывается только под включённой меткой — без неё это
+                  поле ни на что не влияет и только путало бы. */}
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                data-outsourced={isOut ? '1' : '0'}
+              >
+                <input
+                  type="checkbox"
+                  checked={isOut}
+                  onChange={(e) => setFlag(step.stepId, e.target.checked)}
+                  aria-label={`Операция ${step.operationName} делается на стороне`}
+                  title="Операцию (полностью или частью тиража) выполняет подрядчик: вместо своей стоимости в план идёт цена размещения"
+                  data-testid={`order-route-overrides-outsourced-${step.stepId}`}
+                />
+                {isOut ? (
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step="0.01"
+                    style={{ ...inputStyle, minWidth: 0 }}
+                    value={values[outPriceKey(step.stepId)] ?? ''}
+                    placeholder="Цена, ₽/шт"
+                    onChange={(e) =>
+                      setField(outPriceKey(step.stepId), e.target.value)
+                    }
+                    title="Цена размещения, ₽/шт"
+                    aria-label={`Цена размещения операции ${step.operationName}, ₽/шт`}
+                    data-testid={`order-route-overrides-outsource-price-${step.stepId}`}
+                  />
+                ) : (
+                  <span className="admin-muted" style={{ fontSize: '0.74rem' }}>
+                    —
                   </span>
                 )}
               </div>
@@ -544,6 +748,94 @@ export function OrderRouteOverridesEditor({
                   </div>
                 </div>
               )}
+
+              {/* Объём на сторону — компактная сетка «размер · план · на
+                  сторону». Пустая сетка означает «подрядчику отдана вся
+                  операция» (ПРАВИЛО РАСЧЁТА), поэтому подпись объясняет
+                  пустоту: иначе её читают как «ничего не отдано». */}
+              {isOut && (
+                <div
+                  style={{
+                    gridColumn: '1 / -1',
+                    paddingLeft: 42,
+                    paddingTop: 2,
+                    paddingBottom: 2,
+                  }}
+                  data-testid={`order-route-overrides-outsource-sizes-${step.stepId}`}
+                >
+                  <div
+                    className="admin-muted"
+                    style={{ fontSize: '0.72rem', marginBottom: 4 }}
+                  >
+                    Объём на сторону, шт (пусто = вся операция на стороне):
+                  </div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '56px 64px 96px',
+                      columnGap: 12,
+                      rowGap: 4,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <div className="admin-muted" style={headerTitleStyle}>
+                      Размер
+                    </div>
+                    <div className="admin-muted" style={headerTitleStyle}>
+                      План
+                    </div>
+                    <div className="admin-muted" style={headerTitleStyle}>
+                      На сторону
+                    </div>
+                    {sizes.map((sz) => {
+                      const qty = parseOutQty(
+                        values[outQtyKey(step.stepId, sz.id)],
+                        sz.qtyPlan,
+                      );
+                      return (
+                        <Fragment key={sz.id}>
+                          <div style={{ fontWeight: 500, fontSize: '0.78rem' }}>
+                            {sz.code}
+                          </div>
+                          <div
+                            className="admin-muted"
+                            style={{ fontSize: '0.78rem' }}
+                          >
+                            {sz.qtyPlan.toLocaleString('ru-RU')}
+                          </div>
+                          <div>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              max={sz.qtyPlan}
+                              step="1"
+                              style={
+                                qty.invalid
+                                  ? { ...inputStyle, ...invalidInputStyle }
+                                  : inputStyle
+                              }
+                              value={
+                                values[outQtyKey(step.stepId, sz.id)] ?? ''
+                              }
+                              placeholder="—"
+                              onChange={(e) =>
+                                setField(
+                                  outQtyKey(step.stepId, sz.id),
+                                  e.target.value,
+                                )
+                              }
+                              aria-invalid={qty.invalid || undefined}
+                              aria-label={`Объём на сторону ${step.operationName} для ${sz.code}, шт (план ${sz.qtyPlan})`}
+                              data-testid={`order-route-overrides-outsource-qty-${step.stepId}-${sz.id}`}
+                            />
+                          </div>
+                        </Fragment>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </Fragment>
           );
         })}
@@ -555,7 +847,8 @@ export function OrderRouteOverridesEditor({
           style={{ color: '#dc2626', fontSize: '0.78rem', marginTop: 8 }}
         >
           Проверьте значения: при переводе на сделку задайте расценку; расценка
-          ≥ 0 (до 2 знаков), норма — целое число секунд ≥ 0.
+          ≥ 0 (до 2 знаков), норма — целое число секунд ≥ 0; объём на сторону —
+          целое число штук, не больше плана размера.
         </div>
       )}
       {state.error && (
@@ -575,6 +868,7 @@ export function OrderRouteOverridesEditor({
           onClick={() => {
             setValues(buildInitial(steps, sizes));
             setModes(buildInitialModes(steps));
+            setFlags(buildInitialFlags(steps));
             if (embedded) onCancel?.();
             else setEditing(false);
           }}

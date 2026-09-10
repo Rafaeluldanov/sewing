@@ -53,6 +53,7 @@
   - [4.3 Snapshot техкарты в `start()`](#43-tech-card-snapshot)
   - [4.4 Snapshot лекала](#44-pattern-snapshot)
 - [5. План операций (`OrderOperationPlan`)](#5-operation-plan)
+  - [5.1 Сторонние услуги: цена размещения вместо своей расценки](#51-outsourced-operation)
 - [6. `OrderCostEstimate` (себестоимость)](#6-cost-estimate)
 - [7. `WorkshopNeed` (потребность цеха)](#7-workshop-need)
 - [8. Production balance](#8-production-balance)
@@ -107,6 +108,10 @@
 - `operationCostPlanRub`, `operationTimePlanSec`,
   `operationPlanCalculatedAt`, `operationPlanWarnings` — snapshot
   плана операций (см. §5).
+- `operationOutsourceCostPlanRub` — сколько ИЗ `operationCostPlanRub`
+  стоит стороннее размещение (сторонние услуги, §5.1). Расшифровка
+  «в том числе», а не отдельное слагаемое: складывать эти два числа
+  нельзя.
 - `customerUnitPrice`, `customerCurrency` — цена продажи за
   единицу (управленческое поле, на расчёт себестоимости не
   влияет).
@@ -448,6 +453,15 @@ legacy-заказов, у которых snapshot не был материали
 этот helper отдаёт `RouteTemplate.steps[]` отсортированными по
 `index`.
 
+⛔ **Пересоздание не должно терять per-order переопределения.**
+`deleteMany + createMany` физически создаёт НОВЫЕ строки, поэтому
+расценка/норма/режим и метка сторонних услуг (`outsourced`,
+`outsourcePriceRub`, поразмерный `outsourcedQty`) переносятся на
+пересозданные шаги carry-механикой по операции. В шаблоне маршрута
+этих полей нет и взяться им при пересборке неоткуда — без carry метка
+слетала бы на первом же сохранении формы заказа с другим набором
+шагов (ADR-0023 §4).
+
 <a id="42-material-requirements"></a>
 ### 4.2 `rebuildMaterialRequirementsSnapshot(orderId, tx)`
 
@@ -561,6 +575,10 @@ Snapshot-поля на `Order`:
 - `operationPlanWarnings` — JSON-массив человекочитаемых
   warnings («Нет ставки операции "Распошив" для размера XL»,
   «Маршрут не выбран — план операций не рассчитан», …).
+- `operationOutsourceCostPlanRub` — Decimal(14,2), сколько из
+  `operationCostPlanRub` приходится на стороннее размещение
+  (§5.1). `null` там же, где `null` стоимость; `0` — подряда в
+  заказе нет.
 
 Алгоритм `calculateForOrder(orderId, tx)`:
 
@@ -580,6 +598,15 @@ Snapshot-поля на `Order`:
     операции = 0, время считается, в `warnings`
     добавляется «Не задана плановая окладная ставка
     операции "…"».
+- Ставка, норма и режим берутся с учётом per-order
+  переопределений снимка (`OrderRouteStep.rateOverride` /
+  `timeNormSecOverride` / `pricingModeOverride` + поразмерные
+  строки): их подмешивает и `calculateForOrder` (структура — из
+  шаблона), и `calculateFromSnapshot` (структура — из
+  `OrderRouteStep`, используется после старта, когда операция может
+  быть добавлена amendment-ом и в шаблоне её нет).
+- Сторонние услуги (`OrderRouteStep.outsourced`) делят плановый
+  тираж операции на «своё» и «на стороне» — см. §5.1.
 - Никогда не бросает на «нет данных» — отдаёт `null`-totals и
   warnings; CRUD заказа не блокируется.
 - НЕ пишет `OperationEntry` / `SalaryEntry` (это payroll,
@@ -596,6 +623,110 @@ Snapshot-поля на `Order`:
 - `OrdersService.recalculateOperationPlan` (см. ниже);
 - `OrdersService.startCalculation` — финальный snapshot
   перед `CALCULATION`.
+
+<a id="51-outsourced-operation"></a>
+### 5.1 Сторонние услуги: цена размещения вместо своей расценки
+
+Источник: ADR-0023 (решение владельца 10.09.2026),
+`docs/domain.md §2.4a`, `OrderOperationPlanService.computeTotals`.
+
+Шаг снимка с `outsourced = true` означает, что операцию этого заказа
+полностью или частично выполняет подрядчик. По отданному объёму своя
+расценка в план НЕ берётся — вместо неё считается стоимость
+стороннего размещения.
+
+**Правило деления тиража** (держать одинаковым везде, где его
+повторяют — см. ADR-0023 §5, п. 6):
+
+```text
+S.outsourced !== true  → всё считается как раньше, ничего не меняется.
+
+outMap = { sizeId → outsourcedQty } из S.sizeOverrides, где outsourcedQty != null
+outMap пуст            → на стороне ВЕСЬ объём операции: outQty(item) = item.qtyPlan
+иначе                  → outQty(item) = остаток «раздачи» по этому sizeId, но не
+                         больше item.qtyPlan (один размер может встретиться в
+                         нескольких items — разные изделия: расходуем остаток жадно,
+                         по порядку items); размеры не из outMap → 0
+
+ownQty(item) = item.qtyPlan − outQty(item)
+
+ДЕНЬГИ:
+  своя часть      = (ставка по эффективному режиму) × ownQty   ← все три PricingMode
+  размещение      = S.outsourcePriceRub × outQty                ← если цена задана
+  totalCost      += своя часть + размещение
+  totalOutsource += размещение                                  ← отдельный аккумулятор
+
+ВРЕМЯ: без изменений — totalTimeSec += timeSec × item.qtyPlan (ПОЛНОЕ количество).
+
+ОКРУГЛЕНИЕ: toDecimalPlaces(2, ROUND_HALF_UP) — как у остальных денег плана;
+            тот же режим для totalOutsource.
+```
+
+`outsourcedQty = 0` по размеру — «этот размер шьём сами», но набор при
+этом считается расписанным: на сторону уходят только перечисленные
+размеры. `isOptional`-шаг пропускается целиком, как и раньше.
+
+**Итог пишется двумя числами.** `operationCostPlanRub` остаётся
+ПОЛНЫМ планом операций (своё + размещение), а
+`operationOutsourceCostPlanRub` — расшифровка «в том числе». Иначе
+каждый потребитель (вкладка «Операции», «Сводно», план-факт, карточка
+заказа цеха в ERP) складывал бы два числа по-своему.
+
+**Цена не задана** (`outsourcePriceRub = null`, а объём на сторону
+есть) → размещение считается как 0 и один раз на операцию поднимается
+warning «Не задана цена стороннего размещения по операции «X» —
+размещение посчитано как 0». Молчаливый ноль читался бы как «подряд
+бесплатный». План при этом не блокируется — сервис по-прежнему не
+бросает на «нет данных».
+
+**Обратный эффект на warnings.** Если своей части не осталось ни в
+одной строке плана (вся операция на стороне), прежние «Нет ставки
+операции «X» …» и «Не задана плановая окладная ставка операции «X» …»
+подавляются: эта ставка плану уже не нужна, а `operationPlanWarnings`
+читают и цех, и ERP. Как только остаётся хотя бы штука своей части —
+warnings работают как работали.
+
+⛔ **Время, паспорта, доска и зарплата метку не читают.** Плановое
+время считается по полному тиражу, шаг из маршрута не исчезает,
+`OperationsService.resolveRate` / earnings / packing-гейты о подряде
+не знают: часть тиража по той же операции цех делает сам, а по
+отданной части сканов не будет — значит не будет и начислений
+(ADR-0023 §2.3).
+
+⛔ **Расценка операции обязательна и на «целиком отданной» операции.**
+Шаг остаётся в маршруте, паспорт идёт через него, и приёмщик
+закрывает операцию сканом на возврате партии; сделка без расценки
+роняет этот скан (`OperationRateMissingException`). Гард
+`ORDER_ROUTE_OVERRIDE_RATE_REQUIRED` при переводе на сделку —
+безусловный.
+
+**Что проверяется на записи.** Объём больше плана размера отбивается
+400 `ORDER_ROUTE_OUTSOURCED_QTY_OVER_PLAN`, но только если значение
+НОВОЕ: уже лежащий объём мог стать больше плана сам собой (уменьшили
+тираж), а форма присылает поразмерный набор целиком — жёсткий 400 на
+неизменённое значение запер бы всю форму. Такое значение обрезается по
+плану. Объём, расписанный по размерам, которых в плане нет (смена
+размерного ряда), подрядом не считается и поднимает отдельный warning.
+Подряд переносится только на ПЕРВОЕ вхождение операции в маршрут — при
+повторе (ОТК/ВТО до и после) объём иначе задвоился бы. Снятие метки
+гасит и цену, и все поразмерные объёмы шага.
+
+**В план-факте достаточно метки — но цифры не врут.** Строка операции
+документа несёт `outsourced` и `outsourcePlanRub`; Δ по строке
+считается от СВОЕЙ части плана (`факт − (план − размещение)`), иначе
+отданная операция вечно показывала бы «экономию» на сумму подряда.
+Нейтральной строка становится только там, где своей части нет вовсе. В
+итогах документа стоит справочная строка «в т.ч. стороннее размещение
+(факта в цехе не будет)», а в прямую себестоимость подряд входит
+ПЛАНОВОЙ суммой: иначе маржа завышена ровно на деньги подрядчика. То
+же — в отчёте «Материалы: план → факт» (столбец труда).
+
+Ставится метка через `PUT /api/orders/:id/route-overrides`
+(`docs/api.md §13`) — тот же путь, что расценка и норма времени.
+Подрядчик, срок и документ закупки живут в ERP
+(`docs/kb/sewing.md §6` в репозитории `~/service`), сумма размещения в
+цеховой итог сдачи НЕ уезжает — иначе задвоилась бы с компонентом
+подряда ERP.
 
 ### Ручной пересчёт
 
@@ -1002,11 +1133,11 @@ payroll.
 
 | Поле / таблица | Источник | Когда фиксируется | Когда обновляется | Когда стирается |
 | --- | --- | --- | --- | --- |
-| `OrderRouteStep[]` | `RouteTemplate.steps[]` через `RoutesService.getActiveStepsForSnapshot` | `create` (если есть `routeTemplateId`); `update` в DRAFT при изменении items/route/pattern; `recalculateOperationPlan`; `startCalculation`; defensive `start` если ещё пуст. | На каждом `syncOrderRouteStepsSnapshot` — diff: если состав/порядок отличаются, atomic delete+createMany. Идемпотентно. | `update` в DRAFT при `routeTemplateId = null`. После `start` не пересчитывается (ADR-0006). |
+| `OrderRouteStep[]` | `RouteTemplate.steps[]` через `RoutesService.getActiveStepsForSnapshot` | `create` (если есть `routeTemplateId`); `update` в DRAFT при изменении items/route/pattern; `recalculateOperationPlan`; `startCalculation`; defensive `start` если ещё пуст. | На каждом `syncOrderRouteStepsSnapshot` — diff: если состав/порядок отличаются, atomic delete+createMany. Идемпотентно. Per-order переопределения (расценка/норма/режим) и метка сторонних услуг (`outsourced`, `outsourcePriceRub`, `outsourcedQty`) при пересоздании переносятся carry-механикой — в шаблоне их нет (§4.1). | `update` в DRAFT при `routeTemplateId = null`. После `start` не пересчитывается (ADR-0006); правка расценок/подряда точечно через `PUT /api/orders/:id/route-overrides`. |
 | `OrderMaterialRequirement[]` | `TechCardMaterialLine[]` через `TechCardsService.getLinesForSnapshot` + `Order.color` | `create` (если есть `techCardId`); `update` в DRAFT при изменении items/techCard; `update` в DRAFT/CALCULATION/CALCULATION_DONE при изменении `Order.color`; `startCalculation`; defensive `start` если `count === 0`. | На каждом `rebuildMaterialRequirementsSnapshot` — preserve `selectedColorText` для `ORDER_SELECTED_COLOR`-строк; atomic delete+createMany. | `update` в DRAFT при `techCardId = null`. После `start` не пересчитывается (ADR-0006); поле `selectedColorText` точечно правится через `PATCH /api/orders/:id/material-requirements/:requirementId/color`. |
 | `OrderOutsourceRequirement[]` | `TechCardOutsourceLine[]` через `TechCardsService.getLinesForSnapshot` | Только в `start()` (defensive `count === 0`). | НЕ обновляется. Точечно правится `executionStatus` через `POST /api/orders/:id/outsource-requirements/:requirementId/status`. | НЕ стирается (cascade от заказа). |
 | `Order.patternNameSnapshot / patternArticleSnapshot / patternPreviewSnapshotUrl` | `PatternItem` (`name / article / previewImageUrl`) | Первый из `startCalculation` или `start`, при `!Order.patternNameSnapshot`. | НЕ перезаписывается на повторных запусках. | НЕ стирается. `PatternItem.onDelete: SetNull` обнуляет live-связь, snapshot живёт. |
-| `Order.operationCostPlanRub / operationTimePlanSec / operationPlanCalculatedAt / operationPlanWarnings` | `OrderOperationPlanService.calculateForOrder` (live `RouteTemplate.steps × OrderItem`) | `create`; `update` в DRAFT при изменении items/route/pattern; `recalculateOperationPlan`; `startCalculation`. | На каждом `recalculateAndWrite` (полный перезапис). | После `start` не пересчитывается (ADR-0006). На пересчёте может стать `null` (с warnings). |
+| `Order.operationCostPlanRub / operationOutsourceCostPlanRub / operationTimePlanSec / operationPlanCalculatedAt / operationPlanWarnings` | `OrderOperationPlanService.calculateForOrder` (live `RouteTemplate.steps × OrderItem` + per-order переопределения снимка) / `calculateFromSnapshot` (после старта) | `create`; `update` в DRAFT при изменении items/route/pattern; `recalculateOperationPlan`; `startCalculation`; `updateRouteOverrides` (в любом статусе, кроме DONE/CANCELLED). | На каждом `recalculateAndWrite` / `recalculateAndWriteFromSnapshot` (полный перезапис всех четырёх полей + расшифровки подряда). | На пересчёте может стать `null` (с warnings). |
 | `Order.costEstimateTotalRub / costEstimateCompletedAt / costEstimateVersion` | Активный `OrderCostEstimate(status=COMPLETED)` | `completeCalculation`. | Перезаписывается на каждом новом `completeCalculation` (новая версия). | `reopenCalculation` обнуляет в `null` (история остаётся в `OrderCostEstimate`-таблице со статусом REVOKED). На `cancel` сохраняется. |
 | `OrderCostEstimate(+lines)` | `WorkshopNeed[]` (по состоянию на момент `completeCalculation`) | `completeCalculation` создаёт новую версию. | НЕ перезаписывается. На повторном `completeCalculation` — новый ряд с `version = max + 1`. | `reopenCalculation` помечает старый `status = REVOKED` (физически не удаляет). Cascade при удалении заказа. |
 | `WorkshopNeed[]` | Расчёт по live-техкарте (DRAFT) или snapshot `OrderMaterialRequirement` (CALCULATION+) | `startCalculation` (force=false); `POST /api/orders/:id/workshop-needs/calculate` (с поддержкой force=true). | Пересчёт сносит только `CALCULATED`-строки; `REVIEWED` / `PURCHASE_PLANNED` сохраняются (если не `force`). | Cascade при удалении заказа. |

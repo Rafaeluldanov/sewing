@@ -69,6 +69,25 @@ const RouteStepTimeNormSecOverrideField = z
   )
   .nullable();
 
+/** Потолок объёма, отданного на сторону (шт) — защита от опечаток. */
+export const ROUTE_STEP_OUTSOURCED_QTY_MAX = 1_000_000;
+
+/**
+ * СТОРОННИЕ УСЛУГИ: сколько штук размера отдано подрядчику
+ * (`OrderRouteStepSizeOverride.outsourcedQty`). `null` — объём по этому
+ * размеру не расписан. Целое ≥ 0; потолок по плану заказа проверяет
+ * бэкенд (`OrdersService.updateRouteOverrides`) — здесь только форма.
+ */
+const RouteStepOutsourcedQtyField = z
+  .number({ invalid_type_error: 'Количество на сторону должно быть числом' })
+  .int('Количество на сторону: целое число штук')
+  .nonnegative('Количество на сторону не может быть отрицательным')
+  .max(
+    ROUTE_STEP_OUTSOURCED_QTY_MAX,
+    `Количество на сторону не больше ${ROUTE_STEP_OUTSOURCED_QTY_MAX} шт`,
+  )
+  .nullable();
+
 const RouteTemplateCodeField = z
   .string()
   .trim()
@@ -283,9 +302,22 @@ export interface OrderRouteStepDto {
    */
   pricingModeOverride: PricingMode | null;
   /**
+   * СТОРОННИЕ УСЛУГИ: операцию (частью или целиком) выполняет подрядчик
+   * (`OrderRouteStep.outsourced`). По отданному объёму своя стоимость
+   * операции в план не берётся — считается стоимость размещения.
+   * Метка только про деньги: маршрут паспорта, доска и ЗП её не читают.
+   */
+  outsourced: boolean;
+  /**
+   * Цена стороннего размещения за одно изделие (₽) или `null` — цена не
+   * задана (в план идёт 0 + warning). Значимо только при `outsourced`.
+   */
+  outsourcePriceRub: number | null;
+  /**
    * Поразмерные переопределения расценки/нормы **в этом заказе** для
-   * операций `pricingMode = BY_SIZE` / `timeNormMode = BY_SIZE`. Пустой
-   * массив — переопределений нет.
+   * операций `pricingMode = BY_SIZE` / `timeNormMode = BY_SIZE`, а также
+   * поразмерный объём, отданный на сторону. Пустой массив — ни того, ни
+   * другого нет.
    */
   sizeOverrides: OrderRouteStepSizeOverrideDto[];
 }
@@ -301,6 +333,13 @@ export interface OrderRouteStepSizeOverrideDto {
   rate: number | null;
   /** Переопределённая норма сек/шт для размера (`timeNormMode = BY_SIZE`). */
   seconds: number | null;
+  /**
+   * СТОРОННИЕ УСЛУГИ: сколько штук этого размера отдано подрядчику по
+   * шагу. `null` — по размеру объём не расписан; если не расписан ни один
+   * размер шага, а сам шаг помечен `outsourced` — на стороне весь тираж
+   * операции.
+   */
+  outsourcedQty: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +354,12 @@ export const OrderRouteStepSizeOverrideInputSchema = z.object({
   sizeId: z.string().min(1, 'sizeId обязателен'),
   rate: RouteStepRateOverrideField.optional().default(null),
   seconds: RouteStepTimeNormSecOverrideField.optional().default(null),
+  /**
+   * Объём этого размера, отданный подрядчику. `null` — не расписан.
+   * Как и `rate`/`seconds`, приезжает в replace-all наборе шага: строка
+   * с одним `outsourcedQty` законна (объём без правки расценки).
+   */
+  outsourcedQty: RouteStepOutsourcedQtyField.optional().default(null),
 });
 export type OrderRouteStepSizeOverrideInputDto = z.infer<
   typeof OrderRouteStepSizeOverrideInputSchema
@@ -336,6 +381,17 @@ export const OrderRouteStepOverrideInputSchema = z.object({
   pricingModeOverride: z.enum(PRICING_MODES).nullable().optional(),
   rateOverride: RouteStepRateOverrideField.optional(),
   timeNormSecOverride: RouteStepTimeNormSecOverrideField.optional(),
+  /**
+   * СТОРОННИЕ УСЛУГИ: операцию делает подрядчик. `false` — снять метку
+   * (объём и цена при этом обнуляются на бэкенде, чтобы «выключенный»
+   * подряд не всплыл при повторном включении); не передано — не менять.
+   */
+  outsourced: z.boolean().optional(),
+  /**
+   * Цена стороннего размещения за одно изделие (₽). `null` — сбросить;
+   * не передано — не менять. Формат тот же, что у сдельной расценки.
+   */
+  outsourcePriceRub: RouteStepRateOverrideField.optional(),
   sizeOverrides: z
     .array(OrderRouteStepSizeOverrideInputSchema)
     .max(200, 'Слишком много поразмерных строк')

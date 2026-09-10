@@ -177,10 +177,14 @@ describe('Прайс-плана окладных — OrderOperationPlanService',
     expect(branchSrc).not.toMatch(/rate\s*=\s*new\s+Prisma\.Decimal\(0\)/);
   });
 
-  test('SALARY_ONLY использует salaryCostPerSec.mul(timeSec).mul(qty)', () => {
+  test('SALARY_ONLY использует salaryCostPerSec.mul(timeSec).mul(ownQty)', () => {
     expect(src).toMatch(/salaryCostPerSec/);
+    // `ownQty`, а не `qty`, с 10.09.2026 (ADR-0023 «Операция на стороне»):
+    // по объёму, отданному подрядчику, своя окладная стоимость не
+    // считается — вместо неё в план идёт цена размещения. Формула
+    // окладных денег от этого не изменилась, изменился множитель штук.
     expect(src).toMatch(
-      /salaryCostPerSec\.mul\(timeSec\)\.mul\(qty\)/,
+      /salaryCostPerSec\.mul\(timeSec\)\.mul\(\s*ownQty,?\s*\)/,
     );
   });
 

@@ -22,6 +22,20 @@
  * Ожидает / В работе / Выполнено вычисляются «на лету» по passports
  * (см. ТЗ §3 «Статусы операций») и при недостатке данных деградируют
  * к «Ожидает» с warning-плашкой в комментарии.
+ *
+ * СТОРОННИЕ УСЛУГИ (решение владельца 10.09.2026). Шаг маршрута можно
+ * пометить «делаем на стороне» (`OrderRouteStep.outsourced`) целиком или
+ * на часть тиража (`sizeOverrides[].outsourcedQty`): по отданному объёму
+ * своя расценка в план не идёт, вместо неё считается цена размещения
+ * (`OrderRouteStep.outsourcePriceRub` за ОДНО изделие). Деньги строки =
+ * своя расценка на остаток + размещение на отданный объём, то есть ровно
+ * то, что кладёт в `Order.operationCostPlanRub` backend
+ * (`OrderOperationPlanService.computeTotals`). Совпадение обязано быть до
+ * копейки: «Сводно по заказу» сравнивает сумму строк со снимком заказа и
+ * поднимает «план операций разошёлся» на любом расхождении ≥ 1 копейки
+ * (`build-order-summary-rows.ts::computeOrderSummaryTotals`).
+ * Метка — только про деньги: плановое время, статусы, паспорта и ЗП её
+ * не читают.
  */
 import type { OperationDetailDto } from '@sewing/shared/operations';
 import type { OrderItemDto, OrderRouteStepDto } from '@sewing/shared/orders';
@@ -91,12 +105,32 @@ export interface OrderOperationTableRow {
    *  если ни для одного размера нет нормы — в комментарии добавим
    *  warning «Нет нормы времени». */
   totalTimeSec: number | null;
-  /** Плановая стоимость операции на тираж в рублях. `null`, если
-   *  посчитать невозможно (нет ставки / нет нормы для SALARY_ONLY). */
+  /** Плановая стоимость операции на тираж в рублях: своя расценка на
+   *  остаток ПЛЮС стороннее размещение на отданный объём (то же, что
+   *  кладёт в план backend). `null`, если посчитать невозможно (нет
+   *  ставки / нет нормы для SALARY_ONLY). */
   lineTotalRub: number | null;
   /** Подпись стоимости в случае SALARY_ONLY без shift-rate (UI рисует
    *  «окладная» вместо суммы). */
   costFallbackLabel: string | null;
+
+  // ----- Сторонние услуги (метка «делаем на стороне») -------------------
+  /** Шаг помечен `OrderRouteStep.outsourced`: операцию целиком или
+   *  частью тиража выполняет подрядчик. UI рисует нейтральный бейдж
+   *  рядом с названием операции. */
+  isOutsourced: boolean;
+  /** Сколько штук планового тиража операции отдано подрядчику. `0` —
+   *  метки нет либо по размерам не набралось ни одной штуки. */
+  outsourcedQty: number;
+  /** Цена размещения за ОДНО изделие (₽) или `null` — цена не задана
+   *  (в план идёт 0 + warning, молчаливый ноль читался бы как
+   *  «подряд бесплатный»). */
+  outsourcePriceRub: number | null;
+  /** Стоимость размещения на тираж = цена × отданный объём (₽). `null`
+   *  — операция не на стороне; `0` — на стороне, но цена не задана.
+   *  Это РАСШИФРОВКА внутри `lineTotalRub`, а не добавка к нему:
+   *  складывать нельзя (см. `Order.operationOutsourceCostPlanRub`). */
+  outsourceCostRub: number | null;
 
   // ----- Comment / warnings ---------------------------------------------
   /** Свободный комментарий (например, «План операций неполный»). */
@@ -228,6 +262,160 @@ function effSizeSec(
 }
 
 // ---------------------------------------------------------------------------
+// Сторонние услуги: раскладка планового тиража операции на «своё» и
+// «отданное подрядчику»
+// ---------------------------------------------------------------------------
+
+/**
+ * Раскладка объёма шага маршрута между цехом и подрядчиком —
+ * единственный источник «сколько штук чьи» для цены, стоимости и
+ * warnings строки.
+ */
+interface OutsourceSplit {
+  /** Шаг помечен «делаем на стороне». `false` ⇒ ниже всё считается как
+   *  до появления метки (остаток = весь тираж, размещение = 0). */
+  active: boolean;
+  /** `sizeId → сколько штук цех делает сам` (тираж минус отданное). */
+  ownBySize: Map<string, number>;
+  /** Свой объём для режима FIXED — тираж заказа минус отданное. Держим
+   *  отдельно от `ownBySize`, потому что FIXED-ветка исторически считает
+   *  по `qtyPlanTotal` заказа, а не по сумме поразмерных строк. */
+  ownFixedQty: number;
+  /** Σ отданного подрядчику, штук. */
+  outQtyTotal: number;
+  /** Весь плановый объём операции на стороне — своя ставка не нужна
+   *  вовсе, и требовать её warning-ом бессмысленно. */
+  fullyOutsourced: boolean;
+  /** Цена размещения за изделие (₽) или `null`. */
+  priceRub: number | null;
+  /** Σ размещения = цена × отданный объём; `0`, если цена не задана. */
+  costRub: number;
+  warnings: string[];
+}
+
+/**
+ * ПРАВИЛО РАСЧЁТА подряда (одно на цех, backend и web — расходиться
+ * нельзя, см. шапку файла):
+ *
+ *   - метки нет → `active = false`, дальше всё как раньше;
+ *   - метка есть, поразмерных объёмов нет → на стороне ВЕСЬ тираж
+ *     операции (владелец пометил операцию целиком);
+ *   - метка есть и объёмы расписаны → на стороне ровно эти штуки,
+ *     обрезанные планом по размеру; размер без строки — целиком свой
+ *     (`outsourcedQty = null` значит «не расписан», а не «всё»).
+ *
+ * Отданный объём считаем по агрегату `sizeId → qtyPlan`: backend
+ * раздаёт остаток жадно по строкам плана, но сумма по размеру у обоих
+ * одна и та же — `min(outsourcedQty, план по размеру)`.
+ */
+function resolveOutsourceSplit(
+  step: OrderRouteStepDto,
+  itemsBySize: Map<string, number>,
+  totalQty: number,
+): OutsourceSplit {
+  const ownBySize = new Map(itemsBySize);
+  if (step.outsourced !== true) {
+    return {
+      active: false,
+      ownBySize,
+      ownFixedQty: totalQty,
+      outQtyTotal: 0,
+      fullyOutsourced: false,
+      priceRub: null,
+      costRub: 0,
+      warnings: [],
+    };
+  }
+
+  // Значимы только заданные строки: `null` — «размер не расписан»,
+  // а `0` — осознанное «этот размер делаем сами».
+  const outBySize = new Map<string, number>();
+  for (const ov of step.sizeOverrides) {
+    if (ov.outsourcedQty == null || !Number.isFinite(ov.outsourcedQty)) continue;
+    outBySize.set(ov.sizeId, Math.max(0, ov.outsourcedQty));
+  }
+
+  let outQtyTotal = 0;
+  for (const [sizeId, qty] of itemsBySize.entries()) {
+    if (qty <= 0) continue;
+    const requested = outBySize.size === 0 ? qty : (outBySize.get(sizeId) ?? 0);
+    // Больше плана по размеру отдать нельзя — иначе «своя» часть ушла бы
+    // в минус и план операций стал бы меньше реального.
+    const out = Math.min(Math.max(0, requested), qty);
+    if (out <= 0) continue;
+    outQtyTotal += out;
+    ownBySize.set(sizeId, qty - out);
+  }
+
+  let ownQtyTotal = 0;
+  for (const qty of ownBySize.values()) {
+    if (qty > 0) ownQtyTotal += qty;
+  }
+  const fullyOutsourced = outQtyTotal > 0 && ownQtyTotal <= 0;
+
+  const priceRub =
+    step.outsourcePriceRub != null &&
+    Number.isFinite(step.outsourcePriceRub) &&
+    step.outsourcePriceRub >= 0
+      ? step.outsourcePriceRub
+      : null;
+
+  const warnings: string[] = [];
+  if (outQtyTotal > 0 && priceRub == null) {
+    warnings.push(
+      'Не задана цена стороннего размещения — размещение посчитано как 0',
+    );
+  }
+
+  return {
+    active: true,
+    ownBySize,
+    // При полном подряде своего объёма нет по определению, даже если
+    // `qtyPlanTotal` заказа шире суммы поразмерных строк.
+    ownFixedQty: fullyOutsourced ? 0 : Math.max(0, totalQty - outQtyTotal),
+    outQtyTotal,
+    fullyOutsourced,
+    priceRub,
+    costRub: priceRub != null ? priceRub * outQtyTotal : 0,
+    warnings,
+  };
+}
+
+/**
+ * Σ времени по произвольным весам (`sizeId → штук`) — зеркало
+ * `resolveNormLabel` по правилам выбора нормы, но с другим множителем.
+ * Нужно ровно одному потребителю: окладной части плана, которую подряд
+ * ужимает до остатка (`ownBySize`). Само плановое время строки метка не
+ * трогает — решение владельца «метка только про деньги».
+ */
+function sumTimeSecForQty(
+  op: OperationDetailDto,
+  step: OrderRouteStepDto,
+  qtyBySize: Map<string, number>,
+): number | null {
+  if (op.timeNormMode === 'FIXED') {
+    const sec = effFixedSec(op, step);
+    if (sec == null || !Number.isFinite(sec) || sec <= 0) return null;
+    let qty = 0;
+    for (const q of qtyBySize.values()) {
+      if (q > 0) qty += q;
+    }
+    return qty > 0 ? qty * sec : null;
+  }
+  if (op.timeNormMode === 'BY_SIZE') {
+    let total = 0;
+    for (const [sizeId, qty] of qtyBySize.entries()) {
+      if (qty <= 0) continue;
+      const sec = effSizeSec(op, step, sizeId);
+      if (sec == null || !Number.isFinite(sec) || sec <= 0) continue;
+      total += qty * sec;
+    }
+    return total > 0 ? total : null;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Pricing label resolver
 // ---------------------------------------------------------------------------
 
@@ -236,16 +424,46 @@ interface PriceResolution {
   warnings: string[];
 }
 
+/**
+ * Текст колонки «Цена». При подряде показываем обе цены, потому что за
+ * тираж платятся обе: своя расценка — за остаток, цена размещения — за
+ * отданный объём («25 ₽/шт · сторона 180 ₽/шт»). Если на стороне весь
+ * объём, своя расценка не участвует в плане — не показываем её и не
+ * требуем warning-ом.
+ */
 function resolvePriceLabel(
   op: OperationDetailDto | null,
   uniqueOrderSizeIds: string[],
   step: OrderRouteStepDto,
+  split: OutsourceSplit,
+): PriceResolution {
+  const own = resolveOwnPriceLabel(op, uniqueOrderSizeIds, step, split);
+  if (!split.active || split.outQtyTotal <= 0) return own;
+
+  const outLabel = split.priceRub != null ? formatRub(split.priceRub) : '—';
+  const label =
+    split.fullyOutsourced || own.label === '—'
+      ? `сторона ${outLabel}`
+      : `${own.label} · сторона ${outLabel}`;
+  return { label, warnings: own.warnings };
+}
+
+function resolveOwnPriceLabel(
+  op: OperationDetailDto | null,
+  uniqueOrderSizeIds: string[],
+  step: OrderRouteStepDto,
+  split: OutsourceSplit,
 ): PriceResolution {
   const warnings: string[] = [];
   if (!op) {
     warnings.push('Нет данных об операции');
     return { label: '—', warnings };
   }
+  /** Своя ставка при полном подряде в план не входит — её отсутствие не
+   *  повод шуметь (тот же гейт стоит в backend-warnings плана). */
+  const pushNoRate = () => {
+    if (!split.fullyOutsourced) warnings.push('Нет ставки');
+  };
   // Эффективный способ оплаты: переопределение заказа (оклад ⇄ сделка)
   // вытесняет дефолт операции (см. `OperationsService.resolveRate`).
   const mode = step.pricingModeOverride ?? op.pricingMode;
@@ -255,7 +473,7 @@ function resolvePriceLabel(
   if (mode === 'FIXED') {
     const rate = effFixedRate(op, step);
     if (rate == null) {
-      warnings.push('Нет ставки');
+      pushNoRate();
       return { label: '—', warnings };
     }
     return { label: formatRub(rate), warnings };
@@ -270,7 +488,7 @@ function resolvePriceLabel(
       if (r != null) ratesForOrder.push(r);
     }
     if (ratesForOrder.length === 0) {
-      warnings.push('Нет ставки');
+      pushNoRate();
       return { label: '—', warnings };
     }
     if (uniqueOrderSizeIds.length === 1) {
@@ -367,38 +585,96 @@ interface CostResolution {
   warnings: string[];
 }
 
+/** Своя (цеховая) часть плана операции — без размещения. */
+interface OwnCostResolution {
+  rub: number | null;
+  fallbackLabel: string | null;
+  /**
+   * `true` ⇔ backend по своей части этой операции тоже добавит в план
+   * ровно 0: нет ставки, нет нормы или весь объём ушёл подрядчику.
+   * Отличать это от «web не смог посчитать» нужно ради подряда: у
+   * операции на стороне строка обязана показать `0 + размещение`, а не
+   * пустоту — иначе сумма строк разойдётся со снимком
+   * `Order.operationCostPlanRub` ровно на размещение.
+   */
+  matchesZeroPlan: boolean;
+}
+
+/**
+ * Стоимость строки = своя расценка на остаток + цена размещения на
+ * отданный подрядчику объём (см. ПРАВИЛО РАСЧЁТА в шапке файла).
+ * `Order.operationCostPlanRub` — ПОЛНЫЙ план операций, поэтому
+ * размещение сидит внутри `lineTotalRub`, а не рядом с ним.
+ */
 function resolveCost(
   op: OperationDetailDto | null,
-  itemsBySize: Map<string, number>,
-  totalQty: number,
   totalTimeSec: number | null,
   step: OrderRouteStepDto,
+  split: OutsourceSplit,
 ): CostResolution {
   const warnings: string[] = [];
   if (!op) {
     warnings.push('Нет данных об операции');
     return { lineTotalRub: null, fallbackLabel: null, warnings };
   }
+
+  const own = resolveOwnCost(op, totalTimeSec, step, split);
+  if (!split.active) {
+    // Подряда нет — отдаём ровно то, что отдавали до появления метки.
+    return {
+      lineTotalRub: own.rub,
+      fallbackLabel: own.fallbackLabel,
+      warnings,
+    };
+  }
+  if (own.rub != null) {
+    return {
+      lineTotalRub: own.rub + split.costRub,
+      fallbackLabel: null,
+      warnings,
+    };
+  }
+  if (own.matchesZeroPlan) {
+    // Своей части в плане нет (весь объём на стороне / нет ставки) —
+    // строка равна размещению. Ноль без цены размещения тоже показываем:
+    // он честно повторяет план и объяснён warning-ом.
+    return { lineTotalRub: split.costRub, fallbackLabel: null, warnings };
+  }
+  // Остался единственный случай — окладная операция, чью ставку web не
+  // воспроизводит (плановая ставка задана, а длительность смены нет).
+  // Сумму не выдумываем: пусть строка честно скажет «окладная», а
+  // размещение видно в расшифровке итога.
+  return { lineTotalRub: null, fallbackLabel: own.fallbackLabel, warnings };
+}
+
+function resolveOwnCost(
+  op: OperationDetailDto,
+  totalTimeSec: number | null,
+  step: OrderRouteStepDto,
+  split: OutsourceSplit,
+): OwnCostResolution {
   // Эффективный способ оплаты с учётом переопределения заказа.
   const mode = step.pricingModeOverride ?? op.pricingMode;
   if (mode === 'FIXED') {
     const rate = effFixedRate(op, step);
     if (rate == null) {
-      return { lineTotalRub: null, fallbackLabel: null, warnings };
+      return { rub: null, fallbackLabel: null, matchesZeroPlan: true };
     }
-    if (totalQty <= 0) {
-      return { lineTotalRub: null, fallbackLabel: null, warnings };
+    // Своя расценка — только на остаток тиража (без подряда остаток =
+    // весь тираж заказа, как и было).
+    if (split.ownFixedQty <= 0) {
+      return { rub: null, fallbackLabel: null, matchesZeroPlan: true };
     }
     return {
-      lineTotalRub: rate * totalQty,
+      rub: rate * split.ownFixedQty,
       fallbackLabel: null,
-      warnings,
+      matchesZeroPlan: false,
     };
   }
   if (mode === 'BY_SIZE') {
     let total = 0;
     let priced = 0;
-    for (const [sid, qty] of itemsBySize.entries()) {
+    for (const [sid, qty] of split.ownBySize.entries()) {
       if (qty <= 0) continue;
       const r = effSizeRate(op, step, sid);
       if (r == null) continue;
@@ -406,43 +682,48 @@ function resolveCost(
       priced += 1;
     }
     if (priced === 0) {
-      return { lineTotalRub: null, fallbackLabel: null, warnings };
+      // Ни одной оплачиваемой пары (размер × остаток): backend по таким
+      // парам тоже добавляет 0 (размер без ставки он пропускает).
+      return { rub: null, fallbackLabel: null, matchesZeroPlan: true };
     }
-    return {
-      lineTotalRub: total,
-      fallbackLabel: null,
-      warnings,
-    };
+    return { rub: total, fallbackLabel: null, matchesZeroPlan: false };
   }
   if (mode === 'SALARY_ONLY') {
     // Если у операции заданы salaryPlanRubPerShift + shiftSeconds +
     // нормы времени — считаем как (timeSec × ставка_за_секунду).
+    // Подряд ужимает время до остатка: время СТРОКИ метка не трогает
+    // (оно за весь тираж), а окладные деньги — да.
     const ratePerShift = op.salaryPlanRubPerShift;
     const shiftSec = op.salaryPlanShiftSeconds ?? 0;
+    const ownTimeSec = split.active
+      ? sumTimeSecForQty(op, step, split.ownBySize)
+      : totalTimeSec;
+    const hasPlanRate = ratePerShift != null && Number.isFinite(ratePerShift);
     if (
-      ratePerShift != null &&
-      Number.isFinite(ratePerShift) &&
+      hasPlanRate &&
       shiftSec > 0 &&
-      totalTimeSec != null &&
-      totalTimeSec > 0
+      ownTimeSec != null &&
+      ownTimeSec > 0
     ) {
       const ratePerSec = Number(ratePerShift) / shiftSec;
       return {
-        lineTotalRub: ratePerSec * totalTimeSec,
+        rub: ratePerSec * ownTimeSec,
         fallbackLabel: null,
-        warnings,
+        matchesZeroPlan: false,
       };
     }
     // Иначе UI рисует «окладная» — точная оценка считается на
     // backend в сводном `Order.operationCostPlanRub`, мы не дублируем
-    // эту формулу в web.
+    // эту формулу в web. Но если считать было НЕЧЕГО (нет плановой
+    // ставки / нет времени по остатку), backend тоже запишет 0 — и для
+    // операции на стороне это позволяет показать сумму размещения.
     return {
-      lineTotalRub: null,
+      rub: null,
       fallbackLabel: 'окладная',
-      warnings,
+      matchesZeroPlan: !hasPlanRate || ownTimeSec == null || ownTimeSec <= 0,
     };
   }
-  return { lineTotalRub: null, fallbackLabel: null, warnings };
+  return { rub: null, fallbackLabel: null, matchesZeroPlan: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -596,20 +877,19 @@ export function buildOrderOperationRows(
       completed: buckets.completed,
     });
 
+    // Раскладка тиража на «своё» и «на стороне» — считается ДО денег:
+    // на ней ветвятся и цена, и стоимость, и warnings строки.
+    const split = resolveOutsourceSplit(step, itemsBySize, plannedQty);
+
     const norm = resolveNormLabel(op, itemsBySize, uniqueOrderSizeIds, step);
-    const price = resolvePriceLabel(op, uniqueOrderSizeIds, step);
-    const cost = resolveCost(
-      op,
-      itemsBySize,
-      plannedQty,
-      norm.totalTimeSec,
-      step,
-    );
+    const price = resolvePriceLabel(op, uniqueOrderSizeIds, step, split);
+    const cost = resolveCost(op, norm.totalTimeSec, step, split);
 
     const warnings = new Set<string>();
     for (const w of norm.warnings) warnings.add(w);
     for (const w of price.warnings) warnings.add(w);
     for (const w of cost.warnings) warnings.add(w);
+    for (const w of split.warnings) warnings.add(w);
     if (balanceLine && balanceLine.warnings.length > 0) {
       for (const w of balanceLine.warnings) warnings.add(w);
     }
@@ -650,6 +930,12 @@ export function buildOrderOperationRows(
       totalTimeSec,
       lineTotalRub: cost.lineTotalRub,
       costFallbackLabel: cost.fallbackLabel,
+      isOutsourced: split.active,
+      outsourcedQty: split.outQtyTotal,
+      outsourcePriceRub: split.priceRub,
+      // `null` вместо 0 у обычной операции — чтобы «в т.ч. размещение»
+      // не появлялось нулевой строкой там, где подряда нет вовсе.
+      outsourceCostRub: split.active ? split.costRub : null,
       commentText: null,
       warnings: Array.from(warnings),
     });
@@ -666,6 +952,11 @@ export interface OrderOperationsSummary {
   /** Σ `lineTotalRub` по всем строкам, у которых есть стоимость. `null`,
    *  если ни одной строки с посчитанной стоимостью. */
   totalCostRub: number | null;
+  /** Σ `outsourceCostRub` по операциям на стороне — «в том числе
+   *  размещение» ВНУТРИ `totalCostRub`, а не добавка к нему. `null`, если
+   *  подряда в заказе нет. Нужен как fallback, пока backend не пересчитал
+   *  снимок `Order.operationOutsourceCostPlanRub`. */
+  totalOutsourceCostRub: number | null;
   /** Σ `totalTimeSec` по всем строкам с посчитанным временем. `null` ⇔ ничего. */
   totalTimeSec: number | null;
   /** Имя «узкого места» (если есть). */
@@ -686,6 +977,8 @@ export function summariseOrderOperationRows(
 ): OrderOperationsSummary {
   let cost = 0;
   let costSeen = false;
+  let outsource = 0;
+  let outsourceSeen = false;
   let time = 0;
   let timeSeen = false;
   let withWarnings = 0;
@@ -694,6 +987,12 @@ export function summariseOrderOperationRows(
     if (r.lineTotalRub != null && Number.isFinite(r.lineTotalRub)) {
       cost += r.lineTotalRub;
       costSeen = true;
+    }
+    if (r.outsourceCostRub != null && Number.isFinite(r.outsourceCostRub)) {
+      // Складываем ТОЛЬКО расшифровку размещения; в `cost` она уже вошла
+      // строкой целиком (`lineTotalRub` = своё + размещение).
+      outsource += r.outsourceCostRub;
+      outsourceSeen = true;
     }
     if (r.totalTimeSec != null && Number.isFinite(r.totalTimeSec)) {
       time += r.totalTimeSec;
@@ -706,6 +1005,7 @@ export function summariseOrderOperationRows(
   }
   return {
     totalCostRub: costSeen ? cost : null,
+    totalOutsourceCostRub: outsourceSeen ? outsource : null,
     totalTimeSec: timeSeen ? time : null,
     bottleneckOperationName: bottleneck?.name ?? null,
     rowsWithWarnings: withWarnings,

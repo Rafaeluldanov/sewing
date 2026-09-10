@@ -92,6 +92,14 @@ export async function resetDatabase(prisma: {
     'WorkInProgressBalance',
     'Passport',
     'CuttingClosureRequest',
+    // Поразмерные правки шага маршрута заказа (ставка/норма по размеру и —
+    // после фичи «сторонние услуги» — объём, отданный подрядчику
+    // `outsourcedQty`). Подчинены `OrderRouteStep` через `ON DELETE CASCADE`,
+    // то есть `TRUNCATE ... CASCADE` снёс бы их и без этой строки. Явный
+    // список — по конвенции файла и как страховка: если у связи когда-нибудь
+    // уберут CASCADE, зомби-строка с объёмом на сторону молча переехала бы в
+    // следующий тест и сломала бы числа плана операций.
+    'OrderRouteStepSizeOverride',
     'OrderRouteStep',
     'OrderMaterialRequirement',
     'OrderOutsourceRequirement',
