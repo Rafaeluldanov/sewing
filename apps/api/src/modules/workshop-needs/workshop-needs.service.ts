@@ -3375,7 +3375,10 @@ export class WorkshopNeedsService {
    *     (snapshot из `parameter.unit` на момент сохранения) — это
    *     «единица потребности», а НЕ единица ввода.
    *   - На основе rawLinearM = Σ(value × qtyPlan) бэкенд считает
-   *     `calculatedQty` в outputUnit = `parameter.unit`:
+   *     `calculatedQty` в ЗАКУПОЧНОЙ единице строки состава
+   *     (`line.unit`; параметр даёт единицу НОРМЫ, а не закупки —
+   *     правка 10.09.2026, до неё брали `parameter.unit` и потребность
+   *     расходилась со спецификацией того же заказа):
    *       - 'м пог.' → calculatedQty = rawLinearM;
    *       - 'м²'    → calculatedQty = rawLinearM × widthCm / 100;
    *       - 'кг'    → calculatedQty = rawLinearM × widthCm / 100
@@ -3477,10 +3480,19 @@ export class WorkshopNeedsService {
       ? this.resolveColor(matchedLine, orderColor)
       : null;
 
-    // Целевая единица — `parameter.unit` (snapshot в `value.unit`,
-    // одинаковый по построению для всех значений одного параметра).
-    const outputUnitRaw = (head.unit ?? '').trim();
+    // Целевая единица — ЗАКУПОЧНАЯ единица строки состава (`matchedLine.unit`), а параметр даёт
+    // единицу НОРМЫ. Это две разные вещи: норму мерят в погонных метрах, а трикотаж покупают на
+    // вес, и `unit` строки состава исторически означает именно закупку (см.
+    // `@sewing/shared/norm-purchase`). Раньше выходной единицей была единица ПАРАМЕТРА, и
+    // потребность расходилась со спецификацией того же заказа: у ФС-000003 «Футер 2-ух Нитка»
+    // стоял 554.1375 м пог. в потребности против 256.2886 кг в спецификации — два числа про один
+    // материал, ровно то, ради чего норму и закупку разводили по разным полям.
+    // Строки состава нет (параметр без материала) — остаёмся на единице параметра, как раньше.
+    const outputUnitRaw = (matchedLine?.unit ?? head.unit ?? '').trim();
     const outputUnit = outputUnitRaw === '' ? 'м пог.' : outputUnitRaw;
+    // Сравниваем по НОРМАЛИЗОВАННОМУ написанию: состав и параметр заполняют разные люди, и
+    // «м пог.» против «м.пог» не должно решать, будет пересчёт или нет.
+    const outputKey = normalizeUnit(outputUnit);
 
     // Норма правлена в заказе (м пог./шт) — Σ считаем по ней. Правка в
     // других единицах погонные метры не заменяет: предупреждаем явно.
@@ -3524,13 +3536,13 @@ export class WorkshopNeedsService {
     let unit: string;
     let totalAreaM2: Prisma.Decimal | null = null;
 
-    if (outputUnit === 'м пог.') {
+    if (outputKey === 'м') {
       calculatedQty = rawLinearM.toDecimalPlaces(
         4,
         Prisma.Decimal.ROUND_HALF_UP,
       );
       unit = 'м пог.';
-    } else if (outputUnit === 'м²') {
+    } else if (outputKey === 'м2') {
       if (widthCm == null || widthCm <= 0) {
         const w = `Не указана ширина материала для пересчёта погонных метров в м². Заполните ширину в составе материалов по строке с ролью «${head.roleKey}».`;
         noteParts.push(w);
@@ -3562,7 +3574,7 @@ export class WorkshopNeedsService {
           `Пересчёт: ${rawLinearM.toString()} м пог. × ${widthCm} см / 100 = ${calculatedQty.toString()} м².`,
         );
       }
-    } else if (outputUnit === 'кг') {
+    } else if (outputKey === 'кг') {
       const widthMissing = widthCm == null || widthCm <= 0;
       const densityMissing = densityGsm == null || densityGsm <= 0;
       if (widthMissing || densityMissing) {
