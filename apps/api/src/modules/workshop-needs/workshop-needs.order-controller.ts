@@ -20,7 +20,7 @@ import {
 } from '@sewing/shared/workshop-needs';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, MachineScopes, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { WorkshopNeedsService } from './workshop-needs.service.js';
 
@@ -45,6 +45,19 @@ import { WorkshopNeedsService } from './workshop-needs.service.js';
 export class WorkshopNeedsOrderController {
   constructor(private readonly needs: WorkshopNeedsService) {}
 
+  /**
+   * Пересчёт открыт и МАШИННОМУ токену (`needs:write`, 10.09.2026, просьба владельца ERP).
+   *
+   * Зачем: единицу и норму материала задают в лекале, а в потребность они попадают расчётом —
+   * значит «поправил лекало → верное количество в закупке» без этой ручки невозможно. ERP звала её
+   * и получала 403: гвард машинных токенов работает deny-by-default, и роль тут ни при чём.
+   * На людей декоратор не влияет — их по-прежнему пускают роли ADMIN/SHOP_MANAGER.
+   *
+   * Опасность пересчёта (снос строк в работе у закупщика) декоратор не трогает: её держат гварды
+   * самого сервиса — `force` обязателен для тронутых строк, строки под заказом ERP отбиваются
+   * (`WorkshopNeedErpStateException`), закупочный блок переносится `buildPurchaseCarry`.
+   */
+  @MachineScopes('needs:write')
   @Post(':id/workshop-needs/calculate')
   calculate(
     @Param('id') orderId: string,
