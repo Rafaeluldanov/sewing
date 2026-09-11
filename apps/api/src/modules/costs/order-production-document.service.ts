@@ -425,6 +425,7 @@ export class OrderProductionDocumentService {
         materialRole: true,
         unit: true,
         calculatedQty: true,
+        purchaseQty: true,
         quotedPrice: true,
         quotedCurrency: true,
         erpManagedAt: true,
@@ -442,7 +443,19 @@ export class OrderProductionDocumentService {
         materialRole: wn.materialRole,
       });
       if (kind === 'APPLICATION' || kind === 'OTHER') preserveKeys.add(wn.id);
-      // Деньги плана: из сметы, иначе calculatedQty × quotedPrice (RUB).
+      // Деньги плана: из сметы, иначе «к закупке» × цена (RUB).
+      //
+      // ⛔ Количество для ДЕНЕГ — `purchaseQty ?? calculatedQty`, то же, что берут смета
+      // (`OrderCostEstimatesService`) и сводка себестоимости (`production-cost-v2`). Раньше
+      // fallback считал по `calculatedQty`, и документ противоречил смете на тех же данных:
+      // как только закупщик задавал «к закупке» руками, план в деньгах улетал.
+      // Прод-прецедент 11.09.2026, заказ ФС-000003: «Печать лекал» заведена в спецификации как
+      // 1 шт НА ИЗДЕЛИЕ (расчёт дал 525 шт), закупщик поставил «к закупке» 1 — услуга разовая, —
+      // а план показал 525 × 4 460 = 2 341 500 ₽ вместо 4 460 ₽.
+      //
+      // `planQty` остаётся РАСЧЁТНЫМ: это плановый расход, и сравнивают его с «выдано». Деньги же
+      // отвечают на другой вопрос — во сколько заказ обойдётся, — и там решает закупщик.
+      const planQty = wn.purchaseQty ?? wn.calculatedQty;
       let planRub: Prisma.Decimal | null = null;
       let planSource: ProductionDocMaterialPlanSource = 'NONE';
       const fromEstimate = planRubByNeed.get(wn.id);
@@ -451,11 +464,11 @@ export class OrderProductionDocumentService {
         planSource = 'COST_ESTIMATE';
       } else if (wn.erpManagedAt && wn.erpUnitPriceRub) {
         // Материал под ERP — цена её заказа поставщику (факт), рубли.
-        planRub = new Prisma.Decimal(wn.calculatedQty).mul(wn.erpUnitPriceRub);
+        planRub = new Prisma.Decimal(planQty).mul(wn.erpUnitPriceRub);
         planSource = 'WORKSHOP_NEED';
       } else if (wn.quotedPrice != null) {
         if ((wn.quotedCurrency ?? 'RUB') === 'RUB') {
-          planRub = new Prisma.Decimal(wn.calculatedQty).mul(wn.quotedPrice);
+          planRub = new Prisma.Decimal(planQty).mul(wn.quotedPrice);
           planSource = 'WORKSHOP_NEED';
         } else {
           docWarnings.add('PLAN_USD_SKIPPED');

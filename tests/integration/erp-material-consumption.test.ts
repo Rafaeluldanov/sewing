@@ -236,4 +236,29 @@ describeWithDb('integration — материал под ERP: списание п
     // План — по цене ERP: 5 кг × 300 ₽.
     expect(Number(row!.planRub)).toBe(1500);
   });
+
+  test('«к закупке» закупщика решает деньги плана, а не расчётное количество', async () => {
+    // Прод 11.09.2026 (ФС-000003): разовую услугу «Печать лекал» завели в спецификации как 1 шт
+    // НА ИЗДЕЛИЕ, расчёт дал 525 шт, закупщик поставил «к закупке» 1 — а план показал
+    // 525 × 4 460 = 2 341 500 ₽. Смета и сводка себестоимости при этом считали по «к закупке»:
+    // документ противоречил им на тех же данных.
+    const { orderId, workshopNeedId } = await prepare();
+    await t.prisma.workshopNeed.update({
+      where: { id: workshopNeedId },
+      data: { purchaseQty: new Prisma.Decimal('1') },
+    });
+
+    const doc = await request(t.app.getHttpServer())
+      .get(`/api/admin/production-cost/order/${orderId}/document`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    const row = (doc.body.materials as Array<Record<string, any>>).find(
+      (m) => m.workshopNeedId === workshopNeedId || m.key === workshopNeedId,
+    );
+    expect(row).toBeTruthy();
+    // Деньги — по «к закупке»: 1 × 300 ₽, а не 5 × 300 ₽.
+    expect(Number(row!.planRub)).toBe(300);
+    // Количество плана остаётся расчётным расходом — его сравнивают с «выдано».
+    expect(Number(row!.planQty)).toBe(5);
+  });
 });
