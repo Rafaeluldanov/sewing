@@ -681,6 +681,23 @@ export interface WorkshopNeedsArchiveResultDto {
  */
 export const CalculateWorkshopNeedsSchema = z.object({
   force: z.boolean().optional().default(false),
+  /**
+   * `appendMissing = true` — режим ДОБОРА: пересчёт ничего не удаляет и не
+   * переписывает, а лишь создаёт строки, которых в потребности ещё нет.
+   *
+   * Зачем отдельный режим: обычный пересчёт — «всё или ничего», и как только
+   * по заказу пошла закупка, он законно отказывается (`force = false` —
+   * 409 ALREADY_REVIEWED, `force = true` — 409 по строкам под заказом ERP).
+   * Материал, ДОПИСАННЫЙ в спецификацию после этого, не попадал в потребность
+   * уже никогда: закупщик о нём просто не узнавал. Добор закрывает ровно этот
+   * разрыв — новые позиции доезжают, работа закупщика (цена, «к закупке»,
+   * статус, сопоставление с ERP) остаётся нетронутой.
+   *
+   * Нормы и единицы УЖЕ существующих строк добор не обновляет: для этого
+   * нужен полный пересчёт, а он требует сначала отвязать заказы поставщику.
+   * `force` в этом режиме не имеет смысла и игнорируется.
+   */
+  appendMissing: z.boolean().optional(),
 });
 export type CalculateWorkshopNeedsDto = z.infer<
   typeof CalculateWorkshopNeedsSchema
@@ -1231,6 +1248,8 @@ export interface CalculateWorkshopNeedsResultDto {
   count: number;
   /** Использовался ли force-режим. */
   force: boolean;
+  /** Был ли это ДОБОР (`appendMissing`): существующие строки не тронуты. */
+  appendMissing?: boolean;
   /** Свод по методам расчёта. Полезно для UI/аудита. */
   methods: {
     AREA_DENSITY: number;

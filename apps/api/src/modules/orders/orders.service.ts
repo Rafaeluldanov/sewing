@@ -5314,10 +5314,54 @@ export class OrdersService {
           : err instanceof Error
             ? err.message
             : 'Пересчёт потребности не выполнен.';
-      await this.markNeedsStale(orderId, reason);
-      OrdersService.log.warn(
-        `event=order.needs_stale order=${orderId} reason=${reason}`,
+      // Полный пересчёт не положен — но МАТЕРИАЛ, ДОПИСАННЫЙ В СПЕЦИФИКАЦИЮ,
+      // обязан доехать до закупки. Отметка «устарела» этого не делает: она
+      // висит на заказе, а закупщик работает в списке потребности и нового
+      // материала там просто не видит. Прод-прецедент 11.09.2026 (ФС-000003):
+      // две строки добавили в заказ, пересчёт отбился о строки под заказом
+      // поставщику ERP — и цех остался бы без печати лекал и наклеек.
+      //
+      // Добор ничего не удаляет и не переписывает, поэтому безопасен и здесь,
+      // где полный пересчёт запрещён. Отметку он не снимает: нормы и единицы
+      // СТАРЫХ строк так и не пересчитаны, и причина этого не изменилась.
+      const appended = await this.appendMissingNeeds(orderId, actorEmployeeId);
+      await this.markNeedsStale(
+        orderId,
+        appended > 0
+          ? `${reason} Новые позиции спецификации дописаны в потребность: ${appended}.`
+          : reason,
       );
+      OrdersService.log.warn(
+        `event=order.needs_stale order=${orderId} appended=${appended} reason=${reason}`,
+      );
+    }
+  }
+
+  /**
+   * ДОБОР недостающих строк потребности (best-effort, никогда не бросает).
+   *
+   * Зовётся там, где полный пересчёт законно отказался. Смысл ровно один:
+   * позиция, появившаяся в спецификации, должна дойти до закупщика, даже если
+   * остальные строки трогать нельзя. Неудача самого добора — не повод ронять
+   * уже применённую правку спецификации, поэтому только лог.
+   */
+  private async appendMissingNeeds(
+    orderId: string,
+    actorEmployeeId: string | null,
+  ): Promise<number> {
+    try {
+      const res = await this.workshopNeeds.calculateForOrder(
+        orderId,
+        { force: false, appendMissing: true },
+        actorEmployeeId,
+      );
+      return res.count;
+    } catch (err) {
+      OrdersService.log.warn(
+        `event=order.needs_append_failed order=${orderId} ` +
+          `reason=${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 0;
     }
   }
 

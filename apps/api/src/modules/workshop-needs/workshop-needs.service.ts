@@ -1216,12 +1216,37 @@ export class WorkshopNeedsService {
   // CALCULATE
   // -------------------------------------------------------------------------
 
+  /**
+   * Посчитать потребность заказа. Два режима, и разница между ними — в том,
+   * что происходит с УЖЕ СУЩЕСТВУЮЩИМИ строками:
+   *
+   *   - обычный (по умолчанию) — пересобрать: снести свои строки и создать
+   *     заново. Защищён гардами (`force`, остаток на складе, строки под
+   *     заказом поставщику ERP), потому что сносит чужую работу;
+   *   - ДОБОР (`appendMissing`) — ничего не сносить, создать только те строки,
+   *     которых в потребности нет.
+   *
+   * Добор нужен из-за того, что обычный пересчёт устроен «всё или ничего»: как
+   * только по заказу пошла закупка, он законно отказывается — и материал,
+   * дописанный в спецификацию ПОСЛЕ этого, не попадал в потребность уже
+   * никогда (прод-прецедент 11.09.2026, заказ ФС-000003: печать лекал и
+   * наклейки остались невидимыми для закупки). Нормы и единицы старых строк
+   * добор не обновляет — для этого нужен полный пересчёт, а он по-прежнему
+   * требует сперва отвязать заказы поставщику.
+   */
   async calculateForOrder(
     orderId: string,
     dto: CalculateWorkshopNeedsDto,
     actorEmployeeId?: string | null,
   ): Promise<CalculateWorkshopNeedsResultDto> {
     const force = dto.force ?? false;
+    // Режим ДОБОРА: ничего не удаляем и не переписываем — создаём только те
+    // строки, которых в потребности ещё нет. Единственный путь, которым
+    // материал, дописанный в спецификацию УЖЕ работающего заказа, доезжает до
+    // закупки: обычный пересчёт к этому моменту законно отказывается (строки
+    // тронуты закупщиком либо стоят под заказом поставщику ERP), и новая
+    // позиция оставалась невидимой навсегда. `force` тут смысла не имеет.
+    const appendMissing = dto.appendMissing ?? false;
 
     // 1. Грузим заказ + размерную матрицу + лекало с площадями + техкарту
     //    + заказные нанесения (`OrderApplication`).
@@ -1501,7 +1526,10 @@ export class WorkshopNeedsService {
     const hasTouched = existing.some(
       (e) => e.status !== 'CALCULATED' || e.manualEditAt != null,
     );
-    if (hasTouched && !force) {
+    // Добор ничего не сносит, поэтому защищать от него нечего: тронутые строки
+    // он не трогает по построению, а отказ здесь означал бы, что новый материал
+    // не доедет до закупки ровно в том случае, ради которого режим и сделан.
+    if (hasTouched && !force && !appendMissing) {
       throw new WorkshopNeedsAlreadyReviewedException();
     }
 
@@ -2030,6 +2058,70 @@ export class WorkshopNeedsService {
       }
     }
 
+    // 4.4. ДОБОР: из посчитанного оставляем ТОЛЬКО то, чего в потребности нет.
+    //
+    // Совпадение ищем двумя ключами, и второй здесь не роскошь:
+    //   - источник (`sourceType + sourceId + расцветка`) — точный ключ, но
+    //     `sourceId` строки снимка переживает не всякую пересборку
+    //     спецификации («Обновить из номенклатуры» создаёт строки заново);
+    //   - ОПИСАНИЕ строки — то, что закупщик видит глазами. Оно уже несёт тип,
+    //     плотность, ширину, характеристики и цвет, поэтому вторая строка с тем
+    //     же описанием в документе — это дубль, а не новая позиция.
+    // Промах ключа стоит дубля в закупке, поэтому берём оба: лишний пропуск
+    // чинится полным пересчётом, лишняя строка — уже деньгами.
+    //
+    // Ручные строки закупщика (`MANUAL_ADDITION`) в сравнении участвуют
+    // намеренно: материал, заведённый им руками, добор не задваивает.
+    let appendSkipped = 0;
+    if (appendMissing) {
+      const sourceKey = (r: {
+        sourceType: string | null;
+        sourceId: string | null;
+        orderVariantId: string | null;
+      }): string =>
+        [r.sourceType, r.sourceId ?? '', r.orderVariantId ?? ''].join('|');
+      const descriptionKey = (r: {
+        description: string;
+        orderVariantId: string | null;
+      }): string =>
+        [r.description.trim().toLowerCase(), r.orderVariantId ?? ''].join('|');
+      const existingRows = await this.prisma.workshopNeed.findMany({
+        // Скоуп тот же, что у удаления в обычном режиме (шаг 2.5), плюс явное
+        // исключение строк сигнального образца: у legacy-заказа без калькуляций
+        // они лежат с тем же `orderCalculationId = null`, и тиражная строка
+        // молча не доехала бы, совпав с образцовой по описанию.
+        where: { orderId, orderCalculationId: activeCalculationId, orderSampleId: null },
+        select: {
+          sourceType: true,
+          sourceId: true,
+          orderVariantId: true,
+          description: true,
+        },
+      });
+      const bySource = new Set(existingRows.map(sourceKey));
+      const byDescription = new Set(existingRows.map(descriptionKey));
+      const missing = computed.filter((c) => {
+        const variantId = c.orderVariantId ?? null;
+        return (
+          !bySource.has(
+            sourceKey({
+              sourceType: c.sourceType,
+              sourceId: c.sourceId,
+              orderVariantId: variantId,
+            }),
+          ) &&
+          !byDescription.has(
+            descriptionKey({
+              description: c.description,
+              orderVariantId: variantId,
+            }),
+          )
+        );
+      });
+      appendSkipped = computed.length - missing.length;
+      computed.splice(0, computed.length, ...missing);
+    }
+
     // 4.5. Защита складского остатка от каскадного удаления.
     // Пересчёт удаляет системные строки WorkshopNeed и создаёт новые с
     // другими id. По строкам, на которые уже завязаны складские движения
@@ -2050,21 +2142,27 @@ export class WorkshopNeedsService {
       isManual: false,
       ...(force ? {} : { status: 'CALCULATED' }),
     };
-    const needsWithStock = await this.prisma.workshopNeed.count({
-      where: { ...doomedWhere, stockMovements: { some: {} } },
-    });
-    if (needsWithStock > 0) {
-      throw new WorkshopNeedsHaveStockException();
-    }
-    // Закупочный шов: строку под заказом поставщику ERP пересоздавать нельзя — связь ERP
-    // повисла бы на удалённом id, а новая строка снова выглядела бы «не заказана».
-    const needsUnderErp = await this.prisma.workshopNeed.count({
-      where: { ...doomedWhere, erpManagedAt: { not: null } },
-    });
-    if (needsUnderErp > 0) {
-      throw new WorkshopNeedErpStateException(
-        'Часть строк под заказом поставщику ERP — пересчитать их нельзя, сначала отвяжите заказ в ERP.',
-      );
+    // Оба гарда сторожат УДАЛЕНИЕ. В доборе удаления нет — ни остаток, ни связь
+    // с заказом ERP ему не грозят, и отказ здесь означал бы ровно то, против
+    // чего режим сделан: заказ с первым же созданным ЗП больше никогда не
+    // увидел бы нового материала в закупке.
+    if (!appendMissing) {
+      const needsWithStock = await this.prisma.workshopNeed.count({
+        where: { ...doomedWhere, stockMovements: { some: {} } },
+      });
+      if (needsWithStock > 0) {
+        throw new WorkshopNeedsHaveStockException();
+      }
+      // Закупочный шов: строку под заказом поставщику ERP пересоздавать нельзя — связь ERP
+      // повисла бы на удалённом id, а новая строка снова выглядела бы «не заказана».
+      const needsUnderErp = await this.prisma.workshopNeed.count({
+        where: { ...doomedWhere, erpManagedAt: { not: null } },
+      });
+      if (needsUnderErp > 0) {
+        throw new WorkshopNeedErpStateException(
+          'Часть строк под заказом поставщику ERP — пересчитать их нельзя, сначала отвяжите заказ в ERP.',
+        );
+      }
     }
 
     // 5. Транзакция: удаляем нужные строки и пишем новые.
@@ -2077,14 +2175,20 @@ export class WorkshopNeedsService {
       // ставит `manualEditAt` и не меняет статус (см. `update`), поэтому
       // строка с проставленной ценой выглядит нетронутой и попадает под
       // `deleteMany`.
-      const carry = buildPurchaseCarry(
-        await tx.workshopNeed.findMany({
-          where: doomedWhere,
-          select: PURCHASE_CARRY_SELECT,
-        }),
-      );
+      // В доборе переносить не с чего и удалять нечего: старые строки остаются
+      // на месте вместе со своим закупочным блоком.
+      const carry = appendMissing
+        ? new Map<string, PurchaseCarryFields | null>()
+        : buildPurchaseCarry(
+            await tx.workshopNeed.findMany({
+              where: doomedWhere,
+              select: PURCHASE_CARRY_SELECT,
+            }),
+          );
 
-      await tx.workshopNeed.deleteMany({ where: doomedWhere });
+      if (!appendMissing) {
+        await tx.workshopNeed.deleteMany({ where: doomedWhere });
+      }
 
       const createdRows: WorkshopNeed[] = [];
       for (const c of computed) {
@@ -2130,7 +2234,9 @@ export class WorkshopNeedsService {
       // Итерация 3 «стадия per вариант»: успешный расчёт = вариант
       // отправлен на расчёт. Штамп в той же tx, что и строки —
       // инвариант «есть строки ⇔ вариант отправлен» не расходится.
-      if (activeCalculationId) {
+      // Добор этого не решает: он дописывает материал в уже посчитанную
+      // потребность, а не отправляет вариант на расчёт.
+      if (activeCalculationId && !appendMissing) {
         await tx.orderCalculation.updateMany({
           where: { id: activeCalculationId, sentToCalculationAt: null },
           data: { sentToCalculationAt: new Date() },
@@ -2147,6 +2253,9 @@ export class WorkshopNeedsService {
             orderId,
             count: createdRows.length,
             force,
+            appendMissing,
+            // Сколько посчитанных строк добор пропустил как уже существующие.
+            ...(appendMissing ? { appendSkipped } : {}),
             useSnapshot: hasSnapshot,
             // Этап «Исправить формирование Потребности цеха» (см.
             // ТЗ §1 source-recon): пишем в payload, был ли заказ
@@ -2172,17 +2281,26 @@ export class WorkshopNeedsService {
       // Пересчёт прошёл — потребность снова совпадает со спецификацией,
       // значит отметка «устарела» снимается. В той же транзакции, что и сами
       // строки: иначе отметка и цифры разъехались бы при откате.
-      await tx.order.update({
-        where: { id: orderId },
-        data: { needsStaleAt: null, needsStaleReason: null },
-      });
+      //
+      // ⛔ Добор отметку НЕ снимает: он дописал новые позиции, но нормы и
+      // единицы существующих строк остались прежними — потребность со
+      // спецификацией всё ещё может расходиться, и причина расхождения
+      // (строки в работе у закупщика / под заказом ERP) никуда не делась.
+      if (!appendMissing) {
+        await tx.order.update({
+          where: { id: orderId },
+          data: { needsStaleAt: null, needsStaleReason: null },
+        });
+      }
 
       return createdRows;
     });
 
     this.logger.log(
       `event=workshop_needs.calculate orderId=${orderId} count=${created.length} ` +
-        `force=${force} categoryDriven=${isCategoryDriven} ` +
+        `force=${force} appendMissing=${appendMissing} ` +
+        (appendMissing ? `appendSkipped=${appendSkipped} ` : '') +
+        `categoryDriven=${isCategoryDriven} ` +
         `methods=AREA_DENSITY:${methodAreaDensity},QTY_PER_UNIT:${methodQtyPerUnit},LINEAR_M_BY_SIZE:${methodLinearBySize},PATTERN_MATERIAL_AREA:${methodMaterialArea} ` +
         `warnings=${warnings.length}`,
     );
@@ -2208,6 +2326,7 @@ export class WorkshopNeedsService {
       needs,
       count: created.length,
       force,
+      appendMissing,
       methods: {
         AREA_DENSITY: methodAreaDensity,
         QTY_PER_UNIT: methodQtyPerUnit,
