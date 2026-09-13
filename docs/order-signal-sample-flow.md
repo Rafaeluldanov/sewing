@@ -105,13 +105,19 @@ Sample-потребности — это записи `WorkshopNeed` с
 Sample-расчёт **поддерживает** (см.
 `WorkshopNeedsService.calculateForSampleInTx`):
 
-- `TechCardMaterialLine` (live) и `OrderMaterialRequirement` (snapshot
-  после `OrdersService.start`) — каждая строка превращается в
-  `WorkshopNeed` с `qtyPerUnit × sample.qty`;
-- цвет, фабрик-тип, плотность, ширину — переносятся из строки
-  источника;
+- `OrderMaterialRequirement` (снимок заказа) — каждая строка превращается в
+  `WorkshopNeed` с `qtyPerUnit × sample.qty`; источник строки остаётся
+  `ORDER_MATERIAL_REQUIREMENT`, норма, правленная в заказе
+  (`qtySource = ORDER`), действует и для образца;
+- при ≥2 расцветках берутся строки снимка ОДНОЙ расцветки — той, чей цвет
+  совпадает с цветом образца (`Order.color ?? Product.color`), иначе первой;
+  при ≤1 расцветке — все строки (аудит движка расчёта 13.09.2026,
+  N1-8/N2-8: раньше образец получал по строке каждой расцветки — материал ×
+  число расцветок);
+- цвет (из `resolvedColorText` снимка расцветки), фабрик-тип, плотность,
+  ширину — переносятся из строки источника;
 - `calculationNote` дополняется маркером
-  `«Расчёт на сигнальный образец (qty=N, size=CODE)»`.
+  `«Расчёт на сигнальный образец (qty=N, size=CODE[, расцветка=COLOR])»`.
 
 Sample-расчёт **сознательно НЕ пишет** в MVP:
 

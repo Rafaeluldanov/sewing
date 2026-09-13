@@ -1048,7 +1048,16 @@ UNKNOWN/TODO: точный набор `inputType` за пределами трё
 Идемпотентный пересчёт `WorkshopNeedsService.calculateForOrder` (с
 параметром `force: false`) сносит только `CALCULATED`-строки и
 сохраняет `REVIEWED` / `PURCHASE_PLANNED`. Если такие строки есть и
-`force` не задан — 409 `WORKSHOP_NEEDS_ALREADY_REVIEWED`.
+`force` не задан — 409 `WORKSHOP_NEEDS_ALREADY_REVIEWED`. Ручные строки
+(`isManual`) в этот гейт не входят: пересчёт их не трогает даже с `force`
+(аудит движка расчёта 13.09.2026, N2-2). Закупочный блок старой строки
+(цена, валюта, поставщик, `packSize`, `comment`, `expectedDeliveryDate`,
+«К закупке») переезжает на пересозданную; `purchaseQty`, равное прежнему
+расчёту, следует за новым `calculatedQty`, своё число закупщика
+переносится с предупреждением при изменившемся расчёте (N2-4, N2-7).
+Физическое удаление ручной строки под заказом поставщику ERP
+(`erpManagedAt`) запрещено — 409 `WORKSHOP_NEED_ERP_STATE`, как у
+`cancel` (N2-16).
 
 ### 5.5 Триггеры расчёта
 
