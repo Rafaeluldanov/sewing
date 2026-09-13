@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   EntryStatus,
+  OperationCategory,
   PassportEventType,
   PassportStatus,
   Prisma,
@@ -33,6 +34,19 @@ const MIN_MS = 60_000; // минимальный учитываемый инте
 
 /** События-«accept». */
 const ISSUE_TYPES = [PassportEventType.ISSUED_TO_EMPLOYEE];
+/**
+ * Аудит движка расчёта 13.09.2026, F1-5: терминалы ОТК/ВТО берут паспорт
+ * СКАНОМ (`PassportsService.scanOnOperation` пишет `OPERATION_SCAN` с
+ * `operationId` операции QC/IRONING, `ISSUED_TO_EMPLOYEE` не пишет), а
+ * `QC_PASSED` / `WTO_PASSED` несут тот же `operationId` — скан и есть
+ * точный accept для этих категорий (так же его читает дашборд,
+ * `PassportDurationsService`). Для остальных категорий (швеи, крой,
+ * упаковка) accept остаётся `ISSUED_TO_EMPLOYEE` / разрыв по терминалам.
+ */
+const SCAN_ACCEPT_CATEGORIES: OperationCategory[] = [
+  OperationCategory.QC,
+  OperationCategory.IRONING,
+];
 /** События-«complete» (терминалы операций/стадий). */
 const COMPLETE_TYPES = [
   PassportEventType.OPERATION_FINISHED,
@@ -73,8 +87,9 @@ export interface ApportionedSalary {
  * Сдельная и материал — прямые суммы по паспорту (как в `CostsService`).
  * Окладная часть — реальное время окладников, разнесённое по паспортам:
  *   1. `buildWorkIntervals` строит интервалы `[accept..complete]` из
- *      событий сотрудника (точный ISSUE→FINISHED либо фолбэк по разрыву
- *      для ОТК/ВТО/упаковки), capped `MAX_STAGE_MINUTES_PER_PASSPORT`;
+ *      событий сотрудника (точный ISSUE→FINISHED; для ОТК/ВТО accept =
+ *      `OPERATION_SCAN` терминала — F1-5; для упаковки и терминалов без
+ *      accept — фолбэк по разрыву), capped `MAX_STAGE_MINUTES_PER_PASSPORT`;
  *   2. `apportionEmployeeTime` делит нахлёсты между одновременно
  *      удерживаемыми паспортами;
  *   3. минуты × (`salaryPerHour` / 60) = ₽ оклада на паспорт.
@@ -402,11 +417,18 @@ export class PassportRealCostService {
     const salariedIds = candidateIds.filter((id) => rateByEmployee.has(id));
     if (salariedIds.length === 0) return empty;
 
-    // 2) Полный поток ISSUE/COMPLETE окладников в окне.
+    // 2) Полный поток ISSUE/COMPLETE окладников в окне (+ сканы ОТК/ВТО
+    //    как accept — F1-5).
     const events = await this.prisma.passportEvent.findMany({
       where: {
         employeeId: { in: salariedIds },
-        type: { in: [...ISSUE_TYPES, ...COMPLETE_TYPES] },
+        type: {
+          in: [
+            ...ISSUE_TYPES,
+            PassportEventType.OPERATION_SCAN,
+            ...COMPLETE_TYPES,
+          ],
+        },
         createdAt: { gte: from, lte: to },
       },
       select: {
@@ -415,6 +437,7 @@ export class PassportRealCostService {
         employeeId: true,
         type: true,
         createdAt: true,
+        operation: { select: { category: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -423,8 +446,22 @@ export class PassportRealCostService {
     const byEmpDay = new Map<string, WorkEvent[]>();
     for (const ev of events) {
       if (!ev.employeeId) continue;
-      const kind =
-        ev.type === PassportEventType.ISSUED_TO_EMPLOYEE ? 'ISSUE' : 'COMPLETE';
+      let kind: WorkEvent['kind'];
+      if (ev.type === PassportEventType.ISSUED_TO_EMPLOYEE) {
+        kind = 'ISSUE';
+      } else if (ev.type === PassportEventType.OPERATION_SCAN) {
+        // Скан = accept только на операциях ОТК/ВТО (F1-5); скан швеи /
+        // упаковщика в разнос не входит — у них свой accept.
+        if (
+          !ev.operation ||
+          !SCAN_ACCEPT_CATEGORIES.includes(ev.operation.category)
+        ) {
+          continue;
+        }
+        kind = 'ISSUE';
+      } else {
+        kind = 'COMPLETE';
+      }
       const key = `${ev.employeeId}|${toDateKey(ev.createdAt)}`;
       const arr = byEmpDay.get(key) ?? [];
       arr.push({
@@ -565,6 +602,58 @@ export class PassportRealCostService {
       trackedMinutesByEmpDay,
       salaryByOperation,
     };
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, F1-3: оклад паспортов, ВЫПУЩЕННЫХ в
+   * окне отчёта, считаем на окне самих паспортов (как `salaryFor` для
+   * живого паспорта и `finalizeDay` для FINAL-снимка), а не на окне
+   * отчёта — иначе минуты ОТК/ВТО до `dateFrom` не попадали ни в один
+   * период, а дневной отчёт расходился со снимком за тот же день.
+   *
+   * Батч: одно окно = окно отчёта, расширенное до самого раннего / самого
+   * позднего завершения по этим паспортам; разнос по сотруднику × UTC-дню
+   * не зависит от ширины окна, поэтому суммы по паспорту совпадают с
+   * `salaryFor`. Если расширять нечего — возвращаем уже посчитанный
+   * разнос периода без второго прохода.
+   */
+  async apportionedSalaryForPassports(
+    passportIds: string[],
+    period: {
+      from: Date;
+      to: Date;
+      result: Pick<ApportionedSalary, 'rubByPassport' | 'linesByPassport'>;
+    },
+  ): Promise<Pick<ApportionedSalary, 'rubByPassport' | 'linesByPassport'>> {
+    if (passportIds.length === 0) return period.result;
+    const span = await this.prisma.passportEvent.aggregate({
+      where: {
+        passportId: { in: passportIds },
+        type: { in: COMPLETE_TYPES },
+        employeeId: { not: null },
+      },
+      _min: { createdAt: true },
+      _max: { createdAt: true },
+    });
+    let from = period.from;
+    let to = period.to;
+    if (span._min.createdAt && span._min.createdAt < from) {
+      from = startOfUtcDay(span._min.createdAt);
+    }
+    if (span._max.createdAt && span._max.createdAt > to) {
+      to = endOfUtcDay(span._max.createdAt);
+    }
+    if (
+      from.getTime() === period.from.getTime() &&
+      to.getTime() === period.to.getTime()
+    ) {
+      return period.result;
+    }
+    const { rubByPassport, linesByPassport } = await this.apportionSalary(
+      from,
+      to,
+    );
+    return { rubByPassport, linesByPassport };
   }
 
   private async salaryFor(

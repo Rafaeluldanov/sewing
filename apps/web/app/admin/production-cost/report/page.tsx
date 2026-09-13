@@ -5,12 +5,15 @@
  * Компактная сводка за период из двух показателей:
  *
  *   - **Себестоимость** — фактическая сумма, потраченная на изготовление
- *     продукции: материалы (расчёт) + фурнитура + нанесение + прочее +
- *     сдельная (факт начислений) + окладная «рабочая» часть (разнесённое
- *     реальное время окладников × ставка);
+ *     продукции: `totals.totalCostRub` = материалы (расчёт) + фурнитура +
+ *     нанесение + прочее + сдельная (факт начислений) + оклад, разнесённый
+ *     на выпущенные в периоде паспорта (`salaryAllocatedCostRub`);
+ *     рабочая часть оклада за период (`salaryWorkingCostRub`) показывается
+ *     справочно и в итог не прибавляется (аудит движка расчёта 13.09.2026,
+ *     F1-11 — раньше считалась дважды);
  *   - **Простой** — окладная часть, не ушедшая в работу:
- *     `Σ max(0, 480 − разнесённое) × (оклад/480)` по окладникам со сменой
- *     (`SalaryEntry`) за день.
+ *     `Σ max(0, оплачено − разнесённое) × ставка/мин` по окладникам,
+ *     бывшим на смене в этот день (F1-1 / F1-2).
  *
  * Под каждым показателем — расшифровка по составляющим. Источник —
  * тот же endpoint `GET /api/admin/production-cost/v2`, что и у полного
@@ -87,11 +90,11 @@ export default async function ProductionCostReportPage({
   }
 
   // Себестоимость = totalCostRub (материалы + фурнитура + нанесение +
-  // прочее + сделка) + окладная рабочая часть (в totalCostRub оклад не
-  // входит — он не распределяется по номенклатуре в v2).
-  const cost = totals
-    ? Number(totals.totalCostRub) + Number(totals.salaryWorkingCostRub)
-    : 0;
+  // прочее + сделка + оклад, разнесённый на выпущенные паспорта).
+  // Аудит движка расчёта 13.09.2026, F1-11: раньше сюда прибавлялась ещё
+  // и `salaryWorkingCostRub`, хотя оклад выпуска уже внутри `totalCostRub`
+  // (с 7adac18) — разнесённый оклад считался дважды.
+  const cost = totals ? Number(totals.totalCostRub) : 0;
   const idle = totals ? Number(totals.idleSalaryCostRub) : 0;
 
   return (
@@ -207,7 +210,9 @@ function CostBreakdown({
     { label: 'Нанесение', value: totals.applicationCostRub },
     { label: 'Прочее', value: totals.otherCostRub },
     { label: 'Сдельная (операции)', value: totals.operationPieceworkCostRub },
-    { label: 'Оклад (рабочая часть)', value: totals.salaryWorkingCostRub },
+    // F1-11: в итог входит оклад, разнесённый на ВЫПУЩЕННЫЕ паспорта
+    // (он же в `totalCostRub`); рабочая часть за период — справочно ниже.
+    { label: 'Оклад (разнесён на выпуск)', value: totals.salaryAllocatedCostRub },
   ];
   return (
     <AdminCard>
@@ -220,8 +225,13 @@ function CostBreakdown({
       >
         Материалы / фурнитура / нанесение — расчётная основа (по завершённому
         расчёту или текущей потребности). Сдельная — факт начислений
-        (`OperationEntry.amount`, APPROVED). Оклад (рабочая часть) —
-        разнесённое реальное время окладников × ставка.
+        (`OperationEntry.amount`, APPROVED). Оклад — разнесённое реальное
+        время окладников × ставка по паспортам, выпущенным в периоде.
+        Справочно: рабочая часть оклада за период по всем паспортам с
+        событиями в окне — {formatMoney(totals.salaryWorkingCostRub)} ₽
+        ({formatMinutes(totals.salaryWorkingMinutes)} мин); в итог не
+        входит — оклад по ещё не выпущенным паспортам ляжет на их день
+        выпуска.
       </div>
       <div className="admin-table-wrap">
         <table className="admin-table">
@@ -271,9 +281,9 @@ function IdleBreakdown({
       <div
         style={{ fontSize: 12, color: 'var(--admin-muted)', marginBottom: 8 }}
       >
-        Простой = Σ max(0, 480 − разнесённое время) × (оклад / 480) по
-        окладникам, у кого за день есть отметка о смене (`SalaryEntry`). Смена
-        = 480 минут.
+        Простой = Σ max(0, оплаченные минуты дня − разнесённое время) ×
+        ставка/мин по окладникам, бывшим на смене в этот день (у почасовика
+        — строка `SalaryEntry` смены, у месячника — закрытая смена).
       </div>
       <div className="admin-table-wrap">
         <table className="admin-table">
@@ -298,7 +308,7 @@ function IdleBreakdown({
             <tr>
               <td data-label="Показатель">
                 Время простоя
-                <span style={subLabelStyle}>480 × смены − рабочее время</span>
+                <span style={subLabelStyle}>оплаченные минуты смен − рабочее время</span>
               </td>
               <td data-label="Значение" style={{ textAlign: 'right' }}>
                 {formatMinutes(totals.idleSalaryMinutes)} мин
@@ -308,7 +318,7 @@ function IdleBreakdown({
               <td data-label="Показатель">
                 <strong>Сумма простоя</strong>
                 <span style={subLabelStyle}>
-                  время простоя × ставка (оклад / 480)
+                  время простоя × ставка за минуту
                 </span>
               </td>
               <td data-label="Значение" style={{ textAlign: 'right' }}>
