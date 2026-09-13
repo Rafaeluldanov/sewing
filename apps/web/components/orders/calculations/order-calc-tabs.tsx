@@ -82,6 +82,11 @@ export function OrderCalcTabs({
       router.refresh();
     } else {
       setError(result.error ?? 'Не удалось выполнить действие');
+      // Аудит движка расчёта 13.09.2026, V1-5: отказ мог прийти уже
+      // после смены активного варианта в БД — показываем реальное
+      // состояние ряда и страницы, а не прежнее.
+      if (result.data) setDto(result.data);
+      router.refresh();
     }
   };
 
