@@ -195,7 +195,9 @@ ownQty(item) = item.qtyPlan − outQty(item)
 - ⛔ **сумма размещения не уезжает в ERP через очередь сдач.**
   Блок `cost` в `integrations/erp-production.service.ts`
   (`total_rub` / `other_rub`) — это ФАКТ цеха: сделка из сканов,
-  оклад из смен, «прочее» из `OrderExtraCost`. ERP добавляет свой
+  оклад из смен, «прочее» из `OrderExtraCost` (USD — по курсу активной
+  сметы), `OrderLogisticsLine` и разработки лекала — те же слагаемые,
+  что в плане (аудит 13.09.2026, E1-6/D1-10). ERP добавляет свой
   компонент подряда сам, по своим строкам передачи
   (`docs/kb/sewing.md §6.1`, `production_receipt.py::_cost_out`).
   Положи мы размещение в цеховой итог — оно задвоилось бы, и в

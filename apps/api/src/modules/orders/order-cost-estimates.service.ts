@@ -158,7 +158,11 @@ export class OrderCostEstimatesService {
       // своей не вводил.
       // Под ERP её цена — факт нашего заказа поставщику, она главнее плановой цены закупщика
       // цеха (то же правило в автосписании и план→факте).
-      const erpPrice = n.erpManagedAt && n.erpUnitPriceRub ? n.erpUnitPriceRub : null;
+      // Аудит движка расчёта 13.09.2026, E1-10: цена ERP ≤ 0 — «не задана», fallback на
+      // `quotedPrice` (`Prisma.Decimal(0)` — объект, истинен; строка ЗП ERP без цены блокировала
+      // смету «Цена должна быть > 0» при валидной цене закупщика).
+      const erpPrice =
+        n.erpManagedAt && n.erpUnitPriceRub?.greaterThan(0) ? n.erpUnitPriceRub : null;
       if (n.quotedPrice == null && erpPrice == null) {
         errors.push({
           needId: n.id,
@@ -169,10 +173,17 @@ export class OrderCostEstimatesService {
       }
       const quotedPrice = new Prisma.Decimal(erpPrice ?? n.quotedPrice!);
       if (!quotedPrice.greaterThan(0)) {
+        // Аудит движка расчёта 13.09.2026, N2-5: `QuotedPriceField` пропускает 0 («бесплатный
+        // материал»), а смета его отвергает; решение владельца «цена 0 = бесплатно или запрет»
+        // НЕ принято — семантику не меняем, но причина обязана подсказывать выход, а не
+        // повторять условие гарда.
         errors.push({
           needId: n.id,
           description: n.description,
-          reason: 'Цена должна быть > 0.',
+          reason:
+            'Цена 0 — смета её не принимает: укажите цену больше 0; ' +
+            'давальческий материал исключают политикой «Не учитывать материалы и фурнитуру» ' +
+            'или гашением строки.',
         });
         continue;
       }
@@ -560,8 +571,9 @@ export class OrderCostEstimatesService {
 
   /**
    * Вернуть заказ на пересчёт: помечает активный
-   * `OrderCostEstimate` как `REVOKED`, чистит snapshot-поля заказа,
-   * возвращает статус в `CALCULATION`. `WorkshopNeed`,
+   * `OrderCostEstimate` как `REVOKED`, чистит snapshot-поля заказа
+   * (включая отметку `costEstimateStaleAt/Reason` — она про отозванную
+   * смету), возвращает статус в `CALCULATION`. `WorkshopNeed`,
    * `PurchaseOrder`, `PurchaseReceipt` не трогаем — закупщик
    * редактирует существующие строки заново.
    *
@@ -626,6 +638,11 @@ export class OrderCostEstimatesService {
           costEstimateTotalRub: null,
           costEstimateCompletedAt: null,
           costEstimateVersion: null,
+          // Аудит движка расчёта 13.09.2026, E1-12: отметка «себестоимость устарела» относилась
+          // к смете, которую мы только что отозвали; в `CALCULATION` она рисовала плашку с кнопкой
+          // «Пересчитать», отвечающей 409 (`recalculateCostEstimate` из `CALCULATION` запрещён).
+          costEstimateStaleAt: null,
+          costEstimateStaleReason: null,
         },
       });
 
