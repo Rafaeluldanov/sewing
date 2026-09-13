@@ -707,11 +707,26 @@ describeWithDb('integration — production cost v2 (управленческий
       },
       update: { normHours: new Prisma.Decimal(160) },
     });
+    // Месячнику дневных строк не создаётся: одна `MONTH_SALARY` на 1-е число
+    // месяца, а «был на смене» — закрытая `ShiftSession` за день (аудит
+    // движка расчёта 13.09.2026, F1-1; раньше тест сеял `SHIFT_DAY`-строку,
+    // которой у месячника не бывает).
     await t.prisma.salaryEntry.create({
       data: {
         employeeId: seed.employees.qc.id,
-        date: day,
+        date: utcDay('2026-04-01'),
         amount: new Prisma.Decimal(96000),
+        source: 'MONTH_SALARY',
+        workedSeconds: 8 * 3600,
+      },
+    });
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+        startedAt: new Date('2026-04-23T08:00:00.000Z'),
+        endedAt: new Date('2026-04-23T16:00:00.000Z'),
       },
     });
     const passport = await createPackedPassport(t, seed, {
@@ -748,7 +763,7 @@ describeWithDb('integration — production cost v2 (управленческий
     // До фикса простой брал ставку напрямую из `salaryPerHour`, у
     // месячника пустого, — и весь его простой проваливался в ноль, хотя
     // рабочая часть по нему считалась через норму часов. Отчёт
-    // противоречил сам себе.
+    // противоречил сам себе. Смена 480 мин − 6 разнесённых = 474.
     expect(Number(body.totals.salaryWorkingCostRub)).toBeCloseTo(60, 2);
     expect(body.totals.idleSalaryMinutes).toBeCloseTo(474, 1);
     expect(Number(body.totals.idleSalaryCostRub)).toBeCloseTo(4740, 2);

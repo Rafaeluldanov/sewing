@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EntryStatus, PassportEventType, Prisma } from '@prisma/client';
 import {
-  SHIFT_MINUTES,
   type ProductionCostDayDto,
   type ProductionCostQuery,
   type ProductionCostResponseDto,
@@ -15,6 +14,7 @@ import {
   resolveMonthNormHours,
 } from '../salary/salary-rate.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
+import { loadShiftPresence } from './shift-presence.js';
 
 /**
  * `MaterialIssue.status` для проведённого документа фактического
@@ -66,9 +66,13 @@ const MATERIAL_ISSUE_STATUS_POSTED = 'POSTED';
  *      piecework, и salary, и material попадают в один и тот же
  *      день (день упаковки этого паспорта).
  *
- *   4. Простой считаем отдельно: для каждого окладного сотрудника с
- *      открытой/закрытой сменой в этот день
- *        paid     = SHIFT_MINUTES;
+ *   4. Простой считаем отдельно: для каждого окладного сотрудника,
+ *      который был на смене в этот день (см. `shift-presence.ts`:
+ *      `SHIFT_DAY`-строка у почасовика, закрытая `ShiftSession` у
+ *      месячника)
+ *        paid     = оплаченные минуты дня (`SalaryEntry.workedSeconds / 60`
+ *                   либо длительность закрытых смен; `SHIFT_MINUTES` —
+ *                   только фолбэк для legacy-строк без `workedSeconds`);
  *        tracked  = Σ durationMinutes стадий, завершённых в этот день;
  *        idleMin  = max(0, paid − tracked);
  *        idleCost = idleMin × minuteRate.
@@ -89,31 +93,24 @@ export class CostsService {
 
     // 1) Разнос оклада по паспортам + учтённые минуты по сотруднику×дню.
     //    Источник — реальные интервалы `ISSUED_TO_EMPLOYEE →
-    //    OPERATION_FINISHED` с делением нахлёстов (см.
-    //    `PassportRealCostService.apportionedSalaryForPeriod`), а не
-    //    `OPERATION_SCAN` (которого в реальном флоу нет). Это покрывает
+    //    OPERATION_FINISHED` (для ОТК/ВТО accept = `OPERATION_SCAN`
+    //    терминала, F1-5) с делением нахлёстов (см.
+    //    `PassportRealCostService.apportionedSalaryForPeriod`). Это покрывает
     //    все окладные операции: ОТК/ВТО/упаковку/деление кроя/настил.
     const salary = await this.passportRealCost.apportionedSalaryForPeriod(
       from,
       to,
     );
 
-    // 2) Подгружаем `employee.salaryPerShift` для расчёта простоя:
-    //    сотрудники с окладным начислением (`SalaryEntry`) за этот день.
-    const employeeIdsFromStages = new Set<string>();
-    const salaryEntries = await this.prisma.salaryEntry.findMany({
-      where: {
-        date: { gte: from, lte: to },
-      },
-      select: {
-        employeeId: true,
-        date: true,
-      },
-    });
-    for (const s of salaryEntries) employeeIdsFromStages.add(s.employeeId);
+    // 2) Кто и сколько минут был на смене в каждый день окна — для
+    //    расчёта простоя. Аудит движка расчёта 13.09.2026, F1-1 / F1-2:
+    //    раньше признаком служила ЛЮБАЯ `SalaryEntry` за день (месячник
+    //    получал простой 1-го числа, `MANUAL`-премия — в выходной), а
+    //    «оплачено» было константой 480 — теперь общий хелпер.
+    const presence = await loadShiftPresence(this.prisma, from, to);
 
     const employees = await this.prisma.employee.findMany({
-      where: { id: { in: Array.from(employeeIdsFromStages) } },
+      where: { id: { in: presence.employeeIds } },
       select: {
         id: true,
         compensationType: true,
@@ -174,6 +171,16 @@ export class CostsService {
     for (const r of pieceworkRows) {
       pieceworkByPassport.set(r.passportId, decimalToNumber(r._sum.amount));
     }
+
+    // 4b) Оклад выпущенных паспортов — на окне самого паспорта, а не окна
+    //     отчёта (аудит движка расчёта 13.09.2026, F1-3): ОТК/ВТО накануне
+    //     `dateFrom` иначе терялись, и день расходился с FINAL-снимком.
+    //     Разнос периода (`salary`) остаётся источником учтённых минут и
+    //     простоя — там важны только события внутри окна.
+    const packedSalary = await this.passportRealCost.apportionedSalaryForPassports(
+      passportIds,
+      { from, to, result: salary },
+    );
 
     // 5a) Фактический расход материалов по паспортам периода (нетто).
     //     Берём только POSTED-документы с `passportId` из выборки —
@@ -266,16 +273,22 @@ export class CostsService {
       }
     }
 
-    // 6) Группируем по дню упаковки.
+    // 6) Группируем по дню упаковки. Аудит движка расчёта 13.09.2026,
+    //    F1-15: паспорт считаем один раз — по первому `PACKED` в окне
+    //    (как v2 и `finalizeDay`), иначе повторная упаковка удваивала
+    //    выпуск и все суммы дня.
     const dayMap = new Map<string, MutableDay>();
+    const seenPackedPassports = new Set<string>();
     for (const ev of packedEvents) {
+      if (seenPackedPassports.has(ev.passportId)) continue;
+      seenPackedPassports.add(ev.passportId);
       const dayKey = toDateKey(ev.createdAt);
       const day = ensureDay(dayMap, dayKey);
       const qty = ev.passport.qtyGood ?? 0;
       day.producedUnits += qty;
       const piece = pieceworkByPassport.get(ev.passportId) ?? 0;
       day.pieceworkCost += piece;
-      day.salaryCost += salary.rubByPassport.get(ev.passportId) ?? 0;
+      day.salaryCost += packedSalary.rubByPassport.get(ev.passportId) ?? 0;
       day.materialCost += materialCostByPassport.get(ev.passportId) ?? 0;
     }
 
@@ -292,23 +305,23 @@ export class CostsService {
       );
     }
 
-    // 8) Простой по окладным сотрудникам, у которых в этот день
-    //    есть SalaryEntry (это и есть наш источник «человек был на
-    //    смене», см. ADR-0021 — `SalaryEntry` создаётся ровно в этом
-    //    случае).
-    for (const sal of salaryEntries) {
-      const dayKey = toDateKey(sal.date);
-      const day = ensureDay(dayMap, dayKey);
-      day.salariedEmployees.add(sal.employeeId);
+    // 8) Простой по окладным сотрудникам, которые в этот день были на
+    //    смене (`shift-presence.ts`). Аудит движка расчёта 13.09.2026,
+    //    F1-2: простой = оплаченные минуты дня − разнесённые, а не
+    //    `SHIFT_MINUTES − разнесённые` — иначе полсмены давали 420 мин.
+    for (const [key, paid] of presence.paidMinutesByEmpDay) {
+      const sep = key.lastIndexOf('|');
+      const day = ensureDay(dayMap, key.slice(sep + 1));
+      day.paidByEmployee.set(key.slice(0, sep), paid);
     }
     for (const day of dayMap.values()) {
       let idleMinutes = 0;
       let idleCost = 0;
-      for (const empId of day.salariedEmployees) {
+      for (const [empId, paid] of day.paidByEmployee) {
         const rate = employeeRate.get(empId) ?? 0;
         if (rate <= 0) continue;
         const tracked = day.trackedByEmployee.get(empId) ?? 0;
-        const idle = Math.max(0, SHIFT_MINUTES - tracked);
+        const idle = Math.max(0, paid - tracked);
         idleMinutes += idle;
         idleCost += idle * rate;
       }
@@ -356,8 +369,8 @@ interface MutableDay {
   idleCost: number;
   /** Сколько минут tracked у каждого сотрудника в этот день. */
   trackedByEmployee: Map<string, number>;
-  /** Сотрудники с окладной записью за этот день. */
-  salariedEmployees: Set<string>;
+  /** Окладники на смене в этот день → оплаченные минуты (см. `shift-presence.ts`). */
+  paidByEmployee: Map<string, number>;
 }
 
 function ensureDay(map: Map<string, MutableDay>, key: string): MutableDay {
@@ -373,7 +386,7 @@ function ensureDay(map: Map<string, MutableDay>, key: string): MutableDay {
       idleMinutes: 0,
       idleCost: 0,
       trackedByEmployee: new Map(),
-      salariedEmployees: new Set(),
+      paidByEmployee: new Map(),
     };
     map.set(key, d);
   }

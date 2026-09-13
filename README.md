@@ -1543,10 +1543,21 @@ half-day, автозакрытие смены по таймауту, месяч�
   `Σ OperationEntry.amount [APPROVED] + Σ stage.durationMinutes ×
   employee.minuteRate`. Простой **не входит** в `totalCost` изделия
   и идёт отдельной строкой в дневной агрегации.
-- **Простой** = `Σ по окладным сотрудникам с SalaryEntry в этот
-  день: max(0, SHIFT_MINUTES − tracked(employee, date)) ×
+- **Простой** = `Σ по окладным сотрудникам, бывшим на смене в этот
+  день: max(0, paid(employee, date) − tracked(employee, date)) ×
   minuteRate`. Это ровно «мы заплатили за то, что человек присутствовал,
   но ни одной минуты не попало в наш производственный пайплайн».
+  Признак «был на смене» и `paid` — общий хелпер
+  `apps/api/src/modules/costs/shift-presence.ts` (аудит движка расчёта
+  13.09.2026, F1-1 / F1-2): у почасовика — строка `SalaryEntry`
+  `source = SHIFT_DAY` и её `workedSeconds / 60`; у месячника
+  (`SalaryRateMode.MONTHLY`, одна строка `MONTH_SALARY` на 1-е число) —
+  закрытые `ShiftSession` за день и их длительность; `MANUAL` / `RECUT`
+  / `MONTH_SALARY` присутствием не считаются; `SHIFT_MINUTES = 480` —
+  только фолбэк для legacy-строк без `workedSeconds`. Оклад выпущенного
+  паспорта в дне упаковки считается на окне самого паспорта (F1-3), accept
+  ОТК/ВТО — по `OPERATION_SCAN` терминала (F1-5), паспорт с двумя `PACKED`
+  считается один раз (F1-15).
 - **Frontend.** Новая страница `apps/web/app/production-cost/`
   (SSR, `force-dynamic`):
   - layout-guard `canSeeProductionCost` (`apps/web/lib/rbac.ts`)

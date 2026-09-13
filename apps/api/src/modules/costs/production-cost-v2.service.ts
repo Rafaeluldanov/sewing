@@ -25,7 +25,6 @@ import {
   type ProductionCostV2EntryStatus,
   type ProductionCostV2Query,
 } from '@sewing/shared/production-cost';
-import { SHIFT_MINUTES } from '@sewing/shared/costs';
 import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
@@ -36,6 +35,7 @@ import {
   resolveMonthNormHours,
 } from '../salary/salary-rate.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
+import { loadShiftPresence } from './shift-presence.js';
 
 /**
  * Сервис управленческого отчёта «Себестоимость производства v2»
@@ -339,6 +339,21 @@ export class ProductionCostV2Service {
         sizes: Map<string, { sizeCode: string; releasedQty: number }>;
       }
     >();
+    // Оклад выпущенных паспортов — на окне самого паспорта, а не окна
+    // отчёта (аудит движка расчёта 13.09.2026, F1-3): ОТК/ВТО до `dateFrom`
+    // иначе не попадали ни в один период. Разнос периода
+    // (`apportionedSalary`) остаётся для «рабочей части» шапки и простоя.
+    const packedSalary = await this.passportRealCost.apportionedSalaryForPassports(
+      Array.from(
+        new Set(
+          packedEvents
+            .filter((ev) => ev.passport.status === PassportStatus.PACKED)
+            .map((ev) => ev.passportId),
+        ),
+      ),
+      { from, to, result: apportionedSalary },
+    );
+
     // Уникализируем по passportId — у одного паспорта может быть
     // несколько PACKED-событий (теоретически — повторная упаковка), мы
     // берём первое в окне.
@@ -351,7 +366,7 @@ export class ProductionCostV2Service {
       seenPackedPassports.add(ev.passportId);
       const orderId = ev.passport.orderId;
       // Оклад этого выпущенного паспорта → заказу.
-      const salRub = apportionedSalary.rubByPassport.get(ev.passportId);
+      const salRub = packedSalary.rubByPassport.get(ev.passportId);
       if (salRub) {
         salaryByOrderId.set(
           orderId,
@@ -388,7 +403,7 @@ export class ProductionCostV2Service {
 
       // Матрица: окладные операции этого PACKED-паспорта раскладываем по
       // лекалу × размеру (разнесённое реальное время × оклад/480).
-      const salaryLines = apportionedSalary.linesByPassport.get(ev.passportId);
+      const salaryLines = packedSalary.linesByPassport.get(ev.passportId);
       const ordOfPassport = ev.passport.order;
       if (salaryLines && salaryLines.length > 0 && ordOfPassport) {
         const nomKey = nomenclatureKeyFor({
@@ -1233,10 +1248,14 @@ export class ProductionCostV2Service {
     // -------------------------------------------------------------------
     // 10. Totals
     // -------------------------------------------------------------------
-    // Окладная часть за период: «рабочая» (разнесённое время × ставка) и
-    // «простой» (max(0, 480 − разнесённое) × ставка) — для мини-отчёта
-    // «Себестоимость / Простой» в шапке. В `totalCostRub` оклад не входит
-    // (он не распределяется по номенклатуре), поэтому считаем отдельно.
+    // Окладная часть за период: «рабочая» (разнесённое время × ставка по
+    // ВСЕМ паспортам с событиями в окне) и «простой» (max(0, оплачено −
+    // разнесённое) × ставка) — для мини-отчёта «Себестоимость / Простой»
+    // в шапке. Оклад ВЫПУЩЕННЫХ паспортов при этом уже сидит в
+    // `salaryAllocatedCostRub` и в `totalCostRub` (шаг 4) — рабочая часть
+    // шапки его не дополняет, а пересекается с ним (аудит движка расчёта
+    // 13.09.2026, F1-11: страница «Отчёт» складывала их и считала оклад
+    // дважды).
     const salarySplit = await this.computeSalarySplit(
       from,
       to,
@@ -1245,10 +1264,17 @@ export class ProductionCostV2Service {
     );
     const totals = computeTotals(nomenclatureGroups, salarySplit);
 
-    // Honest disclosure об оклaде (всегда в MVP):
-    if (totals.operationPieceworkCostRub !== '0.00') {
+    // Аудит движка расчёта 13.09.2026, F1-11: предупреждение ключуем на
+    // оклад, а не на сделку — раньше оно висело при любой сделке (даже
+    // когда оклад распределён) и молчало без неё. Не распределён ровно
+    // оклад по паспортам, не выпущенным в этом периоде.
+    let salaryUnallocatedRub = 0;
+    for (const [pid, rub] of apportionedSalary.rubByPassport) {
+      if (!seenPackedPassports.has(pid)) salaryUnallocatedRub += rub;
+    }
+    if (salaryUnallocatedRub >= 0.005) {
       warnings.add(
-        'Окладная составляющая не распределена по номенклатуре в этом отчёте',
+        `Оклад по паспортам, не выпущенным в этом периоде (${num2(salaryUnallocatedRub)} ₽), не распределён по номенклатуре`,
       );
     }
 
@@ -1286,8 +1312,10 @@ export class ProductionCostV2Service {
    *   - рабочая часть = Σ разнесённого оклада по паспортам
    *     (= Σ учтённых минут × ставка); это реально потраченное на
    *     изготовление время окладников;
-   *   - простой = Σ max(0, 480 − учтённые минуты) × ставка по окладникам,
-   *     у которых за этот день есть `SalaryEntry` (был на смене).
+   *   - простой = Σ max(0, оплаченные минуты дня − учтённые минуты) × ставка
+   *     по окладникам, которые в этот день были на смене (`SHIFT_DAY`-строка
+   *     у почасовика, закрытая `ShiftSession` у месячника — см.
+   *     `shift-presence.ts`; аудит движка расчёта 13.09.2026, F1-1 / F1-2).
    *
    * Формула простоя — та же, что в дневном отчёте
    * (`CostsService.getProductionCost`, шаги 7–8): держим обе реализации в
@@ -1310,13 +1338,11 @@ export class ProductionCostV2Service {
     let workingMinutes = 0;
     for (const m of trackedMinutesByEmpDay.values()) workingMinutes += m;
 
-    // Окладники, у кого за день есть `SalaryEntry` — «был на смене»
-    // (ровно этот источник использует CostsService, см. ADR-0021).
-    const salaryEntries = await this.prisma.salaryEntry.findMany({
-      where: { date: { gte: from, lte: to } },
-      select: { employeeId: true, date: true },
-    });
-    if (salaryEntries.length === 0) {
+    // Окладники на смене и оплаченные минуты дня — общий хелпер с
+    // `CostsService` (аудит движка расчёта 13.09.2026, F1-1: раньше —
+    // любая `SalaryEntry` за день, и месячник получал простой 1-го числа).
+    const presence = await loadShiftPresence(this.prisma, from, to);
+    if (presence.employeeIds.length === 0) {
       return {
         workingRub,
         workingMinutes: round1Number(workingMinutes),
@@ -1325,11 +1351,8 @@ export class ProductionCostV2Service {
       };
     }
 
-    const employeeIds = Array.from(
-      new Set(salaryEntries.map((s) => s.employeeId)),
-    );
     const employees = await this.prisma.employee.findMany({
-      where: { id: { in: employeeIds } },
+      where: { id: { in: presence.employeeIds } },
       select: {
         id: true,
         compensationType: true,
@@ -1359,21 +1382,18 @@ export class ProductionCostV2Service {
       }
     }
 
-    // Уникальные пары «сотрудник × день на смене».
-    const onShift = new Set<string>();
-    for (const s of salaryEntries) {
-      onShift.add(`${s.employeeId}|${toDateKey(s.date)}`);
-    }
-
+    // Пары «сотрудник × день на смене» → оплаченные минуты. Аудит движка
+    // расчёта 13.09.2026, F1-2: простой = оплачено − разнесено, а не
+    // `SHIFT_MINUTES − разнесено`.
     let idleMinutes = 0;
     let idleRub = 0;
-    for (const key of onShift) {
+    for (const [key, paid] of presence.paidMinutesByEmpDay) {
       const sep = key.lastIndexOf('|');
       const employeeId = key.slice(0, sep);
       const rate = minuteRate.get(employeeId) ?? 0;
       if (rate <= 0) continue;
       const tracked = trackedMinutesByEmpDay.get(key) ?? 0;
-      const idle = Math.max(0, SHIFT_MINUTES - tracked);
+      const idle = Math.max(0, paid - tracked);
       idleMinutes += idle;
       idleRub += idle * rate;
     }
