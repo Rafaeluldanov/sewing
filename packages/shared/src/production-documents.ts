@@ -91,7 +91,13 @@ export interface ProductionDocumentCostDto {
   perUnitRub: number;
   planTotalRub: number | null;
   planPerUnitRub: number | null;
-  /** `NO_MATERIAL_FACT`, `PIECEWORK_PENDING`, `EXTRA_COSTS_NON_RUB_SKIPPED`, … */
+  /**
+   * `NO_MATERIAL_FACT`, `PIECEWORK_PENDING`, `EXTRA_COSTS_NON_RUB_SKIPPED`, … Материал (аудит
+   * движка расчёта 13.09.2026): `MATERIAL_PRICE_UNKNOWN` — цены у строки нет;
+   * `MATERIAL_PRICE_USD_NO_RATE` — цена в USD, курса в смете нет (E1-7); `ERP_MATERIAL_FACT_MISSING`
+   * — строка под ERP без её списания; `ERP_CONSUMPTION_FAILED` / `ERP_CONSUMPTION_PENDING` /
+   * `ERP_CONSUMPTION_EMPTY` / `ERP_UNCOVERED_QTY` — состояние ответов ERP по паспортам (D1-12).
+   */
   warnings: string[];
 }
 

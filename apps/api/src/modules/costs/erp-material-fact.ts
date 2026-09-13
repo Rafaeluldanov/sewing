@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { PassportStatus, Prisma } from '@prisma/client';
 
 import type { PrismaService } from '../../prisma/prisma.service.js';
 
@@ -18,7 +18,9 @@ import type { PrismaService } from '../../prisma/prisma.service.js';
  * задвоятся, и это будет видно только сверкой с ERP.
  *
  * Учитывается ТОЛЬКО `POSTED`: `REVERSED` (списание сторнировано в ERP), `EMPTY` и `FAILED` —
- * не расход. Сумма — та, что ERP реально списала с партий, а не план закупщика.
+ * не расход. Сумма — та, что ERP реально списала с партий, а не план закупщика. Но не расход ≠
+ * молчание: не-POSTED ответы и паспорта без ответа отдаются `erpConsumptionSignals` и становятся
+ * предупреждениями документа выпуска (аудит движка расчёта 13.09.2026, D1-12).
  */
 export const ERP_CONSUMPTION_POSTED = 'POSTED';
 
@@ -48,6 +50,58 @@ export async function erpMaterialCostForPassport(
 ): Promise<Prisma.Decimal> {
   const map = await erpMaterialCostByPassport(prisma, [passportId]);
   return map.get(passportId) ?? new Prisma.Decimal(0);
+}
+
+/**
+ * Чем ERP ответила по паспортам заказа — для ПРЕДУПРЕЖДЕНИЙ себестоимости, не для суммы.
+ *
+ * Аудит движка расчёта 13.09.2026, D1-12: в сумму идёт только `POSTED`, но не-POSTED ответ и
+ * молчание — не «ноль расхода», а потерянный материал: FAILED (закрытый период, нет склада) снимает
+ * паспорт с очереди цеха навсегда, EMPTY приходит, когда ERP нечего было списывать (потребность
+ * переведена под ERP после упаковки), а упакованный паспорт без строки — ERP ещё не ответила.
+ * `uncoveredQty` — ERP списала, но партиями не покрыла (JSDoc модели обещает «видно и здесь»).
+ */
+export type ErpConsumptionSignals = {
+  /** Упакованных паспортов, по которым ERP ещё не ответила. */
+  pending: number;
+  posted: number;
+  failed: number;
+  empty: number;
+  /** Σ `uncoveredQty` шапок POSTED-списаний. */
+  uncoveredQty: Prisma.Decimal;
+};
+
+export async function erpConsumptionSignals(
+  prisma: PrismaService,
+  orderId: string,
+): Promise<ErpConsumptionSignals> {
+  const [rows, pending] = await Promise.all([
+    prisma.erpMaterialConsumption.findMany({
+      where: { orderId },
+      select: { state: true, uncoveredQty: true },
+    }),
+    prisma.passport.count({
+      where: { orderId, status: PassportStatus.PACKED, erpConsumption: { is: null } },
+    }),
+  ]);
+  const out: ErpConsumptionSignals = {
+    pending,
+    posted: 0,
+    failed: 0,
+    empty: 0,
+    uncoveredQty: new Prisma.Decimal(0),
+  };
+  for (const r of rows) {
+    if (r.state === ERP_CONSUMPTION_POSTED) {
+      out.posted += 1;
+      if (r.uncoveredQty != null) out.uncoveredQty = out.uncoveredQty.add(r.uncoveredQty);
+    } else if (r.state === 'FAILED') {
+      out.failed += 1;
+    } else if (r.state === 'EMPTY') {
+      out.empty += 1;
+    }
+  }
+  return out;
 }
 
 /** Строка факта по потребности: сколько и на какую сумму списала ERP, с разрезом по паспорту. */

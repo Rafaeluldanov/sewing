@@ -117,6 +117,14 @@ const COST_WARNING_LABELS: Record<string, string> = {
   SALARY_APPORTION_FAILED: 'оклад разнести не удалось',
   NO_PRODUCTION_WINDOW: 'нет окна производства: оклад не разнесён',
   ORDER_NOT_FOUND: 'заказ не найден',
+  // Аудит движка расчёта 13.09.2026 (E1-7, D1-12): коды движка материала, раньше показывались сырыми.
+  MATERIAL_PRICE_UNKNOWN: 'у части материала нет цены — строка посчитана в 0 ₽',
+  MATERIAL_PRICE_USD_NO_RATE: 'цена материала в USD, а курса в смете нет — сумма строки не посчитана',
+  ERP_MATERIAL_FACT_MISSING: 'по материалу под ERP нет её списания — строка в 0 ₽',
+  ERP_CONSUMPTION_FAILED: 'ERP не смогла списать материал по части паспортов',
+  ERP_CONSUMPTION_PENDING: 'ERP ещё не ответила по списанию части паспортов',
+  ERP_CONSUMPTION_EMPTY: 'по части паспортов ERP списывать было нечего',
+  ERP_UNCOVERED_QTY: 'ERP списала материал, но часть не покрыта партиями',
 };
 
 /* ------------------------------------------------------------------ */
@@ -542,7 +550,12 @@ export default async function AdminProductionDocumentDetailPage({
                       </AdminStatusBadge>
                     </td>
                     <td data-label="Сумма" style={{ textAlign: 'right' }}>
-                      {fmtRub(line.totalRub)}
+                      {/* E1-7: null — цена в USD без курса, это не 0 ₽. */}
+                      {line.totalRub == null ? (
+                        <span className="admin-muted">—</span>
+                      ) : (
+                        fmtRub(line.totalRub)
+                      )}
                     </td>
                   </tr>
                 ))}
