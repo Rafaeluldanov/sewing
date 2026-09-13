@@ -1481,9 +1481,19 @@ master-action'ом, удаление, упаковка прямо из ячей�
 - `ConstructorTaskSizeRow` — строки таблицы «Размер / Кулирка /
   Кашкорсе» (погонные метры на изделие). FK `sizeId` nullable
   (`onDelete: SetNull`) + `sizeCodeSnapshot` (защита от
-  переименования/удаления `Size`). UNIQUE `(taskId, sizeId)`. На
-  сохранении backend создаёт `PatternMaterialArea` с конверсией
-  `areaM2 = linearMeters × CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`.
+  переименования/удаления `Size`). UNIQUE `(taskId, sizeId)`.
+  `PatternMaterialArea` на сохранении берётся ТОЛЬКО из calc-payload
+  (м² по размерам, как ввёл менеджер); конверсии погонных метров в м²
+  через `CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M` код не делает (Аудит
+  движка расчёта 13.09.2026, K9 — прежняя формулировка описывала
+  несуществующую конверсию). Сами метры при `complete()` переносятся в
+  `PatternItemSizeParameterValue` лекала
+  (`ConstructorTasksService.syncSizeParameterValuesFromTask`): колонка
+  «Кулирка» → ровно один активный `LINEAR_M_BY_SIZE`-параметр роли
+  `MAIN_FABRIC`, «Кашкорсе» → ровно один параметр роли `RIB` (по
+  совпадению label, затем по подтипу, иначе первый по `sortOrder`);
+  заменяются только пары (параметр, размер задачи) с заполненным
+  числом — нормы других размеров и пустая колонка не трогаются.
 - `ConstructorTaskFile` — вложения (`onDelete: Cascade`), формат не
   ограничен (валидация только по размеру). `direction` (`INITIAL` —
   бриф менеджера при `saveDraft`; `REWORK` — файлы возврата при
