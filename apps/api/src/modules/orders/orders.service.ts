@@ -2297,9 +2297,18 @@ export class OrdersService {
             // «переданное ?? текущее», а не по одному только запросу.
             outsourced: true,
             outsourcePriceRub: true,
-            sizeOverrides: { select: { sizeId: true, outsourcedQty: true } },
+            // Аудит движка расчёта 13.09.2026, L1-10: `rate` и справочник
+            // `ratesBySize` — для гарда «поразмерная сделка без ставки».
+            sizeOverrides: {
+              select: { sizeId: true, outsourcedQty: true, rate: true },
+            },
             operation: {
-              select: { code: true, name: true, fixedRate: true },
+              select: {
+                code: true,
+                name: true,
+                fixedRate: true,
+                ratesBySize: { select: { sizeId: true } },
+              },
             },
           },
         },
@@ -2349,7 +2358,8 @@ export class OrdersService {
     // Валидация до записи: каждый шаг принадлежит заказу, каждый размер —
     // из плана заказа (защита от чужих snapshot-ов и опечаток); объём на
     // сторону не больше плана этого размера; при переключении операции на
-    // сделку (`FIXED`) обязана быть расценка, иначе payroll упадёт
+    // сделку (`FIXED`, а с L1-10 — и `BY_SIZE` по каждому размеру плана)
+    // обязана быть расценка, иначе payroll упадёт
     // `OperationRateMissingException` на сканировании.
     for (const step of dto.steps) {
       const orderStep = stepById.get(step.stepId);
@@ -2410,6 +2420,44 @@ export class OrdersService {
           throw new BadRequestException({
             code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
             message: `Операция «${stepLabel}»: при переводе на сделку задайте расценку (₽/шт).`,
+          });
+        }
+      } else if (step.pricingModeOverride === 'BY_SIZE') {
+        // Аудит движка расчёта 13.09.2026, L1-10: та же причина, что у FIXED
+        // выше, — гард стоял только на «сделке», а «сделка по размерам» без
+        // единой поразмерной ставки принималась: план по операции 0 (с
+        // warning), а скан по паспорту падал `OperationRateMissingException`.
+        // Ставка нужна по КАЖДОМУ размеру плана: из присланного поразмерного
+        // набора (он replace-all — прежние строки перестанут существовать),
+        // иначе из снимка, иначе из справочника операции (`OperationRateBySize`).
+        const requestedRates =
+          step.sizeOverrides === undefined
+            ? null
+            : new Map(
+                step.sizeOverrides.map(
+                  (o) => [o.sizeId, o.rate ?? null] as const,
+                ),
+              );
+        const storedRates = new Map(
+          orderStep.sizeOverrides.map((o) => [o.sizeId, o.rate] as const),
+        );
+        const catalogSizes = new Set(
+          orderStep.operation.ratesBySize.map((r) => r.sizeId),
+        );
+        const missing: string[] = [];
+        for (const [sizeId, planQty] of planQtyBySizeId) {
+          if (planQty <= 0) continue;
+          const overrideRate = requestedRates
+            ? (requestedRates.get(sizeId) ?? null)
+            : (storedRates.get(sizeId) ?? null);
+          if (overrideRate == null && !catalogSizes.has(sizeId)) {
+            missing.push(sizeCodeById.get(sizeId) ?? sizeId);
+          }
+        }
+        if (missing.length > 0) {
+          throw new BadRequestException({
+            code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
+            message: `Операция «${stepLabel}»: при переводе на сделку по размерам задайте расценку (₽/шт) для размеров: ${missing.join(', ')}.`,
           });
         }
       }
@@ -3181,14 +3229,21 @@ export class OrdersService {
     // не было — конфликта «агрегат vs ресинк» нет. Делаем ДО перехода
     // статуса: если тем же PATCH заказ уходит в «Расчёт», то к моменту
     // `startCalculation` план уже пересобран из свежих расцветок.
+    //
+    // Аудит движка расчёта 13.09.2026, G9-1 (+ G6-1): расцветки НЕ
+    // пересоздаются (`deleteMany` + create давал новые id, и каскады БД
+    // стирали значения слот-параметров, отвязывали строки снимка и
+    // потребности — ORDER-нормы, расщепления и ручные строки расцветок
+    // терялись, а добор потребности дублировал строки по расцветкам).
+    // Сопоставляем с существующими и меняем только поразмерный план — id
+    // расцветок живут, как у `OrderColorwaysService.update`.
     if (wantsVariantsChange) {
       const variantInputs = dto.variants!.map((v) => ({
         color: v.color,
         sizes: v.sizes ?? [],
       }));
       await this.prisma.$transaction(async (tx) => {
-        await tx.orderVariant.deleteMany({ where: { orderId: id } });
-        await this.writeOrderVariants(tx, id, variantInputs);
+        await this.upsertOrderVariants(tx, id, variantInputs);
       });
       await this.resyncColorwayDerived(id, actorEmployeeId);
     }
@@ -4902,13 +4957,13 @@ export class OrdersService {
 
   /**
    * Фича «Расцветки» (FEATURE_COLORWAYS): записать расцветки заказа
-   * (`OrderVariant` / `OrderVariantSize`) по порядковому номеру. Общий
-   * примитив для `create()` (первичное создание) и `update()` (полная
-   * замена при редактировании) — держим один источник логики «схлопнуть
-   * дубли размеров + выкинуть нулевые строки», чтобы поверхности не
-   * разъезжались. Вызывающий отвечает за очистку прежних расцветок
-   * (`deleteMany`) перед полной заменой и за вызов `resyncColorwayDerived`
-   * после — здесь только пишем варианты в переданной транзакции.
+   * (`OrderVariant` / `OrderVariantSize`) по порядковому номеру. Примитив
+   * `create()` (первичное создание — прежних расцветок ещё нет); правка
+   * существующего заказа идёт через `upsertOrderVariants`, который делит с
+   * ним логику «схлопнуть дубли размеров + выкинуть нулевые строки»
+   * (`normalizeVariantSizes`), чтобы поверхности не разъезжались.
+   * Вызывающий отвечает за вызов `resyncColorwayDerived` после — здесь
+   * только пишем варианты в переданной транзакции.
    */
   private async writeOrderVariants(
     tx: Prisma.TransactionClient,
@@ -4920,23 +4975,145 @@ export class OrdersService {
   ): Promise<void> {
     for (let ordinal = 0; ordinal < variantInputs.length; ordinal += 1) {
       const v = variantInputs[ordinal];
-      // Схлопываем дубли размеров и выкидываем нулевые строки.
-      const bySize = new Map<string, number>();
-      for (const s of v.sizes) {
-        bySize.set(s.sizeId, (bySize.get(s.sizeId) ?? 0) + s.qtyPlan);
-      }
-      const sizeRows = [...bySize.entries()]
-        .filter(([, q]) => q > 0)
-        .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan }));
       await tx.orderVariant.create({
         data: {
           orderId,
           ordinal,
           color: v.color,
-          sizes: { create: sizeRows },
+          sizes: { create: OrdersService.normalizeVariantSizes(v.sizes) },
         },
       });
     }
+  }
+
+  /** Схлопывает дубли размеров и выкидывает нулевые строки (как `OrderColorwaysService.normalizeSizes`). */
+  private static normalizeVariantSizes(
+    sizes: { sizeId: string; qtyPlan: number }[],
+  ): { sizeId: string; qtyPlan: number }[] {
+    const bySize = new Map<string, number>();
+    for (const s of sizes) {
+      bySize.set(s.sizeId, (bySize.get(s.sizeId) ?? 0) + s.qtyPlan);
+    }
+    return [...bySize.entries()]
+      .filter(([, q]) => q > 0)
+      .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan }));
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, G9-1 (корень общий с b1-6, следствие
+   * в потребности — G6-1): полная картина расцветок из edit-формы / ERP
+   * «дослать план» пишется БЕЗ пересоздания `OrderVariant`.
+   *
+   * Раньше `update()` делал `deleteMany` + `writeOrderVariants`: расцветки
+   * получали новые id, и каскады БД стирали всё, что живёт на id расцветки —
+   * значения слот-параметров (`OrderTechCardParameter`, Cascade), привязку
+   * строк снимка и потребности (`OrderMaterialRequirement` / `WorkshopNeed`,
+   * SetNull). Пересборка снимка после этого материализовала группы заново
+   * (ORDER-нормы, расщепления, выбранные цвета — к шаблону), ручные строки
+   * всех расцветок съезжали на расцветку №0 и считались по её тиражу, а
+   * добор потребности не узнавал старые строки по новым id и дописывал
+   * полный комплект строк по расцветкам ещё раз. Досылка из ERP по замыслу
+   * меняет ТОЛЬКО поразмерный план (`docs/kb/sewing.md` §0.10), правки
+   * внутри заказа обязаны пережить её (JSDoc `materializeTechCardParameters`).
+   *
+   * Сопоставление входа с существующими расцветками:
+   *   1. по цвету — первая ещё не сопоставленная расцветка с таким цветом
+   *      (ordinal asc). Это ключ ERP (`color_key` карточки заказа
+   *      покупателя) и формы; порядок расцветок в запросе роли не играет;
+   *   2. оставшиеся пары — по порядку (переименование расцветки в форме:
+   *      та же семантика, что у `PATCH /colorways/:id` с новым цветом —
+   *      id живёт, план заменяется);
+   *   3. лишние существующие удаляются (как `DELETE /colorways/:id`,
+   *      каскады штатные), недостающие создаются.
+   * У сопоставленной расцветки обновляются цвет/ordinal и целиком
+   * заменяется `OrderVariantSize` (поразмерный план = source of truth
+   * формы — как в `OrderColorwaysService.update`; на `OrderVariantSize.id`
+   * обратных FK нет).
+   */
+  private async upsertOrderVariants(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    variantInputs: {
+      color: string;
+      sizes: { sizeId: string; qtyPlan: number }[];
+    }[],
+  ): Promise<void> {
+    const existing = await tx.orderVariant.findMany({
+      where: { orderId },
+      orderBy: { ordinal: 'asc' },
+      select: { id: true, ordinal: true, color: true },
+    });
+    const unmatched = [...existing];
+    const matchedId: (string | null)[] = variantInputs.map(() => null);
+    // 1. По цвету.
+    variantInputs.forEach((v, i) => {
+      const idx = unmatched.findIndex((e) => e.color === v.color);
+      if (idx >= 0) {
+        matchedId[i] = unmatched[idx].id;
+        unmatched.splice(idx, 1);
+      }
+    });
+    // 2. Оставшиеся — по порядку (переименование).
+    for (let i = 0; i < variantInputs.length; i += 1) {
+      if (matchedId[i]) continue;
+      const e = unmatched.shift();
+      if (!e) break;
+      matchedId[i] = e.id;
+    }
+    // 3. Лишние расцветки — удалить (освобождает и их ordinal).
+    if (unmatched.length > 0) {
+      await tx.orderVariant.deleteMany({
+        where: { id: { in: unmatched.map((e) => e.id) } },
+      });
+    }
+    // `@@unique([orderId, ordinal])`: перестановка сопоставленных расцветок
+    // упёрлась бы в занятый ordinal соседа, поэтому те, чей ordinal меняется,
+    // сначала уводим на временные отрицательные значения.
+    const ordinalById = new Map(
+      existing.map((e) => [e.id, e.ordinal] as const),
+    );
+    const moving = matchedId
+      .map((id, i) => ({ id, i }))
+      .filter(
+        (m): m is { id: string; i: number } =>
+          m.id != null && ordinalById.get(m.id) !== m.i,
+      );
+    for (const m of moving) {
+      await tx.orderVariant.update({
+        where: { id: m.id },
+        data: { ordinal: -(m.i + 1) },
+      });
+    }
+    for (let i = 0; i < variantInputs.length; i += 1) {
+      const v = variantInputs[i];
+      const sizeRows = OrdersService.normalizeVariantSizes(v.sizes);
+      const id = matchedId[i];
+      if (id) {
+        await tx.orderVariant.update({
+          where: { id },
+          data: {
+            ordinal: i,
+            color: v.color,
+            sizes: { deleteMany: {}, create: sizeRows },
+          },
+        });
+      } else {
+        await tx.orderVariant.create({
+          data: {
+            orderId,
+            ordinal: i,
+            color: v.color,
+            sizes: { create: sizeRows },
+          },
+        });
+      }
+    }
+    OrdersService.log.log(
+      `event=order.variants_upserted order=${orderId} ` +
+        `kept=${matchedId.filter(Boolean).length} ` +
+        `created=${matchedId.filter((x) => !x).length} ` +
+        `removed=${unmatched.length}`,
+    );
   }
 
   /**
@@ -5963,8 +6140,15 @@ export class OrdersService {
       if (moved.count > 0) {
         // `existing` дальше кормит и preserve-карты, и решение об
         // удалении — держим его в согласии с БД.
+        //
+        // Аудит движка расчёта 13.09.2026, G9-1 (подслучай T1): только
+        // ручные строки — ровно те, что переехали в БД. Без фильтра сюда
+        // попадали и шаблонные строки исчезнувшей группы (orderVariantId
+        // = null после SetNull): в памяти они выглядели строками главной
+        // расцветки, пересчитывались по её тиражу с чужой ORDER-нормой и
+        // не сносились как сироты, а в БД оставались с null.
         for (const r of existing) {
-          if (r.orderVariantId === from) r.orderVariantId = to;
+          if (r.isManual && r.orderVariantId === from) r.orderVariantId = to;
         }
         OrdersService.log.log(
           `event=order.material_snapshot.manual_rekeyed order=${orderId} ` +

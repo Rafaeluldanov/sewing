@@ -437,6 +437,152 @@ describeWithDb('integration — order applications', () => {
     expect(needs[0].description).toMatch(/DTF/);
   });
 
+  // ---------------------------------------------------------------------------
+  // Аудит движка расчёта 13.09.2026, G10-1: на CALCULATION при ТРОНУТЫХ
+  // строках потребности полный пересчёт законно отбит (409) — раньше отказ
+  // уходил только в лог: удалённый принт оставался в потребности и смете
+  // (500 × 30 ₽ = 15 000 ₽ лишних), новый до закупки не доезжал, отметки
+  // «устарела» не было. Теперь: точечный `syncApplicationNeeds` +
+  // `needsStaleAt` с причиной и предупреждениями по тронутым строкам.
+  // Сетап — из пробы `tests/scratch/calc_G/G10-1.test.ts`.
+  // ---------------------------------------------------------------------------
+
+  const G10_QTY = 500;
+  const G10_PRICE_A = 45;
+  const G10_PRICE_B = 30;
+
+  /** Заказ 500 шт (спецификация «Нитки» 1,5 м/шт) с нанесениями A (DTF) и B (шелкография) в CALCULATION. */
+  async function prepareG10Order(): Promise<{ orderId: string; appA: string; appB: string }> {
+    const spec = await createSpecPattern(t, cookies.manager, {
+      name: 'G10-1 spec',
+      materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
+    });
+    const pattern = await t.prisma.patternItem.create({
+      data: { name: 'Лекало G10-1', article: `P-G10-1-${Date.now().toString(36)}`, status: 'ACTIVE' },
+    });
+    await copySpecLinesTo(t, spec.id, pattern.id);
+    const orderId = await createOrder(t, seed, cookies.manager, {
+      items: [{ sizeId: seed.sizes.M, qtyPlan: G10_QTY }],
+      patternItemId: pattern.id,
+    });
+    const put = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({
+        applications: [
+          { type: 'DTF', stage: 'CUT_PARTS', placement: 'грудь' },
+          { type: 'SCREEN_PRINT', stage: 'CUT_PARTS', placement: 'спина' },
+        ],
+      })
+      .expect(200);
+    const appA = (put.body as Array<{ id: string; type: string }>).find((a) => a.type === 'DTF')!.id;
+    const appB = (put.body as Array<{ id: string; type: string }>).find((a) => a.type === 'SCREEN_PRINT')!.id;
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    return { orderId, appA, appB };
+  }
+
+  /** Закупщик «проверил» все строки: purchaseQty = calculatedQty, цена, REVIEWED (PATCH без гейта по статусу заказа). */
+  async function g10ReviewAll(orderId: string, appA: string, appB: string): Promise<void> {
+    const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });
+    expect(needs).toHaveLength(3);
+    for (const n of needs) {
+      const price = n.sourceId === appA ? G10_PRICE_A : n.sourceId === appB ? G10_PRICE_B : 2;
+      await request(t.app.getHttpServer())
+        .patch(`/api/workshop-needs/${n.id}`)
+        .set('Cookie', cookies.manager)
+        .send({ purchaseQty: n.calculatedQty.toString(), quotedPrice: String(price), quotedCurrency: 'RUB', status: 'REVIEWED' })
+        .expect(200);
+    }
+  }
+
+  test('G10-1: удаление нанесения при REVIEWED-строках на CALCULATION ставит отметку «устарела» с предупреждением по строке', async () => {
+    const { orderId, appA, appB } = await prepareG10Order();
+    await g10ReviewAll(orderId, appA, appB);
+
+    const r = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({ applications: [{ id: appA, type: 'DTF', stage: 'CUT_PARTS', placement: 'грудь' }] })
+      .expect(200);
+    expect(r.body).toHaveLength(1);
+
+    // Тронутую строку удалённого B синк по построению не сносит — но заказ
+    // несёт отметку с причиной и предупреждением именно по этой строке.
+    const order = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { needsStaleAt: true, needsStaleReason: true },
+    });
+    expect(order.needsStaleAt).not.toBeNull();
+    expect(order.needsStaleReason).toMatch(/в работе у закупщика/u);
+    expect(order.needsStaleReason).toMatch(/осталась от удалённого нанесения/u);
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    expect(detail.body.needsStaleAt).not.toBeNull();
+    expect(detail.body.needsStaleReason).toMatch(/осталась от удалённого нанесения/u);
+    const needB = await t.prisma.workshopNeed.findFirst({
+      where: { orderId, sourceType: 'ORDER_APPLICATION', sourceId: appB },
+    });
+    expect(needB?.status).toBe('REVIEWED');
+  });
+
+  test('G10-1: правка количества и новый принт при REVIEWED-строках — новая строка доезжает до потребности, тронутая не переписана, отметка стоит', async () => {
+    const { orderId, appA, appB } = await prepareG10Order();
+    await g10ReviewAll(orderId, appA, appB);
+
+    const r = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({
+        applications: [
+          { id: appA, type: 'DTF', stage: 'CUT_PARTS', placement: 'грудь', quantity: '200' },
+          { id: appB, type: 'SCREEN_PRINT', stage: 'CUT_PARTS', placement: 'спина' },
+          { type: 'EMBROIDERY', stage: 'FINISHED_ITEM', placement: 'рукав' },
+        ],
+      })
+      .expect(200);
+    const appC = (r.body as Array<{ id: string; type: string }>).find((a) => a.type === 'EMBROIDERY')!.id;
+
+    // Новый принт C — в потребности (точечный синк создаёт недостающие строки).
+    const needC = await t.prisma.workshopNeed.findFirst({
+      where: { orderId, sourceType: 'ORDER_APPLICATION', sourceId: appC },
+    });
+    expect(needC).not.toBeNull();
+    expect(Number(needC!.calculatedQty)).toBe(G10_QTY);
+    // Тронутая строка A не переписана (работа закупщика цела) — об этом предупреждение.
+    const needA = await t.prisma.workshopNeed.findFirst({
+      where: { orderId, sourceType: 'ORDER_APPLICATION', sourceId: appA },
+    });
+    expect(Number(needA!.calculatedQty)).toBe(G10_QTY);
+    expect(Number(needA!.purchaseQty)).toBe(G10_QTY);
+    const order = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { needsStaleAt: true, needsStaleReason: true },
+    });
+    expect(order.needsStaleAt).not.toBeNull();
+    expect(order.needsStaleReason).toMatch(/создано 1/u);
+    expect(order.needsStaleReason).toMatch(/количество по нанесению не переписано/u);
+  });
+
+  test('G10-1 (контроль): при НЕтронутых строках полный пересчёт проходит — строка B исчезает, отметки нет', async () => {
+    const { orderId, appA, appB } = await prepareG10Order();
+    await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({ applications: [{ id: appA, type: 'DTF', stage: 'CUT_PARTS', placement: 'грудь' }] })
+      .expect(200);
+    const appNeeds = await t.prisma.workshopNeed.findMany({ where: { orderId, sourceType: 'ORDER_APPLICATION' } });
+    expect(appNeeds.some((n) => n.sourceId === appB)).toBe(false);
+    expect(appNeeds).toHaveLength(1);
+    const order = await t.prisma.order.findUniqueOrThrow({ where: { id: orderId }, select: { needsStaleAt: true } });
+    expect(order.needsStaleAt).toBeNull();
+  });
+
   /**
    * Доводит заказ до `CALCULATION_DONE` с одним нанесением «OTHER» и
    * отдаёт id заказа. Общая присказка для тестов «поздней» правки:

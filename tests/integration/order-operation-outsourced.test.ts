@@ -89,6 +89,7 @@ describeWithDb('integration — сторонние услуги на опера�
         id: true,
         outsourced: true,
         outsourcePriceRub: true,
+        pricingModeOverride: true,
         sizeOverrides: {
           select: { sizeId: true, rate: true, seconds: true, outsourcedQty: true },
         },
@@ -1123,6 +1124,108 @@ describeWithDb('integration — сторонние услуги на опера�
     const plan = await planOf(orderId);
     expect(plan.costRub).toBeCloseTo(400, 2); // 10 × 40 (не 10 × 25)
     expect(plan.outsourceRub).toBeCloseTo(400, 2);
+  });
+
+  test('гард «сделка без расценки» стоит и на «сделке по размерам»: ставка нужна по каждому размеру плана (L1-10)', async () => {
+    // Аудит движка расчёта 13.09.2026, L1-10: гард стоял только на FIXED —
+    // BY_SIZE без единой поразмерной ставки принимался 200 (план 0 с
+    // warning), а первый скан по паспорту падал `OperationRateMissingException`.
+    // Сетап — из пробы `tests/scratch/calc_D/L1-10.test.ts`.
+    const op = await createOperation(t, {
+      code: 'OUTS-RATE-GUARD-BS',
+      name: 'Пошив',
+      pricingMode: 'SALARY_ONLY',
+      fixedRate: null,
+      timeNormMode: 'FIXED',
+      timeNormSec: 60,
+    });
+    const route = await createRoute(t, {
+      code: 'RT-OUTS-RATE-GUARD-BS',
+      operationIds: [op.id],
+    });
+    const orderId = await createOrder(t, seed, manager, {
+      items: [
+        { sizeId: seed.sizes.M, qtyPlan: 60 },
+        { sizeId: seed.sizes.L, qtyPlan: 40 },
+      ],
+      routeTemplateId: route.id,
+    });
+    const stepId = await stepIdOf(orderId, op.id);
+
+    // Без ставок вовсе — 400 с перечнем обоих размеров.
+    const none = await putOverrides(orderId, [{ stepId, pricingModeOverride: 'BY_SIZE' }], 400);
+    expect(none.body.code).toBe('ORDER_ROUTE_OVERRIDE_RATE_REQUIRED');
+    expect(none.body.message).toMatch(/по размерам/);
+    expect(none.body.message).toMatch(/M/);
+    expect(none.body.message).toMatch(/L/);
+    expect((await stepOf(orderId, op.id)).pricingModeOverride).toBeNull();
+
+    // Ставка только по M — не хватает L.
+    const partial = await putOverrides(
+      orderId,
+      [
+        {
+          stepId,
+          pricingModeOverride: 'BY_SIZE',
+          sizeOverrides: [{ sizeId: seed.sizes.M, rate: 12 }],
+        },
+      ],
+      400,
+    );
+    expect(partial.body.code).toBe('ORDER_ROUTE_OVERRIDE_RATE_REQUIRED');
+    expect(partial.body.message).toMatch(/размеров: L\./);
+
+    // Ставки по обоим размерам — сохраняется, план = 60 × 12 + 40 × 15.
+    await putOverrides(orderId, [
+      {
+        stepId,
+        pricingModeOverride: 'BY_SIZE',
+        sizeOverrides: [
+          { sizeId: seed.sizes.M, rate: 12 },
+          { sizeId: seed.sizes.L, rate: 15 },
+        ],
+      },
+    ]);
+    expect((await stepOf(orderId, op.id)).pricingModeOverride).toBe('BY_SIZE');
+    const plan = await planOf(orderId);
+    expect(plan.costRub).toBeCloseTo(1320, 2);
+    expect(plan.warnings ?? []).toEqual([]);
+
+    // Повторный PUT без поразмерного набора: ставки из снимка засчитываются.
+    await putOverrides(orderId, [{ stepId, pricingModeOverride: 'BY_SIZE' }]);
+
+    // Справочник операции закрывает размер, которого нет в оверрайдах.
+    const opCatalog = await createOperation(t, {
+      code: 'OUTS-RATE-GUARD-BS2',
+      name: 'Оверлок',
+      pricingMode: 'SALARY_ONLY',
+      fixedRate: null,
+      timeNormMode: 'FIXED',
+      timeNormSec: 60,
+    });
+    await t.prisma.operationRateBySize.create({
+      data: { operationId: opCatalog.id, sizeId: seed.sizes.L, rate: new Prisma.Decimal(9) },
+    });
+    const route2 = await createRoute(t, {
+      code: 'RT-OUTS-RATE-GUARD-BS2',
+      operationIds: [opCatalog.id],
+    });
+    const orderId2 = await createOrder(t, seed, manager, {
+      items: [
+        { sizeId: seed.sizes.M, qtyPlan: 60 },
+        { sizeId: seed.sizes.L, qtyPlan: 40 },
+      ],
+      routeTemplateId: route2.id,
+    });
+    const stepId2 = await stepIdOf(orderId2, opCatalog.id);
+    await putOverrides(orderId2, [
+      {
+        stepId: stepId2,
+        pricingModeOverride: 'BY_SIZE',
+        sizeOverrides: [{ sizeId: seed.sizes.M, rate: 12 }],
+      },
+    ]);
+    expect((await planOf(orderId2)).costRub).toBeCloseTo(60 * 12 + 40 * 9, 2);
   });
 });
 
