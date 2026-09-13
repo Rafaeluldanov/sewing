@@ -5514,6 +5514,10 @@ export class OrdersService {
    * селектом, теряла бы связь с номенклатурой (NOMENCLATURE → TEMPLATE)
    * при первом же пересчёте.
    *
+   * Во второй заход идут только СВОБОДНЫЕ источники — занятые первым заходом
+   * исключаются, иначе правило парности (см. `pattern-norms.ts`) ломалось бы
+   * на границе двух вызовов (T1-4).
+   *
    * Мутирует `normsByLine` (дописывает найденное) и возвращает карту
    * `key → единица нормы` для строк, расщеплённых этим заходом.
    */
@@ -5531,9 +5535,20 @@ export class OrdersService {
     }));
     // Матчим ТОЛЬКО против поразмерных источников: плоскую норму («Молния,
     // 1 шт») расщеплять нечем и незачем.
-    const linearSources = normSources.filter(
-      (s) => s.kind === 'LINEAR_M_BY_SIZE',
+    //
+    // Аудит движка расчёта 13.09.2026, T1-4: источники, уже занятые первым
+    // заходом, во второй не передаём. `matchPatternNormSources` считает
+    // «свободным» всё, что получила на вход, и шаг 3 («один источник роли ↔
+    // одна строка») отдавал бы единственную норму роли второй строке той же
+    // роли — «Кашкорсе» получала норму «Рибаны», материал в спецификации
+    // задваивался.
+    const takenSourceIds = new Set(
+      [...normsByLine.values()].map((s) => s.sourceId),
     );
+    const linearSources = normSources.filter(
+      (s) => s.kind === 'LINEAR_M_BY_SIZE' && !takenSourceIds.has(s.sourceId),
+    );
+    if (linearSources.length === 0) return autoNormUnit;
     const retry = matchPatternNormSources(retryInput, linearSources);
     for (const [key, source] of retry) {
       autoNormUnit.set(key, LINEAR_NORM_UNIT);
@@ -5556,6 +5571,11 @@ export class OrdersService {
    * пока эта ветка выходила молча, тираж не считался НИКОГДА — заказ 02-00024
    * ушёл в расчёт с нулевым расходом по всем 11 строкам, а потребность цеха
    * повторила нули и увела шесть материалов в закупку по нулю.
+   *
+   * Возвращает имена строк, которые ПОТЕРЯЛИ норму номенклатуры на этом
+   * пересчёте: источник найден, но с новым размерным планом не пересекается
+   * (Аудит движка расчёта 13.09.2026, T1-3). Вызывающий не молчит об этом —
+   * ставит отметку на заказе.
    */
   private async recomputeSnapshotGroup(
     tx: Prisma.TransactionClient,
@@ -5571,16 +5591,23 @@ export class OrdersService {
       paramValues: Map<string, TechCardParameterValue>;
       normSources: ReadonlyArray<PatternNormSource>;
     },
-  ): Promise<void> {
+  ): Promise<string[]> {
     const { rows, group: g, paramValues, normSources } = input;
+    // Аудит движка расчёта 13.09.2026, T1-8: у группы с НУЛЕВЫМ тиражом
+    // (расцветку обнулили, но не удалили) норму не освежаем вовсе — план
+    // пуст, вывести из него нечего, а связь с номенклатурой и число строки
+    // обязаны дожить до возврата тиража. Пересчитываем только тираж (→ 0),
+    // цвет и ячейки слот-параметров.
+    const refreshNorms = g.qty > 0;
     // Норму из номенклатуры освежаем ТОЛЬКО у строк, которые её оттуда и
     // получили (`qtySource = NOMENCLATURE`): размерный план мог поменяться,
     // а средневзвешенная норма от него зависит. Правку в заказе (`ORDER`) и
     // строки старше признака (`null`) не трогаем — иначе живой заказ тихо
     // поменял бы норму сам.
-    const nomenclatureRows = rows.filter(
-      (r) => r.qtySource === 'NOMENCLATURE',
-    );
+    const nomenclatureRows = refreshNorms
+      ? rows.filter((r) => r.qtySource === 'NOMENCLATURE')
+      : [];
+    const lostNormLines: string[] = [];
     const recomputeMatchInput = nomenclatureRows.map((r) => ({
       key: r.id,
       materialRole: r.materialRole,
@@ -5614,10 +5641,17 @@ export class OrdersService {
       const derivedNorm = refreshed
         ? derivePatternNormPerUnit(refreshed, g.sizePlan)
         : null;
+      // Аудит движка расчёта 13.09.2026, T1-3: источник есть, а с новым
+      // размерным планом он не пересекается — норма не выведена. Число
+      // строки остаётся прежним (recompute в шаблон не ходит), но метка ниже
+      // честно станет «из шаблона», а заказ получит отметку: молчать здесь
+      // значит показывать бейдж «из номенклатуры» на числе прежнего плана.
+      if (refreshed && !derivedNorm) lostNormLines.push(r.name);
       // Единица нормы, выданная вторым заходом: строка снова расщеплена,
-      // номенклатурная норма пойдёт в метрах. Без источника (ячейка под
-      // слот-параметром) авто-расщеплению нечего расщеплять.
-      const autoUnit = refreshed
+      // номенклатурная норма пойдёт в метрах. Без выведенной нормы (ячейка
+      // под слот-параметром / нет пересечения с планом, T1-3) расщеплять
+      // нечего — как и в материализации.
+      const autoUnit = derivedNorm
         ? (recomputeAutoNormUnit.get(r.id) ?? null)
         : null;
       const nextNormUnit = autoUnit ?? r.normUnit;
@@ -5655,12 +5689,18 @@ export class OrdersService {
             densityGsm: cells.densityGsm,
           }),
           // Строка потеряла источник в номенклатуре (параметр убрали /
-          // переименовали) — честно переводим её в «из шаблона», иначе UI
-          // обещал бы связь, которой уже нет.
-          ...(r.qtySource === 'NOMENCLATURE'
+          // переименовали) ИЛИ источник с новым планом не пересекается —
+          // честно переводим её в «из шаблона», иначе UI обещал бы связь,
+          // которой уже нет. Аудит движка расчёта 13.09.2026, T1-3: метка и
+          // число решаются ОДНИМ условием — нормой, выведенной из плана
+          // (`derivedNorm`), как в ветке материализации; раньше метку ставил
+          // сам факт «источник нашёлся», и строка с нормой прежнего плана
+          // оставалась «из номенклатуры». При нулевом тираже (T1-8) метку
+          // не трогаем — норма не освежалась.
+          ...(r.qtySource === 'NOMENCLATURE' && refreshNorms
             ? {
-                qtySource: refreshed ? 'NOMENCLATURE' : 'TEMPLATE',
-                qtySourceRef: refreshed ? refreshed.sourceId : null,
+                qtySource: derivedNorm ? 'NOMENCLATURE' : 'TEMPLATE',
+                qtySourceRef: derivedNorm ? (refreshed?.sourceId ?? null) : null,
               }
             : {}),
           // Цвет расцветки мог измениться — правило то же, что при
@@ -5685,6 +5725,38 @@ export class OrdersService {
         },
       });
     }
+    return lostNormLines;
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, T1-3: строки снимка потеряли норму
+   * номенклатуры (источник есть, с новым размерным планом не пересекается).
+   * Не молчим: отметка на заказе — та же, что у отказа автопересчёта
+   * потребности (`needsStaleAt`/`needsStaleReason`, плашка во вкладке
+   * «Потребность» и предупреждение в сводке). Успешный пересчёт потребности
+   * её снимет — к тому моменту расчёт сам предупредит о непокрытом параметре.
+   */
+  private async markNormSourcesLost(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    lost: ReadonlyArray<{ line: string; color: string | null }>,
+  ): Promise<void> {
+    if (lost.length === 0) return;
+    const listed = lost
+      .map((l) => (l.color ? `«${l.line}» (${l.color})` : `«${l.line}»`))
+      .join(', ');
+    await tx.order.updateMany({
+      where: { id: orderId },
+      data: {
+        needsStaleAt: new Date(),
+        needsStaleReason:
+          `Норма из номенклатуры не покрывает размерный план: ${listed}. ` +
+          'Строки переведены в «из шаблона» с прежним числом — проверьте норму и пересчитайте потребность.',
+      },
+    });
+    OrdersService.log.warn(
+      `event=order.material_snapshot.norm_source_lost order=${orderId} lines=${listed}`,
+    );
   }
 
   private async rebuildMaterialRequirementsSnapshot(
@@ -5999,18 +6071,22 @@ export class OrdersService {
       // нечего, значит переживут все — и ручные, и legacy-шаблонные.
       // Слот-параметры не материализуются (спецификации нет), поэтому карта
       // значений пустая: ячейки под параметром остаются как есть.
+      const lostEarly: Array<{ line: string; color: string | null }> = [];
       for (const g of groups) {
         if (g.qty <= 0) continue;
         const gk = vk(g.variantId);
         const rows = existing.filter((r) => vk(r.orderVariantId) === gk);
         if (rows.length === 0) continue;
-        await this.recomputeSnapshotGroup(tx, {
+        const lost = await this.recomputeSnapshotGroup(tx, {
           rows,
           group: g,
           paramValues: new Map<string, TechCardParameterValue>(),
           normSources,
         });
+        for (const line of lost) lostEarly.push({ line, color: g.variantColor });
       }
+      // T1-3: строки, потерявшие норму номенклатуры, — отметкой на заказе.
+      await this.markNormSourcesLost(tx, orderId, lostEarly);
       return;
     }
 
@@ -6135,9 +6211,15 @@ export class OrdersService {
     // Слоты-параметры спецификации материализуются в заказ (по расцветке),
     // значения переживают пересборку — они в своей таблице.
     // Делаем ДО построения строк: подстановка читает уже готовые значения.
+    //
+    // Аудит движка расчёта 13.09.2026, T1-8: живыми для слотов считаются ВСЕ
+    // существующие группы (`groups`), а не только дающие строки
+    // (`effectiveGroups`): расцветка с обнулённым тиражом жива, и её значения
+    // («плотность 220») обязаны дожить до возврата тиража — иначе слот
+    // воскресал со значением соседней расцветки и расход в кг менялся молча.
     const valuesByGroup = await this.materializeTechCardParameters(
       orderId,
-      effectiveGroups,
+      groups,
       patternSpec,
       tx,
     );
@@ -6148,22 +6230,31 @@ export class OrdersService {
     // перематериализации → её шаблонные строки будут созданы заново, но РУЧНЫЕ
     // переживают, и их тираж тоже надо пересчитать — иначе после смены техкарты
     // у ручной строки остался бы totalQty от прежнего плана.
+    //
+    // T1-8: группа с нулевым тиражом (живая, но не в `effectiveGroups`) тоже
+    // пересчитывается — ВСЕМИ строками и с замороженной нормой (см.
+    // `recomputeSnapshotGroup`): тираж её строк обязан стать нулём, иначе
+    // расчёт потребности прочитал бы из снимка прежний `totalQty`.
     const recomputeSet = new Set(groupsToRecompute.map((g) => vk(g.variantId)));
-    for (const g of effectiveGroups) {
+    const lostNorms: Array<{ line: string; color: string | null }> = [];
+    for (const g of groups) {
       const gk = vk(g.variantId);
-      const isRecomputeGroup = recomputeSet.has(gk);
+      const isRecomputeGroup = recomputeSet.has(gk) || g.qty <= 0;
       const rows = (existingByGroup.get(gk) ?? []).filter(
         (r) => isRecomputeGroup || r.isManual,
       );
       if (rows.length === 0) continue;
-      await this.recomputeSnapshotGroup(tx, {
+      const lost = await this.recomputeSnapshotGroup(tx, {
         rows,
         group: g,
         paramValues:
           valuesByGroup.get(gk) ?? new Map<string, TechCardParameterValue>(),
         normSources,
       });
+      for (const line of lost) lostNorms.push({ line, color: g.variantColor });
     }
+    // T1-3: строки, потерявшие норму номенклатуры, — отметкой на заказе.
+    await this.markNormSourcesLost(tx, orderId, lostNorms);
 
     const data: Prisma.OrderMaterialRequirementCreateManyInput[] = [];
     for (const g of groupsToMaterialize) {
@@ -6403,10 +6494,10 @@ export class OrdersService {
     }
 
     // Сносим строки ТОЛЬКО тех групп, которые перематериализуем, плюс группы,
-    // которых больше нет (расцветку удалили, тираж обнулили, техкарту сняли).
-    // Группы на пересчёте не трогаем — иначе потеряли бы правки, сделанные в
-    // заказе. deleteMany безопасен: WorkshopNeed.sourceId не имеет FK на
-    // снимок (ADR-0022 §«snapshot independence»).
+    // которых больше нет (расцветку удалили). Группы на пересчёте не трогаем
+    // — иначе потеряли бы правки, сделанные в заказе. deleteMany безопасен:
+    // WorkshopNeed.sourceId не имеет FK на снимок (ADR-0022 §«snapshot
+    // independence»).
     //
     // РУЧНЫЕ строки (`isManual`) не сносим НИКОГДА, пока их группа жива — даже
     // при смене техкарты и при «Обновить из шаблона»: шаблон о них не знает,
@@ -6414,14 +6505,23 @@ export class OrdersService {
     // расцветку) — уходят вместе с ней, оставлять их сиротами нельзя.
     // Живая группа = существующая, а НЕ «дающая шаблонные строки»: иначе
     // снятая техкарта или обнулённый тираж уносили бы ручные строки.
+    //
+    // Аудит движка расчёта 13.09.2026, T1-8: сносим по ЯВНОМУ набору
+    // `groupsToMaterialize`, а не «всё, что не на пересчёте». Расцветка с
+    // обнулённым тиражом не попадает ни туда, ни туда, и прежний фильтр читал
+    // это как «перематериализуется»: её шаблонные строки стирались без
+    // замены, а при возврате тиража строились с нуля — правленая норма
+    // (ORDER), фиксированный цвет и расщепление единиц терялись молча.
     const liveGroupKeys = existingGroupKeys;
-    const recomputeKeys = new Set(groupsToRecompute.map((g) => vk(g.variantId)));
+    const materializeKeys = new Set(
+      groupsToMaterialize.map((g) => vk(g.variantId)),
+    );
     const idsToDelete = existing
       .filter((r) => {
         const gk = vk(r.orderVariantId);
         if (!liveGroupKeys.has(gk)) return true; // группы больше нет
         if (r.isManual) return false; // добавлена в заказе — не наша забота
-        return !recomputeKeys.has(gk); // группа перематериализуется
+        return materializeKeys.has(gk); // группа перематериализуется
       })
       .map((r) => r.id);
     if (idsToDelete.length > 0) {
@@ -6614,9 +6714,10 @@ export class OrdersService {
       result.set(gk, values);
     }
 
-    // Группы, которых больше нет (расцветку удалили, тираж обнулили, техкарту
-    // сняли) → их слоты осиротели. Значения таких групп не сохраняем: снимок
-    // для них тоже стирается.
+    // Группы, которых больше нет (расцветку удалили) → их слоты осиротели.
+    // Значения таких групп не сохраняем: снимок для них тоже стирается.
+    // Обнулённый тираж группой не считается мёртвой (T1-8): вызывающий
+    // передаёт сюда все существующие группы, и её значения переживают.
     const orphaned = existing.filter((p) => !liveGroupKeys.has(vk(p.orderVariantId)));
     if (orphaned.length > 0) {
       await tx.orderTechCardParameter.deleteMany({

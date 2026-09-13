@@ -51,8 +51,11 @@ import {
  * Главное публичное действие — `saveDraft(...)` — создаёт за одну
  * Prisma-транзакцию:
  *   - `PatternItem` со `status='DRAFT'` (автогенерация name/article);
- *   - `PatternMaterialArea[]` для каждой строки таблицы (по конверсии
- *     `areaM2 = linearMeters × CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`);
+ *   - `PatternMaterialArea[]` — ТОЛЬКО из calc-payload (м² по размерам,
+ *     как ввёл менеджер во вкладке расчёта); конверсии погонных метров в
+ *     м² через ширину рулона НЕТ (Аудит движка расчёта 13.09.2026, K9:
+ *     прежний JSDoc обещал `linearMeters × CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`,
+ *     код так не делал никогда — см. комментарий в `saveDraft`);
  *   - `ConstructorTask` со `status='NEW'`;
  *   - `ConstructorTaskSizeRow[]`;
  *   - `ConstructorTaskFile[]`.
@@ -1103,16 +1106,16 @@ export class ConstructorTasksService {
       // (`ConstructorTaskSizeRow`) в `PatternItemSizeParameterValue`
       // лекала — раньше менеджер вручную заполнял блок «Погонные метры»
       // на /admin/patterns/[id]. Маппинг по `roleKey` активных
-      // параметров категории с `inputType = LINEAR_M_BY_SIZE`:
+      // параметров категории с `inputType = LINEAR_M_BY_SIZE`, РОВНО ОДИН
+      // параметр на колонку задачи:
       //   - `MAIN_FABRIC` ← kulirkaMeters (Кулирка / основное полотно);
       //   - `RIB`         ← kashkorseMeters (Кашкорсе / рибана).
       // Параметров с другими `roleKey` маппинг не покрывает — те поля
       // менеджер продолжит править руками. Если у лекала нет категории
       // или подходящих активных параметров — секция остаётся пустой.
-      // Для REWORK сценария (повторный complete) делаем full-replace
-      // только в «допустимом окне» (`categoryParameterId IN allowed`),
-      // чтобы не задеть значения по другим параметрам, заданные
-      // вручную.
+      // Заменяются только пары (параметр, размер задачи) с заполненным
+      // числом; остальные значения лекала (другие размеры, пустая
+      // колонка) не трогаются — см. `syncSizeParameterValuesFromTask`.
       await this.syncSizeParameterValuesFromTask(tx, taskId, existing.patternItemId);
 
       await tx.constructorTask.update({
@@ -1134,8 +1137,22 @@ export class ConstructorTasksService {
   /**
    * Переносит Кулирка/Кашкорсе из `ConstructorTaskSizeRow` в
    * `PatternItemSizeParameterValue` лекала. Вызывается из `complete`
-   * внутри транзакции. Безопасно вызывать повторно (full-replace в
-   * рамках «допустимого окна» категорийных параметров — см. logging).
+   * внутри транзакции. Безопасно вызывать повторно: заменяются только
+   * пары (параметр, размер задачи) с заполненным числом.
+   *
+   * Аудит движка расчёта 13.09.2026, K9. Заявка хранит на размер ровно два
+   * числа — одна колонка на роль, — а категория штатно допускает несколько
+   * LINEAR-параметров одной роли («Рибана» + «Кашкорсе», обе RIB; прод-заказ
+   * 02-00015). Раньше число задачи писалось в КАЖДЫЙ параметр роли, и
+   * потребность/спецификация/смета считали полотно дважды; а full-replace
+   * `deleteMany` по всем параметрам роли стирал у существующего лекала нормы
+   * размеров, которых в заявке нет, и целую колонку, оставленную пустой.
+   * Теперь:
+   *   - колонка задачи → РОВНО ОДИН параметр роли: по совпадению label с
+   *     именем колонки («Кулирка» / «Кашкорсе»), затем по подтипу
+   *     (`subtypeKey` MAIN_FABRIC / KASHKORSE), иначе первый по `sortOrder`;
+   *   - стираются только пары (выбранный параметр, размер задачи), у которых
+   *     в задаче стоит число; `null` в задаче значение лекала не трогает.
    */
   private async syncSizeParameterValuesFromTask(
     tx: Prisma.TransactionClient,
@@ -1158,12 +1175,58 @@ export class ConstructorTasksService {
       select: {
         id: true,
         roleKey: true,
+        subtypeKey: true,
         label: true,
         inputType: true,
         unit: true,
       },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     });
     if (allowedParams.length === 0) return;
+
+    // K9: колонка задачи ↔ один параметр роли.
+    const normalizeLabel = (v: string | null | undefined) =>
+      (v ?? '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/ё/g, 'е');
+    const pickParam = (
+      roleKey: 'MAIN_FABRIC' | 'RIB',
+      columnLabel: string,
+      subtypeKey: string | null,
+    ) => {
+      const candidates = allowedParams.filter((p) => p.roleKey === roleKey);
+      if (candidates.length === 0) return null;
+      const byLabel = candidates.find(
+        (p) => normalizeLabel(p.label) === normalizeLabel(columnLabel),
+      );
+      const bySubtype =
+        subtypeKey == null
+          ? undefined
+          : candidates.find((p) => p.subtypeKey === subtypeKey);
+      const chosen = byLabel ?? bySubtype ?? candidates[0]!;
+      if (candidates.length > 1) {
+        this.logger.warn(
+          `event=constructor-task.sync_size_param_values.ambiguous_role task=${taskId} ` +
+            `role=${roleKey} candidates=${candidates.map((p) => p.label).join('|')} ` +
+            `chosen=${chosen.label}`,
+        );
+      }
+      return chosen;
+    };
+    type TaskRowMeters = {
+      kulirkaMeters: Prisma.Decimal | null;
+      kashkorseMeters: Prisma.Decimal | null;
+    };
+    const columns: Array<{
+      param: (typeof allowedParams)[number];
+      pick: (row: TaskRowMeters) => Prisma.Decimal | null;
+    }> = [];
+    const mainParam = pickParam('MAIN_FABRIC', 'Кулирка', 'MAIN_FABRIC');
+    if (mainParam) {
+      columns.push({ param: mainParam, pick: (row) => row.kulirkaMeters });
+    }
+    const ribParam = pickParam('RIB', 'Кашкорсе', 'KASHKORSE');
+    if (ribParam) {
+      columns.push({ param: ribParam, pick: (row) => row.kashkorseMeters });
+    }
 
     const sizeRows = await tx.constructorTaskSizeRow.findMany({
       where: { taskId },
@@ -1175,15 +1238,11 @@ export class ConstructorTasksService {
     });
 
     const valueRows: Prisma.PatternItemSizeParameterValueCreateManyInput[] = [];
-    for (const param of allowedParams) {
+    for (const { param, pick } of columns) {
       for (const row of sizeRows) {
         if (!row.sizeId) continue;
-        const raw =
-          param.roleKey === 'MAIN_FABRIC'
-            ? row.kulirkaMeters
-            : param.roleKey === 'RIB'
-              ? row.kashkorseMeters
-              : null;
+        const raw = pick(row);
+        // Пусто в задаче — значение лекала по этой паре остаётся (K9).
         if (raw == null) continue;
         valueRows.push({
           patternItemId,
@@ -1198,16 +1257,23 @@ export class ConstructorTasksService {
       }
     }
 
-    const allowedIds = allowedParams.map((p) => p.id);
-    await tx.patternItemSizeParameterValue.deleteMany({
-      where: { patternItemId, categoryParameterId: { in: allowedIds } },
-    });
+    // K9: замена ТОЛЬКО по парам (параметр, размер) из задачи — не по всем
+    // размерам параметра и не по всем параметрам роли.
     if (valueRows.length > 0) {
+      await tx.patternItemSizeParameterValue.deleteMany({
+        where: {
+          patternItemId,
+          OR: valueRows.map((v) => ({
+            categoryParameterId: v.categoryParameterId,
+            sizeId: v.sizeId,
+          })),
+        },
+      });
       await tx.patternItemSizeParameterValue.createMany({ data: valueRows });
     }
     this.logger.log(
       `event=constructor-task.sync_size_param_values task=${taskId} ` +
-        `pattern=${patternItemId} params=${allowedParams.length} ` +
+        `pattern=${patternItemId} params=${columns.map((c) => c.param.label).join('|')} ` +
         `values=${valueRows.length}`,
     );
   }
