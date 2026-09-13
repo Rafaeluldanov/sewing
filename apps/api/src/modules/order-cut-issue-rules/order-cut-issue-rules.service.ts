@@ -50,7 +50,11 @@ import type { AuthPrincipal } from '../auth/auth.types.js';
  *   - `evaluateForIssue(passport, operationCategory)` — pre-check для
  *     `PassportsService.issueToEmployee`: возвращает evaluation с
  *     id строки ТЕКУЩЕЙ очереди + `requiredQty / issuedQty`, либо
- *     `null`, если правило не применимо;
+ *     `null`, если правило не применимо. Паспорт засчитывается в
+ *     очередь РОВНО ОДИН РАЗ: если по нему уже есть
+ *     `ORDER_CUT_ISSUE_RULE_CONSUMED` без парного `RELEASED`, на
+ *     дальнейших выдачах (handoff между операциями) правило к нему
+ *     не применяется (Аудит движка расчёта 13.09.2026, G3-1);
  *   - `consumeInTx(tx, evaluation, ...)` — атомарный инкремент
  *     `issuedQty` через conditional `updateMany`. Если 0 строк
  *     обновлено (race) — перечитываем актуальное состояние и кидаем
@@ -481,7 +485,18 @@ export class OrderCutIssueRulesService {
    *   - нет ни одной активной строки очереди заказа;
    *   - все активные строки выполнены во всех очередях;
    *   - операция активной смены НЕ из категории `CUTTING` И у
-   *     паспорта `currentRouteStepIndex !== 0`.
+   *     паспорта `currentRouteStepIndex !== 0`;
+   *   - паспорт УЖЕ засчитан в очередь: по `passport.id` есть
+   *     `ORDER_CUT_ISSUE_RULE_CONSUMED` без парного
+   *     `ORDER_CUT_ISSUE_RULE_RELEASED` (Аудит движка расчёта
+   *     13.09.2026, G3-1). Единица счёта очереди — штуки кроя, и
+   *     паспорт отдаёт их в швейный поток один раз; `complete-operation`
+   *     оставляет `currentRouteStepIndex` на завершённом шаге, поэтому
+   *     по одной позиции паспорта нельзя отличить «ещё не выдавался» от
+   *     «выдан и завершил первый шаг» — второй handoff (следующая
+   *     швейная операция, повторный issue на CUTTING-смене) без этой
+   *     проверки консумил паспорт ещё раз и/или получал 409 по уже
+   *     закрытому размеру.
    *
    * Иначе ищет «текущую очередь» (минимальный `queueIndex` с
    * незакрытыми строками) и работает в её рамках:
@@ -492,6 +507,7 @@ export class OrderCutIssueRulesService {
    */
   async evaluateForIssue(
     passport: {
+      id: string;
       orderId: string;
       sizeId: string;
       qtyCut: number;
@@ -542,6 +558,14 @@ export class OrderCutIssueRulesService {
       // Все строки во всех очередях закрыты — очередь «погасла сама».
       return null;
     }
+
+    // Аудит движка расчёта 13.09.2026, G3-1: паспорт, уже засчитанный в
+    // очередь (CONSUMED без парного RELEASED), второй раз не считаем и
+    // не блокируем — иначе handoff на следующую операцию удваивал
+    // `issuedQty` и отбивал 409 паспорт закрытого размера. Проверка
+    // стоит ПОСЛЕ определения живой очереди, чтобы не ходить в audit
+    // на каждой выдаче по заказам без очереди.
+    if (await this.hasUnreleasedConsume(passport.id)) return null;
 
     const currentRows = activeRows.filter(
       (r) => r.queueIndex === currentQueueIndex,
@@ -665,6 +689,34 @@ export class OrderCutIssueRulesService {
       },
       tx,
     );
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, G3-1: «паспорт уже засчитан в
+   * очередь» = число `ORDER_CUT_ISSUE_RULE_CONSUMED` по `passportId`
+   * больше числа `ORDER_CUT_ISSUE_RULE_RELEASED` (та же балансировка,
+   * что в `releaseInTx`). Возврат в ячейку мастером балансирует пару,
+   * и следующая физическая выдача снова считается.
+   */
+  private async hasUnreleasedConsume(passportId: string): Promise<boolean> {
+    const rows = await this.prisma.auditLog.findMany({
+      where: {
+        entityType: 'ORDER_CUT_ISSUE_RULE',
+        event: {
+          in: [
+            'ORDER_CUT_ISSUE_RULE_CONSUMED',
+            'ORDER_CUT_ISSUE_RULE_RELEASED',
+          ],
+        },
+        payload: { path: ['passportId'], equals: passportId },
+      },
+      select: { event: true },
+    });
+    let balance = 0;
+    for (const r of rows) {
+      balance += r.event === 'ORDER_CUT_ISSUE_RULE_CONSUMED' ? 1 : -1;
+    }
+    return balance > 0;
   }
 
   /**

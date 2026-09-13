@@ -414,6 +414,17 @@ null`):
 - Если все активные строки уже выполнены
   (`issuedQty >= requiredQty` для каждой) — выдача проходит как
   обычно. Очередь «гаснет сама», ручного отключения не нужно.
+- Если паспорт УЖЕ засчитан в очередь (по `passportId` есть
+  `ORDER_CUT_ISSUE_RULE_CONSUMED` без парного
+  `ORDER_CUT_ISSUE_RULE_RELEASED`) — выдача проходит как обычно, без
+  инкремента и без 409 (Аудит движка расчёта 13.09.2026, G3-1).
+  Это handoff того же паспорта на следующую операцию:
+  `complete-operation` оставляет `currentRouteStepIndex` на
+  завершённом шаге, поэтому один паспорт иначе считался бы на каждой
+  выдаче (OV1 → OV2, CUTTING → OV1 → OV2) и после закрытия строки
+  своего размера получал «Сначала нужно выдать: …» на второй швейной
+  операции. Единица счёта очереди — штуки кроя, паспорт отдаёт их
+  один раз.
 - Если есть незавершённые активные строки и `Passport.sizeId` не
   среди них → `OrderCutIssueRuleViolationException` (409
   `ORDER_CUT_ISSUE_RULE_VIOLATION`) с сообщением «Сначала нужно
@@ -431,6 +442,9 @@ null`):
 - Audit `ORDER_CUT_ISSUE_RULE_CONSUMED` (`entityId =
   OrderCutIssueRule.id`, payload `{ orderId, passportId, sizeCode,
   qty, beforeIssued, afterIssued }`) пишется в той же транзакции.
+  `MasterActionsService.returnToCell` пишет парный
+  `ORDER_CUT_ISSUE_RULE_RELEASED` и декрементит ту же строку — после
+  этого паспорт при следующей выдаче считается снова.
 
 Само движение паспорта по маршруту (`scan` /
 `complete-operation`), `MasterActionsService` и

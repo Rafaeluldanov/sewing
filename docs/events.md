@@ -845,7 +845,15 @@ audit-событий не существует.
     `PassportsService.issueToEmployee`. `entityId =
     OrderCutIssueRule.id`, payload содержит `passportId` /
     `qty` / `beforeIssued` / `afterIssued` / `sizeCode` /
-    `orderId`.
+    `orderId`. На один паспорт — не больше одного CONSUMED без
+    парного RELEASED: повторные выдачи того же паспорта (handoff
+    между операциями) очередью не считаются (Аудит движка расчёта
+    13.09.2026, G3-1).
+  - `ORDER_CUT_ISSUE_RULE_RELEASED` — откат последнего CONSUMED
+    при `MasterActionsService.returnToCell` (паспорт вернулся в
+    ячейку). `entityId = OrderCutIssueRule.id` той строки, что была
+    инкрементирована; payload `passportId` / `qty` / `queueIndex` /
+    `sizeCode` / `sizeId` / `orderId`.
 
 <a id="33b-payroll-payout"></a>
 
