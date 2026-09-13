@@ -27,6 +27,7 @@ import {
   PayrollAccrualDocumentNotFoundException,
   PayrollAccrualDocumentStaleSnapshotException,
   PayrollAccrualLineAlreadyPaidException,
+  PayrollAccrualLineNonPositiveException,
 } from '../../common/errors.js';
 import { lockEmployeePayrollTx } from '../../common/payroll-lock.js';
 import {
@@ -47,11 +48,18 @@ import { TreasuryService } from '../treasury/treasury.service.js';
  *   2. `recompute` — пересчитать строки (только DRAFT), сохранив
  *      ручные корректировки (`manualAdjustRub` / `manualComment`).
  *   3. `updateLine` — скорректировать `manualAdjustRub` /
- *      `manualComment` у строки (только DRAFT).
+ *      `manualComment` у строки (только DRAFT). У строки с начислениями
+ *      итог обязан остаться `> 0` — иначе 422
+ *      `PAYROLL_ACCRUAL_LINE_NON_POSITIVE` (аудит 13.09.2026, K1).
  *   4. `pay` — провести документ: DRAFT → PAID, создать
  *      `PayrollPayout` ISSUED для каждой строки с `amountToPayRub > 0`.
  *      Если у строки `manualAdjustRub != 0`, создаётся дополнительная
  *      `PayrollPayoutLine` с `kind = ADJUSTMENT` (STEP 6.4).
+ *      Строка «начисления есть, к выплате ≤ 0» проведение блокирует
+ *      (422 `PAYROLL_ACCRUAL_LINE_NON_POSITIVE`): молчаливый пропуск
+ *      оставлял её начисления «не выплаченными» для следующей ведомости
+ *      (аудит 13.09.2026, K1). Строка без начислений с одним удержанием
+ *      по-прежнему пропускается.
  *   5. `cancel` — отменить черновик: DRAFT → CANCELLED.
  *
  * Контракт — `docs/api.md §«Payroll accrual documents»`.
@@ -287,6 +295,8 @@ export class PayrollAccrualDocumentsService {
 
       const line = await tx.payrollAccrualDocumentLine.findUnique({
         where: { id: lineId },
+        // Имя сотрудника — для текста 422 (K1): менеджер читает его в форме строки.
+        include: { employee: { select: employeeSelect } },
       });
       if (!line || line.documentId !== id) {
         throw new PayrollAccrualDocumentLineNotFoundException();
@@ -302,9 +312,23 @@ export class PayrollAccrualDocumentsService {
       const newManualComment =
         dto.manualComment !== undefined ? (dto.manualComment ?? null) : line.manualComment;
 
-      const newAmountToPayRub = roundMoney(
-        line.amountPieceworkRub.plus(line.amountSalaryRub).plus(newManualAdjustRub),
-      );
+      const accruedRub = line.amountPieceworkRub.plus(line.amountSalaryRub);
+      const newAmountToPayRub = roundMoney(accruedRub.plus(newManualAdjustRub));
+
+      // Аудит движка расчёта 13.09.2026, K1: удержание/зачёт аванса не может
+      // «съесть» начисления целиком — pay() такую строку не проведёт (422), а
+      // раньше молча пропускал, и её начисления уходили в следующую ведомость
+      // повторно. Отбиваем сразу при правке строки, с подсказкой, до какой
+      // суммы можно удержать; остаток менеджер переносит в следующую ведомость.
+      if (accruedRub.greaterThan(0) && newAmountToPayRub.lessThanOrEqualTo(0)) {
+        throw new PayrollAccrualLineNonPositiveException(
+          nonPositiveLineMessage(
+            line.employee?.fullName || line.employeeId,
+            accruedRub,
+            newAmountToPayRub,
+          ),
+        );
+      }
 
       await tx.payrollAccrualDocumentLine.update({
         where: { id: lineId },
@@ -399,6 +423,26 @@ export class PayrollAccrualDocumentsService {
       // STEP 6.4: ADJUSTMENT lines supported — no longer blocking pay.
       // (PayrollPayoutLineKind now includes 'ADJUSTMENT'.)
 
+      // Аудит движка расчёта 13.09.2026, K1: строка «начисления есть, к выплате
+      // ≤ 0» (удержание/зачёт аванса «в ноль» ≥ начислений) проведение блокирует.
+      // Раньше цикл ниже её молча пропускал: PayrollPayout/PayrollPayoutLine не
+      // создавались, payoutId оставался null, а документ становился PAID — её
+      // OperationEntry/SalaryEntry не считались выплаченными и следующая
+      // ведомость брала их снова, удержание же сгорало. Проверяем ДО захвата
+      // локов: документ остаётся DRAFT, менеджер правит строку.
+      for (const line of doc.lines) {
+        const accruedRub = line.amountPieceworkRub.plus(line.amountSalaryRub);
+        if (accruedRub.greaterThan(0) && line.amountToPayRub.lessThanOrEqualTo(0)) {
+          throw new PayrollAccrualLineNonPositiveException(
+            nonPositiveLineMessage(
+              line.employee?.fullName || line.employeeId,
+              accruedRub,
+              line.amountToPayRub,
+            ),
+          );
+        }
+      }
+
       // PAY4: сериализуем по сотрудникам (advisory-lock, тот же ключ, что и
       // rebuildLines) ДО проверок/вставок — закрываем окно двойной оплаты, в
       // т.ч. кросс-системной (accrual pay ∥ payout issue). Берём в
@@ -415,6 +459,9 @@ export class PayrollAccrualDocumentsService {
       let payoutsCreated = 0;
 
       for (const line of doc.lines) {
+        // Сюда с «к выплате ≤ 0» доходит только строка БЕЗ начислений (одно
+        // удержание) — строки с начислениями отбиты выше (K1); повторно брать
+        // в следующую ведомость у такой строки нечего, пропуск как раньше.
         if (line.amountToPayRub.lessThanOrEqualTo(0)) continue;
 
         const snapshot = line.snapshot as Record<string, unknown>;
@@ -1117,6 +1164,27 @@ function calcTotals(lines: { amountPieceworkRub: Prisma.Decimal; amountSalaryRub
     totalToPayRub = totalToPayRub.plus(l.amountToPayRub);
   }
   return { totalPieceworkRub, totalSalaryRub, totalAdjustRub, totalToPayRub };
+}
+
+/**
+ * Аудит движка расчёта 13.09.2026, K1: текст 422 `PAYROLL_ACCRUAL_LINE_NON_POSITIVE`
+ * с подсказкой, до какой суммы можно удержать (строго меньше начислений),
+ * чтобы менеджер сразу видел, что править, а остаток перенёс в следующую ведомость.
+ */
+function nonPositiveLineMessage(
+  employeeLabel: string,
+  accruedRub: Prisma.Decimal,
+  amountToPayRub: Prisma.Decimal,
+): string {
+  const accrued = accruedRub.toFixed(2);
+  return (
+    `Удержание у сотрудника ${employeeLabel} не меньше его начислений ` +
+    `(начислено ${accrued} ₽, к выплате ${amountToPayRub.toFixed(2)} ₽): ` +
+    `выплата по такой строке не создаётся, и начисления ушли бы в следующую ` +
+    `ведомость повторно. Уменьшите корректировку так, чтобы к выплате осталось ` +
+    `больше 0 ₽ (удержать можно меньше ${accrued} ₽), остаток удержания ` +
+    `перенесите в следующую ведомость.`
+  );
 }
 
 /**
