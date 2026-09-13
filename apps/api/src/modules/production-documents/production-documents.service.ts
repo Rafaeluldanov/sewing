@@ -16,6 +16,7 @@ import {
 } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { ERP_CONSUMPTION_POSTED } from '../costs/erp-material-fact.js';
 import { OrderFactCostService } from '../costs/order-fact-cost.service.js';
 import { ProductionDocumentNumberService } from './production-document-number.service.js';
 
@@ -414,7 +415,7 @@ export class ProductionDocumentsService {
    * вопрос: «факты те же?». Совпал — показываем снимок, разошёлся — пересобираем.
    */
   private async factSignature(orderId: string): Promise<string> {
-    const [issues, returns, approved, pending, recut, extras, packed, events] =
+    const [issues, returns, approved, pending, recut, extras, packed, events, erp] =
       await Promise.all([
         this.prisma.materialIssue.aggregate({
           where: { orderId, status: 'POSTED' },
@@ -450,6 +451,15 @@ export class ProductionDocumentsService {
         }),
         // Оклад разносится по событиям паспортов: их количество ловит поздние правки смен.
         this.prisma.passportEvent.count({ where: { passport: { orderId } } }),
+        // Аудит движка расчёта 13.09.2026, D1-2: факт списания ERP приходит асинхронно (`ack`
+        // её тиком) уже ПОСЛЕ READY — без него в отпечатке `materialsErpRub` замерзал на нуле,
+        // и ни чтение документа, ни очередь ERP пересборку не запускали. Считаем только POSTED,
+        // как `erp-material-fact.ts`; `uncoveredQty` — чтобы поймать правку ответа без денег.
+        this.prisma.erpMaterialConsumption.aggregate({
+          where: { orderId, state: ERP_CONSUMPTION_POSTED },
+          _sum: { amountRub: true, uncoveredQty: true },
+          _count: true,
+        }),
       ]);
     return [
       num(issues._sum.totalCost),
@@ -461,6 +471,9 @@ export class ProductionDocumentsService {
       packed._sum.qtyGood ?? 0,
       packed._count,
       events,
+      num(erp._sum.amountRub),
+      num(erp._sum.uncoveredQty),
+      erp._count,
     ].join('|');
   }
 
@@ -479,6 +492,36 @@ export class ProductionDocumentsService {
     }
     const signature = await this.factSignature(orderId);
     if (signature !== storedSignature) await this.refresh(orderId);
+  }
+
+  /**
+   * Освежить документы ЗАКАЗОВ по отпечатку фактов — та же ленивая пересборка, что при чтении
+   * карточки, но для машинного читателя.
+   *
+   * Аудит движка расчёта 13.09.2026, D1-3: очередь сдачи в ERP отдавала снимок документа, не
+   * сверяя отпечаток, — поздний факт (выдача задним числом, ручное утверждение начислений,
+   * подкрой, прочий расход) доезжал до ERP только после того, как человек открывал карточку в
+   * цехе. Зовётся из `ErpProductionService.listPending` по окну выборки перед чтением снимков.
+   *
+   * Ошибка пересборки одного документа не роняет очередь: остальные должны уехать, а этот
+   * останется со старым снимком и следом в логе — лучше, чем встать всем.
+   */
+  async refreshStaleForOrders(orderIds: string[]): Promise<void> {
+    if (orderIds.length === 0) return;
+    const docs = await this.prisma.productionDocument.findMany({
+      where: { orderId: { in: orderIds } },
+      select: { orderId: true, status: true, factSignature: true },
+    });
+    for (const doc of docs) {
+      try {
+        await this.refreshIfStale(doc.orderId, doc.status, doc.factSignature);
+      } catch (error) {
+        this.logger.warn(
+          `event=production_document.refresh_stale.failed orderId=${doc.orderId} ` +
+            `error=${String(error)}`,
+        );
+      }
+    }
   }
 
   /**

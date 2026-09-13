@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { CostsModule } from '../costs/costs.module.js';
 import { OrdersModule } from '../orders/orders.module.js';
+import { ProductionDocumentsModule } from '../production-documents/production-documents.module.js';
 import { ErpConsumptionController } from './erp-consumption.controller.js';
 import { ErpFinishedGoodsController } from './erp-finished-goods.controller.js';
 import { ErpOrderLookupController } from './erp-order-lookup.controller.js';
@@ -30,7 +31,10 @@ import { UpgiftsClient } from './upgifts-client.service.js';
   // `OrdersModule` — ради ОДНОГО действия: отмены заказа цеха по команде ERP («снять отправку»).
   // Своя отмена была бы вторым описанием того же перехода: `completedAt` для зарплаты, аудит,
   // проверки статуса — всё это живёт в `OrdersService.cancel`.
-  imports: [CostsModule, OrdersModule],
+  // `ProductionDocumentsModule` — аудит движка расчёта 13.09.2026, D1-2/D1-3: ответ ERP по
+  // списанию будит документ выпуска, а очередь сдачи освежает документы окна перед выдачей.
+  // Цикла нет: модуль документов зависит только от `CostsModule`.
+  imports: [CostsModule, OrdersModule, ProductionDocumentsModule],
   controllers: [
     IntegrationsController,
     ErpStockController,

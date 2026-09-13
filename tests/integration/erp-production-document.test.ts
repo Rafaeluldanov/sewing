@@ -18,18 +18,20 @@
  *   9. прочие расходы в валюте складывались с рублёвыми как рубли;
  *  10. подкрой (повременная доплата по заказу) не считался вовсе;
  *  11. неподтверждённая сдельная не была видна — сумма молча занижена на незакрытую коробку.
+ *
+ * Аудит движка расчёта 13.09.2026:
+ *  12. D1-3 — очередь ОСВЕЖАЕТ READY-документы окна по отпечатку фактов перед выдачей: поздняя
+ *      выдача материала доезжает до ERP без того, чтобы человек открыл карточку в цехе.
  */
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 
 import { loginAs, startTestApp, stopTestApp, type TestApp } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
+import { buildErpProductionService, buildOrderFactCostService } from '../utils/erp-services';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
-import { ErpProductionService } from '../../apps/api/src/modules/integrations/erp-production.service.js';
-import { OrderFactCostService } from '../../apps/api/src/modules/costs/order-fact-cost.service.js';
-import { PassportRealCostService } from '../../apps/api/src/modules/costs/passport-real-cost.service.js';
-import { OrderMaterialCostService } from '../../apps/api/src/modules/costs/order-material-cost.service.js';
+import type { ErpProductionService } from '../../apps/api/src/modules/integrations/erp-production.service.js';
 
 describeWithDb('integration — сдача заказа цеха уходит в ERP документом производства', () => {
   let t: TestApp;
@@ -111,13 +113,7 @@ describeWithDb('integration — сдача заказа цеха уходит в
 
   /** Сервис на тестовом prisma: у DI-версии свой клиент, требующий TenantContext HTTP-запроса. */
   function service(): ErpProductionService {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const prisma = t.prisma as any;
-    return new ErpProductionService(prisma, new OrderFactCostService(
-      prisma,
-      new PassportRealCostService(prisma),
-      new OrderMaterialCostService(prisma),
-    ));
+    return buildErpProductionService(t);
   }
 
   async function setSince(value: Date | null): Promise<void> {
@@ -251,13 +247,7 @@ describeWithDb('integration — сдача заказа цеха уходит в
       where: { orderId, status: 'PACKED' },
       select: { id: true, qtyGood: true },
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const prisma = t.prisma as any;
-    return new OrderFactCostService(
-      prisma,
-      new PassportRealCostService(prisma),
-      new OrderMaterialCostService(prisma),
-    ).factCostForOrder(
+    return buildOrderFactCostService(t).factCostForOrder(
       orderId,
       passports.reduce((sum, p) => sum + (p.qtyGood ?? 0), 0),
     );
@@ -395,5 +385,66 @@ describeWithDb('integration — сдача заказа цеха уходит в
     // Обещание — не трата: в сумме только подтверждённое, но разрыв виден.
     expect(cost.total_rub).toBe(40);
     expect(cost.warnings).toContain('PIECEWORK_PENDING');
+  });
+
+  // ---------------------------------------------------------------------------
+  // СВЕЖЕСТЬ ДОКУМЕНТА В ОЧЕРЕДИ (аудит движка расчёта 13.09.2026, D1-3)
+  // ---------------------------------------------------------------------------
+
+  test('D1-3: поздняя выдача материала доезжает до ERP без открытия карточки в цехе', async () => {
+    const orderId = await closedOrder();
+    await setSince(new Date('2026-08-01T00:00:00.000Z'));
+    // `resetDatabase` не трогает CompanySettings: оси материала фиксируем явно, чтобы выдача без
+    // паспорта считалась расходом независимо от того, что оставил соседний тест.
+    await t.prisma.companySettings.upsert({
+      where: { id: 'default' },
+      create: {
+        id: 'default', singleton: true,
+        materialQtySource: 'ISSUED_OR_CALCULATED', materialPriceSource: 'PURCHASE',
+      },
+      update: { materialQtySource: 'ISSUED_OR_CALCULATED', materialPriceSource: 'PURCHASE' },
+    });
+    // Документ READY с нулевой себестоимостью — так его зафиксировало закрытие заказа.
+    const ready = await request(t.app.getHttpServer())
+      .get(`/api/admin/orders/${orderId}/production-document`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    expect(ready.body.status).toBe('READY');
+    const svc = service();
+    const before = (await svc.listPending(10)).items[0] as Record<string, any>;
+    expect(before.cost.total_rub).toBe(0);
+    expect(before.recalculated_at).toBeNull();
+
+    // Менеджер проводит выдачу ткани на заказ ЗАДНИМ ЧИСЛОМ, без паспорта. Карточку в цехе
+    // никто не открывает.
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId, status: 'POSTED', totalCost: '5000', postedAt: new Date(),
+        lines: {
+          create: [{
+            description: 'Кулирка чёрная', unit: 'кг',
+            issuedQty: '10', unitCost: '500', totalCost: '5000',
+          }],
+        },
+      },
+    });
+
+    // Тик ERP: очередь сверяет отпечаток фактов и отдаёт пересобранный документ с отметкой.
+    // Раньше здесь было `0` и `null` — снимок жил до первого GET документа в UI.
+    const queue = await svc.listPending(10);
+    expect(queue.count).toBe(1);
+    const after = queue.items[0] as Record<string, any>;
+    expect(after.order_id).toBe(orderId);
+    expect(after.cost.materials_own_rub).toBe(5000);
+    expect(after.cost.total_rub).toBe(5000);
+    expect(after.recalculated_at).toBeTruthy();
+    // Номер документа стабилен: ERP гасит повтор по нему, второй приход не заводится.
+    expect(after.document_number).toBe(before.document_number);
+
+    // Снимок в БД тот же, что ушёл в очередь — у одной цифры один хозяин.
+    const row = await t.prisma.productionDocument.findUnique({ where: { orderId } });
+    expect(Number(row?.totalRub)).toBe(5000);
+    expect(row?.recalculatedAt).toBeTruthy();
+    expect(row?.status).toBe('READY');
   });
 });
