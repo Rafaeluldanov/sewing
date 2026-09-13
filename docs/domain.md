@@ -2014,7 +2014,10 @@ createdAt, updatedAt`. Уникальность —
   явного create-пути под `source = MANUAL`
   (`docs/production-flow.md §12.1`).
 - `RECUT` — почасовая доплата за подкрой сверх смены
-  (`RecutSession`), отдельной строкой того же дня.
+  (`RecutSession`), отдельной строкой того же дня. Подкрой не живёт
+  дольше своей смены: конец — не позже `ShiftSession.endedAt`, закрытие
+  смены завершает активный подкрой, длительность ограничена тем же
+  предохранителем, что и смена (аудит 13.09.2026, G4-3/K7).
 - `MONTH_SALARY` — месячный оклад: ОДНА строка на календарный месяц,
   `date` = 1-е число (29.07.2026, см. §10.3a).
 
@@ -2103,7 +2106,12 @@ date)` для `source = SHIFT_DAY`. Повременная оплата (рев�
    `PIECEWORK`, `!active` или `salaryPerHour === null` → return null.
 2. Суммирует длительности ЗАКРЫТЫХ `ShiftSession` за сутки
    (`workedSeconds`, открытые `endedAt = null` игнорируются). `0` →
-   return null (нет закрытых смен — считать нечего).
+   return null (нет закрытых смен — считать нечего). Длительность
+   каждой смены ограничена предохранителем
+   `CompanySettings.shiftMaxDurationHours` (если задан) или 16 ч
+   (`shift-worked-cap.ts`; аудит 13.09.2026, K7) — забытая смена,
+   закрытая через сутки, не платит 24,5 ч; сама `ShiftSession` не
+   меняется.
 3. `amount = workedSeconds / 3600 × salaryPerHour` (до копеек).
 4. `upsert` по `(employeeId, date, source = SHIFT_DAY)`:
    - update только если `editedManually = false` и запись не в

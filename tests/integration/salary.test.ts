@@ -618,6 +618,87 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
     });
     expect(count).toBe(0);
   });
+
+  // -------------------------------------------------------------------------
+  // K7 (Аудит движка расчёта 13.09.2026): предохранитель на часы смены
+  // -------------------------------------------------------------------------
+
+  /**
+   * `resetDatabase` не трункейтит CompanySettings — предел выставляем
+   * явно на каждый тест блока и возвращаем в «выключено» после.
+   */
+  async function setShiftMaxDurationHours(hours: number): Promise<void> {
+    await t.prisma.companySettings.upsert({
+      where: { id: 'default' },
+      create: {
+        id: 'default',
+        singleton: true,
+        shiftAutoCloseTime: null,
+        shiftMaxDurationHours: hours,
+      },
+      update: { shiftAutoCloseTime: null, shiftMaxDurationHours: hours },
+    });
+  }
+
+  test('K7: забытая смена 73 ч, закрытая через трое суток, платит не больше 16 ч (предел по умолчанию)', async () => {
+    // Было: SHIFT_DAY = 262 800 с → 300 × 73 = 21 900 ₽ за один «день».
+    await setShiftMaxDurationHours(0);
+    await accrueClosedShift({
+      cookie: cookies.qc,
+      employeeId: seed.employees.qc.id,
+      equipmentId: seed.equipment['qc-station-01'].id,
+      operationId: seed.operations.QC.id,
+      hours: 73,
+    });
+    const entry = await t.prisma.salaryEntry.findFirst({
+      where: { employeeId: seed.employees.qc.id, source: 'SHIFT_DAY' },
+    });
+    expect(entry).not.toBeNull();
+    expect(entry!.workedSeconds).toBe(16 * 3600);
+    expect(Number(entry!.amount)).toBe(4800);
+
+    // Сама смена хранит настоящую длительность — режется только число в деньгах.
+    const shift = await t.prisma.shiftSession.findFirst({
+      where: { employeeId: seed.employees.qc.id, endedAt: { not: null } },
+    });
+    expect(
+      Math.floor((shift!.endedAt!.getTime() - shift!.startedAt.getTime()) / 1000),
+    ).toBe(73 * 3600);
+  });
+
+  test('K7: предел берётся из shiftMaxDurationHours политики автозакрытия; штатная смена не режется', async () => {
+    await setShiftMaxDurationHours(10);
+    try {
+      await accrueClosedShift({
+        cookie: cookies.qc,
+        employeeId: seed.employees.qc.id,
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+        hours: 73,
+      });
+      const capped = await t.prisma.salaryEntry.findFirst({
+        where: { employeeId: seed.employees.qc.id, source: 'SHIFT_DAY' },
+      });
+      expect(capped!.workedSeconds).toBe(10 * 3600);
+      expect(Number(capped!.amount)).toBe(3000);
+
+      // Упаковщик (MIXED, 250 ₽/ч) с обычной сменой 8 ч — как и раньше.
+      await accrueClosedShift({
+        cookie: cookies.packer,
+        employeeId: seed.employees.packer.id,
+        equipmentId: seed.equipment['packing-station-01'].id,
+        operationId: seed.operations.PACKING.id,
+        hours: 8,
+      });
+      const normal = await t.prisma.salaryEntry.findFirst({
+        where: { employeeId: seed.employees.packer.id, source: 'SHIFT_DAY' },
+      });
+      expect(normal!.workedSeconds).toBe(8 * 3600);
+      expect(Number(normal!.amount)).toBe(2000);
+    } finally {
+      await setShiftMaxDurationHours(0);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,7 @@ import {
   ShiftOperationNotAllowedForEquipmentException,
 } from '../../common/errors.js';
 import { SalaryService } from '../salary/salary.service.js';
+import { RecutService } from '../recut/recut.service.js';
 import { ShiftAutoCloseService } from './shift-auto-close.service.js';
 import { closeShiftSegments, openShiftSegment } from './shift-segments.js';
 import { loadActivePermitSubstitutions } from '../routes/route-work-permits.js';
@@ -42,6 +43,7 @@ export class ShiftsService {
     private readonly prisma: PrismaService,
     private readonly salary: SalaryService,
     private readonly autoClose: ShiftAutoCloseService,
+    private readonly recut: RecutService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -262,6 +264,11 @@ export class ShiftsService {
     // (`MasterEmployeeStatsService.closeActiveShift`), так что отдельной
     // врезки там не нужно.
     await closeShiftSegments(this.prisma, updated.id, endedAt);
+    // Аудит движка расчёта 13.09.2026, G4-3: подкрой — активность внутри
+    // смены, поэтому активный таймер подкроя завершаем тем же моментом.
+    // Иначе он висит до следующей смены, блокирует новый подкрой и при
+    // «Завершить» в понедельник платит 65 календарных часов.
+    await this.safeCloseRecut(updated.employeeId, endedAt);
     // Окладные начисления (ADR-0021): подстраховка на стороне stop —
     // если start был до внедрения sync (legacy-данные) или прошёл
     // мимо по любой причине, на stop запись будет создана. Берём
@@ -269,6 +276,29 @@ export class ShiftsService {
     // на следующий день при ночном завершении.
     await this.safeSyncSalary(updated.employeeId, updated.startedAt);
     return this.toDto(updated);
+  }
+
+  /**
+   * fail-soft обёртка над `RecutService.completeActiveForEmployee`
+   * (Аудит движка расчёта 13.09.2026, G4-3): смена уже закрыта, и
+   * ошибка в завершении подкроя не должна ронять `stop` — подкрой
+   * всё равно обрежется концом смены при своём `complete`.
+   */
+  private async safeCloseRecut(employeeId: string, endedAt: Date) {
+    try {
+      const done = await this.recut.completeActiveForEmployee(employeeId, endedAt);
+      if (done > 0) {
+        this.logger.log(
+          `event=shift.stop.recut-closed employeeId=${employeeId} count=${done} endedAt=${endedAt.toISOString()}`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `completeActiveForEmployee failed (employeeId=${employeeId}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**

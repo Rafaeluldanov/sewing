@@ -1004,8 +1004,11 @@ export class MasterEmployeeStatsService {
    *     что у `MeService.switchWorkplace`;
    *   - закрытие идёт через `ShiftsService.stop` — тем же путём, что
    *     самозакрытие (в т.ч. `safeSyncSalary`, оклад выравнивается сам);
-   *   - активный подкрой НЕ трогаем: `RecutSession` — отдельная
-   *     активность раскройщика, мастер видит только флаг в DTO.
+   *   - активный подкрой завершается внутри `ShiftsService.stop` тем же
+   *     моментом (Аудит движка расчёта 13.09.2026, G4-3: подкрой —
+   *     активность внутри смены, таймер не должен пережить её закрытие);
+   *     отдельной логики по `RecutSession` здесь нет, мастер видит
+   *     только флаг в DTO.
    *
    * Аудит — `MASTER_SHIFT_FORCE_CLOSED` (`entityType = SHIFT_SESSION`,
    * `employeeId` = мастер-актор, закрываемый сотрудник в payload).

@@ -22,6 +22,10 @@ import {
 } from '../employees/compensation.js';
 import { isSalaryManager } from './salary.constants.js';
 import { resolveEffectiveHourlyRate } from './salary-rate.js';
+import {
+  cappedWorkedSeconds,
+  resolveShiftWorkedCapSeconds,
+} from './shift-worked-cap.js';
 import { AuditService } from '../audit/audit.service.js';
 
 /**
@@ -55,6 +59,10 @@ import { AuditService } from '../audit/audit.service.js';
  *     одной закрытой смены — запись не создаётся (и существующая не
  *     обнуляется): дисциплина закрытия смены, иначе менеджер правит
  *     сумму руками.
+ *   - длительность ОДНОЙ закрытой смены в расчёте ограничена
+ *     предохранителем (`shift-worked-cap.ts`: `shiftMaxDurationHours`
+ *     или 16 ч) — забытая смена, закрытая через сутки, не платит 24,5 ч
+ *     (Аудит движка расчёта 13.09.2026, K7).
  *   - `compensationType` сотрудника решает, нужно ли вообще
  *     создавать запись. Спрашиваем у `isSalaryEligible` (ADR-0021):
  *     `SALARY`/`MIXED` ⇒ да, `PIECEWORK` ⇒ никогда.
@@ -369,7 +377,10 @@ export class SalaryService {
    * часов смены: подкрой идёт внутри смены, но оплачивается доплатой
    * сверху (сознательное решение, см. `RecutService`). Сумма =
    * `Σ(workedSeconds завершённых подкроев за день) / 3600 ×
-   * ставка ₽/час`.
+   * ставка ₽/час`. «Внутри смены» обеспечивает `RecutService`: конец
+   * подкроя не позже конца своей смены, закрытие смены завершает
+   * подкрой, длительность режется тем же предохранителем, что и
+   * смена (Аудит движка расчёта 13.09.2026, G4-3/K7).
    *
    * Ставка берётся через `resolveEffectiveHourlyRate` (29.07.2026):
    * у почасовика это `salaryPerHour`, у месячника — производная
@@ -906,6 +917,13 @@ function roundMoney(amount: Prisma.Decimal): Prisma.Decimal {
  * интервалы не перекрываются и простая сумма = реально отработанное
  * время без задвоений. Открытые смены игнорируются — часы по ним
  * ещё неизвестны (повременка «строго start→end»).
+ *
+ * Аудит движка расчёта 13.09.2026, K7: длительность КАЖДОЙ смены
+ * режется предохранителем `resolveShiftWorkedCapSeconds`
+ * (`shiftMaxDurationHours` или 16 ч). Иначе забытая смена, закрытая
+ * кнопкой «Завершить смену» через сутки (73 ч → 21 900 ₽), уходила в
+ * ведомость и выплату целиком — автозакрытие по умолчанию выключено,
+ * а ручной `stop` его порог не применяет.
  */
 async function computeWorkedSeconds(
   tx: Prisma.TransactionClient | PrismaService,
@@ -921,10 +939,12 @@ async function computeWorkedSeconds(
     },
     select: { startedAt: true, endedAt: true },
   });
+  if (sessions.length === 0) return 0;
+  const capSeconds = await resolveShiftWorkedCapSeconds(tx);
   let total = 0;
   for (const s of sessions) {
     if (!s.endedAt) continue;
-    const sec = Math.floor((s.endedAt.getTime() - s.startedAt.getTime()) / 1000);
+    const sec = cappedWorkedSeconds(s.startedAt, s.endedAt, capSeconds);
     if (sec > 0) total += sec;
   }
   return total;
