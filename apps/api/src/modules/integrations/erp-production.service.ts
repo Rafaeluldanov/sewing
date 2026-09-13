@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { OrderStatus, PassportStatus } from '@prisma/client';
+import { OrderStatus, PassportStatus, type Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { OrderFactCostService } from '../costs/order-fact-cost.service.js';
+import { ProductionDocumentsService } from '../production-documents/production-documents.service.js';
 
 /** Что ERP отвечает по сданному заказу. */
 export type ProductionAckItem = {
@@ -41,6 +42,9 @@ export class ErpProductionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cost: OrderFactCostService,
+    // Аудит движка расчёта 13.09.2026, D1-3: очередь обязана отдавать документ, сверенный с
+    // фактами цеха, а не снимок на момент фиксации.
+    private readonly productionDocuments: ProductionDocumentsService,
   ) {}
 
   /** Отсечка: документы, готовые раньше неё, в выгрузку не попадают. Без неё выгрузка ПУСТА. */
@@ -69,6 +73,11 @@ export class ErpProductionService {
    * Документы, ПЕРЕСОБРАННЫЕ после фиксации (поздний факт — списание задним числом, правка
    * начисления), попадают в выборку повторно по `recalculatedAt`: у ERP должна быть возможность
    * увидеть исправленную сумму, иначе расхождение осталось бы только у нас.
+   *
+   * Аудит движка расчёта 13.09.2026, D1-3: перед чтением снимков документы окна выборки
+   * СВЕРЯЮТСЯ с фактами цеха по отпечатку (`refreshStaleForOrders`) — раньше пересборку READY
+   * запускало только чтение карточки в UI цеха, и поздняя выдача доезжала до ERP лишь после
+   * того, как кто-то открыл документ.
    */
   async listPending(
     limit?: number,
@@ -81,14 +90,29 @@ export class ErpProductionService {
     const since = await this.cutoff(readyFrom);
     if (!since) return { count: 0, items: [] };
 
+    const where = {
+      status: 'READY',
+      OR: [{ readyAt: { gte: since } }, { recalculatedAt: { gte: since } }],
+      // Собственный заказ цеха ERP не касается: приходовать его ей некуда.
+      order: { erpCustomerOrderId: { not: null } },
+    } satisfies Prisma.ProductionDocumentWhereInput;
+    const orderBy = [
+      { readyAt: 'asc' },
+      { number: 'asc' },
+    ] satisfies Prisma.ProductionDocumentOrderByWithRelationInput[];
+
+    // D1-3: сначала освежаем документы окна по отпечатку фактов, потом читаем снимки.
+    const stale = await this.prisma.productionDocument.findMany({
+      where,
+      orderBy,
+      take,
+      select: { orderId: true },
+    });
+    await this.productionDocuments.refreshStaleForOrders(stale.map((d) => d.orderId));
+
     const docs = await this.prisma.productionDocument.findMany({
-      where: {
-        status: 'READY',
-        OR: [{ readyAt: { gte: since } }, { recalculatedAt: { gte: since } }],
-        // Собственный заказ цеха ERP не касается: приходовать его ей некуда.
-        order: { erpCustomerOrderId: { not: null } },
-      },
-      orderBy: [{ readyAt: 'asc' }, { number: 'asc' }],
+      where,
+      orderBy,
       take,
       select: {
         id: true,

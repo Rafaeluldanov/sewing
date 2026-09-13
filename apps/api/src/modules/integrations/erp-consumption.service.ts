@@ -6,6 +6,7 @@ import {
   needDescription,
   resolvePassportNeedShares,
 } from '../material-issues/passport-need-share.js';
+import { ProductionDocumentsService } from '../production-documents/production-documents.service.js';
 
 /**
  * ОЧЕРЕДЬ СПИСАНИЯ МАТЕРИАЛА В ERP по факту выпуска цеха (лестница остатков, шаг 5).
@@ -30,7 +31,12 @@ import {
 export class ErpConsumptionService {
   private readonly logger = new Logger(ErpConsumptionService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Аудит движка расчёта 13.09.2026, D1-2: ответ ERP — факт материала документа выпуска, и
+    // документ обязан его увидеть сам, а не ждать кнопки.
+    private readonly productionDocuments: ProductionDocumentsService,
+  ) {}
 
   /** Сколько паспортов отдаём за один опрос (у ERP на каждый — своя транзакция списания). */
   private static readonly DEFAULT_LIMIT = 50;
@@ -161,6 +167,10 @@ export class ErpConsumptionService {
    * Замена, а не слияние: повторный ответ по паспорту (сторно, повторное списание) заменяет
    * строки целиком — иначе после сторно рядом лежали бы старая и новая правда о расходе.
    * Неизвестный паспорт не роняет пакет: он мог быть удалён, пока ERP списывала.
+   *
+   * Аудит движка расчёта 13.09.2026, D1-2: по каждому затронутому заказу после записи будим
+   * документ выпуска (`refresh`) — ответ ERP обычно приходит ПОЗЖЕ, чем документ стал READY
+   * (закрытие коробки), и без побудки `materialsErpRub` в снимке и в очереди сдачи оставался 0.
    */
   async ack(items: AckItem[]): Promise<{
     accepted: number;
@@ -168,6 +178,7 @@ export class ErpConsumptionService {
   }> {
     let accepted = 0;
     const skipped: Array<{ passport_id: string; reason: string }> = [];
+    const touchedOrderIds = new Set<string>();
     for (const item of items) {
       const passportId = String(item?.passport_id ?? '');
       if (!passportId) {
@@ -232,6 +243,7 @@ export class ErpConsumptionService {
           });
         });
         accepted += 1;
+        touchedOrderIds.add(passport.orderId);
         this.logger.log(
           `event=erp_consumption.ack passportId=${passportId} state=${state} ` +
             `lines=${lines.length} amountRub=${header.amountRub?.toString() ?? '-'} ` +
@@ -242,6 +254,18 @@ export class ErpConsumptionService {
           `event=erp_consumption.ack.failed passportId=${passportId} error=${String(e)}`,
         );
         skipped.push({ passport_id: passportId, reason: 'ack_failed' });
+      }
+    }
+    // D1-2: пересборка документа выпуска по затронутым заказам. Факт уже записан, поэтому сбой
+    // пересборки ответ не отменяет: ERP не должна повторять пакет из-за нашей витрины — документ
+    // догонит факт по отпечатку при следующем чтении или опросе очереди сдачи.
+    for (const orderId of touchedOrderIds) {
+      try {
+        await this.productionDocuments.refresh(orderId);
+      } catch (e) {
+        this.logger.warn(
+          `event=erp_consumption.ack.refresh_failed orderId=${orderId} error=${String(e)}`,
+        );
       }
     }
     return { accepted, skipped };
