@@ -46,6 +46,13 @@ function explainApiError(e: unknown): {
  * в форме нет — поле не идёт в DTO (Backend оставит колонку как есть).
  * Если ключ есть, но значение пустое — отправляем пустую строку, Zod
  * нормализует её в `null` (стирание поля).
+ *
+ * Отсюда обязанность форм (аудит движка расчёта 13.09.2026, N2-1):
+ * поле, значение которого форма ВЫВОДИТ из других (кнопки: штуки из
+ * упаковок × `packSize`), рендерится в FormData только если закупщик
+ * его тронул — иначе производная пустота уйдёт сюда как «стёр» и
+ * обнулит `purchaseQty`/`quotedPrice`. См. `button-units.ts ::
+ * packFieldToSubmit`.
  */
 function buildUpdateDto(form: FormData): UpdateWorkshopNeedDto {
   const dto: UpdateWorkshopNeedDto = {};
