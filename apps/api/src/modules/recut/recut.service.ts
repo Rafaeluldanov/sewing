@@ -20,6 +20,10 @@ import {
 } from '../../common/errors.js';
 import { SalaryService } from '../salary/salary.service.js';
 import { resolveEffectiveHourlyRate } from '../salary/salary-rate.js';
+import {
+  cappedWorkedSeconds,
+  resolveShiftWorkedCapSeconds,
+} from '../salary/shift-worked-cap.js';
 
 const recutSessionInclude = {
   order: { select: { number: true } },
@@ -47,7 +51,14 @@ type RecutSessionRow = Prisma.RecutSessionGetPayload<{
  *     индекс + явная проверка);
  *   - оплата — почасовая ДОПЛАТА сверх смены: при завершении считаем
  *     длительность и `amount`, дневной агрегат ложится строкой
- *     `SalaryEntry(source = RECUT)` через `SalaryService.syncDailyRecut`.
+ *     `SalaryEntry(source = RECUT)` через `SalaryService.syncDailyRecut`;
+ *   - подкрой не живёт дольше своей смены (Аудит движка расчёта
+ *     13.09.2026, G4-3): конец подкроя — не позже `ShiftSession.endedAt`
+ *     смены, в которой он начат; закрытие смены (`ShiftsService.stop`,
+ *     в т. ч. мастером) завершает активный подкрой тем же моментом;
+ *     длительность режется тем же предохранителем, что и смена
+ *     (`shift-worked-cap.ts`, K7). Забытый таймер иначе платил все
+ *     календарные часы до нажатия «Завершить» (пт→пн: 65 ч × 300 ₽).
  */
 @Injectable()
 export class RecutService {
@@ -185,23 +196,99 @@ export class RecutService {
    * «Завершить подкрой» — `ACTIVE` → `DONE`. Фиксирует длительность,
    * снимок часовой ставки и рассчитанную доплату, затем пересчитывает
    * дневную строку `SalaryEntry(source = RECUT)`.
+   *
+   * Аудит движка расчёта 13.09.2026, G4-3: момент завершения — не
+   * позже конца смены, в которой подкрой начат (см. `finish`).
    */
   async complete(id: string, employeeId: string): Promise<RecutSessionDto> {
     const session = await this.loadOwnedActive(id, employeeId);
+    const updated = await this.finish(session, new Date());
+    // Гонка с закрытием смены (`completeActiveForEmployee`): подкрой
+    // уже завершён другим путём — та же 409, что и для любого не-ACTIVE.
+    if (!updated) throw new RecutNotActiveException();
+    return this.toDto(updated);
+  }
 
-    const endedAt = new Date();
-    const workedSeconds = Math.max(
-      0,
-      Math.floor((endedAt.getTime() - session.startedAt.getTime()) / 1000),
+  /**
+   * Завершить все активные подкрои сотрудника моментом `at` — зовётся
+   * из `ShiftsService.stop` при закрытии смены (через него идёт и
+   * принудительное закрытие мастером). Подкрой — активность внутри
+   * смены, и после её закрытия таймеру тикать незачем: иначе он висит
+   * до следующей смены, блокирует новый подкрой (`RECUT_ALREADY_ACTIVE`)
+   * и платит календарные часы (Аудит движка расчёта 13.09.2026, G4-3).
+   *
+   * Возвращает число завершённых. Ошибки не глотает — fail-soft на
+   * стороне вызывающего (закрытие смены важнее).
+   */
+  async completeActiveForEmployee(employeeId: string, at: Date): Promise<number> {
+    const active = await this.prisma.recutSession.findMany({
+      where: { employeeId, status: 'ACTIVE' },
+      select: {
+        id: true,
+        employeeId: true,
+        startedAt: true,
+        shiftSessionId: true,
+      },
+    });
+    let done = 0;
+    for (const session of active) {
+      const updated = await this.finish(session, at);
+      if (updated) done += 1;
+    }
+    return done;
+  }
+
+  /**
+   * Общий финал `ACTIVE → DONE` для `complete` и `completeActiveForEmployee`.
+   *
+   * Аудит движка расчёта 13.09.2026, G4-3: `endedAt = min(requestedAt,
+   * ShiftSession.endedAt своей смены)` — подкрой идёт внутри смены, и
+   * забытый таймер не может начислить ничего после её конца (пт 16:00 →
+   * «Завершить» в пн 09:00 давало 65 ч = 19 500 ₽ вместо 2 ч = 600 ₽).
+   * Если смена закрыта раньше старта подкроя (автозакрытие по последней
+   * отметке), длительность = 0. Сверху — тот же предохранитель, что у
+   * часов смены (`resolveShiftWorkedCapSeconds`, K7): если забыли и
+   * смену, и подкрой, доплата не превышает предел на смену.
+   *
+   * `updateMany` с условием `status = 'ACTIVE'` делает завершение
+   * идемпотентным: `null` — сессию уже завершили/отменили параллельно.
+   */
+  private async finish(
+    session: {
+      id: string;
+      employeeId: string;
+      startedAt: Date;
+      shiftSessionId: string | null;
+    },
+    requestedAt: Date,
+  ): Promise<RecutSessionRow | null> {
+    let endedAt = requestedAt;
+    if (session.shiftSessionId) {
+      const shift = await this.prisma.shiftSession.findUnique({
+        where: { id: session.shiftSessionId },
+        select: { endedAt: true },
+      });
+      if (shift?.endedAt && shift.endedAt < endedAt) endedAt = shift.endedAt;
+    }
+    if (endedAt < session.startedAt) endedAt = session.startedAt;
+
+    const capSeconds = await resolveShiftWorkedCapSeconds(this.prisma);
+    const workedSeconds = cappedWorkedSeconds(
+      session.startedAt,
+      endedAt,
+      capSeconds,
     );
 
-    // Снимок часовой ставки на момент завершения (для аудита/показа).
-    // Платёжный источник истины — агрегат `syncDailyRecut`; здесь снимок
-    // считаем ТОЙ ЖЕ ставкой, чтобы строка сессии и ведомость сходились —
-    // включая месячного окладника, у которого `salaryPerHour` пуст, а
-    // ₽/час производные от нормы часов месяца (см. `salary-rate.ts`).
+    // Снимок часовой ставки (для аудита/показа). Платёжный источник
+    // истины — агрегат `syncDailyRecut`; здесь снимок считаем ТОЙ ЖЕ
+    // ставкой, чтобы строка сессии и ведомость сходились — включая
+    // месячного окладника, у которого `salaryPerHour` пуст, а ₽/час
+    // производные от нормы часов месяца (см. `salary-rate.ts`). Дата
+    // ставки — день СТАРТА, как у `syncDailyRecut(employeeId, startedAt)`
+    // (Аудит движка расчёта 13.09.2026, G4-3, поправка скептика: по
+    // `endedAt` снимок месячника расходился с ведомостью на границе месяца).
     const employee = await this.prisma.employee.findUnique({
-      where: { id: employeeId },
+      where: { id: session.employeeId },
       select: {
         salaryRateMode: true,
         salaryPerHour: true,
@@ -209,7 +296,11 @@ export class RecutService {
       },
     });
     const ratePerHour = employee
-      ? await resolveEffectiveHourlyRate(this.prisma, employee, endedAt)
+      ? await resolveEffectiveHourlyRate(
+          this.prisma,
+          employee,
+          session.startedAt,
+        )
       : null;
     const amount =
       ratePerHour !== null
@@ -218,8 +309,8 @@ export class RecutService {
             .toDecimalPlaces(2)
         : null;
 
-    const updated = await this.prisma.recutSession.update({
-      where: { id },
+    const res = await this.prisma.recutSession.updateMany({
+      where: { id: session.id, status: 'ACTIVE' },
       data: {
         status: 'DONE',
         endedAt,
@@ -227,11 +318,15 @@ export class RecutService {
         ratePerHour,
         amount,
       },
+    });
+    if (res.count === 0) return null;
+    const updated = await this.prisma.recutSession.findUniqueOrThrow({
+      where: { id: session.id },
       include: recutSessionInclude,
     });
 
-    await this.safeSyncRecutSalary(employeeId, session.startedAt);
-    return this.toDto(updated);
+    await this.safeSyncRecutSalary(session.employeeId, session.startedAt);
+    return updated;
   }
 
   /**
@@ -257,7 +352,13 @@ export class RecutService {
   private async loadOwnedActive(id: string, employeeId: string) {
     const session = await this.prisma.recutSession.findUnique({
       where: { id },
-      select: { id: true, employeeId: true, status: true, startedAt: true },
+      select: {
+        id: true,
+        employeeId: true,
+        status: true,
+        startedAt: true,
+        shiftSessionId: true,
+      },
     });
     if (!session || session.employeeId !== employeeId) {
       // Не раскрываем чужие подкрои — та же 404, что и «не найден».
