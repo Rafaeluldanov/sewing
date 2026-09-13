@@ -456,4 +456,82 @@ describeWithDb('integration — order-samples MVP', () => {
     });
     expect(needs.length).toBe(0);
   });
+
+  // -------------------------------------------------------------------------
+  // 13. Аудит движка расчёта 13.09.2026, N1-8/N2-8: образец при ≥2 расцветках
+  //     считается по строкам снимка ОДНОЙ расцветки (цвет образца), а не по
+  //     всем — иначе материал образца умножался на число расцветок (0.6 кг
+  //     кулирки на один образец). Источник строк остаётся снимком заказа:
+  //     цвет расцветки и правка нормы в заказе (`qtySource = ORDER`) доезжают.
+  // -------------------------------------------------------------------------
+
+  test('образец при двух расцветках: по строке на материал, цвет и ORDER-норма расцветки образца', async () => {
+    const pattern = await createSpecPattern(t, cookies.shopChief, {
+      name: 'Sample colorways spec',
+      materialLines: [
+        { name: 'Кулирка', unit: 'кг', qtyPerUnit: '0.3', materialRole: 'MAIN_FABRIC', fabricType: 'Кулирка', colorRule: 'ORDER_COLOR' },
+        { name: 'Резинка', unit: 'м', qtyPerUnit: '1.5', materialRole: 'PACKAGING', colorRule: 'NO_COLOR' },
+      ],
+    });
+    // Цвет образца = `Order.color ?? Product.color` (см.
+    // `OrderSamplesService.start`); в pattern-flow технический продукт цвета
+    // не несёт, поэтому цвет задаём на заказе. Расцветка «Белая» стоит
+    // ВТОРОЙ, чтобы проверить выбор по цвету, а не «первую попавшуюся».
+    const order = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookies.shopChief)
+      .send({
+        orderDate: '2026-09-13T00:00:00.000Z',
+        productId: seed.product.id,
+        clientId: seed.client.id,
+        patternItemId: pattern.id,
+        color: 'Белая',
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+        variants: [
+          { color: 'Чёрный', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }] },
+          { color: 'Белая', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 60 }] },
+        ],
+      })
+      .expect(201);
+    const orderId = order.body.id as string;
+    const snapshot = await t.prisma.orderMaterialRequirement.findMany({
+      where: { orderId },
+      select: { id: true, name: true, variantColor: true },
+    });
+    expect(snapshot).toHaveLength(4); // 2 материала × 2 расцветки
+    // Норму кулирки правят в заказе — только у белой расцветки: 0.4 кг/шт.
+    const whiteKulirka = snapshot.find((r) => r.name === 'Кулирка' && r.variantColor === 'Белая')!;
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/tech-card/lines/${whiteKulirka.id}`)
+      .set('Cookie', cookies.shopChief)
+      .send({ qtyPerUnit: '0.4' })
+      .expect(200);
+    await t.prisma.order.update({ where: { id: orderId }, data: { status: 'CALCULATION' } });
+
+    const start = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/samples/start`)
+      .set('Cookie', cookies.shopChief)
+      .send({ sizeId: seed.sizes.M, qty: 1, materialMode: 'SAMPLE_ONLY', countsTowardOrderQty: false })
+      .expect(201);
+
+    const needs = await t.prisma.workshopNeed.findMany({
+      where: { orderId, orderSampleId: start.body.id as string },
+      select: { sourceType: true, sourceId: true, sourceName: true, calculatedQty: true, unit: true, resolvedColorText: true, calculationNote: true },
+    });
+    // Один образец — по одной строке на материал, а не по числу расцветок.
+    expect(needs).toHaveLength(2);
+    const kulirka = needs.find((n) => n.sourceName === 'Кулирка')!;
+    const rezinka = needs.find((n) => n.sourceName === 'Резинка')!;
+    expect(kulirka).toBeDefined();
+    expect(rezinka).toBeDefined();
+    // Строки — из снимка расцветки образца («Белая»), с её цветом и ORDER-нормой.
+    expect(kulirka.sourceType).toBe('ORDER_MATERIAL_REQUIREMENT');
+    expect(kulirka.sourceId).toBe(whiteKulirka.id);
+    expect(kulirka.resolvedColorText).toBe('Белая');
+    expect(Number(kulirka.calculatedQty)).toBeCloseTo(0.4, 4);
+    expect(kulirka.unit).toBe('кг');
+    expect(Number(rezinka.calculatedQty)).toBeCloseTo(1.5, 4);
+    expect(rezinka.resolvedColorText).toBeNull();
+    expect(kulirka.calculationNote ?? '').toContain('расцветка=Белая');
+  });
 });

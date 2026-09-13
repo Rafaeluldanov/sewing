@@ -16,11 +16,13 @@
  *   2. гейты от двойного счёта на месте и различают СИЛУ покрытия роли:
  *      геометрия лекала (`rolesCoveredByGeometry` — площадь и погонные метры
  *      по размерам) гасит строку всегда, потому что расход выводится из
- *      лекала; норма фурнитуры (`rolesCoveredByQtyNorm`) — только пока строка
- *      с этой ролью в спецификации одна, иначе роль PACKAGING с одной
- *      заполненной нормой уносила бы из потребности всю остальную фурнитуру;
- *      плюс строка, уже ушедшая обогащением в найденную норму
- *      (`enrichedLineIds`) — совпасть она могла и по имени, при пустой роли.
+ *      лекала; норма фурнитуры гасит ТОЛЬКО строку, ушедшую в неё
+ *      обогащением (`enrichedLineIds`) — совпасть она могла и по имени, при
+ *      пустой роли. Гейта «роль закрыта нормой, строка одна»
+ *      (`rolesCoveredByQtyNorm` + `specLinesByRole`) больше нет — аудит
+ *      движка расчёта 13.09.2026, N1-1: единственная строка роли
+ *      принималась за материал нормы без сверки имени, и «Кнопки» гасились
+ *      как «уже учтённые» нормой «Молния».
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -59,17 +61,19 @@ describe('потребность цеха — строки спецификац�
     expect(branch).toMatch(
       /rolesCoveredByGeometry\.has\(role\)\)\s*continue;/,
     );
-    // Норма фурнитуры — только пока строка с этой ролью одна.
-    expect(branch).toMatch(/rolesCoveredByQtyNorm\.has\(role\)/);
-    expect(branch).toMatch(/specLinesByRole\.get\(role\) \?\? 0\) <= 1/);
+    // Норма фурнитуры — только через пару из `findEnrichmentLine`
+    // (аудит движка расчёта 13.09.2026, N1-1): гейта по роли нет.
+    expect(branch).not.toMatch(/rolesCoveredByQtyNorm/);
+    expect(branch).not.toMatch(/specLinesByRole/);
     expect(branch).toMatch(/enrichedLineIds\.has\(line\.id\)\) continue;/);
   });
 
-  test('роли по геометрии и по норме фурнитуры собираются раздельно', () => {
-    // Слить их обратно в один набор — значит вернуть дефект: одна норма
-    // «Молния» уносила из потребности шнур и концевики той же роли.
+  test('роль гасится только геометрией; набора ролей по норме фурнитуры нет', () => {
+    // Вернуть набор ролей по норме — значит вернуть дефект: одна норма
+    // «Молния» уносила из потребности шнур и концевики той же роли (а после
+    // N1-1 — и «Кнопки», единственные под ролью).
     expect(src).toMatch(/const rolesCoveredByGeometry = new Set<string>\(\);/);
-    expect(src).toMatch(/const rolesCoveredByQtyNorm = new Set<string>\(\);/);
+    expect(src).not.toMatch(/const rolesCoveredByQtyNorm = new Set<string>\(\);/);
     expect(src).not.toMatch(/rolesCoveredByPattern/);
   });
 

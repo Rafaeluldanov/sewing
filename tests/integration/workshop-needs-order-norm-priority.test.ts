@@ -183,6 +183,55 @@ describeWithDb('integration — норма заказа vs номенклату�
       .send({ norms: [{ categoryParameterId: cat.parameterId, qtyPerItem: '2' }] })
       .expect(200);
 
+    // Строка ТОГО ЖЕ материала, но с нормой в метрах. Аудит движка расчёта
+    // 13.09.2026, N1-1: пара «строка ↔ норма» теперь требует совместимого
+    // имени — чужой «Шнур» под «Люверсы» больше не встаёт (см. тест ниже),
+    // поэтому сверку единиц проверяем на строке с именем параметра.
+    const orderId = await createOrderWithSpec(patternId, [
+      {
+        name: 'Люверсы',
+        unit: 'м',
+        qtyPerUnit: '1',
+        materialRole: 'PACKAGING',
+        fabricType: 'Люверсы',
+      },
+    ]);
+    await editNormInOrder(orderId, 'Люверсы', '1.2');
+
+    const calc = await calculate(orderId).expect(201);
+    const needs = calc.body.needs as Array<{
+      materialRole: string | null;
+      calculatedQty: string;
+      calculationNote: string | null;
+    }>;
+    const packaging = needs.filter((n) => n.materialRole === 'PACKAGING');
+    expect(packaging).toHaveLength(1);
+    // Метры не могут стать штуками люверсов — считаем по номенклатуре.
+    expect(Number(packaging[0].calculatedQty)).toBe(200);
+    expect(packaging[0].calculationNote).toMatch(/правка в расчёт не вошла/);
+    expect(
+      (calc.body.warnings as string[]).some((w) =>
+        /правка в расчёт не вошла/.test(w),
+      ),
+    ).toBe(true);
+  });
+
+  test('N1-1: чужой материал под той же ролью не встаёт под норму — оба идут в потребность', async () => {
+    // Аудит движка расчёта 13.09.2026, N1-1: раньше единственная строка роли
+    // («Шнур», м) принималась за материал нормы «Люверсы» (шт); сверка единиц
+    // лишь отбрасывала её норму с предупреждением, а сам шнур (120 м)
+    // в закупку не попадал вовсе.
+    const cat = await createCategory({
+      roleKey: 'PACKAGING',
+      label: 'Люверсы',
+      unit: 'шт',
+    });
+    const patternId = await createPattern(cat.id);
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/parameter-norms`)
+      .set('Cookie', t.adminCookie)
+      .send({ norms: [{ categoryParameterId: cat.parameterId, qtyPerItem: '2' }] })
+      .expect(200);
     const orderId = await createOrderWithSpec(patternId, [
       {
         name: 'Шнур',
@@ -196,20 +245,28 @@ describeWithDb('integration — норма заказа vs номенклату�
 
     const calc = await calculate(orderId).expect(201);
     const needs = calc.body.needs as Array<{
+      sourceType: string;
+      sourceName: string | null;
       materialRole: string | null;
+      unit: string;
       calculatedQty: string;
       calculationNote: string | null;
     }>;
     const packaging = needs.filter((n) => n.materialRole === 'PACKAGING');
-    expect(packaging).toHaveLength(1);
-    // Метры шнура не могут стать штуками люверсов — считаем по номенклатуре.
-    expect(Number(packaging[0].calculatedQty)).toBe(200);
-    expect(packaging[0].calculationNote).toMatch(/правка в расчёт не вошла/);
+    expect(packaging).toHaveLength(2);
+    const eyelets = packaging.find((n) => n.sourceType === 'PATTERN_PARAMETER_NORM')!;
+    const cord = packaging.find((n) => n.sourceType === 'ORDER_MATERIAL_REQUIREMENT')!;
+    // Люверсы — по номенклатуре, без чужой правки и без ложного предупреждения.
+    expect(eyelets.unit).toBe('шт');
+    expect(Number(eyelets.calculatedQty)).toBe(200);
+    expect(eyelets.calculationNote ?? '').not.toMatch(/правка в расчёт не вошла/);
+    // Шнур — по спецификации заказа, с его ORDER-нормой: 1.2 × 100.
+    expect(cord.sourceName).toBe('Шнур');
+    expect(cord.unit).toBe('м');
+    expect(Number(cord.calculatedQty)).toBe(120);
     expect(
-      (calc.body.warnings as string[]).some((w) =>
-        /правка в расчёт не вошла/.test(w),
-      ),
-    ).toBe(true);
+      (calc.body.warnings as string[]).some((w) => /правка в расчёт не вошла/.test(w)),
+    ).toBe(false);
   });
 
   test('две строки одного типа материала различимы в потребности', async () => {

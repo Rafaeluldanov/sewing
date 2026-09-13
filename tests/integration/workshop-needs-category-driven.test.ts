@@ -1073,4 +1073,282 @@ describeWithDb('integration — workshop needs category-driven', () => {
     ).filter((n) => n.materialRole === 'RIB');
     expect(ribAfter.map((n) => n.sourceName)).toEqual(['Рибана']);
   });
+
+  // -------------------------------------------------------------------------
+  // Аудит движка расчёта 13.09.2026, N1-1: единственная строка роли — не
+  // обязательно материал нормы. Роль PACKAGING объединяет 17 подтипов;
+  // «Кнопки» под норму «Молния» принимались за молнию: норма считалась по
+  // кнопкам (4 шт/изд → 1200 «молний»), описание получало цвет кнопок, а
+  // сами кнопки гасились как «уже учтённые». Ожидание: пара «строка ↔
+  // норма» решается привязкой/именем; нет пары — строка спецификации идёт в
+  // потребность сама, а убранная из заказа норма не возвращается.
+  // -------------------------------------------------------------------------
+
+  test('N1-1: единственная строка роли с чужим именем не подменяет материал нормы', async () => {
+    const cat = await createCategoryFull();
+    const main = findParam(cat, 'Основное полотно');
+    const molnija = findParam(cat, 'Молния');
+    const patternId = await createPattern({ categoryId: cat.id, article: 'P-CAT-N11' });
+    // Полотно по размерам — чтобы у снимка была хотя бы одна привязка
+    // (`qtySourceRef`), как у любого заказа, собранного новым правилом.
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/size-parameter-values`)
+      .set('Cookie', t.adminCookie)
+      .send({ values: [{ categoryParameterId: main.id, sizeId: seed.sizes.M, value: '1.2' }] })
+      .expect(200);
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/parameter-norms`)
+      .set('Cookie', t.adminCookie)
+      .send({ norms: [{ categoryParameterId: molnija.id, qtyPerItem: '1' }] })
+      .expect(200);
+    const specId = await createSpec({
+      name: 'TC N1-1',
+      materialLines: [
+        { name: 'Дюспа', unit: 'м', qtyPerUnit: '1', materialRole: 'MAIN_FABRIC', fabricType: 'Дюспа', densityGsm: 90, plannedWidthCm: 140, colorRule: 'ORDER_COLOR' },
+        { name: 'Молния', unit: 'шт', qtyPerUnit: '1', materialRole: 'PACKAGING', hardwareSizeText: '60 см', colorRule: 'ORDER_COLOR' },
+        { name: 'Нитки', unit: 'м', qtyPerUnit: '50', materialRole: 'THREAD', colorRule: 'NO_COLOR' },
+      ],
+    });
+    const orderId = await createOrder({
+      specPatternId: specId,
+      patternItemId: patternId,
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 300 }],
+      color: 'бордо',
+    });
+
+    // База: молния 1 × 300, с обогащением из своей строки.
+    const base = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+    type Need = { sourceType: string; sourceName: string | null; materialRole: string | null; description: string; calculatedQty: string };
+    const basePack = (base.body.needs as Need[]).filter((n) => n.materialRole === 'PACKAGING');
+    expect(basePack).toHaveLength(1);
+    expect(Number(basePack[0]!.calculatedQty)).toBeCloseTo(300, 4);
+    expect(basePack[0]!.description).toMatch(/60 см/);
+
+    // Менеджер: + «Кнопки» 4 шт/изд руками, − «Молния».
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/tech-card/lines`)
+      .set('Cookie', t.adminCookie)
+      .send({ name: 'Кнопки', unit: 'шт', qtyPerUnit: '4', materialRole: 'PACKAGING', colorText: 'серебро' })
+      .expect(201);
+    const molnijaLine = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, name: 'Молния' },
+      select: { id: true },
+    });
+    await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/tech-card/lines/${molnijaLine.id}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+
+    const calc = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+    const pack = (calc.body.needs as Need[]).filter((n) => n.materialRole === 'PACKAGING');
+    // Ровно одна строка роли — кнопки из спецификации заказа, 4 × 300.
+    expect(pack).toHaveLength(1);
+    expect(pack[0]!.sourceType).toBe('ORDER_MATERIAL_REQUIREMENT');
+    expect(pack[0]!.sourceName).toBe('Кнопки');
+    expect(Number(pack[0]!.calculatedQty)).toBeCloseTo(1200, 4);
+    expect(pack[0]!.description).toMatch(/Кнопки/);
+    expect(pack[0]!.description).toMatch(/серебро/);
+    // Убранная из заказа «Молния» не вернулась — ни под своим именем, ни с
+    // нормой кнопок.
+    expect((calc.body.needs as Need[]).some((n) => n.sourceName === 'Молния')).toBe(false);
+  });
+
+  test('N1-1: шаблонные «Кнопки» рядом с «Молнией» считаются сами, норма обогащается своей строкой', async () => {
+    const cat = await createCategoryFull();
+    const molnija = findParam(cat, 'Молния');
+    const patternId = await createPattern({ categoryId: cat.id, article: 'P-CAT-N11B' });
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/parameter-norms`)
+      .set('Cookie', t.adminCookie)
+      .send({ norms: [{ categoryParameterId: molnija.id, qtyPerItem: '1' }] })
+      .expect(200);
+    const specId = await createSpec({
+      name: 'TC N1-1 template',
+      materialLines: [
+        { name: 'Молния', unit: 'шт', qtyPerUnit: '1', materialRole: 'PACKAGING', hardwareSizeText: '60 см', colorRule: 'ORDER_COLOR' },
+        { name: 'Кнопки', unit: 'шт', qtyPerUnit: '4', materialRole: 'PACKAGING', hardwareSizeText: '15 мм', colorRule: 'FIXED_COLOR', fixedColorText: 'серебро' },
+        { name: 'Нитки', unit: 'м', qtyPerUnit: '50', materialRole: 'THREAD', colorRule: 'NO_COLOR' },
+      ],
+    });
+    const orderId = await createOrder({
+      specPatternId: specId,
+      patternItemId: patternId,
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 300 }],
+      color: 'бордо',
+    });
+    const calc = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+    type Need = { sourceType: string; sourceName: string | null; materialRole: string | null; description: string; calculatedQty: string };
+    const pack = (calc.body.needs as Need[]).filter((n) => n.materialRole === 'PACKAGING');
+    const byName = new Map(pack.map((n) => [n.sourceName, n]));
+    expect(pack).toHaveLength(2);
+    expect(Number(byName.get('Молния')!.calculatedQty)).toBeCloseTo(300, 4);
+    expect(byName.get('Молния')!.description).toMatch(/60 см/);
+    expect(byName.get('Молния')!.description).not.toMatch(/15 мм/);
+    expect(Number(byName.get('Кнопки')!.calculatedQty)).toBeCloseTo(1200, 4);
+    expect(byName.get('Кнопки')!.description).toMatch(/15 мм/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Аудит движка расчёта 13.09.2026, N1-3: снимок и гейт «убрано из
+  // спецификации» узнают строку параметра по ЯВНОЙ привязке
+  // `qtySourceRef`, а расчёт искал её только по имени/характеристике.
+  // Строка, названная не как параметр («Манжеты» / «Манжетная резинка» под
+  // «Кашкорсе»), теряла ширину, плотность и закупочную единицу: потребность
+  // уходила в «м пог.» с предупреждениями «не указана ширина/плотность» при
+  // 8,64 кг в спецификации.
+  // -------------------------------------------------------------------------
+
+  /** Категория RIB «Рибана» + «Кашкорсе» (LINEAR_M_BY_SIZE, «кг») + PACKAGING «Молния»; лекало M: 0.2 / 0.3 м. */
+  async function createRibPattern(article: string): Promise<{ patternId: string; pid: (label: string) => string }> {
+    catCounter += 1;
+    const cat = await request(t.app.getHttpServer())
+      .post('/api/pattern-categories')
+      .set('Cookie', t.adminCookie)
+      .send({
+        name: `RIB cat ${catCounter}`,
+        iconKey: 'HOODIE',
+        parameters: [
+          { roleKey: 'RIB', label: 'Рибана', inputType: 'LINEAR_M_BY_SIZE', unit: 'кг' },
+          { roleKey: 'RIB', label: 'Кашкорсе', inputType: 'LINEAR_M_BY_SIZE', unit: 'кг' },
+          { roleKey: 'PACKAGING', label: 'Молния', inputType: 'QTY_PER_ITEM', unit: 'шт' },
+        ],
+      })
+      .expect(201);
+    const params = cat.body.parameters as Array<{ id: string; label: string }>;
+    const pid = (label: string) => params.find((p) => p.label === label)!.id;
+    const patternId = await createPattern({ categoryId: cat.body.id as string, article });
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/size-parameter-values`)
+      .set('Cookie', t.adminCookie)
+      .send({
+        values: [
+          { categoryParameterId: pid('Рибана'), sizeId: seed.sizes.M, value: '0.2' },
+          { categoryParameterId: pid('Кашкорсе'), sizeId: seed.sizes.M, value: '0.3' },
+        ],
+      })
+      .expect(200);
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/parameter-norms`)
+      .set('Cookie', t.adminCookie)
+      .send({ norms: [{ categoryParameterId: pid('Молния'), qtyPerItem: '1' }] })
+      .expect(200);
+    return { patternId, pid };
+  }
+
+  /** Строка RIB: закупка в «кг», норма в «м пог.», 320 г/м², ширина 90 см. */
+  const ribLine = (name: string, fabricType: string): SpecLineInput => ({
+    name,
+    unit: 'кг',
+    normUnit: 'м пог.',
+    qtyPerUnit: '1',
+    materialRole: 'RIB',
+    fabricType,
+    densityGsm: 320,
+    plannedWidthCm: 90,
+    colorRule: 'ORDER_COLOR',
+  });
+  const MOLNIJA_LINE: SpecLineInput = { name: 'Молния', unit: 'шт', qtyPerUnit: '1', materialRole: 'PACKAGING', colorRule: 'NO_COLOR' };
+
+  type RibNeed = { sourceName: string | null; materialRole: string | null; unit: string; calculatedQty: string };
+  async function calcRib(orderId: string): Promise<{ needs: RibNeed[]; warnings: string[] }> {
+    const r = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+    return { needs: r.body.needs as RibNeed[], warnings: r.body.warnings as string[] };
+  }
+
+  test('N1-3: спецификация набрана руками («Манжеты» под «Кашкорсе») — привязка обогащает расчёт: 8,64 кг, не 30 м пог.', async () => {
+    const { patternId, pid } = await createRibPattern('P-CAT-N13A');
+    const specId = await createSpec({
+      name: 'TC N1-3 manual',
+      materialLines: [ribLine('Рибана', 'Рибана'), ribLine('Манжеты', 'Манжетная резинка'), MOLNIJA_LINE],
+    });
+    const orderId = await createOrder({
+      specPatternId: specId,
+      patternItemId: patternId,
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+      color: 'серый',
+    });
+    // Снимок привязал «Манжеты» к «Кашкорсе» (единственный остаток роли).
+    const cuff = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, name: 'Манжеты' },
+      select: { qtySource: true, qtySourceRef: true, totalQty: true },
+    });
+    expect(cuff.qtySource).toBe('NOMENCLATURE');
+    expect(cuff.qtySourceRef).toBe(pid('Кашкорсе'));
+    expect(Number(cuff.totalQty)).toBeCloseTo(8.64, 4); // 0.3 × 100 = 30 м × 0.9 × 0.32
+
+    const { needs, warnings } = await calcRib(orderId);
+    const kash = needs.find((n) => n.sourceName === 'Кашкорсе')!;
+    expect(kash).toBeDefined();
+    // Потребность — в закупочной единице строки, по её ширине и плотности.
+    expect(kash.unit).toBe('кг');
+    expect(Number(kash.calculatedQty)).toBeCloseTo(8.64, 4);
+    expect(warnings.filter((w) => /Кашкорсе/u.test(w))).toHaveLength(0);
+    // Строка спецификации учтена один раз — отдельной «Манжеты» нет.
+    expect(needs.filter((n) => n.materialRole === 'RIB')).toHaveLength(2);
+    expect(needs.some((n) => n.sourceName === 'Манжеты')).toBe(false);
+    const ribana = needs.find((n) => n.sourceName === 'Рибана')!;
+    expect(ribana.unit).toBe('кг');
+    expect(Number(ribana.calculatedQty)).toBeCloseTo(5.76, 4);
+  });
+
+  test('N1-3: переименование строки в заказе (name + fabricType) не отрывает её от параметра в расчёте', async () => {
+    const { patternId, pid } = await createRibPattern('P-CAT-N13B');
+    const specId = await createSpec({
+      name: 'TC N1-3 rename',
+      materialLines: [ribLine('Рибана', 'Рибана'), ribLine('Кашкорсе', 'Кашкорсе'), MOLNIJA_LINE],
+    });
+    const orderId = await createOrder({
+      specPatternId: specId,
+      patternItemId: patternId,
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+      color: 'серый',
+    });
+    const base = await calcRib(orderId);
+    expect(Number(base.needs.find((n) => n.sourceName === 'Кашкорсе')!.calculatedQty)).toBeCloseTo(8.64, 4);
+
+    // Менеджер правит и название, и характеристику (ERP-вкладка шлёт оба поля).
+    const kashLine = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, name: 'Кашкорсе' },
+      select: { id: true },
+    });
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/tech-card/lines/${kashLine.id}`)
+      .set('Cookie', t.adminCookie)
+      .send({ name: 'Манжеты кашкорсе', fabricType: 'Манжеты' })
+      .expect(200);
+    const renamed = await t.prisma.orderMaterialRequirement.findUniqueOrThrow({
+      where: { id: kashLine.id },
+      select: { qtySource: true, qtySourceRef: true, totalQty: true, plannedWidthCm: true, densityGsm: true },
+    });
+    // Снимок: привязка пережила правку (единственный остаток роли), 8,64 кг.
+    expect(renamed.qtySource).toBe('NOMENCLATURE');
+    expect(renamed.qtySourceRef).toBe(pid('Кашкорсе'));
+    expect(Number(renamed.totalQty)).toBeCloseTo(8.64, 4);
+
+    const { needs, warnings } = await calcRib(orderId);
+    const kash = needs.find((n) => n.sourceName === 'Кашкорсе')!;
+    expect(kash).toBeDefined();
+    expect(kash.unit).toBe('кг');
+    expect(Number(kash.calculatedQty)).toBeCloseTo(8.64, 4);
+    expect(warnings.filter((w) => /Кашкорсе/u.test(w))).toHaveLength(0);
+    expect(needs.some((n) => n.sourceName === 'Манжеты кашкорсе')).toBe(false);
+    expect(needs.filter((n) => n.materialRole === 'RIB')).toHaveLength(2);
+    expect(Number(needs.find((n) => n.sourceName === 'Рибана')!.calculatedQty)).toBeCloseTo(5.76, 4);
+  });
 });

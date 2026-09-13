@@ -18,7 +18,15 @@
  *   3. повторный добор ничего не задваивает;
  *   4. сквозной путь: материал, ДОПИСАННЫЙ В СПЕЦИФИКАЦИЮ заказа, доезжает до
  *      потребности сам, а отметка «потребность устарела» остаётся с честной
- *      причиной (нормы старых строк так и не пересчитаны).
+ *      причиной (нормы старых строк так и не пересчитаны);
+ *   5. аудит движка расчёта 13.09.2026, N2-11: погашенная закупщиком строка
+ *      (`CANCELLED`) с тем же описанием не считается «уже существующей» —
+ *      материал, вернувшийся в спецификацию с новым id строки снимка,
+ *      доезжает до закупки заново;
+ *   6. аудит движка расчёта 13.09.2026, N1-7/N2-3: схлопнутая order-level
+ *      строка «материала без цвета» узнаёт живые строки по расцветкам,
+ *      посчитанные до правила схлопывания (da74850), — третья, суммарная
+ *      строка не дописывается (иначе 30 + 20 + 50 = 100 м при норме 50).
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -30,7 +38,7 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
-import { createSpecPattern } from '../utils/spec';
+import { copySpecLinesTo, createSpecPattern } from '../utils/spec';
 
 describeWithDb('integration — workshop needs append missing', () => {
   let t: TestApp;
@@ -252,5 +260,207 @@ describeWithDb('integration — workshop needs append missing', () => {
     });
     expect(order?.needsStaleAt).not.toBeNull();
     expect(order?.needsStaleReason).toMatch(/дописан/iu);
+  });
+
+  test('N2-11: погашенная строка с тем же описанием не мешает добору вернувшегося материала', async () => {
+    const pattern = await createSpecPattern(t, manager, {
+      name: 'Лекало P-APP-5',
+      article: 'P-APP-5',
+      materialLines: [
+        { name: 'Нитки', unit: 'м', qtyPerUnit: '1' },
+        { name: 'Резинка', unit: 'м', qtyPerUnit: '0.5' },
+      ],
+    });
+    const created = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', manager)
+      .send({
+        orderDate: '2026-09-13T00:00:00.000Z',
+        clientId: seed.client.id,
+        productId: seed.product.id,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+        patternItemId: pattern.id,
+      })
+      .expect(201);
+    const orderId = created.body.id as string;
+    await t.prisma.order.update({ where: { id: orderId }, data: { status: 'CALCULATION' } });
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });
+    expect(needs).toHaveLength(2);
+    const threads = needs.find((n) => n.description.startsWith('Нитки'))!;
+    const elastic = needs.find((n) => n.description.startsWith('Резинка'))!;
+
+    // Закупщик работает по ниткам (полный пересчёт закрыт) и гасит резинку.
+    await request(t.app.getHttpServer())
+      .patch(`/api/workshop-needs/${threads.id}`)
+      .set('Cookie', manager)
+      .send({ status: 'REVIEWED' })
+      .expect(200);
+    await request(t.app.getHttpServer())
+      .post(`/api/workshop-needs/${elastic.id}/cancel`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+
+    // «Резинку» вернули в спецификацию: строка снимка рождается с НОВЫМ id.
+    const snapElastic = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, name: 'Резинка' },
+    });
+    const { id: _oldId, createdAt: _c, updatedAt: _u, ...rest } = snapElastic;
+    await t.prisma.orderMaterialRequirement.delete({ where: { id: snapElastic.id } });
+    const recreated = await t.prisma.orderMaterialRequirement.create({
+      data: {
+        ...rest,
+        characteristics: rest.characteristics ?? undefined,
+        parameterBindings: rest.parameterBindings ?? undefined,
+      } as never,
+    });
+    expect(recreated.id).not.toBe(snapElastic.id);
+
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(409);
+    const append = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', manager)
+      .send({ appendMissing: true })
+      .expect(201);
+    expect(append.body.count).toBe(1);
+
+    const live = await t.prisma.workshopNeed.findMany({
+      where: { orderId, NOT: { status: 'CANCELLED' } },
+    });
+    const liveElastic = live.filter((n) => n.description.startsWith('Резинка'));
+    expect(liveElastic).toHaveLength(1);
+    expect(liveElastic[0]!.sourceId).toBe(recreated.id);
+    expect(Number(liveElastic[0]!.calculatedQty)).toBeCloseTo(50, 4);
+    // Погашенная строка остаётся погашенной, нитки закупщика не тронуты.
+    const cancelled = await t.prisma.workshopNeed.findMany({ where: { orderId, status: 'CANCELLED' } });
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]!.id).toBe(elastic.id);
+    expect(live.find((n) => n.id === threads.id)?.status).toBe('REVIEWED');
+  });
+
+  test('N1-7/N2-3: схлопнутая строка без цвета не дописывается поверх строк по расцветкам', async () => {
+    const pattern = await request(t.app.getHttpServer())
+      .post('/api/patterns')
+      .set('Cookie', manager)
+      .send({ name: 'Футболка P-APP-6', article: 'P-APP-6' })
+      .expect(201);
+    const patternItemId = pattern.body.id as string;
+    const spec = await createSpecPattern(t, manager, {
+      article: 'P-APP-6-SPEC',
+      materialLines: [
+        { name: 'Кулирка', unit: 'м пог.', qtyPerUnit: '1', materialRole: 'MAIN_FABRIC', fabricType: 'Кулирка', colorRule: 'ORDER_COLOR' },
+        { name: 'Дублерин', unit: 'м пог.', qtyPerUnit: '0.5', materialRole: 'LINING', fabricType: 'Дублерин', colorRule: 'NO_COLOR' },
+      ],
+    });
+    await copySpecLinesTo(t, spec.id, patternItemId);
+    const created = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', manager)
+      .send({
+        orderDate: '2026-09-13T00:00:00.000Z',
+        productId: seed.product.id,
+        clientId: seed.client.id,
+        patternItemId,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+        variants: [
+          { color: 'Белый', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 60 }] },
+          { color: 'Чёрный', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }] },
+        ],
+      })
+      .expect(201);
+    const orderId = created.body.id as string;
+    await t.prisma.order.update({ where: { id: orderId }, data: { status: 'CALCULATION' } });
+    const calc = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    const lining = (calc.body.needs as Array<{ id: string; sourceName: string | null; orderVariantId: string | null; calculatedQty: string }>)
+      .filter((x) => x.sourceName === 'Дублерин');
+    expect(lining).toHaveLength(1);
+    expect(lining[0]!.orderVariantId).toBeNull();
+    expect(Number(lining[0]!.calculatedQty)).toBeCloseTo(50, 4);
+
+    // Заказ, посчитанный ДО da74850: две строки дублерина по расцветкам (30 + 20).
+    const row = await t.prisma.workshopNeed.findUniqueOrThrow({ where: { id: lining[0]!.id } });
+    const specRows = await t.prisma.orderMaterialRequirement.findMany({
+      where: { orderId, materialRole: 'LINING' },
+      include: { orderVariant: true },
+      orderBy: { orderVariant: { ordinal: 'asc' } },
+    });
+    expect(specRows).toHaveLength(2);
+    const { id: _id, createdAt: _c, updatedAt: _u, calculationNote: _n, ...base } = row;
+    await t.prisma.workshopNeed.delete({ where: { id: row.id } });
+    const legacyIds: string[] = [];
+    for (const sp of specRows) {
+      const legacy = await t.prisma.workshopNeed.create({
+        data: {
+          ...base,
+          calculationNote: null,
+          sourceId: sp.id,
+          orderVariantId: sp.orderVariantId,
+          variantColor: sp.variantColor,
+          calculatedQty: sp.totalQty,
+        },
+      });
+      legacyIds.push(legacy.id);
+    }
+    // Закупщик тронул строку белого → полный пересчёт запрещён, работает добор.
+    await request(t.app.getHttpServer())
+      .patch(`/api/workshop-needs/${legacyIds[0]}`)
+      .set('Cookie', manager)
+      .send({ status: 'REVIEWED', purchaseQty: '30', quotedPrice: '120', quotedCurrency: 'RUB' })
+      .expect(200);
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(409);
+
+    const liningRows = () =>
+      t.prisma.workshopNeed.findMany({
+        where: { orderId, materialRole: 'LINING' },
+        select: { id: true, orderVariantId: true, calculatedQty: true },
+      });
+
+    // Явный добор: дублерин уже есть (по расцветкам) — ничего не дописывает.
+    const appended = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', manager)
+      .send({ appendMissing: true })
+      .expect(201);
+    expect(appended.body.count).toBe(0);
+    let rows = await liningRows();
+    expect(rows.map((r) => r.id).sort()).toEqual([...legacyIds].sort());
+    expect(rows.reduce((s, r) => s + Number(r.calculatedQty), 0)).toBeCloseTo(50, 4);
+
+    // Авто-путь: правка спецификации при тронутой строке → 409 → добор.
+    // Дописывается только новая «Бирка», дублерин не задваивается.
+    const variants = await t.prisma.orderVariant.findMany({ where: { orderId }, orderBy: { ordinal: 'asc' } });
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/tech-card/lines`)
+      .set('Cookie', manager)
+      .send({ orderVariantId: variants[0]!.id, name: 'Бирка', unit: 'шт', qtyPerUnit: '1', materialRole: 'LABEL' })
+      .expect(201);
+    rows = await liningRows();
+    expect(rows).toHaveLength(2);
+    expect(rows.reduce((s, r) => s + Number(r.calculatedQty), 0)).toBeCloseTo(50, 4);
+    const all = await t.prisma.workshopNeed.findMany({ where: { orderId }, select: { description: true } });
+    expect(all.filter((r) => r.description.includes('Бирка'))).toHaveLength(1);
+    const order = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { needsStaleAt: true, needsStaleReason: true },
+    });
+    expect(order.needsStaleAt).not.toBeNull();
+    expect(order.needsStaleReason ?? '').toMatch(/дописан/u);
   });
 });

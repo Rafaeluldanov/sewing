@@ -404,6 +404,80 @@ describeWithDb('integration — workshop needs (Этап 4А)', () => {
     expect(gone.status).toBe(404);
   });
 
+  test('Ручная строка (isManual, REVIEWED) не блокирует пересчёт без force и переживает его', async () => {
+    // Аудит движка расчёта 13.09.2026, N2-2: ручная строка рождается
+    // REVIEWED, и гейт `hasTouched` считал её «тронутой», хотя пересчёт
+    // ручные строки не трогает даже с force. Первая же «Добавить строку»
+    // навсегда отбивала авто-пересчёт норм всего заказа: правка тиража
+    // 100 → 150 оставляла «Нитки» 150 м вместо 225 и ставила stale.
+    const tc = await createSpec(t, cookies.manager, {
+      code: 'TC-MANUAL-GATE',
+      name: 'Manual gate',
+      materialLines: [{ name: 'Нитки', unit: 'м', qtyPerUnit: '1.5' }],
+    });
+    const created = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookies.manager)
+      .send({
+        orderDate: '2026-09-13T00:00:00.000Z',
+        clientId: seed.client.id,
+        productId: seed.product.id,
+        patternItemId: tc.id,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+        variants: [{ color: 'Белый', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 100 }] }],
+      })
+      .expect(201);
+    const orderId = created.body.id as string;
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    const threads = await t.prisma.workshopNeed.findFirstOrThrow({
+      where: { orderId, isManual: false },
+    });
+    expect(Number(threads.calculatedQty)).toBe(150);
+
+    const manual = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/manual`)
+      .set('Cookie', cookies.manager)
+      .send({ description: 'Стропа', unit: 'м', calculatedQty: '5', materialRole: 'PACKAGING' })
+      .expect(201);
+    expect(manual.body.isManual).toBe(true);
+    expect(manual.body.status).toBe('REVIEWED');
+
+    // Явный пересчёт без force проходит: ручная строка гейт не держит.
+    const recalc = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    expect(recalc.body.force).toBe(false);
+
+    // Авто-путь: правка тиража 100 → 150 пересчитывает нитки на 225, без stale.
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}`)
+      .set('Cookie', cookies.manager)
+      .send({ variants: [{ color: 'Белый', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 150 }] }] })
+      .expect(200);
+    const order = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { needsStaleAt: true },
+    });
+    expect(order.needsStaleAt).toBeNull();
+    const rows = await t.prisma.workshopNeed.findMany({
+      where: { orderId, NOT: { status: 'CANCELLED' } },
+      select: { isManual: true, status: true, calculatedQty: true, description: true },
+    });
+    const sys = rows.find((r) => !r.isManual)!;
+    expect(Number(sys.calculatedQty)).toBe(225);
+    // Ручная строка жива и не тронута.
+    const manualRow = rows.find((r) => r.isManual)!;
+    expect(manualRow.status).toBe('REVIEWED');
+    expect(Number(manualRow.calculatedQty)).toBe(5);
+    expect(manualRow.description).toBe('Стропа');
+  });
+
   test('Пересчёт переносит цену и поставщика на пересозданную строку', async () => {
     const orderId = await prepareSimpleQtyPerUnitOrder(t, seed, cookies.manager);
     const first = await request(t.app.getHttpServer())

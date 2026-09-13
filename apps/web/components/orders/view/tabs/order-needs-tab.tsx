@@ -259,8 +259,12 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
             {canManage && (
               <RecalcNeedsButton
                 orderId={order.id}
+                // Аудит движка расчёта 13.09.2026, N2-2: ручные строки пересчёт
+                // не трогает — в счётчик «в работе у закупщика» они не входят.
                 reviewedCount={
-                  activeNeeds.filter((n) => n.status !== 'CALCULATED').length
+                  activeNeeds.filter(
+                    (n) => n.status !== 'CALCULATED' && !n.isManual,
+                  ).length
                 }
               />
             )}

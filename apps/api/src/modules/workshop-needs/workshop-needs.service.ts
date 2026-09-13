@@ -938,6 +938,14 @@ export class WorkshopNeedsService {
     if (!existing) throw new WorkshopNeedNotFoundException();
     if (!existing.isManual) throw new WorkshopNeedNotManualException();
     assertOrderMaterialCorrectionAllowed(existing.order.status);
+    // Аудит движка расчёта 13.09.2026, N2-16: тот же гард, что в `cancel()`.
+    // `erpLink` берёт под заказ и ручные строки, а физическое удаление
+    // оставляло связь ERP сиротой (ручкой `unlink` её потом не снять).
+    if (existing.erpManagedAt) {
+      throw new WorkshopNeedErpStateException(
+        `Потребность под заказом поставщику ERP (${existing.erpPurchaseOrderRef ?? ''}): отмените заказ в ERP и отвяжите её, потом удаляйте.`,
+      );
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.workshopNeed.delete({ where: { id } });
@@ -1514,8 +1522,14 @@ export class WorkshopNeedsService {
     // ДРУГОГО варианта не блокируют пересчёт этого. Sample-строки
     // (orderCalculationId=null при activeCalculationId!=null) тоже
     // больше не блокируют тиражный пересчёт и не удаляются им.
+    //
+    // Аудит движка расчёта 13.09.2026, N2-2: ручные строки (`isManual`)
+    // в гейт не входят — пересчёт их не трогает даже в force-режиме (см.
+    // `doomedWhere`), защищать их гейтом нечего. Ручная строка рождается
+    // REVIEWED, и без этого фильтра первая же «Добавить строку» навсегда
+    // отбивала любой авто-пересчёт норм всего заказа (409 → stale).
     const existing = await this.prisma.workshopNeed.findMany({
-      where: { orderId, orderCalculationId: activeCalculationId },
+      where: { orderId, orderCalculationId: activeCalculationId, isManual: false },
       select: { id: true, status: true, manualEditAt: true },
     });
     // Фича «Правка потребности на любой стадии»: правленная руками
@@ -1635,19 +1649,18 @@ export class WorkshopNeedsService {
     //     с одинаковым `roleKey`, различающихся `categoryParameterId`.
     //     Гасить по роли значило: заполнена одна норма «Молния» — и шнур с
     //     концевиками из спецификации не попадают в потребность вовсе, без
-    //     предупреждения.
+    //     предупреждения. Поэтому у нормы фурнитуры набора ролей нет вовсе:
+    //     она гасит ровно свою строку — ту, что ушла в неё обогащением
+    //     (`enrichedLineIds`, пара решается в `findEnrichmentLine`).
+    //     Аудит движка расчёта 13.09.2026, N1-1: прежний набор
+    //     `rolesCoveredByQtyNorm` («роль закрыта нормой, строка одна») снят
+    //     — единственная строка роли принималась за материал нормы без
+    //     сверки имени.
     const rolesCoveredByGeometry = new Set<string>();
     for (const role of areasByRole.keys()) rolesCoveredByGeometry.add(role);
     for (const values of linearByParam.values()) {
       for (const v of values) rolesCoveredByGeometry.add(v.roleKey);
     }
-    // Намеренно `.filter().forEach()`, а не `for … of`: сигнатурой цикла по
-    // нормам smoke-тест находит ГЛАВНЫЙ цикл и проверяет порядок гейта внутри
-    // него — второе вхождение увело бы его сюда, на безобидный сбор ролей.
-    const rolesCoveredByQtyNorm = new Set<string>();
-    (order.patternItem?.parameterNorms ?? [])
-      .filter((n) => n.inputTypeSnapshot === 'QTY_PER_ITEM')
-      .forEach((n) => rolesCoveredByQtyNorm.add(n.roleKey));
 
     // -----------------------------------------------------------------------
     // Фича «Расцветки»: считаем ПО КАЖДОЙ группе-расцветке. Внутри — те
@@ -1734,6 +1747,8 @@ export class WorkshopNeedsService {
           roleKey: norm.roleKey,
           labelSnapshot: norm.labelSnapshot,
           sourceLines: g.sourceLines,
+          // Аудит движка расчёта 13.09.2026, N1-1: сначала явная привязка.
+          normId: norm.id,
         });
         if (matchedLine) enrichedLineIds.add(matchedLine.id);
         // Материал убрали из спецификации заказа → потребности по нему нет.
@@ -1771,6 +1786,8 @@ export class WorkshopNeedsService {
               roleKey: values[0].roleKey,
               labelSnapshot: values[0].labelSnapshot,
               sourceLines: g.sourceLines,
+              // Аудит движка расчёта 13.09.2026, N1-3: сначала явная привязка.
+              normId: categoryParameterId,
             })
           : null;
         if (linearMatched) enrichedLineIds.add(linearMatched.id);
@@ -1850,32 +1867,24 @@ export class WorkshopNeedsService {
       // Для legacy-заказов ветка не нужна: там `!isCategoryDriven` считает
       // каждую строку источника.
       //
-      // Норма фурнитуры гасит строку только пока строка с этой ролью в
-      // спецификации ОДНА: тогда норма её и представляет, даже если имена
-      // разошлись и обогащение не сработало. Как только строк несколько —
-      // однозначного соответствия нет, и гасим ровно ту, что реально ушла
-      // в норму. Остальные считаются по спецификации: правило «что стоит в
-      // спецификации заказа, то и идёт в потребность» важнее экономии на
-      // строке, а лишнее видно в списке и убирается руками — в отличие от
-      // недостачи, которая всплывает уже на раскрое.
-      const specLinesByRole = new Map<string, number>();
-      for (const line of g.sourceLines) {
-        if (!line.materialRole) continue;
-        specLinesByRole.set(
-          line.materialRole,
-          (specLinesByRole.get(line.materialRole) ?? 0) + 1,
-        );
-      }
+      // Норма фурнитуры гасит ровно ту строку, что реально ушла в неё
+      // обогащением (`enrichedLineIds`). Остальные считаются по
+      // спецификации: правило «что стоит в спецификации заказа, то и идёт в
+      // потребность» важнее экономии на строке, а лишнее видно в списке и
+      // убирается руками — в отличие от недостачи, которая всплывает уже на
+      // раскрое.
+      //
+      // Аудит движка расчёта 13.09.2026, N1-1: гейт «роль закрыта нормой,
+      // строка одна» снят. Он считал единственную строку роли материалом
+      // нормы без сверки имени, а роль `PACKAGING` объединяет 17 подтипов:
+      // «Кнопки» 4 шт/изд гасились как «уже учтённые» нормой «Молния», и
+      // 1200 кнопок не заказывались вовсе. Пара «строка ↔ норма» теперь
+      // решается только в `findEnrichmentLine` (привязка / имя); нет пары —
+      // строка считается по спецификации.
       if (isCategoryDriven) {
         for (const line of g.sourceLines) {
           const role = line.materialRole;
           if (role && rolesCoveredByGeometry.has(role)) continue;
-          if (
-            role &&
-            rolesCoveredByQtyNorm.has(role) &&
-            (specLinesByRole.get(role) ?? 0) <= 1
-          )
-            continue;
           if (enrichedLineIds.has(line.id)) continue;
           const computedManual = this.computeLine({
             line,
@@ -2072,6 +2081,19 @@ export class WorkshopNeedsService {
     //
     // Ручные строки закупщика (`MANUAL_ADDITION`) в сравнении участвуют
     // намеренно: материал, заведённый им руками, добор не задваивает.
+    //
+    // Аудит движка расчёта 13.09.2026, N2-11: погашенная закупщиком строка
+    // (`CANCELLED`) по ОПИСАНИЮ «существующей» не считается — материал,
+    // который вернули в спецификацию (новый id строки снимка), обязан
+    // доехать до закупки заново; по источнику же (тот самый id) отмену
+    // уважаем: закупщик убрал именно эту позицию.
+    //
+    // Аудит движка расчёта 13.09.2026, N1-7/N2-3: схлопнутая order-level
+    // строка «материала без цвета» сверяется ещё и по парам «источник +
+    // расцветка», из которых сложена (`mergedFrom`), а бесцветная строка —
+    // по описанию БЕЗ расцветки. Иначе к живым строкам по расцветкам,
+    // посчитанным до правила схлопывания (da74850), добор дописывал третью,
+    // суммарную строку — двойной счёт количества и денег.
     let appendSkipped = 0;
     if (appendMissing) {
       const sourceKey = (r: {
@@ -2080,11 +2102,13 @@ export class WorkshopNeedsService {
         orderVariantId: string | null;
       }): string =>
         [r.sourceType, r.sourceId ?? '', r.orderVariantId ?? ''].join('|');
+      const descriptionText = (description: string): string =>
+        description.trim().toLowerCase();
       const descriptionKey = (r: {
         description: string;
         orderVariantId: string | null;
       }): string =>
-        [r.description.trim().toLowerCase(), r.orderVariantId ?? ''].join('|');
+        [descriptionText(r.description), r.orderVariantId ?? ''].join('|');
       const existingRows = await this.prisma.workshopNeed.findMany({
         // Скоуп тот же, что у удаления в обычном режиме (шаг 2.5), плюс явное
         // исключение строк сигнального образца: у legacy-заказа без калькуляций
@@ -2096,27 +2120,41 @@ export class WorkshopNeedsService {
           sourceId: true,
           orderVariantId: true,
           description: true,
+          status: true,
         },
       });
+      const liveRows = existingRows.filter((r) => r.status !== 'CANCELLED');
       const bySource = new Set(existingRows.map(sourceKey));
-      const byDescription = new Set(existingRows.map(descriptionKey));
+      const byDescription = new Set(liveRows.map(descriptionKey));
+      const byDescriptionAnyVariant = new Set(
+        liveRows.map((r) => descriptionText(r.description)),
+      );
       const missing = computed.filter((c) => {
         const variantId = c.orderVariantId ?? null;
-        return (
-          !bySource.has(
-            sourceKey({
-              sourceType: c.sourceType,
-              sourceId: c.sourceId,
-              orderVariantId: variantId,
-            }),
-          ) &&
-          !byDescription.has(
-            descriptionKey({
-              description: c.description,
-              orderVariantId: variantId,
-            }),
-          )
+        const pairs: Array<{ sourceId: string; orderVariantId: string | null }> = [
+          { sourceId: c.sourceId, orderVariantId: variantId },
+          ...(c.mergedFrom ?? []),
+        ];
+        const knownByPair = pairs.some(
+          (p) =>
+            bySource.has(
+              sourceKey({
+                sourceType: c.sourceType,
+                sourceId: p.sourceId,
+                orderVariantId: p.orderVariantId,
+              }),
+            ) ||
+            byDescription.has(
+              descriptionKey({
+                description: c.description,
+                orderVariantId: p.orderVariantId,
+              }),
+            ),
         );
+        const colorless = (c.resolvedColorText ?? '').trim() === '';
+        const knownColorless =
+          colorless && byDescriptionAnyVariant.has(descriptionText(c.description));
+        return !knownByPair && !knownColorless;
       });
       appendSkipped = computed.length - missing.length;
       computed.splice(0, computed.length, ...missing);
@@ -2178,7 +2216,7 @@ export class WorkshopNeedsService {
       // В доборе переносить не с чего и удалять нечего: старые строки остаются
       // на месте вместе со своим закупочным блоком.
       const carry = appendMissing
-        ? new Map<string, PurchaseCarryFields | null>()
+        ? new Map<string, PurchaseCarry | null>()
         : buildPurchaseCarry(
             await tx.workshopNeed.findMany({
               where: doomedWhere,
@@ -2192,6 +2230,15 @@ export class WorkshopNeedsService {
 
       const createdRows: WorkshopNeed[] = [];
       for (const c of computed) {
+        // Аудит движка расчёта 13.09.2026, N2-4: перенос «К закупке» со
+        // сверкой; расхождение с новой теорией — в warnings и в ноту строки.
+        const carried = takePurchaseCarry(carry, c);
+        if (carried.qtyNote) warnings.push(carried.qtyNote);
+        const calculationNote = carried.qtyNote
+          ? [c.calculationNote, carried.qtyNote]
+              .filter((p): p is string => p != null && p !== '')
+              .join(' ')
+          : c.calculationNote;
         const row = await tx.workshopNeed.create({
           data: {
             orderId,
@@ -2217,15 +2264,16 @@ export class WorkshopNeedsService {
             calculatedQty: c.calculatedQty,
             unit: c.unit,
             calculationMethod: c.calculationMethod,
-            calculationNote: c.calculationNote,
+            calculationNote,
             // `status` идёт по дефолту (CALCULATED) — пересчёт возвращает
             // строку на начало закупочного цикла. А вот закупочный блок
-            // (цена / валюта / «К закупке» / поставщик) переносим со
-            // старой строки: он к спецификации отношения не имеет.
+            // (цена / валюта / «К закупке» / поставщик / комментарий /
+            // дата поставки) переносим со старой строки: он к
+            // спецификации отношения не имеет.
             // Ключ включает единицу — если она сменилась (расщепление
             // «м пог. ↔ кг»), цена за единицу больше не та, и блок
             // намеренно НЕ переносится.
-            ...takePurchaseCarry(carry, c),
+            ...carried.fields,
           },
         });
         createdRows.push(row);
@@ -2354,6 +2402,10 @@ export class WorkshopNeedsService {
    *     `[{ sizeId: sample.sizeId, qtyPlan: sample.qty }]` —
    *     формулы `QTY_PER_UNIT` / `AREA_DENSITY` получают «1 единицу
    *     выбранного размера», а не весь заказ;
+   *   - при ≥2 расцветках берутся строки снимка ОДНОЙ расцветки — по цвету
+   *     образца (`Order.color ?? Product.color`), иначе первой (аудит
+   *     движка расчёта 13.09.2026, N1-8/N2-8); источник строк остаётся
+   *     `ORDER_MATERIAL_REQUIREMENT`, `totalQty` затирается в `null`;
    *   - результирующие строки `WorkshopNeed` помечаются
    *     `orderSampleId = sample.id` — bulk-list заказа их отличит;
    *   - тиражные строки (с `orderSampleId = null`) **не трогаются**;
@@ -2388,6 +2440,13 @@ export class WorkshopNeedsService {
         items: { include: { size: true } },
         materialRequirements: { orderBy: { sortOrder: 'asc' } },
         patternItem: { include: { materialAreas: true } },
+        // Аудит движка расчёта 13.09.2026, N1-8/N2-8: при ≥2 расцветках
+        // снимок хранит строку материала ПО КАЖДОЙ расцветке — образец
+        // одного цвета считаем по строкам ОДНОЙ расцветки.
+        variants: {
+          orderBy: { ordinal: 'asc' },
+          select: { id: true, color: true },
+        },
       },
     });
     if (!order) {
@@ -2431,15 +2490,46 @@ export class WorkshopNeedsService {
     // поэтому при копировании snapshot-строк затираем `totalQty =
     // null` — это заставит `computeLine` пересчитать через
     // `qtyPerUnit × totalOrderQty (= sample.qty)`.
-    // ВАЖНО: даже для snapshot-источника мы выставляем
-    // `source = 'TECH_CARD_MATERIAL_LINE'` локально, чтобы
-    // `computeLine` пошёл по веткой QTY_PER_UNIT (qtyPerUnit × N),
-    // а не по snapshot-ветке (line.totalQty). Snapshot нам нужен
-    // лишь для enrichment (densityGsm, materialRole, цвет).
-    const hasSnapshot = order.materialRequirements.length > 0;
+    //
+    // Аудит движка расчёта 13.09.2026, N1-8/N2-8: источник остаётся
+    // `ORDER_MATERIAL_REQUIREMENT` (раньше подменялся на
+    // `TECH_CARD_MATERIAL_LINE`, и `resolveColor` терял цвет расцветки /
+    // выбранный цвет из снимка, а `qtySource` не передавался — правка нормы
+    // в заказе для образца не действовала). Ветка QTY_PER_UNIT для снимка с
+    // `totalQty = null` сама считает `qtyPerUnit × N`.
+    //
+    // Расцветка образца: у `OrderSample` своей расцветки нет, цвет образца —
+    // `Order.color ?? Product.color` (см. `OrderSamplesService.start`). При
+    // ≥2 расцветках берём строки снимка расцветки с этим цветом, иначе
+    // первой; при ≤1 расцветке — все строки, как раньше. Без фильтра образец
+    // 1 шт получал по строке КАЖДОЙ расцветки — материал × число расцветок.
+    const sampleRow = await tx.orderSample.findUnique({
+      where: { id: sample.id },
+      select: { product: { select: { color: true } } },
+    });
+    const sampleColor = order.color ?? sampleRow?.product.color ?? null;
+    const colorKey = (c: string | null | undefined): string =>
+      (c ?? '').trim().toLowerCase().replace(/ё/g, 'е');
+    const sampleVariant =
+      order.variants.length >= 2
+        ? (order.variants.find(
+            (v) => colorKey(v.color) !== '' && colorKey(v.color) === colorKey(sampleColor),
+          ) ?? order.variants[0]!)
+        : null;
+    const variantRows = sampleVariant
+      ? order.materialRequirements.filter(
+          (r) => r.orderVariantId === sampleVariant.id,
+        )
+      : [];
+    // Частично-legacy снимок без строк этой расцветки — считаем по всем
+    // строкам, как раньше, чем молча не посчитать ничего.
+    const sampleRequirements =
+      variantRows.length > 0 ? variantRows : order.materialRequirements;
+    const sampleOrderColor = sampleVariant?.color ?? order.color;
+    const hasSnapshot = sampleRequirements.length > 0;
     const sourceLines: SourceLine[] = hasSnapshot
-      ? order.materialRequirements.map((r) => ({
-          source: 'TECH_CARD_MATERIAL_LINE',
+      ? sampleRequirements.map((r) => ({
+          source: 'ORDER_MATERIAL_REQUIREMENT',
           id: r.id,
           isManual: r.isManual,
           name: r.name,
@@ -2461,6 +2551,8 @@ export class WorkshopNeedsService {
           materialImageUrl: r.materialImageUrl,
           selectedColorText: r.selectedColorText,
           requiresColorSelection: r.requiresColorSelection,
+          qtySource: r.qtySource,
+          qtySourceRef: r.qtySourceRef,
         }))
       : [];
 
@@ -2498,7 +2590,9 @@ export class WorkshopNeedsService {
       const c = this.computeLine({
         line,
         order: {
-          color: order.color,
+          // N1-8: цвет расцветки образца, а не `Order.color` (у заказа с
+          // ≥2 расцветками он пуст).
+          color: sampleOrderColor,
           patternItemId: order.patternItemId,
         },
         items: virtualItems,
@@ -2534,7 +2628,9 @@ export class WorkshopNeedsService {
           calculationMethod: c.calculationMethod,
           calculationNote:
             (c.calculationNote ? c.calculationNote + ' · ' : '') +
-            `Расчёт на сигнальный образец (qty=${sample.qty}, size=${sampleSizeRow.size.code})`,
+            `Расчёт на сигнальный образец (qty=${sample.qty}, size=${sampleSizeRow.size.code}` +
+            (sampleVariant ? `, расцветка=${sampleVariant.color ?? '—'}` : '') +
+            ')',
         },
       });
     }
@@ -3384,10 +3480,15 @@ export class WorkshopNeedsService {
    *      несёт `qtySourceRef` (собран билдером, который проставляет привязки).
    *      Для legacy-снимков без привязок поведение остаётся прежним: там
    *      «нет привязки» не означает «убрали», и молча терять потребности
-   *      старых заказов нельзя;
+   *      старых заказов нельзя. (Аудит движка расчёта 13.09.2026, N1-1:
+   *      известная слепая зона — если убрали ЕДИНСТВЕННУЮ привязанную
+   *      строку, снимок выглядит legacy и норма возвращается без
+   *      обогащения; закрыть это можно только признаком на заказе, что
+   *      меняет задокументированное поведение норм без строки — оставлено);
    *   2. ни одна строка не привязана к этой норме (`qtySourceRef = norm.id`);
-   *   3. обогащающая строка не нашлась (`findEnrichmentLine` — по роли, имени
-   *      и префиксу имени: то же правило, по которому норма и матчится);
+   *   3. обогащающая строка не нашлась (`findEnrichmentLine` — по привязке,
+   *      роли, имени и префиксу имени: то же правило, по которому норма и
+   *      матчится);
    *   4. и ни одна строка не названа как сам параметр — страховка на случай,
    *      когда привязка не проставилась (например, из-за расхождения единиц),
    *      а роль в снимке неоднозначная.
@@ -3426,16 +3527,42 @@ export class WorkshopNeedsService {
     return true;
   }
 
+  /**
+   * Строка спецификации заказа, которая ПРЕДСТАВЛЯЕТ параметр номенклатуры
+   * (норму фурнитуры / погонные метры / площадь роли) и обогащает его
+   * потребность: ширина, плотность, закупочная единица, размер и материал
+   * фурнитуры, цвет, ORDER-норма.
+   *
+   * Аудит движка расчёта 13.09.2026, N1-1/N1-3 — порядок поиска:
+   *   1. ЯВНАЯ привязка `qtySourceRef === normId` — тот же ключ, которым
+   *      снимок и гейт «убрано из спецификации» решают, чья это строка
+   *      (`SourceLine.qtySourceRef`). Раньше расчёт искал только по имени,
+   *      и переименованная строка теряла ширину/плотность/единицу —
+   *      потребность уходила в «м пог.» при 8,64 кг в спецификации;
+   *   2. точное имя / `fabricType` = метка параметра;
+   *   3. метка — начало названия строки («Молния» ↔ «Молния разъёмная»),
+   *      если такая пара единственная;
+   *   4. единственная строка роли — ТОЛЬКО если её имя совместимо с меткой
+   *      (либо метки нет: площади ищут по роли). Роль `PACKAGING` объединяет
+   *      17 подтипов, и единственной строкой роли может оказаться другой
+   *      материал: «Кнопки» принимались за «Молнию», её норма ставилась по
+   *      кнопкам, а сами кнопки гасились как «уже учтённые».
+   */
   private findEnrichmentLine(input: {
     roleKey: string | null;
     labelSnapshot: string | null;
     sourceLines: SourceLine[];
+    /** id нормы/параметра номенклатуры — для явной привязки `qtySourceRef`. */
+    normId?: string | null;
   }): SourceLine | null {
-    const { roleKey, labelSnapshot, sourceLines } = input;
+    const { roleKey, labelSnapshot, sourceLines, normId } = input;
+    if (normId) {
+      const bound = sourceLines.find((l) => l.qtySourceRef === normId);
+      if (bound) return bound;
+    }
     if (!roleKey) return null;
     const candidates = sourceLines.filter((l) => l.materialRole === roleKey);
     if (candidates.length === 0) return null;
-    if (candidates.length === 1) return candidates[0]!;
 
     const normalized = (s: string | null | undefined): string =>
       (s ?? '')
@@ -3443,32 +3570,46 @@ export class WorkshopNeedsService {
         .toLowerCase()
         .replace(/\s+/g, ' ')
         .replace(/ё/g, 'е');
+    const target = normalized(labelSnapshot);
+    if (target.length === 0) {
+      // Метки нет (площадь по роли) — единственная строка роли и есть материал.
+      return candidates.length === 1 ? candidates[0]! : null;
+    }
 
-    if (labelSnapshot) {
-      const target = normalized(labelSnapshot);
-      if (target.length > 0) {
-        for (const c of candidates) {
-          if (
-            normalized(c.fabricType) === target ||
-            normalized(c.name) === target
-          ) {
-            return c;
-          }
-        }
-        // Имя параметра — НАЧАЛО названия строки: «Молния» ↔ «Молния
-        // разъёмная 60 см». Так пишут техкарты, собранные руками, и без
-        // этого прохода такая строка оставалась без обогащения (описание
-        // без размера/материала/цвета), а правка её нормы в заказе не
-        // доезжала до закупки. Границу слова требуем обязательно, иначе
-        // «Шнур» цеплял бы «Шнуровку»; берём пару, только если она
-        // единственная — угадывать по-прежнему не хотим.
-        const byPrefix = candidates.filter((c) => {
-          const startsWith = (v: string) =>
-            v === target || v.startsWith(`${target} `);
-          return startsWith(normalized(c.name)) || startsWith(normalized(c.fabricType));
-        });
-        if (byPrefix.length === 1) return byPrefix[0]!;
+    for (const c of candidates) {
+      if (
+        normalized(c.fabricType) === target ||
+        normalized(c.name) === target
+      ) {
+        return c;
       }
+    }
+    // Имя параметра — НАЧАЛО названия строки: «Молния» ↔ «Молния
+    // разъёмная 60 см». Так пишут техкарты, собранные руками, и без
+    // этого прохода такая строка оставалась без обогащения (описание
+    // без размера/материала/цвета), а правка её нормы в заказе не
+    // доезжала до закупки. Границу слова требуем обязательно, иначе
+    // «Шнур» цеплял бы «Шнуровку»; берём пару, только если она
+    // единственная — угадывать по-прежнему не хотим.
+    const startsWith = (v: string, head: string): boolean =>
+      v === head || v.startsWith(`${head} `);
+    const byPrefix = candidates.filter(
+      (c) =>
+        startsWith(normalized(c.name), target) ||
+        startsWith(normalized(c.fabricType), target),
+    );
+    if (byPrefix.length === 1) return byPrefix[0]!;
+
+    // Единственная строка роли: берём её, только если имена совместимы —
+    // название или характеристика строки и метка параметра начинаются друг
+    // с друга («Zip» ↔ «Zip YKK», «Молния разъёмная» ↔ «Молния»). Чужой
+    // материал под той же ролью («Кнопки» под «Молнию») парой не считаем.
+    if (candidates.length === 1) {
+      const only = candidates[0]!;
+      const compatible = [normalized(only.name), normalized(only.fabricType)].some(
+        (v) => v.length > 0 && (startsWith(v, target) || startsWith(target, v)),
+      );
+      if (compatible) return only;
     }
     // Несколько строк под одну роль и нет однозначного совпадения —
     // не угадываем (см. ТЗ §4 «иначе не матчить, fallback на
@@ -3588,6 +3729,9 @@ export class WorkshopNeedsService {
       roleKey: head.roleKey,
       labelSnapshot: head.labelSnapshot,
       sourceLines,
+      // Аудит движка расчёта 13.09.2026, N1-3: тот же ключ, что у гейта
+      // «убрано из спецификации», — явная привязка `qtySourceRef`.
+      normId: categoryParameterId,
     });
     const widthCm = matchedLine?.plannedWidthCm ?? null;
     const densityGsm = matchedLine?.densityGsm ?? null;
@@ -4230,6 +4374,10 @@ const WORKSHOP_NEED_INCLUDE = {
           materialImageUrl: true,
           requiresColorSelection: true,
           selectedColorText: true,
+          // Аудит движка расчёта 13.09.2026, N1-3: явная привязка строки
+          // снимка к норме — первый ключ поиска обогащения на чтении, как и
+          // в расчёте (`findEnrichmentLine`).
+          qtySourceRef: true,
         },
       },
     },
@@ -4312,6 +4460,8 @@ interface EnrichmentRequirementRow {
   materialRole: string | null;
   name: string;
   fabricType: string | null;
+  /** Явная привязка к норме номенклатуры (см. `SourceLine.qtySourceRef`). */
+  qtySourceRef?: string | null;
   colorRule: string | null;
   hardwareSizeText: string | null;
   hardwareMaterialText: string | null;
@@ -4440,9 +4590,15 @@ function normalizeMatchKey(s: string | null | undefined): string {
  *   1. Точное совпадение `sourceId` со строкой того же типа источника
  *      (`ORDER_MATERIAL_REQUIREMENT` → snapshot row;
  *      `TECH_CARD_MATERIAL_LINE` → live row).
+ *   1a. Аудит движка расчёта 13.09.2026, N1-3: для строк по норме /
+ *      параметру номенклатуры (`PATTERN_PARAMETER_NORM`,
+ *      `PATTERN_SIZE_PARAMETER_VALUE`) — строка снимка той же расцветки с
+ *      явной привязкой `qtySourceRef === sourceId`.
  *   2. Иначе ищем по `materialRole` + normalized name/fabricType
- *      = normalized(sourceName).
- *   3. Иначе single-role match (если по роли ровно одна строка).
+ *      = normalized(sourceName), затем по префиксу имени.
+ *   3. Иначе single-role match (если по роли ровно одна строка) — только
+ *      при совместимом имени (N1-1: чужой материал под той же ролью парой
+ *      не считается).
  *   4. Иначе пустое обогащение (UI покажет голый description).
  *
  * Snapshot заказа всегда предпочтительнее live-техкарты — он зафиксирован
@@ -4461,6 +4617,20 @@ function resolveWorkshopNeedEnrichment(
   if (row.sourceType === 'ORDER_MATERIAL_REQUIREMENT' && row.sourceId) {
     const r = requirements.find((x) => x.id === row.sourceId);
     if (r) return enrichmentFromRequirement(r);
+  }
+
+  // 1a. Явная привязка снимка к норме / параметру (N1-3) — той же расцветки.
+  if (
+    (row.sourceType === 'PATTERN_PARAMETER_NORM' ||
+      row.sourceType === 'PATTERN_SIZE_PARAMETER_VALUE') &&
+    row.sourceId
+  ) {
+    const bound = requirements.find(
+      (x) =>
+        x.qtySourceRef === row.sourceId &&
+        x.orderVariantId === row.orderVariantId,
+    );
+    if (bound) return enrichmentFromRequirement(bound);
   }
 
   // 2./3. Совпадение по материал-роли (для PATTERN_PARAMETER_NORM /
@@ -4482,28 +4652,43 @@ function resolveWorkshopNeedEnrichment(
         r.materialRole === role &&
         r.orderVariantId === row.orderVariantId,
     );
+    // Площадь по роли (`PATTERN_MATERIAL_AREA`, sourceName = имя строки
+    // либо роль) и строки без имени: единственная строка роли — она и есть.
+    if (target.length === 0) {
+      return reqMatches.length === 1
+        ? enrichmentFromRequirement(reqMatches[0]!)
+        : EMPTY_ENRICHMENT;
+    }
     const reqExact = reqMatches.find(
       (r) =>
-        target.length > 0 &&
-        (normalizeMatchKey(r.name) === target ||
-          normalizeMatchKey(r.fabricType) === target),
+        normalizeMatchKey(r.name) === target ||
+        normalizeMatchKey(r.fabricType) === target,
     );
     if (reqExact) return enrichmentFromRequirement(reqExact);
-    if (reqMatches.length === 1) {
-      return enrichmentFromRequirement(reqMatches[0]!);
-    }
     // Тот же проход «имя параметра — начало названия строки», что и в
     // `findEnrichmentLine` на стороне расчёта: правила чтения и расчёта
     // обязаны совпадать, иначе UI покажет одно обогащение, а посчитано
     // будет по другому.
-    const startsWithTarget = (v: string | null | undefined): boolean => {
-      const n = normalizeMatchKey(v);
-      return target.length > 0 && (n === target || n.startsWith(`${target} `));
-    };
+    const startsWith = (v: string, head: string): boolean =>
+      v === head || v.startsWith(`${head} `);
+    const startsWithTarget = (v: string | null | undefined): boolean =>
+      startsWith(normalizeMatchKey(v), target);
     const reqPrefix = reqMatches.filter(
       (r) => startsWithTarget(r.name) || startsWithTarget(r.fabricType),
     );
     if (reqPrefix.length === 1) return enrichmentFromRequirement(reqPrefix[0]!);
+    // Аудит движка расчёта 13.09.2026, N1-1: single-role fallback — только
+    // при совместимом имени, зеркало `findEnrichmentLine`. Площадь по роли
+    // (`PATTERN_MATERIAL_AREA`) ищет строку по роли без метки — как в расчёте.
+    if (reqMatches.length === 1) {
+      const only = reqMatches[0]!;
+      const compatible =
+        row.sourceType === 'PATTERN_MATERIAL_AREA' ||
+        [normalizeMatchKey(only.name), normalizeMatchKey(only.fabricType)].some(
+          (v) => v.length > 0 && (startsWith(v, target) || startsWith(target, v)),
+        );
+      if (compatible) return enrichmentFromRequirement(only);
+    }
   }
 
   return EMPTY_ENRICHMENT;
@@ -4576,6 +4761,16 @@ function mergeOrderWhere(
  * пересобирает спецификацию, но цена поставщика, согласованное
  * «К закупке» и выбранный поставщик из спецификации не выводятся —
  * значит и терять их при пересборке нельзя.
+ *
+ * Аудит движка расчёта 13.09.2026, N2-7: `comment` и `expectedDeliveryDate`
+ * — такие же поля закупщика (ссылка на поставщика, договорённость о цене,
+ * дата поставки); без них в переносе каждый авто-пересчёт по нетронутой
+ * строке молча стирал их.
+ *
+ * Аудит движка расчёта 13.09.2026, N2-4: `calculatedQty` СТАРОЙ строки —
+ * не для переноса, а для сверки: по нему `takePurchaseCarry` понимает,
+ * принял ли закупщик прежнюю теорию как есть («К закупке» = расчёт) или
+ * поставил своё число.
  */
 const PURCHASE_CARRY_SELECT = {
   sourceType: true,
@@ -4583,6 +4778,7 @@ const PURCHASE_CARRY_SELECT = {
   orderVariantId: true,
   materialRole: true,
   unit: true,
+  calculatedQty: true,
   purchaseQty: true,
   packSize: true,
   quotedPrice: true,
@@ -4591,17 +4787,32 @@ const PURCHASE_CARRY_SELECT = {
   selectedSupplierCatalogItemId: true,
   supplierNameText: true,
   purchaseItemNameText: true,
+  comment: true,
+  expectedDeliveryDate: true,
 } as const;
 
 type PurchaseCarryRow = Prisma.WorkshopNeedGetPayload<{
   select: typeof PURCHASE_CARRY_SELECT;
 }>;
 
-/** Только закупочная часть строки — без ключа идентичности. */
+/** Только закупочная часть строки — без ключа идентичности и без старого расчёта. */
 type PurchaseCarryFields = Omit<
   PurchaseCarryRow,
-  'sourceType' | 'sourceId' | 'orderVariantId' | 'materialRole' | 'unit'
+  | 'sourceType'
+  | 'sourceId'
+  | 'orderVariantId'
+  | 'materialRole'
+  | 'unit'
+  | 'calculatedQty'
 >;
+
+/**
+ * Закупочный блок старой строки вместе с её прежним расчётом (N2-4): блок
+ * переносится, расчёт нужен только для сверки «К закупке» с новой теорией.
+ */
+type PurchaseCarry = PurchaseCarryFields & {
+  calculatedQty: PurchaseCarryRow['calculatedQty'];
+};
 
 /**
  * Ключ идентичности строки потребности ПОПЕРЁК пересчёта.
@@ -4644,8 +4855,8 @@ function purchaseCarryKey(parts: {
  */
 function buildPurchaseCarry(
   rows: PurchaseCarryRow[],
-): Map<string, PurchaseCarryFields | null> {
-  const map = new Map<string, PurchaseCarryFields | null>();
+): Map<string, PurchaseCarry | null> {
+  const map = new Map<string, PurchaseCarry | null>();
   for (const row of rows) {
     const key = purchaseCarryKey(row);
     if (map.has(key)) {
@@ -4666,14 +4877,29 @@ function buildPurchaseCarry(
 }
 
 /**
- * Закупочный блок для пересозданной строки. Пусто — если старой строки
- * с таким ключом не было, ключ оказался неоднозначным или у строки
+ * Закупочный блок для пересозданной строки. `fields` пусто — если старой
+ * строки с таким ключом не было, ключ оказался неоднозначным или у строки
  * закупочных данных и не было.
+ *
+ * Аудит движка расчёта 13.09.2026, N2-4: «К закупке» переезжает не вслепую,
+ * а со сверкой с новой теорией. «Принять теорию» и свой ЗП цеха ставят
+ * `purchaseQty` массово, поэтому у большинства строк это копия СТАРОГО
+ * расчёта — и после смены нормы/тиража смета и `need_link.qty` ERP считались
+ * по нему молча. Правило:
+ *   - `purchaseQty` совпадало со старым `calculatedQty` (закупщик принял
+ *     теорию как есть) → следует за новой теорией;
+ *   - закупщик поставил СВОЁ число, а расчёт изменился → число переносим,
+ *     но возвращаем `qtyNote` — оно уходит в `warnings` ответа и в
+ *     `calculationNote` строки, чтобы разницу увидели;
+ *   - расчёт не изменился → своё число переносим молча, как раньше.
  */
 function takePurchaseCarry(
-  carry: Map<string, PurchaseCarryFields | null>,
+  carry: Map<string, PurchaseCarry | null>,
   computed: ComputedNeed,
-): PurchaseCarryFields | Record<string, never> {
+): {
+  fields: PurchaseCarryFields | Record<string, never>;
+  qtyNote: string | null;
+} {
   const keyAt = (sourceId: string, orderVariantId: string | null): string =>
     purchaseCarryKey({
       sourceType: computed.sourceType,
@@ -4683,8 +4909,32 @@ function takePurchaseCarry(
       unit: computed.unit,
     });
 
+  const reconcile = (
+    old: PurchaseCarry | null | undefined,
+  ): { fields: PurchaseCarryFields | Record<string, never>; qtyNote: string | null } => {
+    if (old == null) return { fields: {}, qtyNote: null };
+    const { calculatedQty: oldCalculatedQty, ...fields } = old;
+    if (fields.purchaseQty == null) return { fields, qtyNote: null };
+    if (fields.purchaseQty.equals(oldCalculatedQty)) {
+      return {
+        fields: { ...fields, purchaseQty: computed.calculatedQty },
+        qtyNote: null,
+      };
+    }
+    if (oldCalculatedQty.equals(computed.calculatedQty)) {
+      return { fields, qtyNote: null };
+    }
+    return {
+      fields,
+      qtyNote:
+        `«${computed.description}»: «К закупке» ${fields.purchaseQty.toString()} ${computed.unit} ` +
+        `перенесено с прежнего расчёта (${oldCalculatedQty.toString()} ${computed.unit}), ` +
+        `новый расчёт — ${computed.calculatedQty.toString()} ${computed.unit}. Сверьте количество к закупке.`,
+    };
+  };
+
   const primary = keyAt(computed.sourceId, computed.orderVariantId ?? null);
-  if (carry.has(primary)) return carry.get(primary) ?? {};
+  if (carry.has(primary)) return reconcile(carry.get(primary));
 
   // Материал без цвета, схлопнутый в одну строку на заказ: до схлопывания
   // цена лежала на строке РАСЦВЕТКИ, по order-level ключу её не найти.
@@ -4693,9 +4943,9 @@ function takePurchaseCarry(
   // ключ) уважаем как и раньше: молча приписать чужую цену нельзя.
   for (const from of computed.mergedFrom ?? []) {
     const legacy = keyAt(from.sourceId, from.orderVariantId);
-    if (carry.has(legacy)) return carry.get(legacy) ?? {};
+    if (carry.has(legacy)) return reconcile(carry.get(legacy));
   }
-  return {};
+  return { fields: {}, qtyNote: null };
 }
 
 // ---------------------------------------------------------------------------
