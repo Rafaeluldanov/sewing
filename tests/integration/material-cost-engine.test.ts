@@ -21,10 +21,8 @@ import { loginAs, refreshAdminCookie, startTestApp, stopTestApp, type TestApp } 
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
-import { ErpProductionService } from '../../apps/api/src/modules/integrations/erp-production.service.js';
-import { OrderFactCostService } from '../../apps/api/src/modules/costs/order-fact-cost.service.js';
-import { PassportRealCostService } from '../../apps/api/src/modules/costs/passport-real-cost.service.js';
-import { OrderMaterialCostService } from '../../apps/api/src/modules/costs/order-material-cost.service.js';
+import type { ErpProductionService } from '../../apps/api/src/modules/integrations/erp-production.service.js';
+import { buildErpProductionService } from '../utils/erp-services';
 
 describeWithDb('integration — движок материала факта: отменённые строки, взвешенная цена, USD', () => {
   let t: TestApp;
@@ -178,11 +176,8 @@ describeWithDb('integration — движок материала факта: от
 
   /** Очередь сдачи в ERP на тестовом prisma (DI-версия требует TenantContext HTTP-запроса). */
   function erpQueue(): ErpProductionService {
-    const prisma = t.prisma as any;
-    return new ErpProductionService(
-      prisma,
-      new OrderFactCostService(prisma, new PassportRealCostService(prisma), new OrderMaterialCostService(prisma)),
-    );
+    // Слияние правок аудита 13.09: очередь сдачи зависит от ProductionDocumentsService (D1-3) — общий хелпер.
+    return buildErpProductionService(t);
   }
 
   // ---------------------------------------------------------------------------

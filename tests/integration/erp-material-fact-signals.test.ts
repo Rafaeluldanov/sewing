@@ -24,11 +24,7 @@ import { loginAs, startTestApp, stopTestApp, type TestApp } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
-import { ErpConsumptionService } from '../../apps/api/src/modules/integrations/erp-consumption.service.js';
-import { ErpProductionService } from '../../apps/api/src/modules/integrations/erp-production.service.js';
-import { OrderFactCostService } from '../../apps/api/src/modules/costs/order-fact-cost.service.js';
-import { PassportRealCostService } from '../../apps/api/src/modules/costs/passport-real-cost.service.js';
-import { OrderMaterialCostService } from '../../apps/api/src/modules/costs/order-material-cost.service.js';
+import { buildErpConsumptionService, buildErpProductionService } from '../utils/erp-services';
 
 const ERP_NOMENCLATURE = '11111111-1111-4111-8111-111111111111';
 const ERP_UNIT = '22222222-2222-4222-8222-222222222222';
@@ -83,12 +79,10 @@ describeWithDb('integration — материал под ERP: сигналы бе
     });
   });
 
-  function factCost() {
-    const prisma = t.prisma as any;
-    return new OrderFactCostService(prisma, new PassportRealCostService(prisma), new OrderMaterialCostService(prisma));
-  }
-  const consumptionQueue = () => new ErpConsumptionService(t.prisma as any);
-  const productionQueue = () => new ErpProductionService(t.prisma as any, factCost());
+  // Слияние правок аудита 13.09: очереди ERP получили зависимость от ProductionDocumentsService (D1-2/D1-3) —
+  // собираем их общим хелпером, как erp-production-document.test.ts.
+  const consumptionQueue = () => buildErpConsumptionService(t);
+  const productionQueue = () => buildErpProductionService(t);
 
   /** Заказ 10 шт: «Кулирка» (0,5 кг/шт) + «Нитки» (2 шт/шт, своя, чтобы список строк не был пуст); расчёт потребности. */
   async function orderWithNeeds(opts: { fromErp?: boolean; threads?: boolean } = {}) {

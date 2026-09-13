@@ -52,6 +52,8 @@ describe('Shared workshop-needs — source recon + classification', () => {
       'PATTERN_PARAMETER_NORM',
       'PATTERN_SIZE_PARAMETER_VALUE',
       'PATTERN_MATERIAL_AREA',
+      // Ручная строка закупщика (7b6b61e, добор потребности) — ассерт обновлён аудитом 13.09.2026.
+      'MANUAL_ADDITION',
     ]);
   });
 
