@@ -2163,6 +2163,19 @@ export class WorkshopNeedsService {
           'Часть строк под заказом поставщику ERP — пересчитать их нельзя, сначала отвяжите заказ в ERP.',
         );
       }
+      // Аудит движка расчёта 13.09.2026, D1-13: факт списания ERP привязан к строке по id
+      // (`ErpMaterialConsumptionLine.workshopNeedId`, `onDelete: SetNull`), а складских движений
+      // у материала ERP в цехе нет — после `erp-unlink` оба гарда выше молчат, и пересоздание
+      // строки отвязывало бы списанное: план→факт терял факт ERP целиком. Гард — по образцу
+      // `stockMovements`.
+      const needsWithErpFact = await this.prisma.workshopNeed.count({
+        where: { ...doomedWhere, erpConsumptionLines: { some: {} } },
+      });
+      if (needsWithErpFact > 0) {
+        throw new WorkshopNeedErpStateException(
+          'По части строк ERP уже списала материал по выпуску — пересчитать их нельзя: факт списания привязан к строке.',
+        );
+      }
     }
 
     // 5. Транзакция: удаляем нужные строки и пишем новые.
