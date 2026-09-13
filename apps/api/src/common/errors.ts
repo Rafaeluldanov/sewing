@@ -4421,6 +4421,27 @@ export class PayrollAccrualLineAlreadyPaidException extends BusinessException {
 }
 
 /**
+ * Аудит движка расчёта 13.09.2026, K1: строка ведомости, у которой есть
+ * начисления (`amountPieceworkRub + amountSalaryRub > 0`), но «к выплате»
+ * `amountToPayRub ≤ 0` (удержание/зачёт аванса ≥ начислений). Раньше `pay`
+ * такую строку молча пропускал: выплата не создавалась, начисления оставались
+ * «не выплаченными» и уходили в следующую ведомость повторно, а удержание
+ * сгорало. Теперь `PATCH …/lines/:lineId` и `POST …/pay` отвечают 422 —
+ * менеджер уменьшает удержание до суммы меньше начислений, остаток переносит
+ * в следующую ведомость. Строка без начислений с одним удержанием сюда не
+ * попадает (повторно брать нечего) и ведёт себя как раньше.
+ */
+export class PayrollAccrualLineNonPositiveException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'PAYROLL_ACCRUAL_LINE_NON_POSITIVE',
+      message,
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
  * Документ содержит строки с `manualAdjustRub != 0`, но
  * `PayrollPayoutLineKind` не содержит значения `ADJUSTMENT`.
  * Проводка заблокирована до расширения enum в STEP 6.3/6.4.

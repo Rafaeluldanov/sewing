@@ -2153,8 +2153,8 @@ DTO `WorkshopNeedDto` получил `erpManagedAt/erpPurchaseOrderId/erpPurchas
 | POST  | `/api/payroll/accrual-documents`                                | SHOP_MANAGER, ADMIN | Body `CreatePayrollAccrualDocumentDto` (`{ accrualDate, managerComment? }`). Создаёт `DRAFT` и рассчитывает строки по всем сотрудникам: APPROVED `OperationEntry` (`createdAt ≤ accrualDate 23:59:59.999 UTC`, не в активных выплатах) + `SalaryEntry` (`date ≤ accrualDate`, не в активных выплатах). Строка создаётся только при `amountPieceworkRub + amountSalaryRub > 0`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_CREATED`. |
 | GET   | `/api/payroll/accrual-documents/:id`                            | SHOP_MANAGER, ADMIN | Карточка со строками `lines` (полный `PayrollAccrualDocumentDto`). 404 `PAYROLL_ACCRUAL_DOCUMENT_NOT_FOUND` при отсутствии. |
 | POST  | `/api/payroll/accrual-documents/:id/recompute`                  | SHOP_MANAGER, ADMIN | Только DRAFT. Пересчитывает авто-часть строк; `manualAdjustRub` / `manualComment` сохраняются по `employeeId`. Строка без начислений и `manualAdjustRub = 0` удаляется. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_RECOMPUTED`. |
-| PATCH | `/api/payroll/accrual-documents/:id/lines/:lineId`              | SHOP_MANAGER, ADMIN | Только DRAFT. Body `UpdatePayrollAccrualDocumentLineDto` (`{ manualAdjustRub?, manualComment? }`). После изменения пересчитываются `amountToPayRub` и итоги документа. 404 `PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_LINE_UPDATED`. |
-| POST  | `/api/payroll/accrual-documents/:id/pay`                        | SHOP_MANAGER, ADMIN | Только DRAFT. Документ переходит в `PAID`. Для каждой строки с `amountToPayRub > 0` создаётся `PayrollPayout` (статус `ISSUED`). Перед созданием повторная проверка активной уникальности → 422 `PAYROLL_ACCRUAL_LINE_ALREADY_PAID`. **STEP 6.4:** если `manualAdjustRub ≠ 0`, создаётся дополнительная `PayrollPayoutLine` с `kind = ADJUSTMENT`, `operationEntryId = null`, `salaryEntryId = null`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_PAID` (payload содержит `adjustmentsCount` / `totalAdjustRub`). |
+| PATCH | `/api/payroll/accrual-documents/:id/lines/:lineId`              | SHOP_MANAGER, ADMIN | Только DRAFT. Body `UpdatePayrollAccrualDocumentLineDto` (`{ manualAdjustRub?, manualComment? }`). После изменения пересчитываются `amountToPayRub` и итоги документа. У строки с начислениями (`amountPieceworkRub + amountSalaryRub > 0`) итог обязан остаться `> 0` — иначе 422 `PAYROLL_ACCRUAL_LINE_NON_POSITIVE` (K1). 404 `PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_LINE_UPDATED`. |
+| POST  | `/api/payroll/accrual-documents/:id/pay`                        | SHOP_MANAGER, ADMIN | Только DRAFT. Строка «начисления есть, `amountToPayRub ≤ 0`» блокирует проведение → 422 `PAYROLL_ACCRUAL_LINE_NON_POSITIVE`, документ остаётся DRAFT (K1). Документ переходит в `PAID`. Для каждой строки с `amountToPayRub > 0` создаётся `PayrollPayout` (статус `ISSUED`); строка без начислений с одним удержанием пропускается. Перед созданием повторная проверка активной уникальности → 422 `PAYROLL_ACCRUAL_LINE_ALREADY_PAID`. **STEP 6.4:** если `manualAdjustRub ≠ 0`, создаётся дополнительная `PayrollPayoutLine` с `kind = ADJUSTMENT`, `operationEntryId = null`, `salaryEntryId = null`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_PAID` (payload содержит `adjustmentsCount` / `totalAdjustRub`). |
 | POST  | `/api/payroll/accrual-documents/:id/cancel`                     | SHOP_MANAGER, ADMIN | Только DRAFT. `DRAFT → CANCELLED`. Body `CancelPayrollAccrualDocumentDto` (`{ reason? }`). PAID нельзя отменить в MVP. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_CANCELLED`. |
 
 Snapshot строки (`PayrollAccrualDocumentLine.snapshot`):
@@ -2175,7 +2175,16 @@ Snapshot строки (`PayrollAccrualDocumentLine.snapshot`):
 - `PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND` (404) — строка не найдена
   в документе;
 - `PAYROLL_ACCRUAL_LINE_ALREADY_PAID` (422) — начисление из snapshot
-  уже входит в активную выплату на момент проводки.
+  уже входит в активную выплату на момент проводки;
+- `PAYROLL_ACCRUAL_LINE_NON_POSITIVE` (422) — у строки с начислениями
+  `amountToPayRub ≤ 0` (удержание/зачёт аванса ≥ начислений, в т.ч.
+  «в ноль»). Отдаётся на `PATCH` строки и на `pay`. Аудит движка расчёта
+  13.09.2026, K1: раньше `pay` такую строку молча пропускал — выплата не
+  создавалась, её начисления оставались «не выплаченными» и уходили в
+  следующую ведомость повторно, удержание сгорало. Менеджер уменьшает
+  корректировку так, чтобы к выплате осталось `> 0`, остаток переносит в
+  следующую ведомость. Строка без начислений с одним удержанием не
+  задета (пропускается при `pay`, как раньше).
 
 **`manualAdjustRub` и ADJUSTMENT (STEP 6.4):** при `pay` документа каждая строка с
 `manualAdjustRub ≠ 0` создаёт дополнительную `PayrollPayoutLine`:
