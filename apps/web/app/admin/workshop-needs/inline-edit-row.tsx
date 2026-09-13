@@ -68,6 +68,8 @@ import {
 } from './thread-units';
 import {
   isButtonNeed,
+  isPackMode,
+  packFieldToSubmit,
   packagesToPieces,
   piecesToPackages,
   pricePerPackToPiece,
@@ -258,6 +260,15 @@ export function InlineEditWorkshopNeedRow({
     need.sourceName,
     need.description,
   );
+  // Аудит движка расчёта 13.09.2026, N2-1: режим упаковок — только при
+  // СОХРАНЁННОМ packSize. ERP (`:price`/`:qty`) и окно правки во вкладке
+  // заказа пишут purchaseQty/quotedPrice без packSize; из одних штук
+  // упаковки не вывести, и такая строка показывала пустые «Упаковок» /
+  // «Цена за упаковку», а сохранение уносило пустоту как «стёр».
+  // Без packSize кнопочная строка ведёт себя как обычная («К закупке»,
+  // «Цена за 1 шт» с исходными значениями) + поле «Шт/упак»; после его
+  // сохранения строка перезагрузится уже в упаковках.
+  const packMode = isPackMode(isButton, need.packSize);
 
   // Исходные значения в единицах ОТОБРАЖЕНИЯ (для ниток — ярды /
   // цена за бобину; иначе — как в БД). Считаем один раз: если поле
@@ -282,15 +293,21 @@ export function InlineEditWorkshopNeedRow({
 
   // Кнопки: исходные значения «Упаковок» / «Шт/упак» / «Цена за
   // упаковку» восстанавливаем из поштучных purchaseQty / quotedPrice и
-  // сохранённого packSize.
-  const [packSizeValue, setPackSizeValue] = useState<string>(
-    need.packSize ?? '',
-  );
+  // сохранённого packSize. Исходные значения держим отдельно: поле
+  // уходит на backend только если отличается от них (N2-1).
+  const initialPackSize = need.packSize ?? '';
+  const initialPackagesDisplay = packMode
+    ? piecesToPackages(need.purchaseQty, need.packSize)
+    : '';
+  const initialPackPriceDisplay = packMode
+    ? pricePerPieceToPack(need.quotedPrice, need.packSize)
+    : '';
+  const [packSizeValue, setPackSizeValue] = useState<string>(initialPackSize);
   const [packagesValue, setPackagesValue] = useState<string>(
-    isButton ? piecesToPackages(need.purchaseQty, need.packSize) : '',
+    initialPackagesDisplay,
   );
   const [packPriceValue, setPackPriceValue] = useState<string>(
-    isButton ? pricePerPieceToPack(need.quotedPrice, need.packSize) : '',
+    initialPackPriceDisplay,
   );
 
   // Комментарий закупщика по умолчанию скрыт. Кнопка-toggle
@@ -321,7 +338,7 @@ export function InlineEditWorkshopNeedRow({
   const unitLabel = isThread ? 'ярд' : need.unit;
   const priceLabel = isThread
     ? 'Цена за 1 боб.'
-    : isButton
+    : packMode
       ? 'Цена за упаковку'
       : formatPriceLabel(need.unit);
 
@@ -339,7 +356,7 @@ export function InlineEditWorkshopNeedRow({
   // Сумма: для кнопок — упаковок × цена за упаковку; для ниток —
   // (ярды / 4000) × цена за боб.; иначе — цена за единицу × кол-во.
   let lineTotal: number | null;
-  if (isButton) {
+  if (packMode) {
     const packagesNum = parseDecimalString(packagesValue);
     const packPriceNum = parseDecimalString(packPriceValue);
     lineTotal =
@@ -355,32 +372,36 @@ export function InlineEditWorkshopNeedRow({
   }
   const symbol = currencySymbol(currency);
 
-  // Кнопки: на backend уходит поштучно. purchaseQty (шт) = упаковок ×
-  // шт/упак, quotedPrice (за 1 шт) = цена за упаковку ÷ шт/упак,
-  // packSize = шт/упак.
+  // Кнопки в режиме упаковок: на backend уходит поштучно. purchaseQty
+  // (шт) = упаковок × шт/упак, quotedPrice (за 1 шт) = цена за упаковку
+  // ÷ шт/упак, packSize = шт/упак.
   //
   // На backend пустое значение означает «очистить поле», а отсутствие
   // поля — «не трогать» (`trackOptional`: absent → changed=false).
-  // Поэтому различаем два разных «пусто»:
-  //   ''   — закупщик стёр значение сам, очистку передаём;
-  //   null — пересчитать нечем («Шт/упак» пуст), поле не отправляем.
-  //
-  // Раньше скрытые поля рендерились всегда и без «Шт/упак» уходили
-  // пустыми, поэтому ЛЮБОЕ сохранение строки — даже правка одного
-  // поставщика — обнуляло согласованное «К закупке» и цену.
-  const canConvertPacks = packSizeValue.trim() !== '';
-  const submitButtonQty =
-    packagesValue.trim() === ''
-      ? '' // закупщик очистил «Упаковок» — так и передаём
-      : canConvertPacks
-        ? packagesToPieces(packagesValue, packSizeValue)
-        : null; // «Шт/упак» пуст — из упаковок в штуки не перевести
-  const submitButtonPrice =
-    packPriceValue.trim() === ''
-      ? ''
-      : canConvertPacks
-        ? pricePerPackToPiece(packPriceValue, packSizeValue)
-        : null;
+  // Аудит движка расчёта 13.09.2026, N2-1: поле уходит ТОЛЬКО если
+  // его (или «Шт/упак») тронули — как у ниток; иначе любое сохранение
+  // строки (даже смена статуса) переписывало purchaseQty/quotedPrice
+  // производным значением, а без packSize — пустотой, т.е. null.
+  //   null — не отправлять (не менялось / «Шт/упак» стёрт);
+  //   ''   — закупщик стёр значение сам, очистку передаём.
+  const submitButtonQty = packMode
+    ? packFieldToSubmit({
+        value: packagesValue,
+        initialValue: initialPackagesDisplay,
+        packSize: packSizeValue,
+        initialPackSize,
+        convert: packagesToPieces,
+      })
+    : null;
+  const submitButtonPrice = packMode
+    ? packFieldToSubmit({
+        value: packPriceValue,
+        initialValue: initialPackPriceDisplay,
+        packSize: packSizeValue,
+        initialPackSize,
+        convert: pricePerPackToPiece,
+      })
+    : null;
 
   // Значения, которые реально уйдут на backend (всегда в метрах /
   // цене за метр). Если поле не редактировали — отправляем исходное
@@ -497,7 +518,7 @@ export function InlineEditWorkshopNeedRow({
       <section className="wn-zone wn-zone--buy">
         <div className="wn-zone__cap">Закупка</div>
         <div className="wn-zone__body wn-zone__body--buy">
-          {isButton ? (
+          {packMode ? (
             <>
               <label className="wn-field">
                 <span className="wn-field__lab">Упаковок</span>
@@ -535,38 +556,64 @@ export function InlineEditWorkshopNeedRow({
               )}
             </>
           ) : (
-            <label className="wn-field">
-              <span className="wn-field__lab">
-                К закупке{isThread ? ', ярд' : ''}
-              </span>
-              <input
-                name={isThread ? undefined : 'purchaseQty'}
-                type="text"
-                inputMode="decimal"
-                value={purchaseQtyValue}
-                onChange={(e) => setPurchaseQtyValue(e.target.value)}
-                placeholder={calcQtyDisplay}
-                disabled={isCancelled || isLockedByPo}
-              />
-              {isThread && !(isCancelled || isLockedByPo) && (
+            <>
+              <label className="wn-field">
+                <span className="wn-field__lab">
+                  К закупке{isThread ? ', ярд' : ''}
+                </span>
                 <input
-                  type="hidden"
-                  name="purchaseQty"
-                  value={submitPurchaseQty ?? ''}
+                  name={isThread ? undefined : 'purchaseQty'}
+                  type="text"
+                  inputMode="decimal"
+                  value={purchaseQtyValue}
+                  onChange={(e) => setPurchaseQtyValue(e.target.value)}
+                  placeholder={calcQtyDisplay}
+                  disabled={isCancelled || isLockedByPo}
                 />
+                {isThread && !(isCancelled || isLockedByPo) && (
+                  <input
+                    type="hidden"
+                    name="purchaseQty"
+                    value={submitPurchaseQty ?? ''}
+                  />
+                )}
+              </label>
+              {/* N2-1: кнопочная строка без сохранённого packSize —
+                  штуки как есть + поле «Шт/упак»; после его сохранения
+                  строка перезагрузится в режиме упаковок. */}
+              {isButton && (
+                <label className="wn-field">
+                  <span className="wn-field__lab">Шт/упак</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={packSizeValue}
+                    onChange={(e) => setPackSizeValue(e.target.value)}
+                    placeholder="0"
+                    title="Укажите штук в упаковке — после сохранения строка перейдёт в упаковки"
+                    disabled={isCancelled || isLockedByPo}
+                  />
+                  {!(isCancelled || isLockedByPo) && (
+                    <input
+                      type="hidden"
+                      name="packSize"
+                      value={packSizeValue.trim()}
+                    />
+                  )}
+                </label>
               )}
-            </label>
+            </>
           )}
 
           <label className="wn-field">
             <span className="wn-field__lab">{priceLabel}</span>
             <input
-              name={isThread || isButton ? undefined : 'quotedPrice'}
+              name={isThread || packMode ? undefined : 'quotedPrice'}
               type="text"
               inputMode="decimal"
-              value={isButton ? packPriceValue : quotedPriceValue}
+              value={packMode ? packPriceValue : quotedPriceValue}
               onChange={(e) =>
-                isButton
+                packMode
                   ? setPackPriceValue(e.target.value)
                   : setQuotedPriceValue(e.target.value)
               }
@@ -576,7 +623,7 @@ export function InlineEditWorkshopNeedRow({
             {isThread && !isCancelled && (
               <input type="hidden" name="quotedPrice" value={submitQuotedPrice ?? ''} />
             )}
-            {isButton && !isCancelled && submitButtonPrice !== null && (
+            {packMode && !isCancelled && submitButtonPrice !== null && (
               <input type="hidden" name="quotedPrice" value={submitButtonPrice} />
             )}
           </label>

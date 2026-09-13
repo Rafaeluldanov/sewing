@@ -24,10 +24,16 @@
  *   2. иначе — текущие `WorkshopNeed` через
  *      `getOrderWorkshopNeeds(order.id)`. Группируем по
  *      `getWorkshopNeedKind(needs)` и считаем `purchaseQty ??
- *      calculatedQty × quotedPrice`. Только RUB-строки попадают в
+ *      calculatedQty × цена`, где цена — `erpUnitPriceRub` для строки
+ *      под ERP, иначе `quotedPrice`. Только RUB-строки попадают в
  *      итог; USD-строки выводятся отдельным warning, поскольку
  *      курс задаётся вручную в `completeCalculation` и нам его
- *      пока нет.
+ *      пока нет. Аудит движка расчёта 13.09.2026, E1-5: к потребности
+ *      подмешиваются те же слагаемые, что смета кладёт в «Прочее» —
+ *      прочие расходы «в себестоимость» (`listOrderExtraCosts`),
+ *      логистика и разработка лекала, — иначе итог менялся после
+ *      «Завершить расчёт» без изменения данных. Арифметика — в
+ *      `./order-planned-cost-preview.ts` (там же unit-тест).
  *
  * Операции (`order.operationCostPlanRub`):
  *   - всегда показываются как отдельная строка;
@@ -53,14 +59,22 @@ import {
   type OrderCostEstimateDto,
   type OrderCostEstimateLineKind,
 } from '@sewing/shared/order-cost-estimates';
-import {
-  getWorkshopNeedKind,
-  type WorkshopNeedKind,
-  type WorkshopNeedListItemDto,
+import type {
+  WorkshopNeedKind,
+  WorkshopNeedListItemDto,
 } from '@sewing/shared/workshop-needs';
+import type { OrderExtraCostDto } from '@sewing/shared/order-extra-costs';
 import type { OrderDetailDto } from '@sewing/shared/orders';
 import { ApiRequestError } from '@/lib/api';
+import { listOrderExtraCosts } from '@/lib/order-extra-costs-api';
 import { getOrderWorkshopNeeds } from '@/lib/workshop-needs-api';
+import {
+  addToBucket,
+  bucketsAreEmpty,
+  buildPreviewBuckets,
+  emptyBuckets,
+  type SummaryBuckets,
+} from './order-planned-cost-preview';
 
 interface Props {
   order: OrderDetailDto;
@@ -75,15 +89,6 @@ interface Props {
 
 /** Источник, на основе которого построена сводка. */
 type CostSource = 'estimate' | 'workshopNeeds' | 'empty';
-
-interface SummaryBuckets {
-  materialsRub: number;
-  hardwareRub: number;
-  applicationRub: number;
-  otherRub: number;
-  /** Суммы по строкам в RUB — одна и та же логика для estimate / needs. */
-  hasUsdLines: boolean;
-}
 
 const RUB_FORMATTER = new Intl.NumberFormat('ru-RU', {
   style: 'currency',
@@ -110,13 +115,7 @@ function fmtRubPerUnit(v: number | null): string {
  * никогда не возникает — расчёт зафиксирован в рублях.
  */
 function bucketsFromEstimate(estimate: OrderCostEstimateDto): SummaryBuckets {
-  const buckets: SummaryBuckets = {
-    materialsRub: 0,
-    hardwareRub: 0,
-    applicationRub: 0,
-    otherRub: 0,
-    hasUsdLines: false,
-  };
+  const buckets = emptyBuckets();
   for (const line of estimate.lines) {
     const kind = (line.kind as OrderCostEstimateLineKind) ?? 'OTHER';
     const total = Number(line.lineTotalRub) || 0;
@@ -137,100 +136,6 @@ function mapEstimateKind(
     return kind;
   }
   return 'OTHER';
-}
-
-function addToBucket(
-  buckets: SummaryBuckets,
-  kind: WorkshopNeedKind,
-  amountRub: number,
-): void {
-  if (!Number.isFinite(amountRub)) return;
-  switch (kind) {
-    case 'MATERIAL':
-      buckets.materialsRub += amountRub;
-      break;
-    case 'HARDWARE':
-      buckets.hardwareRub += amountRub;
-      break;
-    case 'APPLICATION':
-      buckets.applicationRub += amountRub;
-      break;
-    case 'OTHER':
-    default:
-      buckets.otherRub += amountRub;
-      break;
-  }
-}
-
-/**
- * Считаем суммы по kind из текущих `WorkshopNeed`. До завершения
- * расчёта это «прикидка», поэтому:
- *   - используем `purchaseQty ?? calculatedQty` как финальное
- *     количество (это та же логика, что у backend в
- *     `OrderCostEstimatesService.completeCalculation` — см.
- *     `apps/api/src/modules/orders/order-cost-estimates.service.ts`);
- *   - умножаем на `quotedPrice` только для RUB-строк;
- *   - USD-строки помечаем флагом, чтобы UI вывел warning «итог
- *     в рублях будет доступен после ввода курса».
- *
- * Строки с пустой ценой / нулевой ценой / отменённые сознательно
- * пропускаем (нечего класть в итог).
- */
-function bucketsFromWorkshopNeeds(
-  needs: WorkshopNeedListItemDto[],
-): SummaryBuckets {
-  const buckets: SummaryBuckets = {
-    materialsRub: 0,
-    hardwareRub: 0,
-    applicationRub: 0,
-    otherRub: 0,
-    hasUsdLines: false,
-  };
-  for (const need of needs) {
-    if (need.status === 'CANCELLED') continue;
-    const priceRaw = need.quotedPrice;
-    if (priceRaw == null || priceRaw === '') continue;
-    const price = Number(priceRaw);
-    if (!Number.isFinite(price) || price <= 0) continue;
-    const qtyRaw = need.purchaseQty ?? need.calculatedQty;
-    const qty = Number(qtyRaw);
-    if (!Number.isFinite(qty) || qty <= 0) continue;
-    const total = price * qty;
-
-    const currency = (need.quotedCurrency ?? 'RUB') as string;
-    if (currency === 'USD') {
-      buckets.hasUsdLines = true;
-      continue;
-    }
-    if (currency !== 'RUB') {
-      // Чужая валюта (не должна попадать после сужения до
-      // MoneyCurrencySchema, но защищаемся): не кладём в итог,
-      // но и USD-warning не показываем — это редкий legacy-кейс.
-      continue;
-    }
-
-    // Роль материала — ГЛАВНЫЙ признак классификации (см.
-    // `getWorkshopNeedKind`): по ней фурнитура отделяется от тканей.
-    // Без неё молнии и люверсы уезжали в «Материалы» и «Прочее», строка
-    // «Фурнитура» показывала ноль, а «материалы за изделие» — завышенное
-    // число. Передаём ровно как соседний `resolveMaterialSection`.
-    const kind = getWorkshopNeedKind({
-      sourceType: need.sourceType,
-      calculationMethod: need.calculationMethod,
-      materialRole: need.materialRole ?? undefined,
-    });
-    addToBucket(buckets, kind, total);
-  }
-  return buckets;
-}
-
-function bucketsAreEmpty(b: SummaryBuckets): boolean {
-  return (
-    b.materialsRub === 0 &&
-    b.hardwareRub === 0 &&
-    b.applicationRub === 0 &&
-    b.otherRub === 0
-  );
 }
 
 export async function OrderPlannedCostSummaryCard({
@@ -265,18 +170,28 @@ export async function OrderPlannedCostSummaryCard({
             : 'Не удалось загрузить потребность цеха.';
       }
     }
-    buckets = bucketsFromWorkshopNeeds(needs);
-    // Ручные строки логистики («Добавить поле» в таблице «Операции»)
-    // потребностью цеха не являются, но в себестоимость входят —
-    // backend заводит их в смету позицией «Прочее». Пока сметы нет,
-    // добавляем их здесь, иначе прикидка занижена ровно на логистику.
-    // В ветке `estimate` этого делать НЕ надо: там они уже в `lines`.
-    for (const line of order.logisticsLines ?? []) {
-      const cost = Number(line.costRub);
-      if (Number.isFinite(cost) && cost > 0) {
-        addToBucket(buckets, 'OTHER', cost);
+    // Аудит движка расчёта 13.09.2026, E1-5: прочие расходы «в
+    // себестоимость» в DTO заказа нет — грузим отдельно. Падение fetch-а
+    // карточку не валит: прикидка будет без них, с сообщением.
+    let extraCosts: OrderExtraCostDto[] = [];
+    try {
+      extraCosts = await listOrderExtraCosts(order.id);
+    } catch (e) {
+      extraCosts = [];
+      if (!needsLoadError) {
+        needsLoadError =
+          e instanceof ApiRequestError
+            ? `Не удалось загрузить прочие расходы: ${e.message}`
+            : 'Не удалось загрузить прочие расходы.';
       }
     }
+    // Ручные строки логистики, прочие расходы и разработка лекала
+    // потребностью цеха не являются, но в себестоимость входят —
+    // backend заводит их в смету позициями «Прочее». Пока сметы нет,
+    // добавляем их здесь, иначе прикидка занижена ровно на них и
+    // «прыгает» после «Завершить расчёт» (E1-5). В ветке `estimate`
+    // этого делать НЕ надо: там они уже в `lines`.
+    buckets = buildPreviewBuckets({ needs, extraCosts, order });
     source = bucketsAreEmpty(buckets) && !buckets.hasUsdLines
       ? 'empty'
       : 'workshopNeeds';

@@ -376,7 +376,7 @@ Lifecycle:
 | Вкладка «Операции» | `apps/web/components/orders/operations/order-operations-unified-table.tsx` | `order.routeSteps` + `order.logisticsLines`; итог = снимок `Order.operationCostPlanRub` + Σ логистики |
 | Себестоимость | `order-cost-estimates.service.ts::assembleEstimatePlan` | `WorkshopNeed` + `OrderExtraCost` + `OrderLogisticsLine` + разработка лекала. **Операций маршрута в смете нет** |
 | «Сводно по заказу» | `apps/web/components/orders/summary/build-order-summary-rows.ts` | материалы — `WorkshopNeed`, операции — `routeSteps` (сумма из снимка), **секция «Прочее» — только из зафиксированной сметы** |
-| Карточка «Плановая себестоимость» | `apps/web/components/orders/order-planned-cost-summary-card.tsx` | активная смета, иначе живые `WorkshopNeed` |
+| Карточка «Плановая себестоимость» | `apps/web/components/orders/order-planned-cost-summary-card.tsx` | активная смета, иначе прикидка того же состава, что у сметы (`order-planned-cost-preview.ts`): живые `WorkshopNeed` (цена ERP `erpUnitPriceRub` главнее `quotedPrice`) + `OrderExtraCost` «в себестоимость» + `OrderLogisticsLine` + разработка лекала — иначе итог менялся после «Завершить расчёт» (аудит движка расчёта 13.09.2026, E1-5) |
 
 Отсюда практические следствия для любой новой денежной сущности
 заказа:
