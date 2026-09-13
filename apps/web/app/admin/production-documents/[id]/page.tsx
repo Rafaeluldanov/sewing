@@ -112,7 +112,9 @@ function statusTone(status: ProductionDocumentDto['status']): AdminStatusTone {
 const COST_WARNING_LABELS: Record<string, string> = {
   NO_MATERIAL_FACT: 'по заказу нет ни одного факта расхода материала',
   PIECEWORK_PENDING: 'часть сдельной ещё не подтверждена',
-  EXTRA_COSTS_NON_RUB_SKIPPED: 'прочие расходы в валюте не вошли: конвертации нет',
+  // Аудит движка расчёта 13.09.2026, E1-6/D1-10: USD теперь идёт по курсу активной сметы;
+  // код остаётся только когда курса нет (сметы нет или она без USD).
+  EXTRA_COSTS_NON_RUB_SKIPPED: 'прочие расходы в валюте не вошли: у сметы нет курса USD',
   MATERIALS_EXCLUDED_BY_POLICY: 'материалы исключены политикой заказа',
   SALARY_APPORTION_FAILED: 'оклад разнести не удалось',
   NO_PRODUCTION_WINDOW: 'нет окна производства: оклад не разнесён',

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EntryStatus, Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
 import { OrderMaterialCostService } from './order-material-cost.service.js';
 import { erpMaterialCostByPassport } from './erp-material-fact.js';
@@ -11,6 +12,7 @@ const POSTED = 'POSTED';
 /** Завершённая сессия подкроя — та же выборка, что и у зарплаты (`computeRecutSeconds`). */
 const RECUT_DONE = 'DONE';
 const RUB = 'RUB';
+const USD = 'USD';
 
 const num = (value: Prisma.Decimal | number | null | undefined): number =>
   value == null ? 0 : Number(value);
@@ -70,10 +72,17 @@ export type OrderFactCost = {
  *      обнуляла только свой материал, а материал ERP продолжал суммироваться. Политика — про
  *      материал как таковой, чей склад — неважно.
  *   3. `OrderExtraCost.currency` игнорировалась: строки в USD складывались с рублёвыми как рубли.
- *      Конвертации на MVP нет, поэтому не-рублёвые строки в сумму НЕ идут, но о них предупреждаем —
- *      тихо потерянный расход хуже явно пропущенного.
+ *      USD конвертируется по курсу активной сметы (`OrderCostEstimate.usdRateRub`) — тому же, по
+ *      которому этот расход вошёл в план; без сметы или курса не-рублёвые строки в сумму НЕ идут,
+ *      но о них предупреждаем — тихо потерянный расход хуже явно пропущенного.
  *   4. Подкрой (`RecutSession.amount`) не считался вовсе, хотя это прямые деньги по заказу и
  *      возникают они именно на проблемных тиражах, где себестоимость и смотрят.
+ *
+ * Аудит движка расчёта 13.09.2026, E1-6/D1-10: «прочее» факта обязано состоять из тех же
+ * слагаемых, что «прочее» плана (`assembleEstimatePlan`): прочие расходы (USD — по курсу сметы),
+ * логистика заказа (`OrderLogisticsLine.costRub`) и разработка лекала. Раньше логистика в факт не
+ * входила никак, а USD-прочие выбрасывались при известном курсе — ERP видела «экономию» ровно на
+ * их сумму.
  */
 @Injectable()
 export class OrderFactCostService {
@@ -125,7 +134,7 @@ export class OrderFactCostService {
       select: { id: true },
     });
     const passportIds = passports.map((p) => p.id);
-    const [settings, piecework, pending, recut, extras] = await Promise.all([
+    const [settings, piecework, pending, recut, extras, logistics, estimate] = await Promise.all([
       // Источники материала — настройка компании: это свойство процесса, одинаковое для цеха.
       this.prisma.companySettings.findFirst({
         select: { materialQtySource: true, materialPriceSource: true },
@@ -150,6 +159,19 @@ export class OrderFactCostService {
         by: ['currency'],
         where: { orderId, includeInCostPrice: true },
         _sum: { amount: true },
+      }),
+      // Аудит движка расчёта 13.09.2026, E1-6/D1-10: логистика заказа — расход компании, в плане
+      // (смете) она есть строкой, значит и в факте обязана быть, иначе «экономия» на её сумму.
+      this.prisma.orderLogisticsLine.aggregate({
+        where: { orderId },
+        _sum: { costRub: true },
+      }),
+      // Курс USD активной сметы — для прочих расходов в валюте (E1-6/D1-10). Смета — по
+      // активному варианту просчёта (`ACTIVE_CALCULATION_ESTIMATE_WHERE`).
+      this.prisma.orderCostEstimate.findFirst({
+        where: { orderId, status: 'COMPLETED', AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE] },
+        orderBy: { version: 'desc' },
+        select: { usdRateRub: true },
       }),
     ]);
     const qtyPlan = order.items.reduce((sum, i) => sum + (i.qtyPlan ?? 0), 0);
@@ -193,9 +215,15 @@ export class OrderFactCostService {
     if (!excluded) warnings.push(...material.warnings);
 
     let extraRub = 0;
+    // Аудит движка расчёта 13.09.2026, E1-6/D1-10: USD-прочие — по курсу активной сметы, как в
+    // плане; иначе они пропадали из факта при известном курсе.
+    const usdRate = estimate?.usdRateRub != null ? num(estimate.usdRateRub) : 0;
     for (const row of extras) {
-      if ((row.currency ?? RUB) === RUB) {
+      const currency = (row.currency ?? RUB).toUpperCase();
+      if (currency === RUB) {
         extraRub += num(row._sum.amount);
+      } else if (currency === USD && usdRate > 0) {
+        extraRub += round2(num(row._sum.amount) * usdRate);
       } else if (num(row._sum.amount) !== 0) {
         warnings.push('EXTRA_COSTS_NON_RUB_SKIPPED');
         this.logger.warn(
@@ -204,6 +232,8 @@ export class OrderFactCostService {
         );
       }
     }
+    // Логистика заказа (E1-6/D1-10): всегда в рублях, `Decimal(12,2)`.
+    const logisticsRub = num(logistics._sum.costRub);
 
     // Разнесённый оклад: считаем ПО ОКНУ ПРОИЗВОДСТВА заказа и берём только его паспорта.
     // ⛔ Отдельной строкой, а не внутри сдельной: у цеха оклад — почти половина денег труда,
@@ -230,7 +260,8 @@ export class OrderFactCostService {
       order.patternDevelopmentCostInCostPrice && order.patternDevelopmentCostRub
         ? num(order.patternDevelopmentCostRub)
         : 0;
-    const other = extraRub + patternDev;
+    // «Прочее» факта = те же слагаемые, что «прочее» плана (E1-6/D1-10).
+    const other = extraRub + logisticsRub + patternDev;
 
     const pieceworkRub = num(piecework._sum.amount);
     const pieceworkPending = num(pending._sum.amount);

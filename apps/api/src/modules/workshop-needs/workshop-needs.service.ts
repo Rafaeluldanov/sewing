@@ -60,6 +60,20 @@ import {
 } from './workshop-need-scope.js';
 
 /**
+ * Аудит движка расчёта 13.09.2026, E1-10: цена заказа поставщику ERP за единицу цеха.
+ * `null` и `≤ 0` — «не задана» (строка ЗП ERP без цены уезжает как `"0"`, Zod её пропускает);
+ * хранить ноль нельзя — `Prisma.Decimal(0)` истинен, и потребители брали бы его вместо
+ * плановой цены закупщика цеха.
+ */
+function normalizeErpUnitPrice(
+  raw: ErpLinkWorkshopNeedDto['erpUnitPriceRub'],
+): Prisma.Decimal | null {
+  if (raw === null || raw === undefined) return null;
+  const price = new Prisma.Decimal(raw);
+  return price.greaterThan(0) ? price : null;
+}
+
+/**
  * Реализация модуля «Потребность цеха» (Этап 4А, см.
  * `docs/recon-soft-integration.md §«Этап 4А»`).
  *
@@ -652,8 +666,12 @@ export class WorkshopNeedsService {
           ...(dto.erpNomenclatureId !== undefined ? { erpNomenclatureId: dto.erpNomenclatureId } : {}),
           ...(dto.erpCharacteristicId !== undefined ? { erpCharacteristicId: dto.erpCharacteristicId } : {}),
           ...(dto.erpUnitId !== undefined ? { erpUnitId: dto.erpUnitId } : {}),
+          // Аудит движка расчёта 13.09.2026, E1-10: цена ERP ≤ 0 (строка ЗП ERP ещё без цены
+          // уезжает как "0") — это «не задана», а не «главнее плановой»: иначе Decimal(0) истинен,
+          // fallback на `quotedPrice` в смете/план→факте/v2 не срабатывает, смета падает
+          // «Цена должна быть > 0», документ показывает план 0 ₽. Нормализуем в null на входе.
           ...(dto.erpUnitPriceRub !== undefined
-            ? { erpUnitPriceRub: dto.erpUnitPriceRub === null ? null : new Prisma.Decimal(dto.erpUnitPriceRub) }
+            ? { erpUnitPriceRub: normalizeErpUnitPrice(dto.erpUnitPriceRub) }
             : {}),
           ...(receivedQty !== null
             ? {
@@ -681,6 +699,12 @@ export class WorkshopNeedsService {
         tx,
       );
     });
+    // Аудит движка расчёта 13.09.2026, E1-1: `erpUnitPriceRub` — цена, которую смета предпочитает
+    // `quotedPrice` (`assembleEstimatePlan`), и менялась она здесь без пересчёта: смета и
+    // `Order.costEstimateTotalRub` жили со старой ценой без отметки «устарела», пока любая
+    // соседняя правка не меняла итог «сама». Правило `domain.md §1.5`: ручка, меняющая источник
+    // сметы, заканчивается `syncAfterNeedsChange` (best-effort, не бросает — как у `update`).
+    await this.costEstimates.syncAfterNeedsChange(existing.orderId, actorEmployeeId);
     return this.getOne(id);
   }
 
@@ -734,6 +758,9 @@ export class WorkshopNeedsService {
         tx,
       );
     });
+    // Аудит движка расчёта 13.09.2026, E1-1: цена ERP снята — смета снова считает по `quotedPrice`
+    // закупщика цеха и обязана это отразить сразу (симметрично `erpLink`).
+    await this.costEstimates.syncAfterNeedsChange(existing.orderId, actorEmployeeId);
     return this.getOne(id);
   }
 

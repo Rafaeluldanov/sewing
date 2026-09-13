@@ -462,8 +462,10 @@ export class OrderProductionDocumentService {
       if (fromEstimate != null) {
         planRub = fromEstimate;
         planSource = 'COST_ESTIMATE';
-      } else if (wn.erpManagedAt && wn.erpUnitPriceRub) {
+      } else if (wn.erpManagedAt && wn.erpUnitPriceRub?.greaterThan(0)) {
         // Материал под ERP — цена её заказа поставщику (факт), рубли.
+        // Аудит движка расчёта 13.09.2026, E1-10: цена ERP ≤ 0 — «не задана», идём к
+        // `quotedPrice` (иначе Decimal(0) истинен и план строки молча = 0 ₽).
         planRub = new Prisma.Decimal(planQty).mul(wn.erpUnitPriceRub);
         planSource = 'WORKSHOP_NEED';
       } else if (wn.quotedPrice != null) {

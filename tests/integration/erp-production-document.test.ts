@@ -15,7 +15,9 @@
  * Себестоимость сдачи (08.09.2026) — четыре грабли, каждая теряла деньги молча:
  *   7. списание, оформленное на заказ без паспорта, в сумму не попадало;
  *   8. политика «материалы вне себестоимости» обнуляла свой материал, но не материал ERP;
- *   9. прочие расходы в валюте складывались с рублёвыми как рубли;
+ *   9. прочие расходы в валюте складывались с рублёвыми как рубли (с 13.09.2026 USD идёт по
+ *      курсу активной сметы, без курса — пропуск с предупреждением; логистика заказа входит в
+ *      «прочее» факта, как и в план — аудит E1-6/D1-10);
  *  10. подкрой (повременная доплата по заказу) не считался вовсе;
  *  11. неподтверждённая сдельная не была видна — сумма молча занижена на незакрытую коробку.
  */
@@ -336,7 +338,7 @@ describeWithDb('integration — сдача заказа цеха уходит в
     expect(after.warnings).toContain('MATERIALS_EXCLUDED_BY_POLICY');
   });
 
-  test('прочие расходы в валюте не складываются с рублёвыми', async () => {
+  test('прочие расходы в валюте — по курсу активной сметы, без курса не складываются с рублёвыми', async () => {
     const orderId = await closedOrder();
     await t.prisma.orderExtraCost.createMany({
       data: [
@@ -345,10 +347,51 @@ describeWithDb('integration — сдача заказа цеха уходит в
         { orderId, description: 'Не в себестоимость', amount: '900', currency: 'RUB', includeInCostPrice: false },
       ],
     });
+    // Сметы нет — курса нет: USD в сумму не идёт, но пропущенный расход должен быть слышен.
+    const noRate = await costOf(orderId);
+    expect(noRate.other_rub).toBe(500);
+    expect(noRate.warnings).toContain('EXTRA_COSTS_NON_RUB_SKIPPED');
+
+    // Аудит движка расчёта 13.09.2026, E1-6/D1-10: в план (`plan_total_rub`) USD-прочие вошли
+    // по курсу сметы, а из факта выбрасывались — ERP видела «экономию» ровно на их сумму.
+    // Курс есть у активной сметы — факт конвертирует по нему же.
+    await t.prisma.orderCostEstimate.create({
+      data: {
+        orderId, version: 1, status: 'COMPLETED',
+        totalCostRub: '9500', usdRateRub: '90',
+      },
+    });
+    const withRate = await costOf(orderId);
+    expect(withRate.other_rub).toBe(500 + 100 * 90);
+    expect(withRate.warnings).not.toContain('EXTRA_COSTS_NON_RUB_SKIPPED');
+
+    // Отозванная смета курса не даёт — снова пропуск с предупреждением, а не старый курс.
+    await t.prisma.orderCostEstimate.updateMany({
+      where: { orderId },
+      data: { status: 'REVOKED', revokedAt: new Date() },
+    });
+    const revoked = await costOf(orderId);
+    expect(revoked.other_rub).toBe(500);
+    expect(revoked.warnings).toContain('EXTRA_COSTS_NON_RUB_SKIPPED');
+  });
+
+  test('логистика заказа входит в «прочее» факта — как и в план (аудит 13.09.2026, E1-6/D1-10)', async () => {
+    const orderId = await closedOrder();
+    // Смета кладёт логистику строкой в `plan_total_rub`; факт обязан считать её тем же
+    // слагаемым, иначе на каждом заказе с доставкой ERP видит ложную «экономию».
+    await t.prisma.orderLogisticsLine.createMany({
+      data: [
+        { orderId, sortOrder: 0, name: 'Доставка ткани', costRub: '5000' },
+        { orderId, sortOrder: 1, name: 'Забрать образцы', costRub: '0' },
+        { orderId, sortOrder: 2, name: 'Курьер до клиента', costRub: '1500.50' },
+      ],
+    });
+    await t.prisma.orderExtraCost.create({
+      data: { orderId, description: 'Упаковка', amount: '200', currency: 'RUB', includeInCostPrice: true },
+    });
     const cost = await costOf(orderId);
-    expect(cost.other_rub).toBe(500);
-    // Пропущенный расход должен быть слышен: конвертации на MVP нет.
-    expect(cost.warnings).toContain('EXTRA_COSTS_NON_RUB_SKIPPED');
+    expect(cost.other_rub).toBe(200 + 5000 + 1500.5);
+    expect(cost.total_rub).toBe(200 + 5000 + 1500.5);
   });
 
   test('подкрой входит в себестоимость отдельным компонентом', async () => {
