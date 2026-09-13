@@ -25,6 +25,7 @@ import {
   activateOrderCalculation,
   createOrderCalculation,
   deleteOrderCalculation,
+  getOrderCalculations,
   renameOrderCalculation,
 } from '@/lib/order-calculations-api';
 
@@ -75,8 +76,21 @@ export async function activateCalculationAction(
     revalidateOrder(orderId);
     return { ok: true, data };
   } catch (e) {
+    // Аудит движка расчёта 13.09.2026, V1-5: переключение — многофазное,
+    // и отказ мог случиться ПОСЛЕ смены активного варианта в БД. Ряд
+    // вкладок обязан показать, что реально активно, а не прежнее
+    // состояние — иначе клик по «активной» вкладке выглядит как no-op.
+    // Перечитываем ряд и страницу; сам отказ — best-effort.
+    let data: OrderCalculationsDto | undefined;
+    try {
+      data = await getOrderCalculations(orderId);
+      revalidateOrder(orderId);
+    } catch {
+      data = undefined;
+    }
     return {
       ok: false,
+      data,
       error:
         e instanceof ApiRequestError
           ? errorText(e, 'Не удалось переключить вариант')
