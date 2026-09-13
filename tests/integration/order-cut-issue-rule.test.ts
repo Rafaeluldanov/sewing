@@ -27,6 +27,13 @@
  *       любой авторизованной роли.
  *  T10. Audit `ORDER_CUT_ISSUE_RULE_*` пишется на каждое целевое
  *       событие.
+ *  T21–T23. Аудит движка расчёта 13.09.2026, G3-1: паспорт засчитывается
+ *       в очередь РОВНО ОДИН РАЗ — handoff на следующую швейную
+ *       операцию (complete-operation оставляет паспорт на завершённом
+ *       шаге), повторный issue на CUTTING-смене и возврат от ОТК не
+ *       консумят повторно и не блокируют 409 паспорт уже закрытого
+ *       размера; после `returnToCell` (RELEASED) следующая выдача
+ *       считается снова.
  *
  * Маршрут заказа: `SEW_OVERLOCK_1 → SEW_OVERLOCK_2 → QC` — швея
  * с активной сменой на `overlock-01/SEW_OVERLOCK_1` встаёт ровно
@@ -1023,5 +1030,254 @@ describeWithDb('integration — order cut issue rules', () => {
       qty: 3,
       queueIndex: 1,
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // G3-1. паспорт засчитывается в очередь ровно один раз
+  // (Аудит движка расчёта 13.09.2026, G3-1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Заказ с произвольным маршрутом (коды операций из seed) — для
+   * G3-1 нужны и sewing-only маршрут, и маршрут с CUTTING-шагом.
+   */
+  async function setupOrderWithCustomRoute(
+    opCodes: string[],
+    items: Array<{ sizeKey: 'S' | 'M' | 'L'; qtyPlan: number }>,
+  ): Promise<{ orderId: string; sizeIdByKey: Record<string, string> }> {
+    const tplCode = `OCRG-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+    const tpl = await request(t.app.getHttpServer())
+      .post('/api/routes')
+      .set('Cookie', cookies.manager)
+      .send({
+        code: tplCode,
+        name: tplCode,
+        steps: opCodes.map((code) => ({
+          operationId: seed.operations[code]!.id,
+        })),
+      })
+      .expect(201);
+
+    const sizeIdByKey: Record<string, string> = {};
+    const orderItems = items.map((it) => {
+      const sizeId = seed.sizes[it.sizeKey]!;
+      sizeIdByKey[it.sizeKey] = sizeId;
+      return { sizeId, qtyPlan: it.qtyPlan };
+    });
+    const order = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookies.manager)
+      .send({
+        orderDate: '2026-04-15T00:00:00.000Z',
+        productId: seed.product.id,
+        color: 'Чёрный',
+        items: orderItems,
+        routeTemplateId: tpl.body.id,
+      })
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${order.body.id}/start`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    return { orderId: order.body.id, sizeIdByKey };
+  }
+
+  async function startShift(
+    cookie: string,
+    equipmentCode: string,
+    opCode: string,
+  ): Promise<void> {
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookie)
+      .send({
+        equipmentId: seed.equipment[equipmentCode]!.id,
+        operationId: seed.operations[opCode]!.id,
+      })
+      .expect(201);
+  }
+
+  async function switchOp(cookie: string, opCode: string): Promise<void> {
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/switch-operation')
+      .set('Cookie', cookie)
+      .send({ operationId: seed.operations[opCode]!.id })
+      .expect(201);
+  }
+
+  function issue(cookie: string, passportId: string): request.Test {
+    return request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookie)
+      .send({});
+  }
+
+  async function completeOp(cookie: string, passportId: string): Promise<void> {
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/complete-operation`)
+      .set('Cookie', cookie)
+      .send({})
+      .expect(201);
+  }
+
+  async function issuedQtyOf(orderId: string, sizeId: string): Promise<number> {
+    const rule = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, sizeId },
+    });
+    return rule.issuedQty;
+  }
+
+  function consumedCount(passportId: string): Promise<number> {
+    return t.prisma.auditLog.count({
+      where: {
+        event: 'ORDER_CUT_ISSUE_RULE_CONSUMED',
+        payload: { path: ['passportId'], equals: passportId },
+      },
+    });
+  }
+
+  test('T21. G3-1: handoff OV1 → OV2 (sewing-only маршрут) не консумит паспорт второй раз и не режет 409 паспорт закрытого размера', async () => {
+    // Маршрут OV1(0) → OV2(1) → QC; очередь S — 20, M — 20; паспорта S по 10.
+    const { orderId, sizeIdByKey } = await setupOrderWithCustomRoute(
+      ['SEW_OVERLOCK_1', 'SEW_OVERLOCK_2', 'QC'],
+      [
+        { sizeKey: 'S', qtyPlan: 100 },
+        { sizeKey: 'M', qtyPlan: 100 },
+      ],
+    );
+    const S = sizeIdByKey.S!;
+    const M = sizeIdByKey.M!;
+    await bulkUpsertRules(orderId, [
+      { sizeId: S, requiredQty: 20, sortOrder: 0 },
+      { sizeId: M, requiredQty: 20, sortOrder: 1 },
+    ]).expect(201);
+
+    const P1 = await createAndPlace(orderId, S, 10, 'R-G31-P1');
+    const P2 = await createAndPlace(orderId, S, 10, 'R-G31-P2');
+    const P3 = await createAndPlace(orderId, S, 10, 'R-G31-P3');
+    await startShift(cookies.seamstress, 'overlock-01', 'SEW_OVERLOCK_1');
+
+    // P1: issue@OV1 → consume #1; complete оставляет idx=0; issue@OV2 —
+    // handoff, паспорт уже засчитан → счётчик не растёт.
+    await issue(cookies.seamstress, P1).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(10);
+    await completeOp(cookies.seamstress, P1);
+    const afterComplete = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: P1 },
+      select: { currentRouteStepIndex: true, currentEmployeeId: true },
+    });
+    expect(afterComplete.currentRouteStepIndex).toBe(0);
+    expect(afterComplete.currentEmployeeId).toBeNull();
+
+    await switchOp(cookies.seamstress, 'SEW_OVERLOCK_2');
+    await issue(cookies.seamstress, P1).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(10);
+    expect(await consumedCount(P1)).toBe(1);
+    await completeOp(cookies.seamstress, P1);
+
+    // P2 закрывает строку S (20/20).
+    await switchOp(cookies.seamstress, 'SEW_OVERLOCK_1');
+    await issue(cookies.seamstress, P2).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(20);
+    await completeOp(cookies.seamstress, P2);
+
+    // Строка S закрыта, M ещё открыта: паспорт P2 всё равно идёт на
+    // OV2 без 409 (он уже засчитан, очередь к нему больше не применяется).
+    await switchOp(cookies.seamstress, 'SEW_OVERLOCK_2');
+    await issue(cookies.seamstress, P2).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(20);
+    expect(await consumedCount(P2)).toBe(1);
+    // Смену нельзя переключить с паспортом в руках (ShiftHasActivePassports).
+    await completeOp(cookies.seamstress, P2);
+
+    // Новый паспорт S сверх закрытой строки на ПЕРВОЙ операции — как и
+    // раньше, 409 с подсказкой следующего размера (штатный контракт T3).
+    await switchOp(cookies.seamstress, 'SEW_OVERLOCK_1');
+    const r3 = await issue(cookies.seamstress, P3).expect(409);
+    expect(r3.body?.code).toBe('ORDER_CUT_ISSUE_RULE_VIOLATION');
+    expect(r3.body?.message).toBe('Сначала нужно выдать: M — осталось 20 шт');
+    expect(await consumedCount(P3)).toBe(0);
+    expect(await issuedQtyOf(orderId, S)).toBe(20);
+    expect(await issuedQtyOf(orderId, M)).toBe(0);
+  });
+
+  test('T22. G3-1: маршрут с CUTTING — issue на Делении кроя + OV1 + OV2 = один CONSUMED; returnToCell откатывает счётчик до нуля', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithCustomRoute(
+      ['CUT_DIVISION', 'SEW_OVERLOCK_1', 'SEW_OVERLOCK_2', 'QC'],
+      [
+        { sizeKey: 'S', qtyPlan: 100 },
+        { sizeKey: 'M', qtyPlan: 100 },
+      ],
+    );
+    const S = sizeIdByKey.S!;
+    await bulkUpsertRules(orderId, [
+      { sizeId: S, requiredQty: 40, sortOrder: 0 },
+      { sizeId: sizeIdByKey.M!, requiredQty: 40, sortOrder: 1 },
+    ]).expect(201);
+
+    const P1 = await createAndPlace(orderId, S, 10, 'R-G31-T22');
+
+    // 1) Менеджер на CUTTING-смене «Получить крой» — единственный consume.
+    await startShift(cookies.manager, 'cutting-table-01', 'CUT_DIVISION');
+    await issue(cookies.manager, P1).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(10);
+    expect(await consumedCount(P1)).toBe(1);
+    await completeOp(cookies.manager, P1);
+
+    // 2) Швея на OV1 (первый не-CUTTING шаг; idx паспорта остался 0).
+    await startShift(cookies.seamstress, 'overlock-01', 'SEW_OVERLOCK_1');
+    await issue(cookies.seamstress, P1).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(10);
+    expect(await consumedCount(P1)).toBe(1);
+    await completeOp(cookies.seamstress, P1);
+
+    // 3) OV2 (idx паспорта = firstNonCutting) — тоже не считается.
+    await switchOp(cookies.seamstress, 'SEW_OVERLOCK_2');
+    await issue(cookies.seamstress, P1).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(10);
+    expect(await consumedCount(P1)).toBe(1);
+
+    // 4) Мастер возвращает паспорт в ячейку — единственный CONSUMED
+    // балансируется одним RELEASED, счётчик «как до выдачи».
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${P1}/return-to-cell`)
+      .set('Cookie', cookies.master)
+      .send({ reason: 'CELL_CORRECTION', cellId: seed.cells.A1.id })
+      .expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(0);
+    const released = await t.prisma.auditLog.count({
+      where: {
+        event: 'ORDER_CUT_ISSUE_RULE_RELEASED',
+        payload: { path: ['passportId'], equals: P1 },
+      },
+    });
+    expect(released).toBe(1);
+  });
+
+  test('T23. G3-1: после returnToCell (RELEASED) повторная выдача того же паспорта считается заново', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 20 },
+    ]);
+    const S = sizeIdByKey.S!;
+    await bulkUpsertRules(orderId, [{ sizeId: S, requiredQty: 10 }]).expect(201);
+    const P1 = await createAndPlace(orderId, S, 4, 'R-G31-T23');
+    await startSeamstressShift();
+
+    await issue(cookies.seamstress, P1).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(4);
+
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${P1}/return-to-cell`)
+      .set('Cookie', cookies.master)
+      .send({ reason: 'WRONG_SCAN', cellId: seed.cells.A1.id })
+      .expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(0);
+
+    // Пара CONSUMED/RELEASED сбалансирована → физическая повторная
+    // выдача из ячейки снова инкрементит счётчик.
+    await issue(cookies.seamstress, P1).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(4);
+    expect(await consumedCount(P1)).toBe(2);
   });
 });

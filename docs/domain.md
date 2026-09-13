@@ -476,11 +476,24 @@ Audit-events: `CUT_RELEASE_POLICY_CREATED` / `_UPDATED` / `_DISABLED`,
 дальнейших шагах маршрута (scan / complete-operation /
 master-actions) очередь не применяется.
 
+Паспорт засчитывается в очередь РОВНО ОДИН РАЗ (Аудит движка расчёта
+13.09.2026, G3-1): если по `passportId` уже есть
+`ORDER_CUT_ISSUE_RULE_CONSUMED` без парного
+`ORDER_CUT_ISSUE_RULE_RELEASED`, `evaluateForIssue` возвращает `null`
+— повторный issue того же паспорта (handoff на следующую швейную
+операцию после `complete-operation`, который оставляет
+`currentRouteStepIndex` на завершённом шаге; повторное «Получить
+крой» на CUTTING-смене; возврат от ОТК на первый шаг) не
+инкрементит `issuedQty` и не блокируется 409, даже если строка его
+размера уже закрыта. После `returnToCell` мастера (RELEASED) пара
+сбалансирована, и следующая физическая выдача считается снова.
+
 Audit-events: `ORDER_CUT_ISSUE_RULE_UPSERT` (bulk-сохранение формы),
 `ORDER_CUT_ISSUE_RULE_DISABLED` («Отключить очередь»),
 `ORDER_CUT_ISSUE_RULE_CONSUMED` (атомарный инкремент `issuedQty` в
-транзакции `issueToEmployee`); `entityType = ORDER_CUT_ISSUE_RULE`
-(`docs/events.md §3.2`).
+транзакции `issueToEmployee`; не больше одного несбалансированного на
+паспорт), `ORDER_CUT_ISSUE_RULE_RELEASED` (откат при `returnToCell`);
+`entityType = ORDER_CUT_ISSUE_RULE` (`docs/events.md §3.2`).
 
 ### 1.8 `CuttingClosureRequest` — закрытие раскроя по размеру
 
