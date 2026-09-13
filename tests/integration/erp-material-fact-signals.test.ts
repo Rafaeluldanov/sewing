@@ -24,7 +24,7 @@ import { loginAs, startTestApp, stopTestApp, type TestApp } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
-import { buildErpConsumptionService, buildErpProductionService } from '../utils/erp-services';
+import { buildErpConsumptionService, buildErpProductionService, buildOrderFactCostService } from '../utils/erp-services';
 
 const ERP_NOMENCLATURE = '11111111-1111-4111-8111-111111111111';
 const ERP_UNIT = '22222222-2222-4222-8222-222222222222';
@@ -81,6 +81,7 @@ describeWithDb('integration — материал под ERP: сигналы бе
 
   // Слияние правок аудита 13.09: очереди ERP получили зависимость от ProductionDocumentsService (D1-2/D1-3) —
   // собираем их общим хелпером, как erp-production-document.test.ts.
+  const factCost = () => buildOrderFactCostService(t);
   const consumptionQueue = () => buildErpConsumptionService(t);
   const productionQueue = () => buildErpProductionService(t);
 
