@@ -58,7 +58,7 @@ export class ProductionDocumentsController {
 export class OrderProductionDocumentController {
   constructor(private readonly documents: ProductionDocumentsService) {}
 
-  /** `null`, если заказ ещё не закрыт: документ рождается закрытием. */
+  /** `null`, если документа ещё нет: заказ не закрыт и заранее его не формировали. */
   @Get(':orderId/production-document')
   async forOrder(@Param('orderId') orderId: string) {
     return this.documents.forOrder(orderId);
@@ -71,15 +71,18 @@ export class OrderProductionDocumentController {
    * цеха. Нужна там, где человек смотрит на цифры и не может ждать события: документа не видно
    * (заказ закрыли до появления раздела) или он показывает вчерашнее состояние.
    *
-   * Придумать выпуск ею нельзя: заказ обязан быть закрыт, упакованные паспорта — существовать.
+   * Работает на ЛЮБОЙ стадии заказа (решение владельца 14.09.2026): по открытому заказу
+   * документ заводится заранее и наполняется по ходу производства, окончательным станет только
+   * с закрытием заказа. Отказы (409): заказ отменён (`PRODUCTION_DOCUMENT_ORDER_CANCELLED`) и
+   * заказ закрыт без единого упакованного паспорта (`PRODUCTION_DOCUMENT_NOTHING_RELEASED`).
    * Идемпотентна: второй документ по заказу не появится никогда (`orderId @unique`).
    */
   @Post(':orderId/production-document')
-  async backfill(
+  async sync(
     @Param('orderId') orderId: string,
     @CurrentUser() user: AuthPrincipal | undefined,
   ) {
     if (!user) throw new UnauthorizedException();
-    return this.documents.backfillForClosedOrder(orderId, user.employeeId);
+    return this.documents.syncForOrder(orderId, user.employeeId);
   }
 }

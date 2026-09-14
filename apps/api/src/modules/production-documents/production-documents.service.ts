@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { EntryStatus, PassportStatus, Prisma } from '@prisma/client';
+import { EntryStatus, OrderStatus, PassportStatus, Prisma } from '@prisma/client';
+import { ORDER_STATUS_LABELS } from '@sewing/shared/orders';
 import type {
   ProductionDocumentDto,
   ProductionDocumentFactKind,
@@ -12,7 +13,7 @@ import type {
 
 import {
   ProductionDocumentNothingReleasedException,
-  ProductionDocumentOrderNotClosedException,
+  ProductionDocumentOrderCancelledException,
 } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -49,10 +50,17 @@ type LineDraft = {
 /**
  * ДОКУМЕНТ ВЫПУСКА ПО ЗАКАЗУ: рождается закрытием заказа и дособирается сам.
  *
- * ⛔ Никакого «провести»: человек документ не заводит и не подтверждает. Он появляется в той же
- * транзакции, что и `Order.status = DONE` (ручное закрытие и авто-закрытие при полной упаковке —
- * обе точки зовут `createOnOrderClose`), и переходит в `READY`, когда лёг ПОСЛЕДНИЙ ФАКТ:
+ * ⛔ Никакого «провести»: человек документ не подтверждает. Он появляется в той же транзакции,
+ * что и `Order.status = DONE` (ручное закрытие и авто-закрытие при полной упаковке — обе точки
+ * зовут `createOnOrderClose`), и переходит в `READY`, когда лёг ПОСЛЕДНИЙ ФАКТ: закрыт заказ,
  * закрыты все коробки заказа и подтверждены начисления по его паспортам.
+ *
+ * ⛔ ЗАВЕСТИ РАНЬШЕ ЗАКРЫТИЯ можно (решение владельца 14.09.2026: «документ должен формироваться
+ * на любом этапе») — кнопкой в карточке заказа, `syncForOrder`. Такой документ живёт с
+ * `closedAt = null` и накапливает выпуск по ходу производства: упакованные паспорта, списания,
+ * начисления. Он не может стать `READY`, пока заказ открыт (`pendingReasons` → `ORDER_OPEN`),
+ * поэтому в ERP (она читает только `READY`) недошитый выпуск не уезжает. Закрытие заказа находит
+ * его и проставляет `closedAt` — второго документа не появляется (`orderId @unique`).
  *
  * ⛔ ПОЧЕМУ ДВА МОМЕНТА, А НЕ ОДИН. Физика замерзает раньше денег: после `PACKED` количество
  * паспорта не правится (`QTY_CORRECTION_PASSPORT_NOT_EDITABLE`), а сдельная становится
@@ -93,6 +101,10 @@ export class ProductionDocumentsService {
    * Идемпотентно: повторный вызов (ретрай, гонка ручного и авто-закрытия) документ не задваивает —
    * сначала проверка, а поверх неё `orderId @unique` в БД.
    *
+   * Документ, заведённый ЗАРАНЕЕ (кнопкой по открытому заказу), здесь узнаёт момент закрытия:
+   * у него `closedAt = null`, и это единственное, чего ему не хватало, чтобы стать окончательным.
+   * Состав и деньги пересоберёт `refresh` — как и у только что рождённого.
+   *
    * Себестоимость здесь НЕ считается: на этот момент деньги ещё не окончательны, а лишний
    * тяжёлый расчёт в транзакции закрытия удлинял бы блокировку. Её положит `refresh`.
    */
@@ -104,10 +116,58 @@ export class ProductionDocumentsService {
   ): Promise<string | null> {
     const existing = await tx.productionDocument.findUnique({
       where: { orderId },
+      select: { id: true, closedAt: true },
+    });
+    if (existing) {
+      if (!existing.closedAt) {
+        await tx.productionDocument.update({
+          where: { id: existing.id },
+          data: { closedAt },
+        });
+        this.logger.log(
+          `event=production_document.order_closed orderId=${orderId} id=${existing.id}`,
+        );
+      }
+      return existing.id;
+    }
+    return this.createDocument(tx, orderId, { closedAt, numberAt: closedAt }, actorEmployeeId);
+  }
+
+  /**
+   * Завести документ по ОТКРЫТОМУ заказу — кнопкой, на любой стадии до закрытия.
+   *
+   * `closedAt` пуст: закрытия ещё не было, и выдумывать его нельзя — дату проставит само
+   * закрытие (`createOnOrderClose`). Номер берёт дату ФОРМИРОВАНИЯ: другой у документа в этот
+   * момент нет, а порядок номеров должен совпадать с порядком появления документов.
+   *
+   * Пустой состав (упаковки ещё не было) здесь допустим: документ формируется и наполнится, когда
+   * цех дойдёт до упаковки. Отказ по пустоте — только у ЗАКРЫТОГО заказа (`syncForOrder`).
+   */
+  private async createForOpenOrder(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<string | null> {
+    const existing = await tx.productionDocument.findUnique({
+      where: { orderId },
       select: { id: true },
     });
     if (existing) return existing.id;
+    return this.createDocument(
+      tx,
+      orderId,
+      { closedAt: null, numberAt: new Date() },
+      actorEmployeeId,
+    );
+  }
 
+  /** Общее тело рождения: шапка из упакованных паспортов и плана, строки, номер, аудит. */
+  private async createDocument(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    moment: { closedAt: Date | null; numberAt: Date },
+    actorEmployeeId?: string | null,
+  ): Promise<string | null> {
     const [passports, items] = await Promise.all([
       tx.passport.findMany({
         where: { orderId, status: PassportStatus.PACKED },
@@ -127,13 +187,13 @@ export class ProductionDocumentsService {
     ]);
 
     const lines = this.groupLines(passports);
-    const number = await this.numbers.nextNumber(tx, closedAt);
+    const number = await this.numbers.nextNumber(tx, moment.numberAt);
     const doc = await tx.productionDocument.create({
       data: {
         number,
         orderId,
         status: FORMING,
-        closedAt,
+        closedAt: moment.closedAt,
         qtyPlan: items._sum.qtyPlan ?? 0,
         qtyGood: lines.reduce((s, l) => s + l.qtyGood, 0),
         qtyCut: lines.reduce((s, l) => s + l.qtyCut, 0),
@@ -150,12 +210,20 @@ export class ProductionDocumentsService {
         entityType: 'PRODUCTION_DOCUMENT',
         entityId: doc.id,
         employeeId: actorEmployeeId ?? null,
-        payload: { orderId, number: doc.number, lines: lines.length },
+        payload: {
+          orderId,
+          number: doc.number,
+          lines: lines.length,
+          // Заведён до закрытия заказа — по этому признаку в журнале видно, что документ
+          // накапливал выпуск, а не родился сдачей.
+          beforeOrderClose: moment.closedAt == null,
+        },
       },
       tx,
     );
     this.logger.log(
-      `event=production_document.created orderId=${orderId} number=${doc.number} lines=${lines.length}`,
+      `event=production_document.created orderId=${orderId} number=${doc.number} ` +
+        `lines=${lines.length} beforeOrderClose=${moment.closedAt == null}`,
     );
     return doc.id;
   }
@@ -198,25 +266,34 @@ export class ProductionDocumentsService {
   /**
    * ПОДТЯНУТЬ документ по кнопке: собрать, если его нет, и пересобрать, если есть.
    *
-   * Два случая, для человека — одно действие «покажи правду сейчас»:
-   *   • документа нет — заказ закрывали до появления раздела, рождаться было нечему;
+   * Три случая, для человека — одно действие «покажи правду сейчас»:
+   *   • документа нет, заказ ОТКРЫТ — заводим заранее (решение владельца 14.09.2026: «документ
+   *     должен формироваться на любом этапе»). Он накапливает выпуск по ходу производства и
+   *     останется «формируется», пока заказ не закроют; пустой состав здесь нормален;
+   *   • документа нет, заказ ЗАКРЫТ — заказ закрывали до появления раздела, рождаться было
+   *     нечему: достраиваем задним числом;
    *   • документ есть — пересобираем состав и себестоимость, не дожидаясь события
    *     (закрытие коробки, чтение изменившегося документа).
    *
    * ⛔ Это НЕ проведение: провести или подтвердить выпуск нельзя, таких переходов у документа
    * нет. Кнопка лишь заставляет перечитать факты цеха. Придумать выпуск ею тоже нельзя — все
    * входы исторические (упакованные паспорта, списания, начисления, подкрой, события паспортов
-   * для разноски оклада), поэтому документ ВОССТАНАВЛИВАЕТСЯ, а не сочиняется.
+   * для разноски оклада), поэтому документ ВОССТАНАВЛИВАЕТСЯ, а не сочиняется. По той же
+   * причине документ по открытому заказу не становится `READY` раньше закрытия: недошитый выпуск
+   * не окончателен и в ERP не уезжает.
    *
-   * ⛔ Номер берёт дату ЗАКРЫТИЯ заказа, а не сегодняшнюю: иначе прошлогодняя сдача встала бы в
-   * сегодняшний суточный счётчик, и порядок номеров разошёлся бы с порядком выпуска.
+   * ⛔ Номер достроенного документа берёт дату ЗАКРЫТИЯ заказа, а не сегодняшнюю: иначе
+   * прошлогодняя сдача встала бы в сегодняшний суточный счётчик, и порядок номеров разошёлся бы
+   * с порядком выпуска. У документа по открытому заказу такой даты нет — номер от даты
+   * формирования.
    *
-   * ⛔ Отмечаем `backfilledAt`: строка появилась позже события, которое описывает. Без отметки
-   * достроенный документ неотличим от оформленного задним числом.
+   * ⛔ Отмечаем `backfilledAt` только у достроенного: строка появилась позже события, которое
+   * описывает, и без отметки неотличима от оформленной задним числом. Заведённый заранее живёт
+   * с момента формирования — ему отметка не нужна.
    *
    * Идемпотентно: у заказа уже есть документ — возвращаем его, второй не заводим.
    */
-  async backfillForClosedOrder(
+  async syncForOrder(
     orderId: string,
     actorEmployeeId?: string | null,
   ): Promise<ProductionDocumentDto> {
@@ -234,40 +311,49 @@ export class ProductionDocumentsService {
       where: { orderId },
       select: { id: true },
     });
+    const closed = order.status === OrderStatus.DONE;
     if (!existing) {
       // Отменённый заказ сюда не проходит: приходовать выпуск отменённого тиража нельзя.
-      if (order.status !== 'DONE') {
-        throw new ProductionDocumentOrderNotClosedException();
+      if (order.status === OrderStatus.CANCELLED) {
+        throw new ProductionDocumentOrderCancelledException();
       }
-      const packed = await this.prisma.passport.count({
-        where: { orderId, status: PassportStatus.PACKED, qtyGood: { gt: 0 } },
-      });
-      if (packed === 0) throw new ProductionDocumentNothingReleasedException();
+      if (closed) {
+        const packed = await this.prisma.passport.count({
+          where: { orderId, status: PassportStatus.PACKED, qtyGood: { gt: 0 } },
+        });
+        if (packed === 0) throw new ProductionDocumentNothingReleasedException();
 
-      const closedAt = order.completedAt ?? new Date();
-      await this.prisma.$transaction(async (tx) => {
-        const id = await this.createOnOrderClose(tx, orderId, closedAt, actorEmployeeId);
-        if (id) {
-          await tx.productionDocument.update({
-            where: { id },
-            data: { backfilledAt: new Date() },
-          });
-          await this.audit.log(
-            {
-              event: 'PRODUCTION_DOCUMENT_BACKFILLED',
-              entityType: 'PRODUCTION_DOCUMENT',
-              entityId: id,
-              employeeId: actorEmployeeId ?? null,
-              payload: { orderId, closedAt: closedAt.toISOString() },
-            },
-            tx,
-          );
-        }
-      });
+        const closedAt = order.completedAt ?? new Date();
+        await this.prisma.$transaction(async (tx) => {
+          const id = await this.createOnOrderClose(tx, orderId, closedAt, actorEmployeeId);
+          if (id) {
+            await tx.productionDocument.update({
+              where: { id },
+              data: { backfilledAt: new Date() },
+            });
+            await this.audit.log(
+              {
+                event: 'PRODUCTION_DOCUMENT_BACKFILLED',
+                entityType: 'PRODUCTION_DOCUMENT',
+                entityId: id,
+                employeeId: actorEmployeeId ?? null,
+                payload: { orderId, closedAt: closedAt.toISOString() },
+              },
+              tx,
+            );
+          }
+        });
+      } else {
+        await this.prisma.$transaction(async (tx) => {
+          await this.createForOpenOrder(tx, orderId, actorEmployeeId);
+        });
+      }
     }
     // Пересборка — всегда, а не только при создании: ради неё кнопку и жмут на существующем
-    // документе. Считает её общий движок, второго расчёта тех же денег не заводим.
-    await this.refresh(orderId, 'ORDER_CLOSED');
+    // документе. Считает её общий движок, второго расчёта тех же денег не заводим. Вид факта —
+    // только у закрытого заказа: по открытому документ окончательным не станет, и «чем закрылся»
+    // ему писать нечего.
+    await this.refresh(orderId, closed ? 'ORDER_CLOSED' : undefined);
     if (existing) {
       // Ручная синхронизация существующего документа — след в журнале: у учётного документа
       // «почему цифры вдруг другие» обязано иметь ответ, и «человек нажал обновить» — ответ.
@@ -296,8 +382,10 @@ export class ProductionDocumentsService {
   /**
    * Пересобрать документ по фактам: строки, количества, себестоимость, состояние.
    *
-   * Зовётся событиями цеха (закрытие коробки), лениво при чтении документа, который ещё
-   * формируется, и отложенно писателями поздних фактов (`refreshLater`). Тихо выходит, если
+   * Зовётся событиями цеха (закрытие заказа, закрытие коробки), лениво при чтении документа,
+   * чей отпечаток фактов разошёлся, и отложенно писателями поздних фактов (`refreshLater`).
+   * Документ по открытому заказу (14.09.2026) проходит здесь тот же путь, но в `READY` не
+   * попадает: `pendingReasons` держит его причиной `ORDER_OPEN` до закрытия. Тихо выходит, если
    * документа нет: заказы, закрытые до появления фичи, задним числом не восстанавливаются —
    * «реконструированный» выпуск был бы выдумкой.
    *
@@ -454,10 +542,29 @@ export class ProductionDocumentsService {
    * ⛔ Полный пересчёт тянет разноску оклада по окну производства — это дорого, и делать его на
    * каждое открытие карточки нельзя. Отпечаток стоит копейки и отвечает на единственный нужный
    * вопрос: «факты те же?». Совпал — показываем снимок, разошёлся — пересобираем.
+   *
+   * В отпечатке и всё, от чего зависит переход в `READY` (`pendingReasons`): статус заказа,
+   * открытые коробки, начисления в ожидании. Поэтому по нему сверяется и ФОРМИРУЮЩИЙСЯ документ:
+   * с документами по открытым заказам он живёт в этом состоянии неделями, и пересобирать его на
+   * каждое чтение (а список читает до десяти таких разом) значило бы гонять разноску оклада по
+   * всему цеху впустую.
    */
   private async factSignature(orderId: string): Promise<string> {
-    const [issues, returns, approved, pending, recut, extras, packed, events, erp, logistics] =
-      await Promise.all([
+    const [
+      issues,
+      returns,
+      approved,
+      pending,
+      recut,
+      extras,
+      packed,
+      events,
+      erp,
+      logistics,
+      order,
+      openBoxes,
+      plan,
+    ] = await Promise.all([
         this.prisma.materialIssue.aggregate({
           where: { orderId, status: 'POSTED' },
           _sum: { totalCost: true },
@@ -508,6 +615,16 @@ export class ProductionDocumentsService {
           _sum: { costRub: true },
           _count: true,
         }),
+        // Документ по открытому заказу (14.09.2026): статус и открытые коробки решают, может ли
+        // документ стать окончательным; план меняется правками заказа до самого закрытия.
+        this.prisma.order.findUnique({
+          where: { id: orderId },
+          select: { status: true },
+        }),
+        this.prisma.box.count({
+          where: { closedAt: null, items: { some: { passport: { orderId } } } },
+        }),
+        this.prisma.orderItem.aggregate({ where: { orderId }, _sum: { qtyPlan: true } }),
       ]);
     return [
       num(issues._sum.totalCost),
@@ -524,19 +641,26 @@ export class ProductionDocumentsService {
       erp._count,
       num(logistics._sum.costRub),
       logistics._count,
+      order?.status ?? '',
+      openBoxes,
+      plan._sum.qtyPlan ?? 0,
     ].join('|');
   }
 
   /**
-   * Пересобрать, если факты изменились. Формирующийся документ пересобираем всегда: он для того
-   * и формируется.
+   * Пересобрать, если факты изменились.
+   *
+   * Формирующийся документ — тоже по отпечатку, а не безусловно: с документами по открытым
+   * заказам (14.09.2026) `FORMING` длится всё производство, и безусловная пересборка на каждое
+   * чтение гоняла бы разноску оклада впустую. Отпечаток несёт всё, от чего зависит переход в
+   * `READY`, так что документ не «застрянет»: закрытие заказа, коробки и утверждение начислений
+   * его меняют. Документ без отпечатка (собран до его появления) пересобирается всегда.
    */
   private async refreshIfStale(
     orderId: string,
-    status: string,
     storedSignature: string | null,
   ): Promise<void> {
-    if (status === FORMING) {
+    if (storedSignature == null) {
       await this.refresh(orderId);
       return;
     }
@@ -560,11 +684,11 @@ export class ProductionDocumentsService {
     if (orderIds.length === 0) return;
     const docs = await this.prisma.productionDocument.findMany({
       where: { orderId: { in: orderIds } },
-      select: { orderId: true, status: true, factSignature: true },
+      select: { orderId: true, factSignature: true },
     });
     for (const doc of docs) {
       try {
-        await this.refreshIfStale(doc.orderId, doc.status, doc.factSignature);
+        await this.refreshIfStale(doc.orderId, doc.factSignature);
       } catch (error) {
         this.logger.warn(
           `event=production_document.refresh_stale.failed orderId=${doc.orderId} ` +
@@ -598,8 +722,8 @@ export class ProductionDocumentsService {
    * отпечатку при следующем чтении.
    *
    * Что делает задача, когда доходит до очереди:
-   *   • документа нет или он ещё ФОРМИРУЕТСЯ — выходит: формирующийся пересобирается при каждом
-   *     чтении, гнать его заранее незачем;
+   *   • документа нет или он ещё ФОРМИРУЕТСЯ — выходит: формирующийся догонит факт по отпечатку
+   *     при следующем чтении, гнать его заранее незачем;
    *   • `whenStale` — сначала сверяет отпечаток фактов и пересобирает только при расхождении
    *     (для писателей, чей вызов лежит ВНУТРИ транзакции и чей штатный путь уже зовёт `refresh`,
    *     как закрытие коробки);
@@ -669,14 +793,22 @@ export class ProductionDocumentsService {
   /**
    * Чего документ ещё ждёт. Пусто — значит все факты легли.
    *
-   * Два источника, оба про деньги: незакрытая коробка (сдельная по ней ещё не подтверждена) и
-   * начисления в ожидании. Материал сюда не входит намеренно: списание может прийти когда
-   * угодно, и держать документ незакрытым из-за него значило бы не закрывать его никогда.
+   * Первый источник — сам заказ: документ, заведённый до закрытия (14.09.2026), не может стать
+   * окончательным, пока цех шьёт, — иначе недошитый выпуск уехал бы в ERP как сдача. Отменённый
+   * после формирования заказ держит документ так же, но с честной причиной: выпуска не будет.
+   *
+   * Ещё два — про деньги: незакрытая коробка (сдельная по ней ещё не подтверждена) и начисления
+   * в ожидании. Материал сюда не входит намеренно: списание может прийти когда угодно, и держать
+   * документ незакрытым из-за него значило бы не закрывать его никогда.
    */
   private async pendingReasons(
     orderId: string,
   ): Promise<ProductionDocumentPendingReasonDto[]> {
-    const [openBoxes, pendingEarnings] = await Promise.all([
+    const [order, openBoxes, pendingEarnings] = await Promise.all([
+      this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: { status: true },
+      }),
       this.prisma.box.findMany({
         where: { closedAt: null, items: { some: { passport: { orderId } } } },
         select: { number: true, totalQty: true },
@@ -691,6 +823,18 @@ export class ProductionDocumentsService {
     ]);
 
     const reasons: ProductionDocumentPendingReasonDto[] = [];
+    if (order && order.status === OrderStatus.CANCELLED) {
+      reasons.push({
+        code: 'ORDER_CANCELLED',
+        text: 'Заказ отменён — выпуска по нему не будет',
+      });
+    } else if (order && order.status !== OrderStatus.DONE) {
+      reasons.push({
+        code: 'ORDER_OPEN',
+        text: 'Заказ ещё в работе — выпуск не окончателен, документ наполняется по ходу производства',
+        detail: ORDER_STATUS_LABELS[order.status],
+      });
+    }
     if (openBoxes.length > 0) {
       reasons.push({
         code: 'OPEN_BOX',
@@ -744,19 +888,23 @@ export class ProductionDocumentsService {
     };
 
     // Документы, которые ещё формируются, дособираем перед показом — иначе список показывал бы
-    // вчерашнее состояние цеха. Ограничение бережёт страницу от каскада тяжёлых пересчётов.
+    // вчерашнее состояние цеха. По отпечатку: документ по открытому заказу формируется всё
+    // производство, и безусловный пересчёт десяти таких на каждое открытие списка — это десять
+    // разносок оклада по цеху. Ограничение бережёт страницу от каскада тяжёлых пересчётов.
     const stale = await this.prisma.productionDocument.findMany({
       where: { ...where, status: FORMING },
-      select: { orderId: true },
-      orderBy: { closedAt: 'desc' },
+      select: { orderId: true, factSignature: true },
+      orderBy: [{ closedAt: { sort: 'desc', nulls: 'first' } }, { createdAt: 'desc' }],
       take: 10,
     });
-    for (const s of stale) await this.refresh(s.orderId);
+    for (const s of stale) await this.refreshIfStale(s.orderId, s.factSignature);
 
     const [rows, total, formingCount] = await Promise.all([
       this.prisma.productionDocument.findMany({
         where,
-        orderBy: [{ closedAt: 'desc' }, { number: 'desc' }],
+        // Документы по открытым заказам (`closedAt = null`) — первыми: они живые, за ними
+        // смотрят; сданные — по убыванию даты закрытия, как и раньше.
+        orderBy: [{ closedAt: { sort: 'desc', nulls: 'first' } }, { number: 'desc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
         select: this.listSelect(),
@@ -777,7 +925,7 @@ export class ProductionDocumentsService {
   async getOne(id: string): Promise<ProductionDocumentDto> {
     const found = await this.prisma.productionDocument.findUnique({
       where: { id },
-      select: { orderId: true, status: true, factSignature: true },
+      select: { orderId: true, factSignature: true },
     });
     if (!found) {
       throw new NotFoundException({
@@ -785,18 +933,21 @@ export class ProductionDocumentsService {
         message: 'Документ выпуска не найден',
       });
     }
-    await this.refreshIfStale(found.orderId, found.status, found.factSignature);
+    await this.refreshIfStale(found.orderId, found.factSignature);
     return this.buildDto(found.orderId);
   }
 
-  /** Документ заказа — для блока в карточке заказа. `null`, если заказ ещё не закрыт. */
+  /**
+   * Документ заказа — для блока в карточке заказа. `null`, если документа ещё нет: заказ не
+   * закрыт и заранее его никто не формировал.
+   */
   async forOrder(orderId: string): Promise<ProductionDocumentDto | null> {
     const found = await this.prisma.productionDocument.findUnique({
       where: { orderId },
-      select: { status: true, factSignature: true },
+      select: { factSignature: true },
     });
     if (!found) return null;
-    await this.refreshIfStale(orderId, found.status, found.factSignature);
+    await this.refreshIfStale(orderId, found.factSignature);
     return this.buildDto(orderId);
   }
 
@@ -834,7 +985,7 @@ export class ProductionDocumentsService {
     qtyPlan: number;
     totalRub: Prisma.Decimal;
     perUnitRub: Prisma.Decimal;
-    closedAt: Date;
+    closedAt: Date | null;
     readyAt: Date | null;
     lastFactAt: Date | null;
     lastFactKind: string | null;
@@ -853,7 +1004,7 @@ export class ProductionDocumentsService {
       qtyPlan: row.qtyPlan,
       totalRub: num(row.totalRub),
       perUnitRub: num(row.perUnitRub),
-      closedAt: row.closedAt.toISOString(),
+      closedAt: row.closedAt?.toISOString() ?? null,
       readyAt: row.readyAt?.toISOString() ?? null,
       lastFactAt: row.lastFactAt?.toISOString() ?? null,
       lastFactKind: (row.lastFactKind as ProductionDocumentFactKind | null) ?? null,

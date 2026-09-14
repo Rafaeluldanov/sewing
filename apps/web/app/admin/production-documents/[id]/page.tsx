@@ -351,7 +351,14 @@ export default async function AdminProductionDocumentDetailPage({
             )}
           </dd>
           <dt>Закрыт</dt>
-          <dd>{fmtDateTime(doc.closedAt)}</dd>
+          <dd>
+            {doc.closedAt ? (
+              fmtDateTime(doc.closedAt)
+            ) : (
+              // Документ заведён по открытому заказу: дату проставит закрытие заказа.
+              <span className="admin-muted">заказ ещё в работе</span>
+            )}
+          </dd>
           <dt>Окончателен с</dt>
           <dd>
             {doc.readyAt ? (

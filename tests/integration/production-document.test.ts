@@ -7,7 +7,10 @@
  *   4. когда фактов больше нет — становится СФОРМИРОВАН сам, без чьей-либо кнопки;
  *   5. поздний факт после фиксации документ ПЕРЕСОБИРАЕТ и помечает причину;
  *   6. повторное закрытие второй документ не заводит (гонка авто- и ручного закрытия);
- *   7. кнопки «провести» нет: API документа — только чтение.
+ *   7. кнопки «провести» нет: API документа — только чтение;
+ *   8. по ОТКРЫТОМУ заказу документ можно завести кнопкой заранее (14.09.2026): он формируется
+ *      по ходу производства, окончательным становится только с закрытием заказа, а закрытие
+ *      подхватывает его, а не заводит второй.
  */
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
@@ -293,16 +296,99 @@ describeWithDb('integration — документ выпуска собирает
     expect(await t.prisma.productionDocument.count({ where: { orderId } })).toBe(1);
   });
 
-  test('достройка отказывает по незакрытому заказу и по заказу без упаковки', async () => {
-    const inWork = await orderReadyToClose();
-    // Заказ ещё в производстве — выпуска не было.
-    await request(t.app.getHttpServer())
-      .post(`/api/admin/orders/${inWork}/production-document`)
+  test('по открытому заказу документ заводится кнопкой заранее и окончателен только с закрытием', async () => {
+    const orderId = await orderReadyToClose();
+    // Заказ ещё в производстве — кнопка заводит документ, а не отказывает (14.09.2026).
+    const formed = await request(t.app.getHttpServer())
+      .post(`/api/admin/orders/${orderId}/production-document`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    expect(formed.body.number).toMatch(/^ПР-\d{8}-\d{4}$/);
+    expect(formed.body.status).toBe('FORMING');
+    // Закрытия не было — и дату его документ не выдумывает.
+    expect(formed.body.closedAt).toBeNull();
+    expect(formed.body.readyAt).toBeNull();
+    // Это не достройка задним числом: документ живёт с момента формирования.
+    expect(formed.body.backfilledAt).toBeNull();
+    // Что уже упаковано — уже в составе.
+    expect(formed.body.qtyGood).toBe(10);
+    expect(formed.body.lines).toHaveLength(1);
+    // Первая причина «ещё формируется» — сам заказ: без его закрытия выпуск не окончателен.
+    expect(formed.body.pendingReasons[0]).toMatchObject({
+      code: 'ORDER_OPEN',
+      detail: 'В производстве',
+    });
+
+    // Чтение карточки заказа отдаёт тот же документ, не пересобирая его в READY.
+    const seen = await documentOf(orderId);
+    expect(seen.id).toBe(formed.body.id);
+    expect(seen.status).toBe('FORMING');
+
+    // Закрытие заказа ПОДХВАТЫВАЕТ документ: проставляет дату закрытия и доводит до READY.
+    await close(orderId);
+    const doc = await documentOf(orderId);
+    expect(doc.id).toBe(formed.body.id);
+    expect(doc.number).toBe(formed.body.number);
+    expect(doc.status).toBe('READY');
+    expect(doc.closedAt).not.toBeNull();
+    expect(doc.lastFactKind).toBe('ORDER_CLOSED');
+    expect(doc.pendingReasons).toEqual([]);
+    expect(await t.prisma.productionDocument.count({ where: { orderId } })).toBe(1);
+  });
+
+  test('по открытому заказу без упаковки документ заводится пустым — наполнится по ходу', async () => {
+    const orderId = await orderReadyToClose();
+    await t.prisma.passport.updateMany({
+      where: { orderId },
+      data: { status: 'IN_PROGRESS', qtyGood: 0 },
+    });
+    const formed = await request(t.app.getHttpServer())
+      .post(`/api/admin/orders/${orderId}/production-document`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    expect(formed.body.status).toBe('FORMING');
+    expect(formed.body.qtyGood).toBe(0);
+    expect(formed.body.qtyPlan).toBe(10);
+    expect(formed.body.lines).toEqual([]);
+    expect(formed.body.pendingReasons[0].code).toBe('ORDER_OPEN');
+
+    // Открытые документы — первыми в списке и в счётчике «формируются».
+    const list = await request(t.app.getHttpServer())
+      .get('/api/admin/production-documents')
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    expect(list.body.formingCount).toBe(1);
+    expect(list.body.items[0].id).toBe(formed.body.id);
+    expect(list.body.items[0].closedAt).toBeNull();
+
+    // Упаковали — документ увидел выпуск при следующем чтении, статус не изменился.
+    await t.prisma.passport.updateMany({
+      where: { orderId },
+      data: { status: 'PACKED', qtyGood: 5 },
+    });
+    const grown = await documentOf(orderId);
+    expect(grown.qtyGood).toBe(10);
+    expect(grown.status).toBe('FORMING');
+  });
+
+  test('отказы формирования: отменённый заказ и заказ, закрытый без упаковки', async () => {
+    const cancelled = await orderReadyToClose();
+    await t.prisma.order.update({
+      where: { id: cancelled },
+      data: { status: 'CANCELLED' },
+    });
+    const refused = await request(t.app.getHttpServer())
+      .post(`/api/admin/orders/${cancelled}/production-document`)
       .set('Cookie', cookies.manager)
       .send({})
       .expect(409);
+    expect(refused.body.code).toBe('PRODUCTION_DOCUMENT_ORDER_CANCELLED');
+    expect(await t.prisma.productionDocument.count({ where: { orderId: cancelled } })).toBe(0);
 
-    // Закрыт, но паспорта не упакованы: пустой документ выпуска — не документ.
+    // Закрыт, но паспорта не упакованы: пустой документ выпуска по закрытому заказу — не документ.
+    const inWork = await orderReadyToClose();
     await t.prisma.passport.updateMany({
       where: { orderId: inWork },
       data: { status: 'IN_PROGRESS' },

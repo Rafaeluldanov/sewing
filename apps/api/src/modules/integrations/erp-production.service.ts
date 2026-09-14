@@ -157,6 +157,7 @@ export class ErpProductionService {
         recalculatedAt: true,
         recalcReason: true,
         closedAt: true,
+        createdAt: true,
         qtyPlan: true,
         qtyGood: true,
         qtyDefect: true,
@@ -244,11 +245,20 @@ export class ErpProductionService {
       erp_customer_order_id: doc.order.erpCustomerOrderId,
       erp_customer_order_number: doc.order.erpCustomerOrderNumber,
       customer: doc.order.customer,
-      closed_at: doc.closedAt.toISOString(),
+      // Сюда попадают только `READY`, а `READY` без закрытого заказа не бывает (документ,
+      // заведённый по открытому заказу, держит `pendingReasons.ORDER_OPEN`) — `closedAt` здесь
+      // всегда есть. Запасные значения — на тип, не на случай: очередь выбирает `readyAt IS NOT
+      // NULL`, а `createdAt` не пуст никогда.
+      closed_at: (doc.closedAt ?? doc.readyAt ?? doc.createdAt).toISOString(),
       ready_at: doc.readyAt?.toISOString() ?? null,
       recalculated_at: doc.recalculatedAt?.toISOString() ?? null,
       // G7-1: ключ курсора ERP — max(ready_at, recalculated_at), он же ключ сортировки страницы.
-      queue_at: (queueAtById.get(doc.id) ?? doc.readyAt ?? doc.closedAt).toISOString(),
+      queue_at: (
+        queueAtById.get(doc.id) ??
+        doc.readyAt ??
+        doc.closedAt ??
+        doc.createdAt
+      ).toISOString(),
       recalc_reason: doc.recalcReason,
       pattern_item_id: doc.order.patternItemId,
       pattern_name: doc.order.patternNameSnapshot,
