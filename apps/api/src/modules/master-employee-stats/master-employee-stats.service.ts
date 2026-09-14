@@ -39,6 +39,10 @@ import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ShiftsService } from '../shifts/shifts.service.js';
 import { ShiftAutoCloseService } from '../shifts/shift-auto-close.service.js';
 import {
+  rawWorkedSeconds,
+  resolveShiftWorkedCapSeconds,
+} from '../salary/shift-worked-cap.js';
+import {
   clampSegment,
   loadShiftSegments,
   splitSegmentByMoscowDays,
@@ -961,7 +965,11 @@ export class MasterEmployeeStatsService {
             }),
             this.prisma.recutSession.findMany({
               where: { employeeId: { in: empIds }, status: 'ACTIVE' },
-              select: { employeeId: true },
+              select: {
+                employeeId: true,
+                startedAt: true,
+                shiftSession: { select: { endedAt: true } },
+              },
             }),
           ]);
     const passportsByEmployee = new Map<string, number>();
@@ -971,6 +979,21 @@ export class MasterEmployeeStatsService {
       }
     }
     const recutEmployees = new Set(recuts.map((r) => r.employeeId));
+    // Аудит движка расчёта 13.09.2026, G4-3, ревью: подкрой концом смены
+    // не режется и закрытием смены не завершается (решение №12 за
+    // владельцем) — вместо этого мастер видит предупреждение: подкрой
+    // начат в уже закрытой смене либо тикает дольше предела K7.
+    const recutCapSeconds =
+      recuts.length > 0 ? await resolveShiftWorkedCapSeconds(this.prisma) : 0;
+    const recutOverLimit = new Set<string>();
+    for (const r of recuts) {
+      if (
+        r.shiftSession?.endedAt != null ||
+        rawWorkedSeconds(r.startedAt, now) > recutCapSeconds
+      ) {
+        recutOverLimit.add(r.employeeId);
+      }
+    }
 
     const dtoRows: MasterActiveShiftDto[] = rows.map((r) => ({
       shiftId: r.id,
@@ -986,6 +1009,7 @@ export class MasterEmployeeStatsService {
       startedAt: r.startedAt.toISOString(),
       passportsInProgress: passportsByEmployee.get(r.employeeId) ?? 0,
       hasActiveRecut: recutEmployees.has(r.employeeId),
+      activeRecutOverLimit: recutOverLimit.has(r.employeeId),
     }));
 
     return { now: now.toISOString(), rows: dtoRows };
@@ -1004,11 +1028,11 @@ export class MasterEmployeeStatsService {
    *     что у `MeService.switchWorkplace`;
    *   - закрытие идёт через `ShiftsService.stop` — тем же путём, что
    *     самозакрытие (в т.ч. `safeSyncSalary`, оклад выравнивается сам);
-   *   - активный подкрой завершается внутри `ShiftsService.stop` тем же
-   *     моментом (Аудит движка расчёта 13.09.2026, G4-3: подкрой —
-   *     активность внутри смены, таймер не должен пережить её закрытие);
-   *     отдельной логики по `RecutSession` здесь нет, мастер видит
-   *     только флаг в DTO.
+   *   - активный подкрой НЕ трогаем: `RecutSession` — отдельная
+   *     активность раскройщика, мастер видит только флаги в DTO
+   *     (`hasActiveRecut` / `activeRecutOverLimit`). Завершать подкрой
+   *     закрытием смены — решение №12 Аудита движка расчёта 13.09.2026,
+   *     владельцем не принято (ревью G4-3).
    *
    * Аудит — `MASTER_SHIFT_FORCE_CLOSED` (`entityType = SHIFT_SESSION`,
    * `employeeId` = мастер-актор, закрываемый сотрудник в payload).

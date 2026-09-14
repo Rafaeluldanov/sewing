@@ -284,7 +284,9 @@ function ActiveShiftCard({
         )}
         {shift.hasActiveRecut && (
           <div className="mstat__shift-warn">
-            ⚠ Активный подкрой — время продолжает идти
+            {shift.activeRecutOverLimit
+              ? '⚠ Подкрой длиннее смены/предела — доплата будет обрезана предохранителем'
+              : '⚠ Активный подкрой — время продолжает идти'}
           </div>
         )}
       </div>

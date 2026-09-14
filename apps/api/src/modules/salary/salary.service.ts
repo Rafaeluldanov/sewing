@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PayrollPayoutStatus, Prisma, SalaryEntrySource } from '@prisma/client';
 import type {
   ListSalaryQuery,
@@ -23,7 +23,10 @@ import {
 import { isSalaryManager } from './salary.constants.js';
 import { resolveEffectiveHourlyRate } from './salary-rate.js';
 import {
+  buildCapNote,
   cappedWorkedSeconds,
+  mergeCapNote,
+  rawWorkedSeconds,
   resolveShiftWorkedCapSeconds,
 } from './shift-worked-cap.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -62,7 +65,10 @@ import { AuditService } from '../audit/audit.service.js';
  *   - длительность ОДНОЙ закрытой смены в расчёте ограничена
  *     предохранителем (`shift-worked-cap.ts`: `shiftMaxDurationHours`
  *     или 16 ч) — забытая смена, закрытая через сутки, не платит 24,5 ч
- *     (Аудит движка расчёта 13.09.2026, K7).
+ *     (Аудит движка расчёта 13.09.2026, K7). Обрезанная строка помечена:
+ *     `managerComment = «Обрезано предохранителем N ч (фактически M ч)»`
+ *     (ревью K7 — иначе 16 ч в ведомости неотличимы от честных 16 ч);
+ *     пометка своя, текст менеджера sync не трогает.
  *   - `compensationType` сотрудника решает, нужно ли вообще
  *     создавать запись. Спрашиваем у `isSalaryEligible` (ADR-0021):
  *     `SALARY`/`MIXED` ⇒ да, `PIECEWORK` ⇒ никогда.
@@ -72,6 +78,8 @@ import { AuditService } from '../audit/audit.service.js';
  */
 @Injectable()
 export class SalaryService {
+  private readonly logger = new Logger(SalaryService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -151,12 +159,13 @@ export class SalaryService {
     // неизвестны. Несколько закрытых смен за день суммируются: активная
     // смена у человека одна (partial-unique индекс), интервалы не
     // перекрываются, поэтому сумма длительностей = реальное время.
-    const worked = await computeWorkedSeconds(
+    const hours = await computeWorkedSeconds(
       tx,
       employeeId,
       day,
       endOfDay(date),
     );
+    const worked = hours.total;
     if (worked <= 0) {
       // Ещё нет ни одной закрытой смены за день (например, sync на
       // `start`, когда смену только открыли). Не создаём пустую запись
@@ -165,6 +174,13 @@ export class SalaryService {
     }
 
     const amount = hourlyAmount(employee.salaryPerHour, worked);
+    // Аудит 13.09.2026, K7, ревью: обрезанная строка помечена, а не
+    // выглядит как честные N часов.
+    const capNote = this.capNoteFor(hours, {
+      employeeId,
+      source: SalaryEntrySource.SHIFT_DAY,
+      day,
+    });
 
     // Ищем существующую запись, чтобы решить, можно ли перезаписывать
     // amount. `upsert` сам по себе уважает `editedManually` через
@@ -195,7 +211,11 @@ export class SalaryService {
       }
       const updated = await tx.salaryEntry.update({
         where: { id: existing.id },
-        data: { amount, workedSeconds: worked },
+        data: {
+          amount,
+          workedSeconds: worked,
+          managerComment: mergeCapNote(existing.managerComment, capNote),
+        },
         include: salaryInclude,
       });
       return toDto(updated);
@@ -209,6 +229,7 @@ export class SalaryService {
           amount,
           workedSeconds: worked,
           source: SalaryEntrySource.SHIFT_DAY,
+          managerComment: capNote,
         },
         include: salaryInclude,
       });
@@ -303,12 +324,9 @@ export class SalaryService {
     // ЗАКРЫТОЙ смены, строку не создаём — иначе оклад появлялся бы у
     // человека, который в этом месяце ещё не выходил (например, sync
     // на открытии первой смены).
-    const worked = await computeWorkedSeconds(
-      tx,
-      employeeId,
-      monthStart,
-      endOfMonth(monthStart),
-    );
+    const worked = (
+      await computeWorkedSeconds(tx, employeeId, monthStart, endOfMonth(monthStart))
+    ).total;
     if (worked <= 0) return null;
 
     const amount = roundMoney(employee.salaryPerMonth);
@@ -377,10 +395,13 @@ export class SalaryService {
    * часов смены: подкрой идёт внутри смены, но оплачивается доплатой
    * сверху (сознательное решение, см. `RecutService`). Сумма =
    * `Σ(workedSeconds завершённых подкроев за день) / 3600 ×
-   * ставка ₽/час`. «Внутри смены» обеспечивает `RecutService`: конец
-   * подкроя не позже конца своей смены, закрытие смены завершает
-   * подкрой, длительность режется тем же предохранителем, что и
-   * смена (Аудит движка расчёта 13.09.2026, G4-3/K7).
+   * ставка ₽/час`. Длительность каждого подкроя `RecutService` режет
+   * тем же предохранителем, что и смену (Аудит движка расчёта
+   * 13.09.2026, G4-3/K7); концом смены подкрой НЕ режется и закрытием
+   * смены не завершается — решение №12 владельцем не принято (ревью
+   * G4-3). Обрезанная или пережившая смену доплата помечается в
+   * `managerComment` строки `RECUT` («Подкрой длиннее смены; обрезано
+   * предохранителем N ч (фактически M ч)»).
    *
    * Ставка берётся через `resolveEffectiveHourlyRate` (29.07.2026):
    * у почасовика это `salaryPerHour`, у месячника — производная
@@ -421,12 +442,13 @@ export class SalaryService {
     const ratePerHour = await resolveEffectiveHourlyRate(tx, employee, date);
     if (ratePerHour === null) return null;
 
-    const worked = await computeRecutSeconds(
+    const recut = await computeRecutSeconds(
       tx,
       employeeId,
       day,
       endOfDay(date),
     );
+    const worked = recut.total;
     if (worked <= 0) {
       // Ещё нет ни одного завершённого подкроя за день (например, sync
       // на отмене единственного, ещё не завершённого подкроя). Пустую
@@ -435,6 +457,13 @@ export class SalaryService {
     }
 
     const amount = hourlyAmount(ratePerHour, worked);
+    // Аудит 13.09.2026, G4-3, ревью: пометка в строке ведомости вместо
+    // жёсткой границы сменой (решение №12 за владельцем).
+    const capNote = this.capNoteFor(
+      recut,
+      { employeeId, source: SalaryEntrySource.RECUT, day },
+      recut.outlivedShift ? 'Подкрой длиннее смены' : undefined,
+    );
 
     const existing = await tx.salaryEntry.findUnique({
       where: {
@@ -452,7 +481,11 @@ export class SalaryService {
       if (await isSalaryEntryLocked(tx, existing.id)) return toDto(existing);
       const updated = await tx.salaryEntry.update({
         where: { id: existing.id },
-        data: { amount, workedSeconds: worked },
+        data: {
+          amount,
+          workedSeconds: worked,
+          managerComment: mergeCapNote(existing.managerComment, capNote),
+        },
         include: salaryInclude,
       });
       return toDto(updated);
@@ -466,6 +499,7 @@ export class SalaryService {
           amount,
           workedSeconds: worked,
           source: SalaryEntrySource.RECUT,
+          managerComment: capNote,
         },
         include: salaryInclude,
       });
@@ -635,6 +669,7 @@ export class SalaryService {
       // взята не из того периода.
       let newAmount: Prisma.Decimal;
       let worked: number;
+      let resetComment: string | null = null;
       if (entry.source === SalaryEntrySource.MONTH_SALARY) {
         if (
           employee.salaryPerMonth === null ||
@@ -646,12 +681,14 @@ export class SalaryService {
           entry.date.getUTCFullYear(),
           entry.date.getUTCMonth() + 1,
         );
-        worked = await computeWorkedSeconds(
-          this.prisma,
-          entry.employeeId,
-          monthStart,
-          endOfMonth(monthStart),
-        );
+        worked = (
+          await computeWorkedSeconds(
+            this.prisma,
+            entry.employeeId,
+            monthStart,
+            endOfMonth(monthStart),
+          )
+        ).total;
         newAmount = roundMoney(employee.salaryPerMonth);
       } else {
         const ratePerHour = await resolveEffectiveHourlyRate(
@@ -662,13 +699,34 @@ export class SalaryService {
         if (ratePerHour === null) {
           throw new SalaryReentryWithoutRateException();
         }
-        worked = await computeWorkedSeconds(
-          this.prisma,
-          entry.employeeId,
-          startOfDay(entry.date),
-          endOfDay(entry.date),
-        );
+        // `reset` возвращает строку под автоматику = пересчёт той же
+        // формулой, что и sync: у `RECUT` источник времени — подкрои,
+        // у `SHIFT_DAY` — смены (раньше RECUT сбрасывался по сменам).
+        const hours =
+          entry.source === SalaryEntrySource.RECUT
+            ? await computeRecutSeconds(
+                this.prisma,
+                entry.employeeId,
+                startOfDay(entry.date),
+                endOfDay(entry.date),
+              )
+            : await computeWorkedSeconds(
+                this.prisma,
+                entry.employeeId,
+                startOfDay(entry.date),
+                endOfDay(entry.date),
+              );
+        worked = hours.total;
         newAmount = hourlyAmount(ratePerHour, worked);
+        // Пометка предохранителя (K7) ставится заново — это не текст
+        // менеджера, а часть автоматического расчёта.
+        resetComment = this.capNoteFor(
+          hours,
+          { employeeId: entry.employeeId, source: entry.source, day: entry.date },
+          'outlivedShift' in hours && hours.outlivedShift
+            ? 'Подкрой длиннее смены'
+            : undefined,
+        );
       }
       const updated = await this.prisma.$transaction(async (tx) => {
         const row = await tx.salaryEntry.update({
@@ -677,7 +735,7 @@ export class SalaryService {
             amount: newAmount,
             workedSeconds: worked,
             editedManually: false,
-            managerComment: null,
+            managerComment: resetComment,
             editedByEmployeeId: null,
           },
           include: salaryInclude,
@@ -765,6 +823,26 @@ export class SalaryService {
   // ===========================================================================
   // INTERNAL
   // ===========================================================================
+
+  /**
+   * Пометка обрезанной строки (Аудит 13.09.2026, K7/G4-3, ревью):
+   * `null`, если предохранитель не сработал. Срабатывание дополнительно
+   * логируется — ведомость и лог должны называть одну причину расхождения
+   * с табелем (`ShiftSession` хранит настоящие часы).
+   */
+  private capNoteFor(
+    hours: { total: number; raw: number; capSeconds: number },
+    ctx: { employeeId: string; source: SalaryEntrySource; day: Date },
+    extra?: string,
+  ): string | null {
+    if (hours.raw <= hours.total && !extra) return null;
+    const capped = hours.raw > hours.total;
+    this.logger.warn(
+      `event=salary.capped source=${ctx.source} employeeId=${ctx.employeeId} date=${toDateOnly(ctx.day)} rawSeconds=${hours.raw} paidSeconds=${hours.total} capSeconds=${hours.capSeconds}${extra ? ` note="${extra}"` : ''}`,
+    );
+    if (!capped) return extra ?? null;
+    return buildCapNote(hours.capSeconds, hours.raw, extra);
+  }
 
   private applyViewerScope(
     query: ListSalaryQuery,
@@ -930,7 +1008,7 @@ async function computeWorkedSeconds(
   employeeId: string,
   dayStart: Date,
   dayEnd: Date,
-): Promise<number> {
+): Promise<WorkedHours> {
   const sessions = await tx.shiftSession.findMany({
     where: {
       employeeId,
@@ -939,43 +1017,76 @@ async function computeWorkedSeconds(
     },
     select: { startedAt: true, endedAt: true },
   });
-  if (sessions.length === 0) return 0;
+  if (sessions.length === 0) return { total: 0, raw: 0, capSeconds: 0 };
   const capSeconds = await resolveShiftWorkedCapSeconds(tx);
   let total = 0;
+  let raw = 0;
   for (const s of sessions) {
     if (!s.endedAt) continue;
-    const sec = cappedWorkedSeconds(s.startedAt, s.endedAt, capSeconds);
-    if (sec > 0) total += sec;
+    total += cappedWorkedSeconds(s.startedAt, s.endedAt, capSeconds);
+    raw += rawWorkedSeconds(s.startedAt, s.endedAt);
   }
-  return total;
+  return { total, raw, capSeconds };
+}
+
+/**
+ * Секунды в деньгах (`total`, каждая смена/подкрой не больше предела) и
+ * фактические (`raw`) — разница и есть срабатывание предохранителя K7,
+ * о котором помечается строка ведомости (`SalaryService.capNoteFor`).
+ */
+interface WorkedHours {
+  total: number;
+  raw: number;
+  capSeconds: number;
 }
 
 /**
  * Сумма секунд завершённых подкроев (`RecutSession`, `status = DONE`)
  * сотрудника за день. Берём зафиксированный при завершении
- * `workedSeconds`; сессии, начавшиеся в пределах `[dayStart, dayEnd]`.
- * `ACTIVE`/`CANCELLED` не учитываются (первые ещё идут, вторые не
- * оплачиваются). Используется `SalaryService.syncDailyRecut`.
+ * `workedSeconds` (уже обрезанный предохранителем в `RecutService.finish`);
+ * сессии, начавшиеся в пределах `[dayStart, dayEnd]`. `ACTIVE`/`CANCELLED`
+ * не учитываются (первые ещё идут, вторые не оплачиваются). Используется
+ * `SalaryService.syncDailyRecut`.
+ *
+ * `raw` — фактические `endedAt − startedAt`, `outlivedShift` — хоть один
+ * подкрой дня закончился после конца своей смены (Аудит 13.09.2026,
+ * G4-3, ревью: вместо жёсткой границы сменой — пометка в ведомости).
  */
 async function computeRecutSeconds(
   tx: Prisma.TransactionClient | PrismaService,
   employeeId: string,
   dayStart: Date,
   dayEnd: Date,
-): Promise<number> {
+): Promise<WorkedHours & { outlivedShift: boolean }> {
   const sessions = await tx.recutSession.findMany({
     where: {
       employeeId,
       status: 'DONE',
       startedAt: { gte: dayStart, lte: dayEnd },
     },
-    select: { workedSeconds: true },
+    select: {
+      startedAt: true,
+      endedAt: true,
+      workedSeconds: true,
+      shiftSession: { select: { endedAt: true } },
+    },
   });
+  if (sessions.length === 0) {
+    return { total: 0, raw: 0, capSeconds: 0, outlivedShift: false };
+  }
+  const capSeconds = await resolveShiftWorkedCapSeconds(tx);
   let total = 0;
+  let raw = 0;
+  let outlivedShift = false;
   for (const s of sessions) {
     if (s.workedSeconds && s.workedSeconds > 0) total += s.workedSeconds;
+    if (s.endedAt) {
+      raw += rawWorkedSeconds(s.startedAt, s.endedAt);
+      const shiftEnd = s.shiftSession?.endedAt ?? null;
+      if (shiftEnd && s.endedAt > shiftEnd) outlivedShift = true;
+    }
   }
-  return total;
+  return { total, raw, capSeconds, outlivedShift };
 }
 
 /**
