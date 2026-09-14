@@ -114,7 +114,8 @@ export type PayrollAccrualDocumentListQuery = z.infer<
  *
  * Нижняя граница `manualAdjustRub` зависит от начислений строки и потому
  * живёт не в схеме, а в сервисе: у строки с начислениями итог
- * `amountToPayRub` обязан остаться `> 0`, иначе 422
+ * `amountToPayRub` обязан остаться `≥ 0` (полный зачёт «в ноль»
+ * допустим — ревью K1), иначе 422
  * `PAYROLL_ACCRUAL_LINE_NON_POSITIVE` (см. `isNonPositiveAccrualLine`).
  */
 export const UpdatePayrollAccrualDocumentLineSchema = z.object({
@@ -215,14 +216,19 @@ export interface PayrollAccrualDocumentLineDto {
 
 /**
  * Аудит движка расчёта 13.09.2026, K1: строка «начисления есть, к выплате
- * ≤ 0» (удержание/зачёт аванса ≥ начислений). Проводить такой документ
- * нельзя: раньше `pay` строку молча пропускал, её начисления оставались
+ * < 0» (удержание больше начислений). Проводить такой документ нельзя:
+ * раньше `pay` строку молча пропускал, её начисления оставались
  * «не выплаченными» и уходили в следующую ведомость повторно, а удержание
  * сгорало. Сервер отвечает 422 `PAYROLL_ACCRUAL_LINE_NON_POSITIVE` и на
  * `PATCH` строки, и на `pay`; UI по этому же правилу блокирует кнопку
  * «Выплатить» и объясняет причину. Строка без начислений с одним
  * удержанием (`amountPieceworkRub + amountSalaryRub = 0`) правилом не
  * задета — там повторно брать нечего.
+ *
+ * Ревью K1: полный зачёт «в ноль» (нетто ровно 0, например 5 000 / −5 000)
+ * — штатный случай и НЕ блокирует: `pay` создаёт выплату на 0 ₽, которая
+ * закрывает начисления PIECEWORK/SALARY-строками и фиксирует зачёт
+ * ADJUSTMENT-строкой. Имя функции оставлено по коду ошибки; граница строгая.
  */
 export function isNonPositiveAccrualLine(
   line: Pick<
@@ -232,7 +238,7 @@ export function isNonPositiveAccrualLine(
 ): boolean {
   return (
     line.amountPieceworkRub + line.amountSalaryRub > 0 &&
-    line.amountToPayRub <= 0
+    line.amountToPayRub < 0
   );
 }
 

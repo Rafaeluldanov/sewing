@@ -933,9 +933,15 @@ PayrollPayout.id`. `employeeId` события (см. `AuditLogInput`) — эт�
 
 - `PAYROLL_ACCRUAL_DOCUMENT_PAID` — `PayrollAccrualDocumentsService.pay`.
   Документ проведён (`POST /…/:id/pay`): `DRAFT → PAID`; созданы
-  `PayrollPayout` ISSUED для каждой строки с `amountToPayRub > 0`.
+  `PayrollPayout` ISSUED для каждой строки с начислениями
+  (`amountToPayRub ≥ 0`, полный зачёт «в ноль» — выплата на 0 ₽) и для
+  строки с одной положительной корректировкой.
   Payload — `{ documentId, accrualDate, payoutsCreated, totalToPayRub,
-  paidById, paidAt }`.
+  adjustmentsCount, totalAdjustRub, skippedLineIds, paidById, paidAt,
+  source, externalRef }`. Аудит 13.09.2026, K1, ревью: `adjustmentsCount`
+  / `totalAdjustRub` считаются только по реально созданным
+  ADJUSTMENT-строкам; `skippedLineIds` — строки без начислений с одним
+  удержанием, по которым выплата не создана (удержание не применено).
 
 - `PAYROLL_ACCRUAL_DOCUMENT_CANCELLED` — `PayrollAccrualDocumentsService.cancel`.
   Черновик отменён (`POST /…/:id/cancel`): `DRAFT → CANCELLED`.
