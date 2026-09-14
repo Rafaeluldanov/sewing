@@ -78,6 +78,18 @@ function ActiveRecut({ session }: { session: RecutSessionDto }) {
       >
         {elapsed ?? '—'}
       </p>
+      {/* Аудит движка расчёта 13.09.2026, G4-3 (ревью): концом смены подкрой
+          не режется — вместо этого предупреждение, что доплата будет
+          обрезана предохранителем / таймер пережил смену. */}
+      {(session.longerThanShift || session.cappedByGuard) && (
+        <p className="constructor-actions__error" role="status">
+          ⚠{' '}
+          {session.longerThanShift
+            ? 'Подкрой идёт дольше смены — '
+            : 'Подкрой идёт дольше предела — '}
+          доплата будет ограничена предохранителем. Завершите таймер.
+        </p>
+      )}
       <div className="constructor-actions">
         <button
           type="button"

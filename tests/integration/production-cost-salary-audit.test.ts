@@ -9,11 +9,15 @@
  *           `MANUAL` / `RECUT` строки без смены простоя не дают.
  *   F1-2  — простой = оплаченные минуты (`SalaryEntry.workedSeconds`) −
  *           разнесённые, а не `480 − разнесённые`; legacy-строка без
- *           `workedSeconds` — фолбэк 480.
+ *           `workedSeconds` — фолбэк 480; смена месячника режется тем же
+ *           предохранителем K7 (16 ч), что и часы почасовика (ревью).
  *   F1-3  — оклад паспорта, выпущенного в окне, считается на окне самого
  *           паспорта: минуты ОТК накануне `dateFrom` попадают в день
  *           упаковки и в `salaryAllocatedCostRub` v2; дневной отчёт =
- *           живой паспорт = FINAL-снимок.
+ *           живой паспорт = FINAL-снимок. Ревью: норма часов месячника —
+ *           по месяцу дня события, а не по `from` окна; окно двигают
+ *           только завершения окладных операций; расширение назад не
+ *           дальше 60 дней — с предупреждением.
  *   F1-5  — `OPERATION_SCAN` терминала ОТК/ВТО = accept: интервал
  *           `[скан..QC_PASSED]` точный, обед между паспортами на изделие
  *           не ложится; скан швеи accept-ом не считается.
@@ -217,7 +221,28 @@ describeWithDb('integration — себестоимость: оклад / про�
         idleMinutes: number;
         idleCost: number;
       }>;
+      warnings?: string[];
     };
+  }
+
+  /** Месячник 96 000 ₽ с нормой сентября 176 ч (545,45 ₽/ч) и августа 168 ч (571,43 ₽/ч). */
+  async function setMonthly(key: string): Promise<void> {
+    await t.prisma.employee.update({
+      where: { id: seed.employees[key].id },
+      data: {
+        compensationType: 'SALARY',
+        salaryRateMode: 'MONTHLY',
+        salaryPerMonth: new Prisma.Decimal(96000),
+        salaryPerHour: null,
+      },
+    });
+    for (const [month, normHours] of [[8, 168], [9, 176]] as const) {
+      await t.prisma.payrollCalendarMonth.upsert({
+        where: { PayrollCalendarMonth_year_month_uniq: { year: 2026, month } },
+        create: { year: 2026, month, normDays: 22, normHours: new Prisma.Decimal(normHours) },
+        update: { normHours: new Prisma.Decimal(normHours) },
+      });
+    }
   }
 
   async function v2Report(dateFrom: string, dateTo = dateFrom) {
@@ -392,6 +417,35 @@ describeWithDb('integration — себестоимость: оклад / про�
     expect(v2.idleSalaryMinutes).toBeCloseTo(420, 1);
   });
 
+  test('F1-2 (ревью): забытая смена месячника пт→пн режется предохранителем 16 ч — простой 954 мин, а не 4 374', async () => {
+    await setMonthly('qc');
+    const qc = seed.employees.qc.id;
+    const minuteRate = 545.45 / 60;
+    // Смена открыта в пятницу 08:00, закрыта «Завершить смену» в понедельник 09:00 (73 ч).
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: qc,
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+        startedAt: at('2026-09-04', '08:00'),
+        endedAt: at('2026-09-07', '09:00'),
+      },
+    });
+    const { passportId } = await createPassport({ day: '2026-09-04', qty: 5 });
+    await issueFinished(passportId, seed.operations.QC.id, qc, at('2026-09-04', '08:00'), at('2026-09-04', '08:06'));
+    await pack(passportId, at('2026-09-04', '12:00'), 5);
+
+    const day = (await dailyReport('2026-09-04')).days[0];
+    expect(day.trackedMinutes).toBe(6);
+    // Оплачено = 16 ч = 960 мин (как `computeWorkedSeconds` в ведомости), а не 4 380.
+    expect(day.idleMinutes).toBe(954);
+    expect(day.idleCost).toBeCloseTo(954 * minuteRate, 1);
+
+    const v2 = await v2Report('2026-09-04');
+    expect(v2.totals.idleSalaryMinutes).toBeCloseTo(954, 1);
+    expect(Number(v2.totals.idleSalaryCostRub)).toBeCloseTo(954 * minuteRate, 1);
+  });
+
   // ---------------------------------------------------------------------------
   // F1-3 — оклад выпущенного паспорта на окне паспорта
   // ---------------------------------------------------------------------------
@@ -456,6 +510,84 @@ describeWithDb('integration — себестоимость: оклад / про�
     const snap = await t.prisma.passportCostSnapshot.findUniqueOrThrow({ where: { passportId } });
     expect(Number(snap.salaryCostRub)).toBeCloseTo(350, 2);
     expect((await dailyReport('2026-09-01')).days[0].salaryCost).toBeCloseTo(Number(snap.salaryCostRub), 2);
+  });
+
+  test('F1-3 (ревью): норма месячника — по месяцу дня события: сентябрьский ОТК по норме сентября даже при окне, расширенном в август', async () => {
+    await setMonthly('qc');
+    await setHourly('packer');
+    const qc = seed.employees.qc.id;
+    const augMinute = 96000 / 168 / 60; // 9,5238 ₽/мин
+    const sepMinute = 96000 / 176 / 60; // 9,0909 ₽/мин
+
+    // A: ОТК 31.08 (30 мин, норма августа), упаковка 02.09 (5 мин × 10 ₽).
+    const a = await createPassport({ day: '2026-08-31', qty: 5, orderNumber: 'O-F13-A' });
+    await issueFinished(a.passportId, seed.operations.QC.id, qc, at('2026-08-31', '10:00'), at('2026-08-31', '10:30'));
+    await t.prisma.passportEvent.create({
+      data: { passportId: a.passportId, type: 'ISSUED_TO_EMPLOYEE', operationId: seed.operations.PACKING.id, employeeId: seed.employees.packer.id, createdAt: at('2026-09-02', '09:00') },
+    });
+    await pack(a.passportId, at('2026-09-02', '09:05'), 5);
+    // B: ОТК 02.09 (30 мин, норма сентября), упаковка 02.09.
+    const b = await createPassport({ day: '2026-09-02', qty: 5, orderNumber: 'O-F13-B' });
+    await issueFinished(b.passportId, seed.operations.QC.id, qc, at('2026-09-02', '10:00'), at('2026-09-02', '10:30'));
+    await t.prisma.passportEvent.create({
+      data: { passportId: b.passportId, type: 'ISSUED_TO_EMPLOYEE', operationId: seed.operations.PACKING.id, employeeId: seed.employees.packer.id, createdAt: at('2026-09-02', '12:00') },
+    });
+    await pack(b.passportId, at('2026-09-02', '12:05'), 5);
+
+    const expectedA = 30 * augMinute + 50;
+    const expectedB = 30 * sepMinute + 50;
+    // Живые паспорта — эталон (у каждого своё окно).
+    expect((await passportCost(a.passportId)).salaryCost).toBeCloseTo(expectedA, 1);
+    expect((await passportCost(b.passportId)).salaryCost).toBeCloseTo(expectedB, 1);
+
+    // Отчёт за сентябрь: окно расширено к 31.08, но B считается по норме
+    // сентября (раньше — по августовской, +4,8 %).
+    const sep = await v2Report('2026-09-01', '2026-09-30');
+    const groupA = sep.orderGroups.find((g) => g.orderId === a.orderId)!;
+    const groupB = sep.orderGroups.find((g) => g.orderId === b.orderId)!;
+    expect(Number(groupA.salaryAllocatedCostRub)).toBeCloseTo(expectedA, 1);
+    expect(Number(groupB.salaryAllocatedCostRub)).toBeCloseTo(expectedB, 1);
+    expect(sep.warnings.some((w) => w.includes('окно разноса'))).toBe(false);
+    const day = (await dailyReport('2026-09-02')).days[0];
+    expect(day.salaryCost).toBeCloseTo(expectedA + expectedB, 1);
+    expect(day.warnings ?? []).toEqual([]);
+  });
+
+  test('F1-3 (ревью): OPERATION_FINISHED швеи-сдельщицы окно не двигает; ретро-ОТК старше 60 дней — окно ограничено и есть предупреждение', async () => {
+    await setHourly('qc');
+    await setHourly('packer');
+    // C: швея закрыла операцию в июне (сдельщица), ОТК и упаковка 02.09 —
+    // окно не уезжает в июнь, предупреждения нет, оклад = 30 × 10 + 5 × 10.
+    const c = await createPassport({ day: '2026-06-01', qty: 5, orderNumber: 'O-F13-C' });
+    await issueFinished(c.passportId, seed.operations.SEW_OVERLOCK_1.id, seed.employees.seamstress.id, at('2026-06-01', '10:00'), at('2026-06-01', '10:30'));
+    await issueFinished(c.passportId, seed.operations.QC.id, seed.employees.qc.id, at('2026-09-02', '10:00'), at('2026-09-02', '10:30'));
+    await t.prisma.passportEvent.create({
+      data: { passportId: c.passportId, type: 'ISSUED_TO_EMPLOYEE', operationId: seed.operations.PACKING.id, employeeId: seed.employees.packer.id, createdAt: at('2026-09-02', '11:00') },
+    });
+    await pack(c.passportId, at('2026-09-02', '11:05'), 5);
+
+    const clean = await dailyReport('2026-09-02');
+    expect(clean.days[0].salaryCost).toBeCloseTo(350, 2);
+    expect(clean.warnings ?? []).toEqual([]);
+    expect((await v2Report('2026-09-02')).warnings.some((w) => w.includes('окно разноса'))).toBe(false);
+
+    // D: ОТК окладника 01.06 (93 дня назад), упаковка 03.09 — окно назад не
+    // дальше 60 дней, июньские минуты не учтены, отчёт предупреждает.
+    const d = await createPassport({ day: '2026-06-01', qty: 5, orderNumber: 'O-F13-D' });
+    await issueFinished(d.passportId, seed.operations.QC.id, seed.employees.qc.id, at('2026-06-01', '10:00'), at('2026-06-01', '10:30'));
+    await t.prisma.passportEvent.create({
+      data: { passportId: d.passportId, type: 'ISSUED_TO_EMPLOYEE', operationId: seed.operations.PACKING.id, employeeId: seed.employees.packer.id, createdAt: at('2026-09-03', '09:00') },
+    });
+    await pack(d.passportId, at('2026-09-03', '09:05'), 5);
+
+    const capped = await dailyReport('2026-09-03');
+    expect(capped.days[0].salaryCost).toBeCloseTo(50, 2);
+    expect(capped.warnings ?? []).toHaveLength(1);
+    expect(capped.warnings![0]).toContain('60 дн.');
+    expect(capped.warnings![0]).toContain('2026-06-01');
+    const v2 = await v2Report('2026-09-03');
+    expect(v2.warnings.some((w) => w.includes('окно разноса') && w.includes('60 дн.'))).toBe(true);
+    expect(Number(v2.totals.salaryAllocatedCostRub)).toBeCloseTo(50, 2);
   });
 
   // ---------------------------------------------------------------------------

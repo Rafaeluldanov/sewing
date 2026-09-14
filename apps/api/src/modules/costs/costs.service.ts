@@ -346,6 +346,9 @@ export class CostsService {
       dateTo: dateToIso,
       days,
       summary,
+      ...(packedSalary.warnings.length > 0
+        ? { warnings: packedSalary.warnings }
+        : {}),
     };
   }
 }

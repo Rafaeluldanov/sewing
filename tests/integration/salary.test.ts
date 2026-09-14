@@ -624,8 +624,9 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
   // -------------------------------------------------------------------------
 
   /**
-   * `resetDatabase` не трункейтит CompanySettings — предел выставляем
-   * явно на каждый тест блока и возвращаем в «выключено» после.
+   * `CompanySettings` трункейтится `resetDatabase` (tests/utils/db.ts);
+   * upsert здесь задаёт значения теста явно — предел на каждый тест
+   * блока, «выключено» после.
    */
   async function setShiftMaxDurationHours(hours: number): Promise<void> {
     await t.prisma.companySettings.upsert({
@@ -656,6 +657,10 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
     expect(entry).not.toBeNull();
     expect(entry!.workedSeconds).toBe(16 * 3600);
     expect(Number(entry!.amount)).toBe(4800);
+    // Ревью K7: обрезанная строка помечена — 16 ч в ведомости не выглядят
+    // как честные 16 ч; пометка автоматическая, `editedManually` не поднят.
+    expect(entry!.managerComment).toBe('Обрезано предохранителем 16 ч (фактически 73 ч)');
+    expect(entry!.editedManually).toBe(false);
 
     // Сама смена хранит настоящую длительность — режется только число в деньгах.
     const shift = await t.prisma.shiftSession.findFirst({
@@ -681,6 +686,7 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
       });
       expect(capped!.workedSeconds).toBe(10 * 3600);
       expect(Number(capped!.amount)).toBe(3000);
+      expect(capped!.managerComment).toBe('Обрезано предохранителем 10 ч (фактически 73 ч)');
 
       // Упаковщик (MIXED, 250 ₽/ч) с обычной сменой 8 ч — как и раньше.
       await accrueClosedShift({
@@ -695,6 +701,7 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
       });
       expect(normal!.workedSeconds).toBe(8 * 3600);
       expect(Number(normal!.amount)).toBe(2000);
+      expect(normal!.managerComment).toBeNull();
     } finally {
       await setShiftMaxDurationHours(0);
     }

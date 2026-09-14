@@ -584,7 +584,7 @@ export class ProductionCostV2Service {
     // -------------------------------------------------------------------
     // 5. Маппим OperationEntry → operationLines DTO
     // -------------------------------------------------------------------
-    const warnings = new Set<string>();
+    const warnings = new Set<string>(packedSalary.warnings);
     const operationLines: ProductionCostOperationLineDto[] = entries.map((e) =>
       mapOperationEntryToLine(e),
     );

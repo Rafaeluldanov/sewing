@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
+  CompensationType,
   EntryStatus,
   OperationCategory,
   PassportEventType,
@@ -54,6 +55,27 @@ const COMPLETE_TYPES = [
   PassportEventType.WTO_PASSED,
   PassportEventType.PACKED,
 ];
+/**
+ * Аудит движка расчёта 13.09.2026, F1-3 (ревью): границы окна для оклада
+ * выпущенных паспортов считаются только по завершениям ОКЛАДНЫХ операций
+ * — этих категорий либо сотрудников с окладом (`SALARY`/`MIXED`), — а не
+ * по любому `OPERATION_FINISHED` швеи-сдельщицы (иначе окно уезжало к
+ * первой операции самого старого паспорта, обычно к дате кроя).
+ */
+const SALARIED_OPERATION_CATEGORIES: OperationCategory[] = [
+  OperationCategory.QC,
+  OperationCategory.IRONING,
+  OperationCategory.PACKING,
+  OperationCategory.CUTTING,
+];
+/**
+ * Аудит движка расчёта 13.09.2026, F1-3 (ревью): предел расширения окна
+ * назад от `dateFrom` — один переоткрытый/ретро-паспорт со старым
+ * событием иначе заставлял дневной отчёт и v2 разносить оклад за месяцы
+ * на каждый запрос. Дальше этого горизонта оклад паспорта считается не
+ * полностью, о чём отчёт предупреждает.
+ */
+export const APPORTION_WINDOW_MAX_BACK_DAYS = 60;
 
 /** Агрегат разноса оклада за окно. */
 export interface ApportionedSalary {
@@ -103,6 +125,8 @@ export interface ApportionedSalary {
  */
 @Injectable()
 export class PassportRealCostService {
+  private readonly logger = new Logger(PassportRealCostService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async getForPassport(passportId: string): Promise<PassportCostDto> {
@@ -403,19 +427,45 @@ export class PassportRealCostService {
       },
     });
     // Норма часов месяца — знаменатель ₽/час у месячного окладника
-    // (29.07.2026); одна на окно расчёта.
-    const normHours = await resolveMonthNormHours(this.prisma, from);
-    const rateByEmployee = new Map<string, number>();
+    // (29.07.2026). Аудит движка расчёта 13.09.2026, F1-3 (ревью): норма
+    // берётся по месяцу ДНЯ ключа `employee|day`, а не по `from` окна —
+    // иначе расширенное назад окно (`apportionedSalaryForPassports`)
+    // считало все сентябрьские паспорта по августовской норме, а простой
+    // тех же дней — по сентябрьской. Кэш `YYYY-MM → normHours`.
+    const normByMonth = new Map<string, Prisma.Decimal>();
+    const normHoursFor = async (dayKey: string): Promise<Prisma.Decimal> => {
+      const month = dayKey.slice(0, 7);
+      const cached = normByMonth.get(month);
+      if (cached) return cached;
+      const norm = await resolveMonthNormHours(
+        this.prisma,
+        new Date(`${month}-01T12:00:00.000Z`),
+      );
+      normByMonth.set(month, norm);
+      return norm;
+    };
+    const salariedById = new Map<string, (typeof employees)[number]>();
     const nameByEmployee = new Map<string, string>();
     for (const e of employees) {
       nameByEmployee.set(e.id, e.fullName);
-      const minute = computeMinuteRate(effectiveHourlyRateWithNorm(e, normHours));
+      // Есть ли у человека ставка вообще (норма любого месяца > 0 даёт
+      // положительный ₽/час ровно при заданном окладе/часовой ставке).
+      const minute = computeMinuteRate(
+        effectiveHourlyRateWithNorm(e, await normHoursFor(toDateKey(from))),
+      );
       if (minute > 0 && isSalaryEligible(e.compensationType)) {
-        rateByEmployee.set(e.id, minute);
+        salariedById.set(e.id, e);
       }
     }
-    const salariedIds = candidateIds.filter((id) => rateByEmployee.has(id));
+    const salariedIds = candidateIds.filter((id) => salariedById.has(id));
     if (salariedIds.length === 0) return empty;
+    const rateFor = async (employeeId: string, dayKey: string): Promise<number> => {
+      const e = salariedById.get(employeeId);
+      if (!e) return 0;
+      return computeMinuteRate(
+        effectiveHourlyRateWithNorm(e, await normHoursFor(dayKey)),
+      );
+    };
 
     // 2) Полный поток ISSUE/COMPLETE окладников в окне (+ сканы ОТК/ВТО
     //    как accept — F1-5).
@@ -489,8 +539,9 @@ export class PassportRealCostService {
     const byOpRaw = new Map<string, { minutes: number; rub: number }>();
 
     for (const [key, dayEvents] of byEmpDay) {
-      const employeeId = key.slice(0, key.lastIndexOf('|'));
-      const rate = rateByEmployee.get(employeeId) ?? 0;
+      const sep = key.lastIndexOf('|');
+      const employeeId = key.slice(0, sep);
+      const rate = await rateFor(employeeId, key.slice(sep + 1));
       const intervals = buildWorkIntervals(dayEvents, {
         capMs: CAP_MS,
         minMs: MIN_MS,
@@ -612,10 +663,16 @@ export class PassportRealCostService {
    * период, а дневной отчёт расходился со снимком за тот же день.
    *
    * Батч: одно окно = окно отчёта, расширенное до самого раннего / самого
-   * позднего завершения по этим паспортам; разнос по сотруднику × UTC-дню
-   * не зависит от ширины окна, поэтому суммы по паспорту совпадают с
-   * `salaryFor`. Если расширять нечего — возвращаем уже посчитанный
-   * разнос периода без второго прохода.
+   * позднего завершения ОКЛАДНЫХ операций по этим паспортам (ревью F1-3:
+   * категории `SALARIED_OPERATION_CATEGORIES` либо сотрудник с окладом —
+   * `OPERATION_FINISHED` швеи-сдельщицы окно не двигает); разнос по
+   * сотруднику × UTC-дню не зависит от ширины окна, поэтому суммы по
+   * паспорту совпадают с `salaryFor`. Расширение назад ограничено
+   * `APPORTION_WINDOW_MAX_BACK_DAYS` от `from` отчёта — дальше оклад
+   * паспорта считается не полностью, и об этом говорит `warnings` (v2 и
+   * дневной отчёт отдают их в своём `warnings`, плюс `warn` в лог). Если
+   * расширять нечего — возвращаем уже посчитанный разнос периода без
+   * второго прохода.
    */
   async apportionedSalaryForPassports(
     passportIds: string[],
@@ -624,21 +681,45 @@ export class PassportRealCostService {
       to: Date;
       result: Pick<ApportionedSalary, 'rubByPassport' | 'linesByPassport'>;
     },
-  ): Promise<Pick<ApportionedSalary, 'rubByPassport' | 'linesByPassport'>> {
-    if (passportIds.length === 0) return period.result;
+  ): Promise<
+    Pick<ApportionedSalary, 'rubByPassport' | 'linesByPassport'> & {
+      warnings: string[];
+    }
+  > {
+    if (passportIds.length === 0) return { ...period.result, warnings: [] };
     const span = await this.prisma.passportEvent.aggregate({
       where: {
         passportId: { in: passportIds },
         type: { in: COMPLETE_TYPES },
         employeeId: { not: null },
+        OR: [
+          { operation: { category: { in: SALARIED_OPERATION_CATEGORIES } } },
+          {
+            employee: {
+              compensationType: { in: [CompensationType.SALARY, CompensationType.MIXED] },
+            },
+          },
+        ],
       },
       _min: { createdAt: true },
       _max: { createdAt: true },
     });
+    const warnings: string[] = [];
     let from = period.from;
     let to = period.to;
     if (span._min.createdAt && span._min.createdAt < from) {
-      from = startOfUtcDay(span._min.createdAt);
+      const wanted = startOfUtcDay(span._min.createdAt);
+      const floor = new Date(
+        period.from.getTime() - APPORTION_WINDOW_MAX_BACK_DAYS * 86_400_000,
+      );
+      if (wanted < floor) {
+        from = floor;
+        const msg = `Оклад выпущенных паспортов: окно разноса ограничено ${APPORTION_WINDOW_MAX_BACK_DAYS} дн. назад от ${toDateKey(period.from)} (есть окладные события от ${toDateKey(wanted)}) — оклад таких паспортов учтён не полностью`;
+        warnings.push(msg);
+        this.logger.warn(`event=costs.apportion-window-capped ${msg}`);
+      } else {
+        from = wanted;
+      }
     }
     if (span._max.createdAt && span._max.createdAt > to) {
       to = endOfUtcDay(span._max.createdAt);
@@ -647,13 +728,13 @@ export class PassportRealCostService {
       from.getTime() === period.from.getTime() &&
       to.getTime() === period.to.getTime()
     ) {
-      return period.result;
+      return { ...period.result, warnings };
     }
     const { rubByPassport, linesByPassport } = await this.apportionSalary(
       from,
       to,
     );
-    return { rubByPassport, linesByPassport };
+    return { rubByPassport, linesByPassport, warnings };
   }
 
   private async salaryFor(

@@ -1,19 +1,23 @@
 /**
- * Подкрой (`RecutSession`) не живёт дольше своей смены — регрессия на
- * находку G4-3 Аудита движка расчёта 13.09.2026 (сестра K7 —
- * предохранитель на часы смены, см. `salary.test.ts`).
+ * Забытый таймер подкроя (`RecutSession`) — регрессия на находку G4-3
+ * Аудита движка расчёта 13.09.2026 (сестра K7 — предохранитель на часы
+ * смены, см. `salary.test.ts`) в редакции ревью.
  *
- * Было: «Завершить смену» подкрой не трогал; забытый таймер тикал до
- * следующей смены, при «Завершить подкрой» в понедельник
- * `workedSeconds = 65 ч`, доплата 19 500 ₽ уходила в ведомость (`RECUT`)
- * и в `recut_rub` документа выпуска для ERP; новый подкрой давал 409.
+ * Было: забытый таймер тикал до следующей смены, при «Завершить подкрой»
+ * в понедельник `workedSeconds = 65 ч`, доплата 19 500 ₽ уходила в
+ * ведомость (`RECUT`) и в `recut_rub` документа выпуска для ERP.
  *
- * Стало (`RecutService.finish` / `ShiftsService.stop`):
- *   1. закрытие смены завершает активный подкрой тем же моментом;
- *   2. если смена закрыта другим путём (автозакрытие, смена участка),
- *      `complete` режет конец подкроя концом смены;
- *   3. если забыли и смену, и подкрой — работает предохранитель K7:
- *      подкрой не длиннее предела на смену (16 ч по умолчанию).
+ * Первая починка резала конец подкроя концом смены и завершала подкрой
+ * при `stop` смены — это вариант «жёсткая граница сменой» из решения №12
+ * списка решений владельца («жёсткая граница или предупреждение
+ * мастеру»), которое владелец НЕ принимал (ревью G4-3). Поэтому теперь:
+ *   1. закрытие смены (`ShiftsService.stop`, в т. ч. мастером) подкрой НЕ
+ *      завершает, «Завершить подкрой» ставит `endedAt` моментом нажатия;
+ *   2. в деньгах работает только предохранитель K7: подкрой не длиннее
+ *      предела на смену (16 ч по умолчанию / `shiftMaxDurationHours`);
+ *   3. вместо границы — ПРЕДУПРЕЖДЕНИЕ: `longerThanShift` /
+ *      `cappedByGuard` в DTO подкроя, `activeRecutOverLimit` у мастера,
+ *      пометка в `managerComment` строки `RECUT` ведомости.
  *
  * Техника: `startedAt` смены/сегмента/подкроя бэкдейтятся через prisma
  * (в БД `@default(now())`), моменты «пт 18:00» / «пн 09:00» задаются
@@ -43,7 +47,7 @@ function anchor09(): Date {
   return d;
 }
 
-describeWithDb('подкрой не переживает смену (G4-3)', () => {
+describeWithDb('забытый подкрой: предохранитель + предупреждение, не граница сменой (G4-3, ревью)', () => {
   let t: TestApp;
   let seed: SeedResult;
   let cookies: Record<string, string>;
@@ -60,8 +64,8 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
     await resetDatabase(t.prisma);
     seed = await seedMinimal(t.prisma);
     await refreshAdminCookie(t);
-    // `resetDatabase` не трункейтит CompanySettings — политику
-    // автозакрытия/предел выставляем явно: выключено, предел по умолчанию.
+    // `CompanySettings` трункейтится `resetDatabase`; upsert задаёт
+    // значения теста явно: автозакрытие выключено, предел по умолчанию.
     await t.prisma.companySettings.upsert({
       where: { id: 'default' },
       create: {
@@ -84,6 +88,7 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
     cookies = {
       manager: loginAs(t, seed.employees['shop-chief']),
       cutter: loginAs(t, seed.employees.cutter),
+      master: loginAs(t, seed.employees.master),
     };
   });
 
@@ -187,7 +192,7 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
     return { shiftId, recutId, eq, op };
   }
 
-  test('«Завершить смену» завершает активный подкрой тем же моментом: 2 ч → 600 ₽, новый подкрой в понедельник доступен', async () => {
+  test('«Завершить смену» подкрой НЕ завершает; «Завершить» в понедельник → оплата по предохранителю 16 ч, а не по концу смены; флаги и пометка выставлены', async () => {
     const mon09 = anchor09();
     const fri10 = new Date(mon09.getTime() - 71 * H);
     const fri16 = new Date(mon09.getTime() - 65 * H);
@@ -204,7 +209,8 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
 
     const { recutId, eq, op } = await fridayShiftWithRecut(orderA, fri10, fri16);
 
-    // Пятница 18:00: «Завершить смену».
+    // Пятница 18:00: «Завершить смену» — смена закрыта, подкрой остаётся
+    // ACTIVE (решение №12 владельцем не принято — границы сменой нет).
     const stopped = await atMoment(fri18, () =>
       request(t.app.getHttpServer())
         .post('/api/shifts/stop')
@@ -213,36 +219,25 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
         .expect(201),
     );
     expect(new Date(stopped.body.endedAt).getTime()).toBe(fri18.getTime());
+    const afterStop = await t.prisma.recutSession.findUniqueOrThrow({ where: { id: recutId } });
+    expect(afterStop.status).toBe('ACTIVE');
+    expect(afterStop.endedAt).toBeNull();
 
-    // Подкрой завершён концом смены: 2 ч × 300 ₽ = 600 ₽.
-    const recut = await t.prisma.recutSession.findUniqueOrThrow({ where: { id: recutId } });
-    expect(recut.status).toBe('DONE');
-    expect(recut.endedAt?.getTime()).toBe(fri18.getTime());
-    expect(recut.workedSeconds).toBe(7200);
-    expect(Number(recut.ratePerHour)).toBe(300);
-    expect(Number(recut.amount)).toBe(600);
-
-    // Ведомость пятницы: SHIFT_DAY 8 ч = 2 400 ₽, RECUT 2 ч = 600 ₽, тот же день.
+    // Ведомость пятницы: SHIFT_DAY 8 ч = 2 400 ₽ без пометки (смена штатная), RECUT-строки ещё нет.
     const shiftDay = await t.prisma.salaryEntry.findFirst({
       where: { employeeId: seed.employees.cutter.id, source: 'SHIFT_DAY' },
     });
-    const recutEntry = await t.prisma.salaryEntry.findFirst({
-      where: { employeeId: seed.employees.cutter.id, source: 'RECUT' },
-    });
-    expect(shiftDay).not.toBeNull();
     expect(shiftDay!.workedSeconds).toBe(8 * 3600);
     expect(Number(shiftDay!.amount)).toBe(2400);
-    expect(recutEntry).not.toBeNull();
-    expect(recutEntry!.date.getTime()).toBe(shiftDay!.date.getTime());
-    expect(recutEntry!.workedSeconds).toBe(7200);
-    expect(Number(recutEntry!.amount)).toBe(600);
+    expect(shiftDay!.managerComment).toBeNull();
+    expect(
+      await t.prisma.salaryEntry.findFirst({
+        where: { employeeId: seed.employees.cutter.id, source: 'RECUT' },
+      }),
+    ).toBeNull();
 
-    // Себестоимость заказа (то, что уедет в документ выпуска / ERP): 600 ₽, 60 ₽/шт.
-    const cost = await factCost(orderA);
-    expect(cost.recut_rub).toBe(600);
-    expect(cost.per_unit_rub).toBeCloseTo(60, 2);
-
-    // Понедельник 09:00: новая смена, активного подкроя нет, новый стартует.
+    // Понедельник 09:00: новая смена; активный подкрой пережил свою смену и
+    // тикает дольше предела — предупреждение раскройщику и мастеру.
     await atMoment(mon09, () =>
       request(t.app.getHttpServer())
         .post('/api/shifts/start')
@@ -250,17 +245,72 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
         .send({ equipmentId: eq.id, operationId: op.id })
         .expect(201),
     );
-    const active = await request(t.app.getHttpServer())
-      .get('/api/recut/active')
-      .set('Cookie', cookies.cutter)
-      .expect(200);
-    expect(active.body?.id ?? null).toBeNull();
+    const active = await atMoment(mon09, () =>
+      request(t.app.getHttpServer())
+        .get('/api/recut/active')
+        .set('Cookie', cookies.cutter)
+        .expect(200),
+    );
+    expect(active.body.id).toBe(recutId);
+    expect(active.body.status).toBe('ACTIVE');
+    expect(active.body.longerThanShift).toBe(true);
+    expect(active.body.cappedByGuard).toBe(true);
+
+    const masterView = await atMoment(mon09, () =>
+      request(t.app.getHttpServer())
+        .get('/api/master/employee-stats/active-shifts')
+        .set('Cookie', cookies.master)
+        .expect(200),
+    );
+    const cutterRow = masterView.body.rows.find(
+      (r: { employeeId: string }) => r.employeeId === seed.employees.cutter.id,
+    );
+    expect(cutterRow).toBeDefined();
+    expect(cutterRow.hasActiveRecut).toBe(true);
+    expect(cutterRow.activeRecutOverLimit).toBe(true);
+
+    // Новый подкрой при живом старом — 409: таймер надо остановить руками.
     const second = await request(t.app.getHttpServer())
       .post('/api/recut/start')
       .set('Cookie', cookies.cutter)
       .send({ orderId: orderB });
-    expect(second.status).toBe(201);
-    expect(second.body.status).toBe('ACTIVE');
+    expect(second.status).toBe(409);
+    expect(second.body.code).toBe('RECUT_ALREADY_ACTIVE');
+
+    // «Завершить подкрой» в понедельник: endedAt = момент нажатия (не конец
+    // смены), в деньгах — предохранитель 16 ч = 4 800 ₽ (не 65 ч = 19 500 и
+    // не 2 ч = 600 по концу смены).
+    const done = await atMoment(mon09, () =>
+      request(t.app.getHttpServer())
+        .post(`/api/recut/${recutId}/complete`)
+        .set('Cookie', cookies.cutter)
+        .send({})
+        .expect(201),
+    );
+    const cap = 16 * 3600;
+    expect(done.body.status).toBe('DONE');
+    expect(new Date(done.body.endedAt).getTime()).toBe(mon09.getTime());
+    expect(done.body.workedSeconds).toBe(cap);
+    expect(done.body.ratePerHour).toBe(300);
+    expect(done.body.amount).toBe(4800);
+    expect(done.body.longerThanShift).toBe(true);
+    expect(done.body.cappedByGuard).toBe(true);
+
+    // RECUT-строка ведомости пятницы (день старта) — с пометкой.
+    const recutEntry = await t.prisma.salaryEntry.findFirst({
+      where: { employeeId: seed.employees.cutter.id, source: 'RECUT' },
+    });
+    expect(recutEntry).not.toBeNull();
+    expect(recutEntry!.date.getTime()).toBe(shiftDay!.date.getTime());
+    expect(recutEntry!.workedSeconds).toBe(cap);
+    expect(Number(recutEntry!.amount)).toBe(4800);
+    expect(recutEntry!.managerComment).toBe(
+      'Подкрой длиннее смены; обрезано предохранителем 16 ч (фактически 65 ч)',
+    );
+    expect(recutEntry!.editedManually).toBe(false);
+
+    // Себестоимость заказа (то, что уедет в документ выпуска / ERP): 4 800 ₽.
+    expect((await factCost(orderA)).recut_rub).toBe(4800);
 
     // Повторное «Завершить» уже завершённого подкроя — 409, а не вторая оплата.
     const again = await request(t.app.getHttpServer())
@@ -271,7 +321,7 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
     expect(again.body.code).toBe('RECUT_NOT_ACTIVE');
   });
 
-  test('смена закрыта мимо stop (автозакрытие/смена участка): «Завершить подкрой» в понедельник режется концом смены', async () => {
+  test('штатный подкрой 2 ч внутри смены: 600 ₽, без флагов и без пометки', async () => {
     const mon09 = anchor09();
     const fri10 = new Date(mon09.getTime() - 71 * H);
     const fri16 = new Date(mon09.getTime() - 65 * H);
@@ -283,15 +333,19 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
       ],
     });
     const orderA = await closedOrder(spec.id, { id: 'erp-order-12', number: 'ФС-000012' });
-    const { shiftId, recutId } = await fridayShiftWithRecut(orderA, fri10, fri16);
+    const { recutId } = await fridayShiftWithRecut(orderA, fri10, fri16);
 
-    // Смену закрыл не `stop` (как автозакрытие или `switchWorkplace`):
-    // подкрой остаётся ACTIVE — таймер на доске тикает до понедельника.
-    await t.prisma.shiftSession.update({ where: { id: shiftId }, data: { endedAt: fri18 } });
-    const stillActive = await t.prisma.recutSession.findUniqueOrThrow({ where: { id: recutId } });
-    expect(stillActive.status).toBe('ACTIVE');
+    // Живой таймер внутри открытой смены — предупреждений нет.
+    const active = await atMoment(new Date(fri16.getTime() + H), () =>
+      request(t.app.getHttpServer())
+        .get('/api/recut/active')
+        .set('Cookie', cookies.cutter)
+        .expect(200),
+    );
+    expect(active.body.longerThanShift).toBe(false);
+    expect(active.body.cappedByGuard).toBe(false);
 
-    const done = await atMoment(mon09, () =>
+    const done = await atMoment(fri18, () =>
       request(t.app.getHttpServer())
         .post(`/api/recut/${recutId}/complete`)
         .set('Cookie', cookies.cutter)
@@ -302,16 +356,27 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
     expect(new Date(done.body.endedAt).getTime()).toBe(fri18.getTime());
     expect(done.body.workedSeconds).toBe(7200);
     expect(done.body.amount).toBe(600);
+    expect(done.body.longerThanShift).toBe(false);
+    expect(done.body.cappedByGuard).toBe(false);
+
+    await atMoment(fri18, () =>
+      request(t.app.getHttpServer())
+        .post('/api/shifts/stop')
+        .set('Cookie', cookies.cutter)
+        .send({})
+        .expect(201),
+    );
 
     const recutEntry = await t.prisma.salaryEntry.findFirst({
       where: { employeeId: seed.employees.cutter.id, source: 'RECUT' },
     });
     expect(recutEntry!.workedSeconds).toBe(7200);
     expect(Number(recutEntry!.amount)).toBe(600);
+    expect(recutEntry!.managerComment).toBeNull();
     expect((await factCost(orderA)).recut_rub).toBe(600);
   });
 
-  test('забыли и смену, и подкрой: stop в понедельник — часы обоих не выше предела (16 ч), не 65 ч', async () => {
+  test('забыли и смену, и подкрой: stop в понедельник режет часы смены (с пометкой), подкрой остаётся активным и режется при своём «Завершить»', async () => {
     const mon09 = anchor09();
     const fri10 = new Date(mon09.getTime() - 71 * H);
     const fri16 = new Date(mon09.getTime() - 65 * H);
@@ -333,26 +398,45 @@ describeWithDb('подкрой не переживает смену (G4-3)', () 
     );
     expect(new Date(stopped.body.endedAt).getTime()).toBe(mon09.getTime());
 
-    // Предохранитель K7 (`shiftMaxDurationHours = 0` → 16 ч): смена 71 ч и
-    // подкрой 65 ч в деньгах — не больше 16 ч = 4 800 ₽ каждый. Сама
-    // `ShiftSession` хранит настоящий `endedAt` (табель мастера).
+    // Предохранитель K7 (`shiftMaxDurationHours = 0` → 16 ч): смена 71 ч в
+    // деньгах — 16 ч = 4 800 ₽ с пометкой; сама `ShiftSession` хранит
+    // настоящий `endedAt` (табель мастера).
     const cap = 16 * 3600;
-    const recut = await t.prisma.recutSession.findUniqueOrThrow({ where: { id: recutId } });
-    expect(recut.status).toBe('DONE');
-    expect(recut.endedAt?.getTime()).toBe(mon09.getTime());
-    expect(recut.workedSeconds).toBe(cap);
-    expect(Number(recut.amount)).toBe(4800);
-
     const shiftDay = await t.prisma.salaryEntry.findFirst({
       where: { employeeId: seed.employees.cutter.id, source: 'SHIFT_DAY' },
     });
     expect(shiftDay!.workedSeconds).toBe(cap);
     expect(Number(shiftDay!.amount)).toBe(4800);
+    expect(shiftDay!.managerComment).toBe('Обрезано предохранителем 16 ч (фактически 71 ч)');
+
+    // Подкрой закрытием смены не тронут.
+    const stillActive = await t.prisma.recutSession.findUniqueOrThrow({ where: { id: recutId } });
+    expect(stillActive.status).toBe('ACTIVE');
+
+    // «Завершить подкрой» через полчаса после закрытия смены: 65,5 ч
+    // фактически → 16 ч в деньгах, пометка «длиннее смены».
+    const mon0930 = new Date(mon09.getTime() + H / 2);
+    const done = await atMoment(mon0930, () =>
+      request(t.app.getHttpServer())
+        .post(`/api/recut/${recutId}/complete`)
+        .set('Cookie', cookies.cutter)
+        .send({})
+        .expect(201),
+    );
+    expect(new Date(done.body.endedAt).getTime()).toBe(mon0930.getTime());
+    expect(done.body.workedSeconds).toBe(cap);
+    expect(done.body.amount).toBe(4800);
+    expect(done.body.longerThanShift).toBe(true);
+    expect(done.body.cappedByGuard).toBe(true);
+
     const recutEntry = await t.prisma.salaryEntry.findFirst({
       where: { employeeId: seed.employees.cutter.id, source: 'RECUT' },
     });
     expect(recutEntry!.workedSeconds).toBe(cap);
     expect(Number(recutEntry!.amount)).toBe(4800);
+    expect(recutEntry!.managerComment).toBe(
+      'Подкрой длиннее смены; обрезано предохранителем 16 ч (фактически 65,5 ч)',
+    );
     expect((await factCost(orderA)).recut_rub).toBe(4800);
   });
 });

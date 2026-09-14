@@ -18,7 +18,12 @@
  *     `workedSeconds` (плоская ставка до ревизии ADR-0021) — `SHIFT_MINUTES`;
  *   - месячник (`SalaryRateMode.MONTHLY`) — дневных строк нет по построению,
  *     присутствие = закрытые `ShiftSession` за UTC-день, оплачено = их
- *     суммарная длительность (как `computeWorkedSeconds` в ведомости);
+ *     суммарная длительность, каждая смена — не больше предохранителя K7
+ *     (`salary/shift-worked-cap.ts`: `shiftMaxDurationHours` или 16 ч) —
+ *     ровно как `computeWorkedSeconds` в ведомости (ревью F1-2: иначе
+ *     забытая смена пт→пн давала месячнику 4 380 мин простоя ≈ 39 000 ₽,
+ *     когда почасовик через `SalaryEntry.workedSeconds` предохранитель
+ *     получал);
  *   - `MANUAL` / `RECUT` / `MONTH_SALARY` признаком смены не являются:
  *     премия и доплата за подкрой не говорят о присутствии, месячная
  *     строка датирована 1-м числом.
@@ -30,6 +35,10 @@
 import { SalaryEntrySource, SalaryRateMode } from '@prisma/client';
 import { SHIFT_MINUTES } from '@sewing/shared/costs';
 import type { PrismaService } from '../../prisma/prisma.service.js';
+import {
+  cappedWorkedSeconds,
+  resolveShiftWorkedCapSeconds,
+} from '../salary/shift-worked-cap.js';
 
 export interface ShiftPresence {
   /**
@@ -46,7 +55,7 @@ export async function loadShiftPresence(
   from: Date,
   to: Date,
 ): Promise<ShiftPresence> {
-  const [shiftDays, monthlySessions] = await Promise.all([
+  const [shiftDays, monthlySessions, capSeconds] = await Promise.all([
     prisma.salaryEntry.findMany({
       where: {
         date: { gte: from, lte: to },
@@ -62,6 +71,8 @@ export async function loadShiftPresence(
       },
       select: { employeeId: true, startedAt: true, endedAt: true },
     }),
+    // Аудит 13.09.2026, F1-2 (ревью): тот же предел, что у ведомости.
+    resolveShiftWorkedCapSeconds(prisma),
   ]);
 
   const paidMinutesByEmpDay = new Map<string, number>();
@@ -83,7 +94,7 @@ export async function loadShiftPresence(
   const monthlyKeys = new Set<string>();
   for (const s of monthlySessions) {
     if (!s.endedAt) continue;
-    const minutes = (s.endedAt.getTime() - s.startedAt.getTime()) / 60_000;
+    const minutes = cappedWorkedSeconds(s.startedAt, s.endedAt, capSeconds) / 60;
     if (minutes <= 0) continue;
     const key = `${s.employeeId}|${toDateKey(s.startedAt)}`;
     // Строка SHIFT_DAY у месячника — legacy (переведён с часов); смены

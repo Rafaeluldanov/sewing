@@ -3,7 +3,6 @@ import { ShiftsController } from './shifts.controller.js';
 import { ShiftsService } from './shifts.service.js';
 import { ShiftAutoCloseService } from './shift-auto-close.service.js';
 import { SalaryModule } from '../salary/salary.module.js';
-import { RecutModule } from '../recut/recut.module.js';
 
 /**
  * `ShiftAutoCloseService` экспортируется наружу: проверку «не пора ли
@@ -11,13 +10,14 @@ import { RecutModule } from '../recut/recut.module.js';
  * табель мастера и тайм-трекер админки (планировщика в проекте нет,
  * см. JSDoc сервиса).
  *
- * `RecutModule` — чтобы закрытие смены завершало активный подкрой
- * (`ShiftsService.stop` → `RecutService.completeActiveForEmployee`,
- * Аудит движка расчёта 13.09.2026, G4-3). Зависимость в одну сторону:
- * `RecutModule` про смены не знает.
+ * `RecutModule` здесь сознательно НЕТ: закрытие смены подкрой не
+ * завершает — «жёсткая граница сменой или предупреждение мастеру» — это
+ * решение №12 Аудита движка расчёта 13.09.2026, владельцем не принято
+ * (ревью G4-3); у подкроя свой предохранитель и флаги предупреждения
+ * (`RecutService`).
  */
 @Module({
-  imports: [SalaryModule, RecutModule],
+  imports: [SalaryModule],
   controllers: [ShiftsController],
   providers: [ShiftsService, ShiftAutoCloseService],
   exports: [ShiftsService, ShiftAutoCloseService],
