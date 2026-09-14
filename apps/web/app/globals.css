@@ -14766,6 +14766,29 @@ body:has(.admin-layout) .app-header { display: none !important; }
   cursor: default;
 }
 
+/* Автосохранение строки: после удачного сохранения галочка на пару секунд
+   зеленеет — вместо плашки «Сохранено.» на всю ширину, которая при
+   сохранении каждого поля дёргала бы высоту строки. */
+.wn-zone__body--log .wn-save--saved,
+.wn-zone__body--log .wn-save--saved:hover:not(:disabled) {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #065f46;
+}
+
+/* Live-регион «Сохранено.» для скринридера (визуально — галочка). */
+.wn-zrow__live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* --- подвал строки: comment-toggle + раскрытый коммент + алерты --- */
 .wn-zrow__foot {
   flex: 1 1 100%;

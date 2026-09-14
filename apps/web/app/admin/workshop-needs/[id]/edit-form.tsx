@@ -167,9 +167,15 @@ export function EditWorkshopNeedForm({
   // Такая строка показывает обычные «К закупке» / «Цена за 1 шт» с
   // исходными значениями + поле «Штук в упаковке».
   const packMode = isPackMode(isButton, need.packSize);
+  // «К закупке» по умолчанию = расчёт, пока закупщик не поставил своё
+  // число (как в строке на `/admin/workshop-needs`, см. шапку
+  // `../inline-edit-row.tsx`): значение видно в поле и уходит на backend
+  // первым же сохранением — теория копируется в факт явно.
+  const purchaseQtyIsDefault = need.purchaseQty == null;
+  const effectivePurchaseQty = need.purchaseQty ?? need.calculatedQty;
   const initialPurchaseDisplay = isThread
-    ? metersToYards(need.purchaseQty)
-    : (need.purchaseQty ?? '');
+    ? metersToYards(effectivePurchaseQty)
+    : effectivePurchaseQty;
   const initialPriceDisplay = isThread
     ? pricePerMeterToBobbin(need.quotedPrice)
     : (need.quotedPrice ?? '');
@@ -184,7 +190,7 @@ export function EditWorkshopNeedForm({
   // отличается от них (N2-1).
   const initialPackSize = need.packSize ?? '';
   const initialPackagesDisplay = packMode
-    ? piecesToPackages(need.purchaseQty, need.packSize)
+    ? piecesToPackages(effectivePurchaseQty, need.packSize)
     : '';
   const initialPackPriceDisplay = packMode
     ? pricePerPieceToPack(need.quotedPrice, need.packSize)
@@ -200,7 +206,9 @@ export function EditWorkshopNeedForm({
   // (не менялось / «Шт/упак» стёрт), `''` — закупщик стёр сам. Раньше
   // скрытые поля рендерились всегда и при пустом «Шт/упак» уносили
   // пустоту → backend писал null в purchaseQty/quotedPrice.
-  const submitButtonQty = packMode
+  // Дефолт «К закупке = расчёт»: пока в БД пусто, нетронутые «Упаковок»
+  // уходят поштучным расчётом (точное значение из БД).
+  const packQtyFromForm = packMode
     ? packFieldToSubmit({
         value: packagesValue,
         initialValue: initialPackagesDisplay,
@@ -208,6 +216,9 @@ export function EditWorkshopNeedForm({
         initialPackSize,
         convert: packagesToPieces,
       })
+    : null;
+  const submitButtonQty = packMode
+    ? (packQtyFromForm ?? (purchaseQtyIsDefault ? need.calculatedQty : null))
     : null;
   const submitButtonPrice = packMode
     ? packFieldToSubmit({
@@ -233,7 +244,7 @@ export function EditWorkshopNeedForm({
   // поле уходит исходным значением, чтобы не округлять round-trip.
   const submitPurchaseQty = isThread
     ? purchaseQtyValue === initialPurchaseDisplay
-      ? (need.purchaseQty ?? '')
+      ? effectivePurchaseQty
       : yardsToMeters(purchaseQtyValue)
     : null;
   const submitQuotedPrice = isThread
@@ -305,7 +316,7 @@ export function EditWorkshopNeedForm({
                   type="text"
                   inputMode="decimal"
                   value={isThread ? purchaseQtyValue : undefined}
-                  defaultValue={isThread ? undefined : (need.purchaseQty ?? '')}
+                  defaultValue={isThread ? undefined : initialPurchaseDisplay}
                   onChange={
                     isThread
                       ? (e) => setPurchaseQtyValue(e.target.value)
@@ -584,7 +595,9 @@ export function EditWorkshopNeedForm({
               принимает только `RUB`/`USD`/`null` (см.
               `MoneyCurrencySchema`); UI рендерит ровно то же.
               `defaultValue` берётся из `need.quotedCurrency` —
-              поле подтягивается обратно после сохранения.
+              поле подтягивается обратно после сохранения; пустая
+              валюта — RUB по умолчанию (пустота только роняла
+              «Завершить расчёт»).
             */}
             <select
               id="need-currency"
@@ -594,10 +607,9 @@ export function EditWorkshopNeedForm({
                   (need.quotedCurrency ?? '').toUpperCase() as (typeof MONEY_CURRENCIES)[number],
                 )
                   ? (need.quotedCurrency ?? '').toUpperCase()
-                  : ''
+                  : 'RUB'
               }
             >
-              <option value="">— не выбрана —</option>
               {MONEY_CURRENCIES.map((c) => (
                 <option key={c} value={c}>
                   {MONEY_CURRENCY_LABELS[c]}

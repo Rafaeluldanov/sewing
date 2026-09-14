@@ -21,14 +21,23 @@
  *   Для совместимости значение по умолчанию — `default` (старый
  *   стек label/input + кнопки), его никто кроме этой страницы
  *   не использует, но контракт прежний.
+ *
+ * Автосохранение строк (`./autosave.tsx`): перед отправкой форма просит
+ * все строки страницы сохранить несохранённое и ждёт, пока их
+ * сохранения завершатся (`flushAll`). Иначе blur последнего поля и
+ * клик по кнопке уходили на сервер одновременно, и завершение расчёта
+ * читало ещё не записанную цену — «заполните данные по строке» при
+ * заполненной строке. Пока ждём — кнопка занята («Сохраняем строки…»).
  */
 
 import { useFormState, useFormStatus } from 'react-dom';
+import { useRef, useState } from 'react';
 import { CheckCircle2, XCircle, Receipt } from 'lucide-react';
 import {
   completeOrderCalculationAction,
   type CompleteCalculationActionState,
 } from '@/app/orders/actions';
+import { useWorkshopNeedAutosave } from './autosave';
 
 const initialState: CompleteCalculationActionState = {};
 
@@ -36,9 +45,12 @@ export type CompleteCalculationFormVariant = 'default' | 'compact';
 
 function SubmitButton({
   disabled,
+  flushing,
   variant,
 }: {
   disabled?: boolean;
+  /** Ждём автосохранение строк перед отправкой. */
+  flushing: boolean;
   variant: CompleteCalculationFormVariant;
 }) {
   const { pending } = useFormStatus();
@@ -50,10 +62,14 @@ function SubmitButton({
     <button
       type="submit"
       className={className}
-      disabled={pending || disabled}
+      disabled={pending || flushing || disabled}
     >
       <Receipt size={14} strokeWidth={1.6} aria-hidden />
-      {pending ? 'Завершаем…' : 'Завершить расчёт'}
+      {flushing
+        ? 'Сохраняем строки…'
+        : pending
+          ? 'Завершаем…'
+          : 'Завершить расчёт'}
     </button>
   );
 }
@@ -74,13 +90,42 @@ export function CompleteCalculationForm({
     initialState,
   );
 
+  // Сначала — строки, потом — завершение. `bypassRef` пропускает
+  // повторный submit, который мы сами делаем после `flushAll`.
+  const autosave = useWorkshopNeedAutosave();
+  const formRef = useRef<HTMLFormElement>(null);
+  const bypassRef = useRef(false);
+  const [flushing, setFlushing] = useState(false);
+
   const formClassName =
     variant === 'compact'
       ? 'workshop-need-complete-form workshop-need-complete-form--compact'
       : 'workshop-need-complete-form';
 
   return (
-    <form action={action} className={formClassName}>
+    <form
+      ref={formRef}
+      action={action}
+      className={formClassName}
+      onSubmit={(e) => {
+        if (!autosave || bypassRef.current) {
+          bypassRef.current = false;
+          return;
+        }
+        e.preventDefault();
+        setFlushing(true);
+        void autosave.flushAll().finally(() => {
+          setFlushing(false);
+          bypassRef.current = true;
+          formRef.current?.requestSubmit();
+          // `requestSubmit` может не породить submit (HTML-валидация поля
+          // курса) — не оставляем обход включённым для следующего клика.
+          setTimeout(() => {
+            bypassRef.current = false;
+          }, 0);
+        });
+      }}
+    >
       {hasUsdLines && (
         <div className="workshop-need-complete-form__field">
           <label htmlFor={`usd-${orderId}`}>Курс USD/RUB</label>
@@ -96,7 +141,11 @@ export function CompleteCalculationForm({
         </div>
       )}
       <div className="workshop-need-complete-form__actions">
-        <SubmitButton disabled={disabled} variant={variant} />
+        <SubmitButton
+          disabled={disabled}
+          flushing={flushing}
+          variant={variant}
+        />
       </div>
       {state.error && (
         <div

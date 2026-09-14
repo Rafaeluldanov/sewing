@@ -39,7 +39,9 @@
  *   Строка потребности — компонент `<InlineEditWorkshopNeedRow>`:
  *   закупщик правит цену/валюту/qty/поставщика/дату/статус прямо
  *   в строке, не открывая карточку `[id]`. Превью/клиент уже в
- *   header группы заказа, поэтому строка компактная.
+ *   header группы заказа, поэтому строка компактная. Строка
+ *   сохраняется сама по уходу из поля (`./autosave.tsx`);
+ *   «Завершить расчёт» перед отправкой ждёт её сохранения.
  *
  * Backend: `GET /api/workshop-needs` (см.
  * `apps/api/src/modules/workshop-needs/*`). Никакой пагинации на сервере
@@ -83,6 +85,7 @@ import {
 } from '@/lib/admin-labels';
 import { ClickableCard } from '@/components/ui/clickable-card';
 import { BulkCreatePoProvider } from './bulk-create-po';
+import { WorkshopNeedAutosaveProvider } from './autosave';
 import { CompleteCalculationForm } from './complete-calculation-form';
 import {
   CollapseAllButton,
@@ -483,8 +486,11 @@ export default async function AdminWorkshopNeedsPage({
 
         {/* Провайдер архива оборачивает шапку (кнопка «Архивировать все» /
             «Очистить архив») и карточки (чекбоксы + нижний тулбар). Внутри
-            — провайдер сворачивания (кнопка «Свернуть все» + карточки). */}
+            — провайдер автосохранения строк (см. `autosave.tsx`: «Завершить
+            расчёт» ждёт сохранения строк) и провайдер сворачивания (кнопка
+            «Свернуть все» + карточки). */}
         <OrderArchiveProvider mode={tab} allOrderIds={allOrderIds}>
+          <WorkshopNeedAutosaveProvider>
           <CollapseProvider>
             <AdminSectionHeader
               title={tab === 'archive' ? 'Архив' : 'Потребности'}
@@ -507,6 +513,7 @@ export default async function AdminWorkshopNeedsPage({
               calculationsByOrder={calculationsByOrder}
             />
           </CollapseProvider>
+          </WorkshopNeedAutosaveProvider>
         </OrderArchiveProvider>
       </AdminCard>
     </AdminPageShell>

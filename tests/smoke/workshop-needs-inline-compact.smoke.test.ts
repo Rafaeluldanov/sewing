@@ -242,12 +242,15 @@ describe('Workshop need detail — quotedCurrency через select', () => {
     );
   });
 
-  test('detail-form подтягивает текущую валюту в defaultValue', () => {
+  test('detail-form подтягивает текущую валюту в defaultValue, пустая → RUB', () => {
     const src = read(DETAIL_FORM);
     expect(src).toMatch(/need\.quotedCurrency/);
-    // Опция «не выбрана» позволяет очистить валюту.
-    expect(src).toMatch(/value=""/);
-    expect(src).toMatch(/— не выбрана —/);
+    // Валюта по умолчанию — рубли: опции «не выбрана» больше нет, пустая
+    // валюта только роняла «Завершить расчёт» («Не выбрана валюта»).
+    expect(src).not.toMatch(/— не выбрана —/);
+    expect(src).toMatch(
+      /name="quotedCurrency"[\s\S]*?defaultValue=\{[\s\S]*?: 'RUB'/,
+    );
   });
 
   test('detail-form подписывает поле цены как «Цена за 1 <unit>»', () => {

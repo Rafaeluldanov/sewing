@@ -31,13 +31,30 @@
  *   - bulk-чекбокс PO привязан к `bulkSelect` (feature-flag
  *     `purchase-orders`, см. `page.tsx`).
  *
+ * Автосохранение (см. `./autosave.tsx`): строка уезжает на backend сама
+ * по уходу из поля / смене селекта, если что-то изменилось с прошлого
+ * сохранения (`lastSavedSigRef` — снимок полей формы). Галочка ✓
+ * осталась как явный «сохранить сейчас» и повтор после ошибки; после
+ * удачного сохранения она на пару секунд зеленеет («Сохранено»).
+ * Ошибка сохранения НЕ сбрасывает введённое: поля controlled, значения
+ * остаются в строке вместе с текстом ошибки.
+ *
+ * Дефолты закупщика: «К закупке» предзаполнено расчётом («Нужно»), пока
+ * в БД пусто, валюта — RUB. Оба уходят на backend первым же сохранением
+ * строки — теория копируется в факт явно (то же, что делает «Принять
+ * теорию», см. `WorkshopNeedsService.acceptCalculatedForOrder`), а
+ * «Завершить расчёт» перестаёт спотыкаться о «не выбрана валюта».
+ * Пересчёт потребности такую копию не «прибивает»: `takePurchaseCarry`
+ * (N2-4) переносит «К закупке» = старый расчёт как «принял теорию» и
+ * подставляет новый расчёт.
+ *
  * Прежний построчный режим (`?view=lines`) убран — осталась
  * единственная группировка по заказу.
  */
 
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   XCircle,
   CheckCircle2,
@@ -57,7 +74,11 @@ import {
 import { ClickableCard } from '@/components/ui/clickable-card';
 import { BulkCreatePoCheckbox } from './bulk-create-po';
 import { updateWorkshopNeedAction } from './actions';
-import { initialUpdateWorkshopNeedState } from './form-state';
+import {
+  initialUpdateWorkshopNeedState,
+  type UpdateWorkshopNeedState,
+} from './form-state';
+import { useWorkshopNeedAutosave } from './autosave';
 import {
   YARDS_PER_BOBBIN,
   isThreadNeed,
@@ -169,6 +190,35 @@ function renderCommentWithLinks(text: string): React.ReactNode[] {
   return parts;
 }
 
+/**
+ * Поля строки, которые уходят в `updateWorkshopNeedAction` (см.
+ * `actions.ts :: buildUpdateDto`). По ним считается снимок формы для
+ * автосохранения: bulk-чекбокс PO и прочее, что лежит внутри `<form>`,
+ * но строку не меняет, в снимок не входит.
+ */
+const AUTOSAVE_FIELDS = [
+  'purchaseQty',
+  'packSize',
+  'quotedPrice',
+  'quotedCurrency',
+  'selectedSupplierId',
+  'supplierNameText',
+  'expectedDeliveryDate',
+  'status',
+  'comment',
+] as const;
+
+/** Снимок значений формы: сравнивается с последним отправленным. */
+function formSignature(form: HTMLFormElement): string {
+  const fd = new FormData(form);
+  return AUTOSAVE_FIELDS.map(
+    (k) => `${k}=${fd.getAll(k).map(String).join('\u0001')}`,
+  ).join('\u0002');
+}
+
+/** Сколько держать зелёную галочку «Сохранено» после удачного сохранения. */
+const SAVED_FLASH_MS = 2500;
+
 function currencySymbol(c: string | null | undefined): string {
   switch ((c ?? '').toUpperCase()) {
     case 'RUB':
@@ -180,16 +230,23 @@ function currencySymbol(c: string | null | undefined): string {
   }
 }
 
-/** Save-кнопка зонального orders-макета (иконка ✓, `.wn-save`). */
-function ZoneSaveButton() {
+/**
+ * Save-кнопка зонального orders-макета (иконка ✓, `.wn-save`). С
+ * автосохранением она — явный «сохранить сейчас» и повтор после ошибки;
+ * `saved` на пару секунд красит её зелёным вместо отдельной плашки
+ * «Сохранено.», которая при сохранении каждого поля дёргала бы высоту
+ * строки.
+ */
+function ZoneSaveButton({ saved }: { saved: boolean }) {
   const { pending } = useFormStatus();
+  const showSaved = saved && !pending;
   return (
     <button
       type="submit"
-      className="wn-save"
+      className={`wn-save${showSaved ? ' wn-save--saved' : ''}`}
       disabled={pending}
-      title="Сохранить изменения"
-      aria-label="Сохранить"
+      title={showSaved ? 'Сохранено' : 'Сохранить изменения'}
+      aria-label={showSaved ? 'Сохранено' : 'Сохранить'}
     >
       {pending ? '…' : <CheckCircle2 size={16} strokeWidth={1.8} aria-hidden />}
     </button>
@@ -224,23 +281,44 @@ export function InlineEditWorkshopNeedRow({
   suppliersEnabled = false,
   suppliers = [],
 }: InlineEditWorkshopNeedRowProps) {
+  const autosave = useWorkshopNeedAutosave();
   const [state, action] = useFormState(
-    updateWorkshopNeedAction.bind(null, need.id),
+    // Обёртка вокруг server-action: провайдер автосохранения считает
+    // сохранения «в полёте», чтобы «Завершить расчёт» их дождался.
+    async (
+      prev: UpdateWorkshopNeedState,
+      formData: FormData,
+    ): Promise<UpdateWorkshopNeedState> => {
+      autosave?.begin();
+      try {
+        return await updateWorkshopNeedAction(need.id, prev, formData);
+      } finally {
+        autosave?.end();
+      }
+    },
     initialUpdateWorkshopNeedState,
   );
 
-  // Ref на саму форму строки — нужен, чтобы при сворачивании блока
-  // комментария программно сабмитить тот же server-action, что и
-  // кнопка «Сохранить» (`requestSubmit`). Так введённый коммент
-  // персистится в БД сразу при «Скрыть», а не теряется.
+  // Ref на саму форму строки — по нему автосохранение и сворачивание
+  // блока комментария программно сабмитят тот же server-action, что и
+  // кнопка «Сохранить» (`requestSubmit`).
   const formRef = useRef<HTMLFormElement>(null);
+  // Снимок полей на момент последней отправки (успешной или нет). Пока
+  // форма ему равна, уход из поля ничего не шлёт: табуляция по строке без
+  // правок — не сохранение. После ошибки повтор — правка поля или ✓.
+  const lastSavedSigRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (formRef.current) lastSavedSigRef.current = formSignature(formRef.current);
+  }, []);
 
   const initialCurrency = (need.quotedCurrency ?? '').toUpperCase();
+  // Валюта по умолчанию — рубли: пустая валюта только роняла «Завершить
+  // расчёт» («Не выбрана валюта»), USD закупщик выбирает сам.
   const validInitialCurrency = MONEY_CURRENCIES.includes(
     initialCurrency as (typeof MONEY_CURRENCIES)[number],
   )
     ? initialCurrency
-    : '';
+    : 'RUB';
 
   // Нитки: расход хранится в метрах, но закупщик работает в ярдах и
   // покупает бобинами (1 боб. = 4000 ярдов). Конверсия — только на
@@ -271,13 +349,19 @@ export function InlineEditWorkshopNeedRow({
   // сохранения строка перезагрузится уже в упаковках.
   const packMode = isPackMode(isButton, need.packSize);
 
+  // «К закупке» по умолчанию = расчёт («Нужно»), пока закупщик не
+  // поставил своё число. Значение видно в поле (не placeholder) и уходит
+  // на backend первым же сохранением строки — см. шапку файла.
+  const purchaseQtyIsDefault = need.purchaseQty == null;
+  const effectivePurchaseQty = need.purchaseQty ?? need.calculatedQty;
+
   // Исходные значения в единицах ОТОБРАЖЕНИЯ (для ниток — ярды /
   // цена за бобину; иначе — как в БД). Считаем один раз: если поле
   // не редактировали, при сохранении отправим исходное значение из
   // БД без обратной конверсии — так round-trip метры↔ярды не «плывёт».
   const initialPurchaseDisplay = isThread
-    ? metersToYards(need.purchaseQty)
-    : (need.purchaseQty ?? '');
+    ? metersToYards(effectivePurchaseQty)
+    : trimDecimal(effectivePurchaseQty);
   const initialPriceDisplay = isThread
     ? pricePerMeterToBobbin(need.quotedPrice)
     : (need.quotedPrice ?? '');
@@ -298,7 +382,7 @@ export function InlineEditWorkshopNeedRow({
   // уходит на backend только если отличается от них (N2-1).
   const initialPackSize = need.packSize ?? '';
   const initialPackagesDisplay = packMode
-    ? piecesToPackages(need.purchaseQty, need.packSize)
+    ? piecesToPackages(effectivePurchaseQty, need.packSize)
     : '';
   const initialPackPriceDisplay = packMode
     ? pricePerPieceToPack(need.quotedPrice, need.packSize)
@@ -385,7 +469,11 @@ export function InlineEditWorkshopNeedRow({
   // производным значением, а без packSize — пустотой, т.е. null.
   //   null — не отправлять (не менялось / «Шт/упак» стёрт);
   //   ''   — закупщик стёр значение сам, очистку передаём.
-  const submitButtonQty = packMode
+  //
+  // Дефолт «К закупке = расчёт»: пока в БД пусто, нетронутые «Упаковок»
+  // уходят поштучным расчётом (точное значение из БД, без round-trip
+  // через упаковки) — иначе дефолт для кнопок никогда бы не сохранился.
+  const packQtyFromForm = packMode
     ? packFieldToSubmit({
         value: packagesValue,
         initialValue: initialPackagesDisplay,
@@ -393,6 +481,9 @@ export function InlineEditWorkshopNeedRow({
         initialPackSize,
         convert: packagesToPieces,
       })
+    : null;
+  const submitButtonQty = packMode
+    ? (packQtyFromForm ?? (purchaseQtyIsDefault ? need.calculatedQty : null))
     : null;
   const submitButtonPrice = packMode
     ? packFieldToSubmit({
@@ -417,13 +508,51 @@ export function InlineEditWorkshopNeedRow({
   const submitPurchaseQty = !isThread
     ? null
     : purchaseQtyValue === initialPurchaseDisplay
-      ? (need.purchaseQty ?? '')
+      ? effectivePurchaseQty
       : yardsToMeters(purchaseQtyValue);
   const submitQuotedPrice = !isThread
     ? null
     : quotedPriceValue === initialPriceDisplay
       ? (need.quotedPrice ?? '')
       : pricePerBobbinToMeter(quotedPriceValue);
+
+  // ---------------------------------------------------------------------------
+  // Автосохранение. `requestAutosave` шлёт форму, только если её снимок
+  // отличается от последнего отправленного; `deferAutosave` — то же через
+  // макрозадачу, чтобы React успел закоммитить state после onChange
+  // селекта (скрытые поля ниток/кнопок считаются из state).
+  // Строка также регистрирует flush в провайдере: «Завершить расчёт»
+  // перед отправкой просит все строки сохраниться и ждёт их.
+  // ---------------------------------------------------------------------------
+  const requestAutosave = useCallback(() => {
+    const form = formRef.current;
+    if (!form || isCancelled) return;
+    const sig = formSignature(form);
+    if (sig === lastSavedSigRef.current) return;
+    form.requestSubmit();
+  }, [isCancelled]);
+  const deferAutosave = useCallback(() => {
+    setTimeout(requestAutosave, 0);
+  }, [requestAutosave]);
+  const flushRef = useRef(requestAutosave);
+  flushRef.current = requestAutosave;
+  useEffect(() => {
+    if (!autosave) return undefined;
+    return autosave.register(need.id, () => flushRef.current());
+  }, [autosave, need.id]);
+
+  // Зелёная галочка «Сохранено» на пару секунд после удачного сохранения;
+  // ошибка гасит её сразу — иначе «сохранено» и «ошибка» висели бы рядом.
+  const [savedFlash, setSavedFlash] = useState(false);
+  useEffect(() => {
+    if (!state.ok) {
+      setSavedFlash(false);
+      return undefined;
+    }
+    setSavedFlash(true);
+    const t = setTimeout(() => setSavedFlash(false), SAVED_FLASH_MS);
+    return () => clearTimeout(t);
+  }, [state]);
 
   // Secondary-строка описания: размер фурнитуры · материал · цвет
   // (см. ТЗ §5). Считаем один раз — переиспользуется в обоих макетах.
@@ -445,6 +574,11 @@ export function InlineEditWorkshopNeedRow({
     <form
       ref={formRef}
       action={action}
+      onSubmit={(e) => {
+        // И ✓, и Enter, и автосохранение проходят здесь: фиксируем снимок
+        // отправляемых полей, чтобы следующий blur без правок молчал.
+        lastSavedSigRef.current = formSignature(e.currentTarget);
+      }}
       className="wn-zrow workshop-need-inline-form"
       data-need-id={need.id}
       data-variant="orders"
@@ -535,6 +669,7 @@ export function InlineEditWorkshopNeedRow({
                   inputMode="decimal"
                   value={packagesValue}
                   onChange={(e) => setPackagesValue(e.target.value)}
+                  onBlur={deferAutosave}
                   placeholder="0"
                   disabled={isCancelled || isLockedByPo}
                 />
@@ -546,6 +681,7 @@ export function InlineEditWorkshopNeedRow({
                   inputMode="decimal"
                   value={packSizeValue}
                   onChange={(e) => setPackSizeValue(e.target.value)}
+                  onBlur={deferAutosave}
                   placeholder="0"
                   disabled={isCancelled || isLockedByPo}
                 />
@@ -577,6 +713,7 @@ export function InlineEditWorkshopNeedRow({
                   inputMode="decimal"
                   value={purchaseQtyValue}
                   onChange={(e) => setPurchaseQtyValue(e.target.value)}
+                  onBlur={deferAutosave}
                   placeholder={calcQtyDisplay}
                   disabled={isCancelled || isLockedByPo}
                 />
@@ -599,6 +736,7 @@ export function InlineEditWorkshopNeedRow({
                     inputMode="decimal"
                     value={packSizeValue}
                     onChange={(e) => setPackSizeValue(e.target.value)}
+                    onBlur={deferAutosave}
                     placeholder="0"
                     title="Укажите штук в упаковке — после сохранения строка перейдёт в упаковки"
                     disabled={isCancelled || isLockedByPo}
@@ -627,6 +765,7 @@ export function InlineEditWorkshopNeedRow({
                   ? setPackPriceValue(e.target.value)
                   : setQuotedPriceValue(e.target.value)
               }
+              onBlur={deferAutosave}
               placeholder="0.00"
               disabled={isCancelled}
             />
@@ -643,10 +782,12 @@ export function InlineEditWorkshopNeedRow({
             <select
               name="quotedCurrency"
               value={currency}
-              onChange={(e) => setCurrency(e.target.value)}
+              onChange={(e) => {
+                setCurrency(e.target.value);
+                deferAutosave();
+              }}
               disabled={isCancelled}
             >
-              <option value="">—</option>
               {MONEY_CURRENCIES.map((c) => (
                 <option key={c} value={c}>
                   {MONEY_CURRENCY_LABELS[c]}
@@ -682,6 +823,7 @@ export function InlineEditWorkshopNeedRow({
                 entity="supplier"
                 name="selectedSupplierId"
                 defaultValue={need.selectedSupplierId ?? ''}
+                onValueChange={deferAutosave}
                 disabled={isCancelled || isLockedByPo}
                 disableCreate={isCancelled || isLockedByPo}
                 aria-label="Поставщик из справочника"
@@ -714,6 +856,7 @@ export function InlineEditWorkshopNeedRow({
                     ? `Сейчас: ${need.selectedSupplierName}`
                     : '—'
               }
+              onBlur={deferAutosave}
               disabled={isCancelled}
             />
           </div>
@@ -724,6 +867,10 @@ export function InlineEditWorkshopNeedRow({
               name="expectedDeliveryDate"
               type="date"
               defaultValue={isoToDateInput(need.expectedDeliveryDate)}
+              /* По blur, не по change: при наборе даты с клавиатуры change
+                 срабатывает на каждом валидном промежуточном значении
+                 (год «0002»), и в БД уезжала бы дата из середины набора. */
+              onBlur={deferAutosave}
               disabled={isCancelled}
             />
           </label>
@@ -735,6 +882,7 @@ export function InlineEditWorkshopNeedRow({
             <select
               name="status"
               defaultValue={need.status}
+              onChange={deferAutosave}
               disabled={isCancelled || isLockedByPo}
             >
               {WORKSHOP_NEED_STATUSES.map((s) => (
@@ -749,7 +897,7 @@ export function InlineEditWorkshopNeedRow({
             <span className="wn-field__lab" aria-hidden>
               &nbsp;
             </span>
-            <ZoneSaveButton />
+            <ZoneSaveButton saved={savedFlash} />
           </div>
         </div>
       </section>
@@ -764,9 +912,9 @@ export function InlineEditWorkshopNeedRow({
           aria-expanded={commentOpen}
           aria-controls={`wnm-${need.id}`}
           onClick={() => {
-            if (commentOpen && !isCancelled) {
-              formRef.current?.requestSubmit();
-            }
+            // «Скрыть» сохраняет введённый комментарий — но, как и
+            // остальное автосохранение, только если он изменился.
+            if (commentOpen) requestAutosave();
             setCommentOpen((v) => !v);
           }}
           title={hasComment ? `Комментарий: ${commentValue}` : 'Добавить комментарий'}
@@ -807,6 +955,7 @@ export function InlineEditWorkshopNeedRow({
             maxLength={1000}
             value={commentValue}
             onChange={(e) => setCommentValue(e.target.value)}
+            onBlur={deferAutosave}
             placeholder="—"
             disabled={isCancelled}
             rows={2}
@@ -831,11 +980,13 @@ export function InlineEditWorkshopNeedRow({
           <span>{state.error}</span>
         </div>
       )}
-      {state.ok && state.successMessage && (
-        <div className="success-box wn-zrow__alert" role="status">
-          <CheckCircle2 size={14} strokeWidth={1.6} aria-hidden />
-          <span>{state.successMessage}</span>
-        </div>
+      {/* Успех показывает зелёная галочка ✓ (`savedFlash`): при
+          автосохранении каждого поля плашка на всю ширину дёргала бы
+          высоту строки. Текст — для скринридера. */}
+      {state.ok && state.successMessage && savedFlash && (
+        <span className="wn-zrow__live" role="status">
+          {state.successMessage}
+        </span>
       )}
     </form>
   );
