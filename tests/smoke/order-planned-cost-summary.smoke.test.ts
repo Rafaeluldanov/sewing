@@ -136,7 +136,9 @@ describe('Web — OrderPlannedCostSummaryCard component file', () => {
     // Аудит движка расчёта 13.09.2026, E1-5: состав прикидки = состав
     // сметы (`assembleEstimatePlan`), иначе итог меняется после
     // «Завершить расчёт» без изменения данных.
-    expect(preview).toMatch(/erpManagedAt\s*&&\s*need\.erpUnitPriceRub/);
+    // Ревью 14.09 (E1-5/E1-10): цена ERP берётся только под ERP и только при > 0.
+    expect(preview).toMatch(/need\.erpManagedAt\s*\?\s*parseAmount\(need\.erpUnitPriceRub\)/);
+    expect(preview).toMatch(/erpPriceRaw\s*>\s*0/);
     expect(preview).toMatch(/includeInCostPrice/);
     expect(preview).toMatch(/patternDevelopmentCostRub/);
     expect(preview).toMatch(/patternDevelopmentCostInCostPrice\s*===\s*false/);
