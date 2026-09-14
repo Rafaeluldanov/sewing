@@ -27,6 +27,12 @@ const num = (v: Prisma.Decimal | number | null | undefined): number =>
   v == null ? 0 : Number(v);
 const money = (v: number): Prisma.Decimal =>
   new Prisma.Decimal(v.toFixed(2));
+/** Один и тот же НАБОР предупреждений — порядок и повторы не считаются (D1-12). */
+const sameWarnings = (a: readonly string[], b: readonly string[]): boolean => {
+  const left = [...new Set(a)].sort();
+  const right = [...new Set(b)].sort();
+  return left.length === right.length && left.every((v, i) => v === right[i]);
+};
 
 /** Заготовка строки выпуска до записи: ключ группировки → количества и основания. */
 type LineDraft = {
@@ -57,6 +63,13 @@ type LineDraft = {
  * ⛔ ПОЗДНИЙ ФАКТ (списание задним числом, правка начисления) документ ПЕРЕСОБИРАЕТ и помечает
  * `recalculatedAt`/`recalcReason`. Учёт обязан сходиться с цехом, а не с моментом фиксации;
  * ERP видит такой документ повторно — она читает по курсору готовности.
+ *
+ * Кто будит сформированный документ (аудит движка расчёта 13.09.2026, D1-2/D1-3, ревью):
+ *   • писатели поздних фактов — проведение и возврат выдачи материала, утверждение начислений,
+ *     прочие расходы и строки логистики, ответ ERP по списанию — зовут `refreshLater` после
+ *     своей записи (фоном, вне транзакции);
+ *   • очередь сдачи в ERP (`refreshStaleForOrders`) и чтение карточки (`refreshIfStale`) сверяют
+ *     отпечаток фактов — страховка на случай, если писатель промолчал.
  */
 @Injectable()
 export class ProductionDocumentsService {
@@ -283,9 +296,15 @@ export class ProductionDocumentsService {
   /**
    * Пересобрать документ по фактам: строки, количества, себестоимость, состояние.
    *
-   * Зовётся событиями цеха (закрытие коробки) и лениво при чтении документа, который ещё
-   * формируется. Тихо выходит, если документа нет: заказы, закрытые до появления фичи, задним
-   * числом не восстанавливаются — «реконструированный» выпуск был бы выдумкой.
+   * Зовётся событиями цеха (закрытие коробки), лениво при чтении документа, который ещё
+   * формируется, и отложенно писателями поздних фактов (`refreshLater`). Тихо выходит, если
+   * документа нет: заказы, закрытые до появления фичи, задним числом не восстанавливаются —
+   * «реконструированный» выпуск был бы выдумкой.
+   *
+   * Сформированный документ помечается пересобранным (`recalculatedAt`/`recalcReason`), если
+   * изменились сумма, выпуск ИЛИ набор предупреждений себестоимости (ревью D1-12); «последний
+   * факт» без явного `factKind` не переписывается. Запись идёт под замком строки документа —
+   * фоновые пересборки могут наложиться на пересборку из очереди ERP или карточки.
    */
   async refresh(orderId: string, factKind?: ProductionDocumentFactKind): Promise<void> {
     const doc = await this.prisma.productionDocument.findUnique({
@@ -296,6 +315,8 @@ export class ProductionDocumentsService {
         totalRub: true,
         qtyGood: true,
         readyAt: true,
+        lastFactKind: true,
+        costWarnings: true,
       },
     });
     if (!doc) return;
@@ -329,13 +350,22 @@ export class ProductionDocumentsService {
     const isReady = pending.length === 0;
     const totalChanged = Math.abs(num(doc.totalRub) - cost.total_rub) >= 0.01;
     const qtyChanged = doc.qtyGood !== qtyGood;
+    // Аудит движка расчёта 13.09.2026, D1-12, ревью: ответ ERP FAILED/EMPTY (и переход
+    // PENDING → FAILED) меняет только предупреждения — без этого признака `recalculatedAt` не
+    // ставился, и ERP никогда не перечитывала документ: у неё оставалось «ERP ещё не ответила».
+    const warningsChanged = !sameWarnings(doc.costWarnings, cost.warnings);
     const wasReady = doc.status === READY;
     const now = new Date();
 
     // Поздний факт по уже сформированному документу — не тихая правка: помечаем, чем и когда.
-    const recalculated = wasReady && (totalChanged || qtyChanged);
+    const recalculated = wasReady && (totalChanged || qtyChanged || warningsChanged);
 
     await this.prisma.$transaction(async (tx) => {
+      // Аудит движка расчёта 13.09.2026, D1-2, ревью: пересборки теперь идут и в фоне (ответ ERP,
+      // поздние факты) и могут наложиться на пересборку из очереди сдачи или карточки. Две
+      // одновременные записи задвоили бы строки: вторая `deleteMany` не видит строк первой.
+      // Замок на строке документа выстраивает записи по очереди; вторая удаляет уже всё.
+      await tx.$queryRaw`SELECT "id" FROM "ProductionDocument" WHERE "id" = ${doc.id} FOR UPDATE`;
       await tx.productionDocumentLine.deleteMany({
         where: { productionDocumentId: doc.id },
       });
@@ -345,12 +375,21 @@ export class ProductionDocumentsService {
           status: isReady ? READY : FORMING,
           readyAt: isReady ? (doc.readyAt ?? now) : null,
           lastFactAt: isReady ? (doc.readyAt ?? now) : null,
-          lastFactKind: isReady ? (factKind ?? 'EARNINGS_APPROVED') : null,
+          // D1-12, ревью: «последний факт» — чем документ ЗАКРЫЛСЯ. Пересборка без явного вида
+          // факта (ответ ERP, отпечаток, поздняя выдача) его не переписывает — иначе каждый
+          // такой вызов ставил бы «подтверждены начисления», чего не было.
+          lastFactKind: isReady
+            ? (factKind ??
+              (wasReady ? (doc.lastFactKind as ProductionDocumentFactKind | null) : null) ??
+              'EARNINGS_APPROVED')
+            : null,
           recalculatedAt: recalculated ? now : undefined,
           recalcReason: recalculated
             ? qtyChanged
               ? 'Изменился выпуск по паспортам'
-              : 'Факт расхода или начислений пришёл после фиксации'
+              : totalChanged
+                ? 'Факт расхода или начислений пришёл после фиксации'
+                : 'Изменились предупреждения себестоимости'
             : undefined,
           qtyPlan: items._sum.qtyPlan ?? 0,
           qtyGood,
@@ -399,6 +438,8 @@ export class ProductionDocumentsService {
               totalRub: cost.total_rub,
               wasQtyGood: doc.qtyGood,
               qtyGood,
+              wasWarnings: doc.costWarnings,
+              warnings: cost.warnings,
             },
           },
           tx,
@@ -415,7 +456,7 @@ export class ProductionDocumentsService {
    * вопрос: «факты те же?». Совпал — показываем снимок, разошёлся — пересобираем.
    */
   private async factSignature(orderId: string): Promise<string> {
-    const [issues, returns, approved, pending, recut, extras, packed, events, erp] =
+    const [issues, returns, approved, pending, recut, extras, packed, events, erp, logistics] =
       await Promise.all([
         this.prisma.materialIssue.aggregate({
           where: { orderId, status: 'POSTED' },
@@ -460,6 +501,13 @@ export class ProductionDocumentsService {
           _sum: { amountRub: true, uncoveredQty: true },
           _count: true,
         }),
+        // Аудит движка расчёта 13.09.2026, D1-10, ревью: логистика заказа входит в «прочее»
+        // факта (E1-6), значит новая или исправленная строка доставки — тоже поздний факт.
+        this.prisma.orderLogisticsLine.aggregate({
+          where: { orderId },
+          _sum: { costRub: true },
+          _count: true,
+        }),
       ]);
     return [
       num(issues._sum.totalCost),
@@ -474,6 +522,8 @@ export class ProductionDocumentsService {
       num(erp._sum.amountRub),
       num(erp._sum.uncoveredQty),
       erp._count,
+      num(logistics._sum.costRub),
+      logistics._count,
     ].join('|');
   }
 
@@ -522,6 +572,98 @@ export class ProductionDocumentsService {
         );
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // ПОЗДНИЙ ФАКТ — отложенная пересборка из писателей фактов
+  // ---------------------------------------------------------------------------
+
+  /** Отложенные пересборки по заказам: цепочка задач на заказ, чтобы они не накладывались. */
+  private readonly deferred = new Map<string, Promise<void>>();
+  /** Заказы, у которых пересборка уже ЖДЁТ своего часа: повторный вызов к ней присоединяется. */
+  private readonly deferredQueued = new Set<string>();
+
+  /**
+   * Пересобрать СФОРМИРОВАННЫЙ документ заказа позже, вне пути ответа писателя.
+   *
+   * Аудит движка расчёта 13.09.2026, D1-3 (ревью) и D1-2 (ревью): поздние факты — выдача и
+   * возврат материала по READY-заказу, утверждение начислений, прочие расходы и логистика,
+   * ответ ERP по списанию — обязаны сами доводить документ до правды. Очередь сдачи освежает
+   * лишь своё окно выборки, а с курсором ERP документ старше окна не сверяется никогда.
+   *
+   * ⛔ Вызов НЕ ждёт пересборки и не входит в транзакцию писателя: полный пересчёт тянет разноску
+   * оклада по окну производства (см. `factSignature`), и класть его в ответ `PUT ack` значило бы
+   * ловить таймаут ERP на каждом пакете, а в транзакцию выдачи — держать замки цеха на чужой
+   * расчёт. Сбой пересборки пишется в лог и ничего не отменяет: документ догонит факт по
+   * отпечатку при следующем чтении.
+   *
+   * Что делает задача, когда доходит до очереди:
+   *   • документа нет или он ещё ФОРМИРУЕТСЯ — выходит: формирующийся пересобирается при каждом
+   *     чтении, гнать его заранее незачем;
+   *   • `whenStale` — сначала сверяет отпечаток фактов и пересобирает только при расхождении
+   *     (для писателей, чей вызов лежит ВНУТРИ транзакции и чей штатный путь уже зовёт `refresh`,
+   *     как закрытие коробки);
+   *   • иначе пересобирает безусловно — писатель точно знает, что факт изменился.
+   *
+   * Повторный вызов по заказу, чья задача ещё не начала работу, к ней присоединяется (дедуп);
+   * вызов во время работы ставится следом — цепочка на заказ исключает две одновременные
+   * пересборки одного документа. `delayMs` — для вызовов из транзакции: дать ей закоммититься.
+   * `AsyncLocalStorage` тенанта переживает и таймер, и продолжение промиса, поэтому
+   * `PrismaService` в задаче ходит в ту же БД, что и писатель.
+   */
+  refreshLater(
+    orderId: string,
+    opts: { source: string; whenStale?: boolean; delayMs?: number },
+  ): void {
+    if (this.deferredQueued.has(orderId)) return;
+    this.deferredQueued.add(orderId);
+    const prev = this.deferred.get(orderId) ?? Promise.resolve();
+    const task: Promise<void> = prev
+      .then(
+        () => new Promise<void>((resolve) => setTimeout(resolve, opts.delayMs ?? 0)),
+      )
+      .then(async () => {
+        this.deferredQueued.delete(orderId);
+        await this.refreshReadyIfNeeded(orderId, opts);
+      })
+      .catch((error) => {
+        this.deferredQueued.delete(orderId);
+        this.logger.warn(
+          `event=production_document.late_fact.refresh_failed orderId=${orderId} ` +
+            `source=${opts.source} error=${String(error)}`,
+        );
+      })
+      .finally(() => {
+        if (this.deferred.get(orderId) === task) this.deferred.delete(orderId);
+      });
+    this.deferred.set(orderId, task);
+  }
+
+  /** Дождаться всех отложенных пересборок — для тестов и штатной остановки. */
+  async settleDeferredRefreshes(): Promise<void> {
+    while (this.deferred.size > 0) {
+      await Promise.allSettled([...this.deferred.values()]);
+    }
+  }
+
+  /** Тело отложенной задачи: только READY-документ, по отпечатку или безусловно. */
+  private async refreshReadyIfNeeded(
+    orderId: string,
+    opts: { source: string; whenStale?: boolean },
+  ): Promise<void> {
+    const doc = await this.prisma.productionDocument.findUnique({
+      where: { orderId },
+      select: { status: true, factSignature: true },
+    });
+    if (!doc || doc.status !== READY) return;
+    if (opts.whenStale) {
+      const signature = await this.factSignature(orderId);
+      if (signature === doc.factSignature) return;
+    }
+    await this.refresh(orderId);
+    this.logger.log(
+      `event=production_document.late_fact.refreshed orderId=${orderId} source=${opts.source}`,
+    );
   }
 
   /**

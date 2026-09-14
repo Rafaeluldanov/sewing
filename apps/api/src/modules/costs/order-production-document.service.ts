@@ -7,6 +7,7 @@ import type {
   OrderProductionOperationRowDto,
   ProductionDocMaterialPlanSource,
 } from '@sewing/shared/order-production-document';
+import { PRODUCTION_DOC_MARGIN_NOTE } from '@sewing/shared/order-production-document';
 import { normalizeColorOrNull } from '@sewing/shared/colors';
 import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 
@@ -345,6 +346,9 @@ export class OrderProductionDocumentService {
         varianceDirectRub: this.m(factDirect.sub(planDirect)).toFixed(2),
         revenueRub,
         marginRub,
+        // Аудит движка расчёта 13.09.2026, E1-6, ревью: маржа здесь — по прямым затратам,
+        // без логистики/прочих/лекала, и это обязано быть подписано, а не подразумеваться.
+        marginNote: marginRub == null ? null : PRODUCTION_DOC_MARGIN_NOTE,
       },
       warnings: [...docWarnings],
     };

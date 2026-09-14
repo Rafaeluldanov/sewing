@@ -267,8 +267,13 @@ export class OrderActualMaterialsService {
             // D1-11: материал под ERP — цена её заказа поставщику (₽), она главнее
             // котировки закупщика цеха (так же в смете и документе план→факт);
             // раньше строка под ERP без `quotedPrice` давала план 0 без предупреждения.
+            // Аудит 13.09.2026, E1-10, ревью: гард `> 0` — как у сметы, план→факта и v2;
+            // `Decimal(0)` истинен, и уже сохранённый `erpUnitPriceRub = 0` давал план 0 ₽
+            // вместо котировки закупщика — витрины расходились ровно на ошибку E1-10.
             const erpPrice =
-              wn.erpManagedAt && wn.erpUnitPriceRub ? wn.erpUnitPriceRub : null;
+              wn.erpManagedAt && wn.erpUnitPriceRub?.greaterThan(0)
+                ? wn.erpUnitPriceRub
+                : null;
             const price = erpPrice ?? wn.quotedPrice;
             if (qty == null || price == null) continue;
             const currency = erpPrice != null ? 'RUB' : (wn.quotedCurrency ?? 'RUB');

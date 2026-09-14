@@ -38,16 +38,26 @@ export function buildProductionDocumentsService(t: TestApp): ProductionDocuments
   );
 }
 
-/** Очередь сдачи заказов в ERP (`GET/PUT /api/integrations/erp-production`). */
-export function buildErpProductionService(t: TestApp): ErpProductionService {
-  return new ErpProductionService(
-    t.prisma as any,
-    buildOrderFactCostService(t),
-    buildProductionDocumentsService(t),
-  );
+/**
+ * Очередь сдачи заказов в ERP (`GET/PUT /api/integrations/erp-production`).
+ * `documents` — свой экземпляр, если тесту надо дождаться его фоновых пересборок
+ * (`settleDeferredRefreshes`, ревью D1-2).
+ */
+export function buildErpProductionService(
+  t: TestApp,
+  documents: ProductionDocumentsService = buildProductionDocumentsService(t),
+): ErpProductionService {
+  return new ErpProductionService(t.prisma as any, buildOrderFactCostService(t), documents);
 }
 
-/** Очередь списания материала в ERP (`GET/PUT /api/integrations/erp-consumption`). */
-export function buildErpConsumptionService(t: TestApp): ErpConsumptionService {
-  return new ErpConsumptionService(t.prisma as any, buildProductionDocumentsService(t));
+/**
+ * Очередь списания материала в ERP (`GET/PUT /api/integrations/erp-consumption`).
+ * `ack` будит документ выпуска ФОНОМ (ревью D1-2): тест, который проверяет снимок после ответа,
+ * передаёт свой `documents` и ждёт `settleDeferredRefreshes()`.
+ */
+export function buildErpConsumptionService(
+  t: TestApp,
+  documents: ProductionDocumentsService = buildProductionDocumentsService(t),
+): ErpConsumptionService {
+  return new ErpConsumptionService(t.prisma as any, documents);
 }

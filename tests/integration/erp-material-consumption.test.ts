@@ -21,7 +21,10 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 
 import { loginAs, startTestApp, stopTestApp, type TestApp } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
-import { buildErpConsumptionService } from '../utils/erp-services';
+import {
+  buildErpConsumptionService,
+  buildProductionDocumentsService,
+} from '../utils/erp-services';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
 
@@ -301,13 +304,19 @@ describeWithDb('integration — материал под ERP: списание п
     const { orderId, passportId, workshopNeedId } = await closedWithReleaseDoc();
 
     // Тик ERP: списала 2 кг на 640 ₽ и ответила — настоящий путь `ack`.
-    const ack = await buildErpConsumptionService(t).ack([
+    const documents = buildProductionDocumentsService(t);
+    const ack = await buildErpConsumptionService(t, documents).ack([
       {
         passport_id: passportId, state: 'POSTED', amount_rub: 640, erp_document_ref: 'СП-1',
         lines: [{ workshop_need_id: workshopNeedId, description: 'Кулирка чёрная', unit: 'кг', qty: 2, amount_rub: 640 }],
       },
     ]);
     expect(ack.accepted).toBe(1);
+    // Ревью D1-2: ответ ушёл СРАЗУ после записи строк — пересборка идёт фоном, а не в ответе
+    // (ERP шлёт до 100 паспортов за PUT с таймаутом 20 с). Тест ждёт фоновую задачу.
+    const before = await t.prisma.productionDocument.findUnique({ where: { orderId } });
+    expect(before?.status).toBe('READY');
+    await documents.settleDeferredRefreshes();
 
     // Снимок в БД уже обновлён — никто документ не открывал и кнопку не жал.
     const row = await t.prisma.productionDocument.findUnique({ where: { orderId } });

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { CompanySettingsModule } from '../company-settings/company-settings.module.js';
+import { ProductionDocumentsModule } from '../production-documents/production-documents.module.js';
 import { StockModule } from '../stock/stock.module.js';
 import { MaterialIssuesController } from './material-issues.controller.js';
 import { MaterialIssuesOrderController } from './material-issues.order-controller.js';
@@ -50,7 +51,10 @@ import { MaterialIssuesService } from './material-issues.service.js';
  * дополнительного `imports` не требуется.
  */
 @Module({
-  imports: [StockModule, CompanySettingsModule],
+  // `ProductionDocumentsModule` — аудит движка расчёта 13.09.2026, D1-3 (ревью): проведение и
+  // возврат выдачи будят документ выпуска закрытого заказа. Цикла нет: модуль документов
+  // зависит только от `CostsModule`.
+  imports: [StockModule, CompanySettingsModule, ProductionDocumentsModule],
   controllers: [MaterialIssuesController, MaterialIssuesOrderController],
   providers: [MaterialIssuesService],
   exports: [MaterialIssuesService],

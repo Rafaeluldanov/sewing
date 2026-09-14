@@ -4744,6 +4744,9 @@ export class OrdersService {
     // пересчитать смету, промолчать (сметы ещё нет) или поставить
     // видимую отметку с причиной. Правку строки он не роняет.
     await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
+    // Аудит движка расчёта 13.09.2026, D1-3/D1-10 (ревью): логистика входит в «прочее» факта
+    // документа выпуска — по закрытому заказу это поздний факт, документ узнаёт о нём сам (фоном).
+    this.productionDocuments.refreshLater(orderId, { source: 'order_logistics_line.add' });
     return this.getOne(orderId);
   }
 
@@ -4772,6 +4775,8 @@ export class OrdersService {
       data: buildLogisticsLineData(dto),
     });
     await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
+    // D1-3/D1-10 (ревью): правка суммы — поздний факт документа выпуска (см. `addLogisticsLine`).
+    this.productionDocuments.refreshLater(orderId, { source: 'order_logistics_line.update' });
     return this.getOne(orderId);
   }
 
@@ -4793,6 +4798,8 @@ export class OrdersService {
     }
     await this.prisma.orderLogisticsLine.delete({ where: { id: lineId } });
     await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
+    // D1-3/D1-10 (ревью): удаление — минус к «прочему» факта документа (см. `addLogisticsLine`).
+    this.productionDocuments.refreshLater(orderId, { source: 'order_logistics_line.delete' });
     return this.getOne(orderId);
   }
 

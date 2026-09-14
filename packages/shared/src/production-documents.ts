@@ -94,9 +94,15 @@ export interface ProductionDocumentCostDto {
   /**
    * `NO_MATERIAL_FACT`, `PIECEWORK_PENDING`, `EXTRA_COSTS_NON_RUB_SKIPPED`, … Материал (аудит
    * движка расчёта 13.09.2026): `MATERIAL_PRICE_UNKNOWN` — цены у строки нет;
-   * `MATERIAL_PRICE_USD_NO_RATE` — цена в USD, курса в смете нет (E1-7); `ERP_MATERIAL_FACT_MISSING`
-   * — строка под ERP без её списания; `ERP_CONSUMPTION_FAILED` / `ERP_CONSUMPTION_PENDING` /
-   * `ERP_CONSUMPTION_EMPTY` / `ERP_UNCOVERED_QTY` — состояние ответов ERP по паспортам (D1-12).
+   * `MATERIAL_PRICE_USD_NO_RATE` — цена в USD, курса в смете нет (E1-7);
+   * `MATERIAL_PRICE_CURRENCY_UNSUPPORTED` — цена в валюте, которую движок не переводит (не
+   * RUB/USD; ревью E1-7); `ERP_MATERIAL_FACT_MISSING` — строка под ERP без её списания;
+   * `ERP_CONSUMPTION_FAILED` / `ERP_CONSUMPTION_PENDING` / `ERP_CONSUMPTION_EMPTY` /
+   * `ERP_UNCOVERED_QTY` — состояние ответов ERP по паспортам (D1-12).
+   *
+   * Изменение НАБОРА предупреждений у сформированного документа — тоже пересборка
+   * (`recalculatedAt`, ревью D1-12): ответ ERP FAILED/EMPTY денег не меняет, но ERP обязана его
+   * перечитать, иначе у неё навсегда «ERP ещё не ответила».
    */
   warnings: string[];
 }
@@ -117,6 +123,10 @@ export interface ProductionDocumentListItemDto {
   closedAt: string;
   readyAt: string | null;
   lastFactAt: string | null;
+  /**
+   * Чем документ ЗАКРЫЛСЯ. Поздние пересборки (ответ ERP, выдача задним числом, отпечаток) его
+   * не переписывают — они отмечаются `recalculatedAt`/`recalcReason` (ревью D1-12).
+   */
   lastFactKind: ProductionDocumentFactKind | null;
   recalculatedAt: string | null;
 }

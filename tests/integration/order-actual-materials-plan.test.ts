@@ -242,6 +242,21 @@ describeWithDb('integration — отчёт actual-materials считает пл�
     expect((await document(od)).totals.planMaterialsRub).toBe(D_RUB.toFixed(2));
   });
 
+  test('E1-10 (ревью): сохранённая цена ERP 0 — не цена: план берёт котировку закупщика, как смета и план→факт', async () => {
+    const orderId = await orderWithReceipt({ receiptQty: 1, receiptPrice: 1 });
+    // ЗП ERP заведён без цены до нормализации 0→null: в строке лежит `erpUnitPriceRub = 0`,
+    // котировка закупщика 500 ₽ × 5. Раньше `Decimal(0)` был истинен → план строки 0 ₽.
+    await seedNeed(orderId, {
+      sourceType: 'ORDER_MATERIAL_REQUIREMENT', materialRole: 'MAIN_FABRIC',
+      calculatedQty: 5, quotedPrice: 500, erpUnitPriceRub: 0, description: 'Кулирка под ERP без цены',
+    });
+    const row = rowOf(await report(), orderId);
+    expect(row.planMaterialsRub).toBe('2500.00');
+    expect(row.planSource).toBe('WORKSHOP_NEED');
+    // Те же 2 500 — у документа план→факт: витрины не расходятся.
+    expect((await document(orderId)).totals.planMaterialsRub).toBe('2500.00');
+  });
+
   test('давальческое (EXCLUDE): деньги материала — ноль и в плане из сметы, и в факте приёмки', async () => {
     const orderId = await orderWithReceipt({
       policy: 'EXCLUDE',
