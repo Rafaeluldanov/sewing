@@ -19,6 +19,7 @@ import { WorkshopNeedsService } from '../workshop-needs/workshop-needs.service.j
 import {
   OrderApplicationHasPurchaseException,
   OrderApplicationOrderLockedException,
+  WorkshopNeedsAlreadyReviewedException,
 } from '../../common/errors.js';
 
 /**
@@ -42,7 +43,12 @@ import {
  *   - `DRAFT` / `CALCULATION` — как и было: на `CALCULATION` правка
  *     пересобирает потребность цеха целиком
  *     (`WorkshopNeedsService.calculateForOrder`), тот же приём, что у
- *     расцветок (`resyncColorwayDerived`).
+ *     расцветок (`resyncColorwayDerived`). Если полный пересчёт законно
+ *     отбит (строки уже в работе у закупщика / под ЗП ERP / движения
+ *     склада) — строки нанесений синхронизируются точечно
+ *     (`syncApplicationNeeds`) и на заказ ставится отметка
+ *     `needsStaleAt` с причиной и предупреждениями по тронутым строкам
+ *     (аудит движка расчёта 13.09.2026, G10-1).
  *   - `CALCULATION_DONE` и дальше (`isOrderApplicationsLateEdit`) —
  *     «поздняя» правка: потребность синхронизируется ТОЧЕЧНО
  *     (`WorkshopNeedsService.syncApplicationNeeds`), полный пересчёт
@@ -331,8 +337,18 @@ export class OrderApplicationsService {
     // (`WORKSHOP_NEEDS_ALREADY_REVIEWED`) или по ним есть складские
     // движения (`WORKSHOP_NEEDS_HAVE_STOCK`). Ронять из-за этого
     // сохранение нанесений нельзя — иначе «разблокировали правку», а
-    // она падает 409. Пишем warn: менеджер пересчитает потребность
-    // руками (кнопка «Пересчитать» умеет force).
+    // она падает 409.
+    //
+    // Аудит движка расчёта 13.09.2026, G10-1: отказ полного пересчёта
+    // раньше уходил ТОЛЬКО в лог — удалённый/изменённый принт оставался
+    // в потребности и уезжал в смету и ERP (`plan_total_rub`), новый до
+    // закупки не доезжал, плашки «устарела» не было. Тронутая строка на
+    // CALCULATION — норма (закупка через ERP идёт до завершения
+    // расчёта). Теперь при отказе, как у соседнего пути правок
+    // (`OrdersService.recalcNeedsAndMarkStale`): точечная синхронизация
+    // строк нанесений (`syncApplicationNeeds` по построению не трогает
+    // чужие и тронутые строки — по ним возвращает предупреждения) +
+    // отметка `needsStaleAt` с причиной и этими предупреждениями.
     const activeCalculation = order.calculations[0];
     const activeVariantSent =
       !activeCalculation || activeCalculation.sentToCalculationAt != null;
@@ -348,7 +364,16 @@ export class OrderApplicationsService {
           `event=order_applications.needs_recalc_skipped order=${orderId} ` +
             `reason=${e instanceof Error ? e.message : String(e)}`,
         );
+        await this.syncNeedsAndMarkStale(orderId, actorEmployeeId ?? null, e);
       }
+    } else if (order.status === OrderStatus.CALCULATION && !activeVariantSent) {
+      // Аудит движка расчёта 13.09.2026, G10-1 (поправка скептика): «на
+      // расчёте, но вариант не отправлен» — расхождение, которое resync-путь
+      // отмечает на заказе; здесь раньше не выполнялась ни одна ветка.
+      await this.markNeedsStale(
+        orderId,
+        'Вариант расчёта не отправлен на расчёт — потребность считалась по прежнему списку нанесений.',
+      );
     } else if (lateEdit) {
       // После завершения расчёта полный пересчёт не годится: он
       // пересобирает ВСЮ потребность и на запущенном заказе упрётся в
@@ -385,6 +410,61 @@ export class OrderApplicationsService {
   // -------------------------------------------------------------------------
   // INTERNAL
   // -------------------------------------------------------------------------
+
+  /**
+   * Аудит движка расчёта 13.09.2026, G10-1: полный пересчёт потребности на
+   * CALCULATION законно отбит (строки в работе у закупщика / под ЗП ERP /
+   * движения склада) — строки нанесений синхронизируем точечно и оставляем
+   * на заказе отметку «потребность устарела» с причиной и предупреждениями
+   * синка (плашка во вкладке «Потребность», `needsStaleReason` в
+   * `OrderDetailDto`). Best-effort: неудача синка не роняет уже
+   * сохранённые нанесения — только лог и отметка.
+   */
+  private async syncNeedsAndMarkStale(
+    orderId: string,
+    actorEmployeeId: string | null,
+    cause: unknown,
+  ): Promise<void> {
+    const reason =
+      cause instanceof WorkshopNeedsAlreadyReviewedException
+        ? 'Строки потребности уже в работе у закупщика — пересчёт затёр бы цену и статус.'
+        : cause instanceof Error
+          ? cause.message
+          : 'Пересчёт потребности не выполнен.';
+    const details: string[] = [];
+    try {
+      const res = await this.workshopNeeds.syncApplicationNeeds(
+        orderId,
+        actorEmployeeId,
+      );
+      if (res.created > 0 || res.updated > 0 || res.removed > 0) {
+        details.push(
+          `Строки нанесений синхронизированы точечно: создано ${res.created}, обновлено ${res.updated}, удалено ${res.removed}.`,
+        );
+      }
+      details.push(...res.warnings);
+      if (res.warnings.length > 0) {
+        OrderApplicationsService.log.warn(
+          `event=order_applications.needs_sync_warnings order=${orderId} ` +
+            `warnings=${res.warnings.join(' | ')}`,
+        );
+      }
+    } catch (e) {
+      OrderApplicationsService.log.warn(
+        `event=order_applications.needs_sync_skipped order=${orderId} ` +
+          `reason=${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    await this.markNeedsStale(orderId, [reason, ...details].join(' '));
+  }
+
+  /** Та же отметка, что ставит `OrdersService.markNeedsStale` (снимается успешным пересчётом). */
+  private async markNeedsStale(orderId: string, reason: string): Promise<void> {
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: { needsStaleAt: new Date(), needsStaleReason: reason },
+    });
+  }
 
   private toDto(row: OrderApplicationWithSizes): OrderApplicationDto {
     const type = row.type as OrderApplicationType;

@@ -11,6 +11,7 @@ import { assertOrderMaterialCorrectionAllowed } from '../../common/order-materia
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrderCostEstimatesService } from '../orders/order-cost-estimates.service.js';
+import { ProductionDocumentsService } from '../production-documents/production-documents.service.js';
 
 /**
  * Модуль «Прочие / непредвиденные расходы заказа» (этап «Корректировка
@@ -46,6 +47,9 @@ export class OrderExtraCostsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly costEstimates: OrderCostEstimatesService,
+    // Аудит движка расчёта 13.09.2026, D1-3, ревью: расход «в себестоимость» по закрытому заказу
+    // входит в «прочее» факта документа выпуска — документ обязан узнать о нём сам.
+    private readonly productionDocuments: ProductionDocumentsService,
   ) {}
 
   async listForOrder(orderId: string): Promise<OrderExtraCostDto[]> {
@@ -112,6 +116,10 @@ export class OrderExtraCostsService {
       `event=order_extra_cost.create id=${created.id} order=${orderId}`,
     );
     await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
+    // D1-3 (ревью): только расход в себестоимости меняет факт документа выпуска.
+    if (dto.includeInCostPrice) {
+      this.productionDocuments.refreshLater(orderId, { source: 'order_extra_cost.create' });
+    }
     return this.getOne(created.id);
   }
 
@@ -171,6 +179,12 @@ export class OrderExtraCostsService {
       existing.orderId,
       actorEmployeeId,
     );
+    // D1-3 (ревью): расход был или стал «в себестоимости» — факт документа выпуска изменился.
+    if (existing.includeInCostPrice || dto.includeInCostPrice) {
+      this.productionDocuments.refreshLater(existing.orderId, {
+        source: 'order_extra_cost.update',
+      });
+    }
     return this.getOne(costId);
   }
 
@@ -206,6 +220,12 @@ export class OrderExtraCostsService {
       existing.orderId,
       actorEmployeeId,
     );
+    // D1-3 (ревью): удалённый расход «в себестоимости» — минус к «прочему» факта документа.
+    if (existing.includeInCostPrice) {
+      this.productionDocuments.refreshLater(existing.orderId, {
+        source: 'order_extra_cost.delete',
+      });
+    }
   }
 
   private async getOne(id: string): Promise<OrderExtraCostDto> {

@@ -376,7 +376,7 @@ Lifecycle:
 | Вкладка «Операции» | `apps/web/components/orders/operations/order-operations-unified-table.tsx` | `order.routeSteps` + `order.logisticsLines`; итог = снимок `Order.operationCostPlanRub` + Σ логистики |
 | Себестоимость | `order-cost-estimates.service.ts::assembleEstimatePlan` | `WorkshopNeed` + `OrderExtraCost` + `OrderLogisticsLine` + разработка лекала. **Операций маршрута в смете нет** |
 | «Сводно по заказу» | `apps/web/components/orders/summary/build-order-summary-rows.ts` | материалы — `WorkshopNeed`, операции — `routeSteps` (сумма из снимка), **секция «Прочее» — только из зафиксированной сметы** |
-| Карточка «Плановая себестоимость» | `apps/web/components/orders/order-planned-cost-summary-card.tsx` | активная смета, иначе живые `WorkshopNeed` |
+| Карточка «Плановая себестоимость» | `apps/web/components/orders/order-planned-cost-summary-card.tsx` | активная смета, иначе прикидка того же состава, что у сметы (`order-planned-cost-preview.ts`): живые `WorkshopNeed` (цена ERP `erpUnitPriceRub` главнее `quotedPrice`) + `OrderExtraCost` «в себестоимость» + `OrderLogisticsLine` + разработка лекала — иначе итог менялся после «Завершить расчёт» (аудит движка расчёта 13.09.2026, E1-5) |
 
 Отсюда практические следствия для любой новой денежной сущности
 заказа:
@@ -386,7 +386,15 @@ Lifecycle:
    `materialsAndHardwareCostPolicy`), обязана закончиться
    `OrderCostEstimatesService.syncAfterNeedsChange(orderId, actorEmployeeId)`.
    Он сам решит: пересчитать, промолчать (активной сметы нет) или
-   поставить `Order.costEstimateStaleAt` + причину для плашки.
+   поставить `Order.costEstimateStaleAt` + причину для плашки. Сметы
+   НЕактивных вариантов просчёта он пересобирает тем же вызовом (по их
+   строкам и снимку; аудит движка расчёта 13.09.2026, E1-2/V1-1), а
+   переключение варианта сверяет смету цели с входами и при расхождении
+   ставит ту же отметку. Машинный путь ERP (`erp-link`/`erp-unlink`,
+   опция `erpBatch`; ревью E1-1) — исключение по частоте: ERP шлёт ручки
+   построчно, поэтому смета моложе 60 с новой версией не заменяется
+   (отметка «Цена ERP обновлена…» до следующего пересчёта), а сметы
+   неактивных вариантов на этом пути не трогаются.
 2. Пока сущность не попала в смету, в «Сводно» её не будет —
    секция «Прочее» читает документ, а не живые данные. Если строку
    надо показывать и до пересчёта, её подмешивают в
@@ -476,11 +484,31 @@ Audit-events: `CUT_RELEASE_POLICY_CREATED` / `_UPDATED` / `_DISABLED`,
 дальнейших шагах маршрута (scan / complete-operation /
 master-actions) очередь не применяется.
 
+Паспорт засчитывается в очередь РОВНО ОДИН РАЗ (Аудит движка расчёта
+13.09.2026, G3-1): если по `passportId` уже есть
+`ORDER_CUT_ISSUE_RULE_CONSUMED` без парного
+`ORDER_CUT_ISSUE_RULE_RELEASED`, `evaluateForIssue` возвращает `null`
+— повторный issue того же паспорта (handoff на следующую швейную
+операцию после `complete-operation`, который оставляет
+`currentRouteStepIndex` на завершённом шаге; повторное «Получить
+крой» на CUTTING-смене; возврат от ОТК на первый шаг) не
+инкрементит `issuedQty` и не блокируется 409, даже если строка его
+размера уже закрыта. После `returnToCell` мастера (RELEASED) пара
+сбалансирована, и следующая физическая выдача считается снова.
+Ревью G3-1: выборка AuditLog сужена до `entityId ∈ {все строки правила
+заказа, включая погашенные}` (полный индекс `[entityType, entityId]`;
+событие пишется с `entityId = ruleId`), и та же проверка повторяется в
+`consumeInTx` внутри транзакции выдачи — двойной клик не даёт второго
+CONSUMED. Клиентская пред-проверка «Не тот размер» на `/work` признак
+«уже засчитан» не видит, поэтому модалка даёт «Всё равно взять» —
+источник истины остаётся серверный.
+
 Audit-events: `ORDER_CUT_ISSUE_RULE_UPSERT` (bulk-сохранение формы),
 `ORDER_CUT_ISSUE_RULE_DISABLED` («Отключить очередь»),
 `ORDER_CUT_ISSUE_RULE_CONSUMED` (атомарный инкремент `issuedQty` в
-транзакции `issueToEmployee`); `entityType = ORDER_CUT_ISSUE_RULE`
-(`docs/events.md §3.2`).
+транзакции `issueToEmployee`; не больше одного несбалансированного на
+паспорт), `ORDER_CUT_ISSUE_RULE_RELEASED` (откат при `returnToCell`);
+`entityType = ORDER_CUT_ISSUE_RULE` (`docs/events.md §3.2`).
 
 ### 1.8 `CuttingClosureRequest` — закрытие раскроя по размеру
 
@@ -1035,7 +1063,16 @@ UNKNOWN/TODO: точный набор `inputType` за пределами трё
 Идемпотентный пересчёт `WorkshopNeedsService.calculateForOrder` (с
 параметром `force: false`) сносит только `CALCULATED`-строки и
 сохраняет `REVIEWED` / `PURCHASE_PLANNED`. Если такие строки есть и
-`force` не задан — 409 `WORKSHOP_NEEDS_ALREADY_REVIEWED`.
+`force` не задан — 409 `WORKSHOP_NEEDS_ALREADY_REVIEWED`. Ручные строки
+(`isManual`) в этот гейт не входят: пересчёт их не трогает даже с `force`
+(аудит движка расчёта 13.09.2026, N2-2). Закупочный блок старой строки
+(цена, валюта, поставщик, `packSize`, `comment`, `expectedDeliveryDate`,
+«К закупке») переезжает на пересозданную; `purchaseQty`, равное прежнему
+расчёту, следует за новым `calculatedQty`, своё число закупщика
+переносится с предупреждением при изменившемся расчёте (N2-4, N2-7).
+Физическое удаление ручной строки под заказом поставщику ERP
+(`erpManagedAt`) запрещено — 409 `WORKSHOP_NEED_ERP_STATE`, как у
+`cancel` (N2-16).
 
 ### 5.5 Триггеры расчёта
 
@@ -2014,7 +2051,15 @@ createdAt, updatedAt`. Уникальность —
   явного create-пути под `source = MANUAL`
   (`docs/production-flow.md §12.1`).
 - `RECUT` — почасовая доплата за подкрой сверх смены
-  (`RecutSession`), отдельной строкой того же дня.
+  (`RecutSession`), отдельной строкой того же дня. Длительность
+  каждого подкроя в деньгах ограничена тем же предохранителем, что и
+  смена (аудит 13.09.2026, G4-3/K7); концом смены подкрой НЕ режется и
+  закрытием смены НЕ завершается — «жёсткая граница сменой или
+  предупреждение мастеру» (решение №12 аудита) владельцем не принято.
+  Вместо границы — предупреждение: флаги `longerThanShift` /
+  `cappedByGuard` в DTO подкроя, `activeRecutOverLimit` у мастера и
+  пометка в `managerComment` строки `RECUT` («Подкрой длиннее смены;
+  обрезано предохранителем N ч (фактически M ч)»).
 - `MONTH_SALARY` — месячный оклад: ОДНА строка на календарный месяц,
   `date` = 1-е число (29.07.2026, см. §10.3a).
 
@@ -2103,7 +2148,14 @@ date)` для `source = SHIFT_DAY`. Повременная оплата (рев�
    `PIECEWORK`, `!active` или `salaryPerHour === null` → return null.
 2. Суммирует длительности ЗАКРЫТЫХ `ShiftSession` за сутки
    (`workedSeconds`, открытые `endedAt = null` игнорируются). `0` →
-   return null (нет закрытых смен — считать нечего).
+   return null (нет закрытых смен — считать нечего). Длительность
+   каждой смены ограничена предохранителем
+   `CompanySettings.shiftMaxDurationHours` (если задан) или 16 ч
+   (`shift-worked-cap.ts`; аудит 13.09.2026, K7) — забытая смена,
+   закрытая через сутки, не платит 24,5 ч; сама `ShiftSession` не
+   меняется. Обрезанная строка помечена: `managerComment = «Обрезано
+   предохранителем N ч (фактически M ч)»` (пометка своя — sync ставит и
+   снимает только её, текст менеджера не трогает) + `warn` в лог.
 3. `amount = workedSeconds / 3600 × salaryPerHour` (до копеек).
 4. `upsert` по `(employeeId, date, source = SHIFT_DAY)`:
    - update только если `editedManually = false` и запись не в
@@ -2420,8 +2472,34 @@ recompute) сначала загружается множество заняты
 `recompute`. `amountToPayRub = amountPieceworkRub + amountSalaryRub +
 manualAdjustRub`. Итоговые суммы документа пересчитываются автоматически.
 
+**Удержание не может быть больше начислений (аудит движка расчёта
+13.09.2026, K1).** У строки с начислениями (`amountPieceworkRub +
+amountSalaryRub > 0`) итог обязан остаться `amountToPayRub ≥ 0`:
+`PATCH` строки с корректировкой, дающей `< 0` (удержание 6 000 при
+начислениях 5 000), отвечает 422 `PAYROLL_ACCRUAL_LINE_NON_POSITIVE`
+с подсказкой «удержать можно не больше N ₽»; та же проверка стоит в `pay`
+до захвата локов (строка могла стать такой после `recompute`, когда
+начисления уменьшились) — документ остаётся `DRAFT`. Причина: выплата
+по строке с отрицательным нетто не создаётся, её начисления не
+закрываются `PayrollPayoutLine` и следующая ведомость взяла бы их снова,
+а удержание сгорело бы. Остаток удержания менеджер переносит в следующую
+ведомость руками.
+
+**Полный зачёт «в ноль» — штатный случай (ревью K1).** Строка с
+начислениями и `amountToPayRub = 0` (5 000 / −5 000: аванс зачтён
+целиком) ведомость не блокирует: при `pay` по ней создаётся
+`PayrollPayout` ISSUED на `amountTotalRub = 0` с PIECEWORK/SALARY-строками
+(они закрывают `OperationEntry`/`SalaryEntry` — следующая ведомость их
+не берёт) и `ADJUSTMENT = −Σ начислений`. Заявка казначейства на 0 ₽
+не создаётся. Строка без начислений с одним удержанием
+(`amountPieceworkRub + amountSalaryRub = 0`, `manualAdjustRub < 0`)
+правилом не задета: при `pay` она по-прежнему пропускается (повторно
+брать нечего; её id попадает в `skippedLineIds` аудита
+`PAYROLL_ACCRUAL_DOCUMENT_PAID`, удержание в выплату не попадает).
+
 **pay → `PayrollPayout` ISSUED.** При проводке для каждой строки с
-`amountToPayRub > 0`:
+начислениями (`amountToPayRub ≥ 0`) и для строки с одной положительной
+корректировкой (`amountToPayRub > 0`):
 1. Повторная проверка активной уникальности snapshot-строк (guard
    от race condition → 422 `PAYROLL_ACCRUAL_LINE_ALREADY_PAID`).
 2. Создаётся `PayrollPayout` со статусом `ISSUED`:
@@ -3136,6 +3214,8 @@ COMPANY_SETTINGS | COMPANY_DIVISION
 #### Заказы (`entityType = ORDER` / `ORDER_COST_ESTIMATE`)
 
 `ORDER_CREATED`, `ORDER_UPDATED`, `ORDER_PATTERN_CHANGED`,
+`ORDER_VARIANTS_RENAMED` (пары «старый цвет → новый» при сопоставлении
+расцветок по порядку, ревью G9-1),
 `ORDER_PATTERN_SNAPSHOT_CREATED`, `ORDER_OPERATION_PLAN_RECALCULATED`,
 `ORDER_CALCULATION_STARTED`, `ORDER_CALCULATION_COMPLETED`,
 `ORDER_COST_ESTIMATE_CREATED`, `ORDER_CALCULATION_REOPENED`,

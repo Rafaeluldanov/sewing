@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -18,6 +19,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrdersService } from '../orders/orders.service.js';
+import { OrderCostEstimatesService } from '../orders/order-cost-estimates.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { normalizeColor } from '@sewing/shared/colors';
 
@@ -27,6 +29,9 @@ interface SnapshotRefs {
   validSizeIds: Set<string>;
   validSupplierIds: Set<string>;
   validCatalogItemIds: Set<string>;
+  /** Аудит движка расчёта 13.09.2026, V1-2: операции шагов снимка
+   *  (`routeSteps`) — удалённые при restore пропускаются. */
+  validOperationIds: Set<string>;
   routeTemplateId: string | null;
 }
 
@@ -54,11 +59,16 @@ interface SnapshotRefs {
  *
  * Переключение (`activate`) — многошаговая операция:
  *   0) fail-fast гейты ДО любых мутаций (статус, валидность снимка и
- *      его FK-ссылок, расцветки под паспортами образца);
+ *      его FK-ссылок, применимость оверрайдов снимка — V1-5: `FIXED` без
+ *      расценки и `BY_SIZE` без ставки по размеру плана цели (зеркало
+ *      гарда L1-10), расцветки под паспортами образца);
  *   A+B) одна транзакция: capture живого состояния в старый активный →
- *      restore снимка целевого (Order-поля, себестоимость+статус
- *      целевого варианта, расцветки, паспорта образца по цвету,
- *      параметры техкарт, снимок материалов);
+ *      restore снимка целевого (Order-поля, включая `routeCustomizedAt`;
+ *      состав шагов правленного холстом маршрута — V1-2; старый снимок
+ *      без этих полей маршрут и флаг НЕ трогает — ревью V1-2; себестоимость
+ *      +статус целевого варианта; расцветки; тираж заказа без расцветок
+ *      из `items` — V1-3; паспорта образца по цвету; параметры техкарт;
+ *      снимок материалов);
  *   C) пересборка производных СУЩЕСТВУЮЩИМ путём —
  *      `OrdersService.resyncColorwayDerived` (агрегат OrderItem, снимок
  *      материалов ФАЗА-2 recompute, операционный план, снимок шагов
@@ -66,7 +76,8 @@ interface SnapshotRefs {
  *   D) оверлей route-оверрайдов ПОСЛЕ resync: carry-механика
  *      `syncOrderRouteStepsSnapshot` переносит оверрайды ПРЕДЫДУЩЕГО
  *      варианта по operationId — поэтому всем шагам пишутся значения из
- *      снимка, а отсутствующим — явные null (сброс утечки);
+ *      снимка (по вхождению операции — V1-4), а отсутствующим — явные
+ *      null (сброс утечки);
  *   E) потребности варианта. Итерация 2: строки `WorkshopNeed`
  *      СОСУЩЕСТВУЮТ per вариант (`orderCalculationId`) — переключение их
  *      НЕ пересчитывает и не трогает работу закупщика по другим
@@ -76,13 +87,20 @@ interface SnapshotRefs {
  *      рассчитывается только явной кнопкой («Перевести в расчёт» /
  *      «Рассчитать вариант» → `OrdersService.startCalculation`, ветка
  *      isVariantCalc). Здесь только ре-линк строк варианта к
- *      пересозданным расцветкам (по `variantColor`).
+ *      пересозданным расцветкам (по `variantColor`);
+ *   F) свежесть сметы цели (Аудит движка расчёта 13.09.2026, E1-2/V1-1):
+ *      план сметы пересобирается по восстановленным входам и сверяется
+ *      со сметой варианта — расхождение становится отметкой
+ *      «себестоимость устарела» с причиной
+ *      (`OrderCostEstimatesService.markStaleIfActiveEstimateOutdated`).
  *
- * Инвариант устойчивости: фазы C–E идут отдельными транзакциями. Сбой в
+ * Инвариант устойчивости: фазы C–F идут отдельными транзакциями. Сбой в
  * середине оставляет данные КОНСИСТЕНТНЫМИ (входы уже переключены), но
- * недосинхронизированными — повторный `activate` того же варианта
- * (no-op по входам) или любая правка расцветки самолечит производные
- * через тот же resync.
+ * недосинхронизированными. Снимок цели стирается только после фазы F
+ * (Аудит движка расчёта 13.09.2026, V1-5), поэтому «активен со снимком»
+ * = переключение не завершено: повторный `activate` того же варианта
+ * долечивает производные из этого снимка (не no-op), а переключение на
+ * другой вариант сначала долечивает текущий, потом снимает capture.
  *
  * Осознанные ограничения: `OrderExtraCost`, `OrderApplication`,
  * `OrderLogisticsLine` — order-level и общие для всех вариантов;
@@ -97,6 +115,10 @@ export class OrderCalculationsService {
     private readonly prisma: PrismaService,
     private readonly orders: OrdersService,
     private readonly audit: AuditService,
+    // Аудит движка расчёта 13.09.2026, E1-2/V1-1: после переключения
+    // сверяем смету цели с её восстановленными входами (см. фазу F).
+    // `OrdersModule` реэкспортирует `OrderCostEstimatesModule` — цикла нет.
+    private readonly costEstimates: OrderCostEstimatesService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -193,6 +215,16 @@ export class OrderCalculationsService {
         'Варианты просчёта изменяются параллельно — обновите страницу и повторите.',
       );
     }
+    // Аудит движка расчёта 13.09.2026, V1-5: активный со снимком =
+    // незавершённое переключение; долечиваем производные до capture,
+    // иначе клон унёс бы наполовину чужие оверрайды в снимок.
+    const activeRow = await this.prisma.orderCalculation.findUnique({
+      where: { id: active.id },
+      select: { id: true, title: true, snapshot: true },
+    });
+    if (activeRow && activeRow.snapshot != null) {
+      await this.healPendingSwitch(orderId, activeRow, actorEmployeeId);
+    }
     const nextOrdinal = Math.max(...rows.map((r) => r.ordinal)) + 1;
     const title = dto.title?.trim() || `Вариант ${nextOrdinal + 1}`;
 
@@ -264,7 +296,18 @@ export class OrderCalculationsService {
       where: { id: calcId, orderId },
     });
     if (!target) throw this.notFoundCalc();
-    if (target.isActive) return this.listForOrder(orderId); // no-op
+    if (target.isActive) {
+      // Аудит движка расчёта 13.09.2026, V1-5: повторный activate уже
+      // активного — no-op ТОЛЬКО если прошлое переключение дошло до
+      // конца. Снимок у активного варианта остаётся до успешного
+      // завершения фаз C–F (см. `applyDerivedPhases`), поэтому «активен,
+      // но со снимком» = прошлое переключение остановилось посередине —
+      // долечиваем производные из того же снимка, а не молчим.
+      if (target.snapshot == null) return this.listForOrder(orderId);
+      this.assertEditableStatus(order.status);
+      await this.healPendingSwitch(orderId, target, actorEmployeeId);
+      return this.listForOrder(orderId);
+    }
 
     // --- Фаза 0: fail-fast гейты до любых мутаций -------------------------
     // Итерация 2 (потребности per вариант): гейты «закупщик в работе» и
@@ -281,6 +324,17 @@ export class OrderCalculationsService {
     }
     const snap = parsed.data;
     const refs = await this.validateSnapshotRefs(snap);
+
+    // Аудит движка расчёта 13.09.2026, V1-5: единственный известный отказ
+    // фазы D (400 `ORDER_ROUTE_OVERRIDE_RATE_REQUIRED`) проверяем ЗДЕСЬ,
+    // до мутаций — иначе цель уже активна в БД с оверрайдами прошлого
+    // варианта, а UI показывает «не удалось переключить».
+    await this.assertSnapshotOverridesApplicable(
+      orderId,
+      snap,
+      refs,
+      target.title,
+    );
 
     // Гейт стадии сигнального образца (переключение доступно вплоть до
     // запуска в производство): restore пересоздаёт `OrderVariant`, а
@@ -305,6 +359,18 @@ export class OrderCalculationsService {
       );
     }
 
+    // Аудит движка расчёта 13.09.2026, V1-5: если прошлое переключение
+    // остановилось между фазами A+B и D, у нынешнего активного варианта
+    // остался снимок, а живые производные — наполовину чужие. Сначала
+    // долечиваем их из того снимка, и только потом снимаем capture:
+    // иначе утечка закрепилась бы в снимке навсегда.
+    const currentActive = await this.prisma.orderCalculation.findFirst({
+      where: { orderId, isActive: true },
+    });
+    if (currentActive && currentActive.snapshot != null) {
+      await this.healPendingSwitch(orderId, currentActive, actorEmployeeId);
+    }
+
     // --- Фазы A+B: capture + restore в одной транзакции -------------------
     await this.prisma.$transaction(async (tx) => {
       const currentSnapshot = await this.captureSnapshot(tx, orderId);
@@ -323,12 +389,30 @@ export class OrderCalculationsService {
         );
       }
 
-      // Order-поля варианта. OrderItem не трогаем — его пересоберёт
-      // resyncColorwayDerived из расцветок.
+      // Order-поля варианта. OrderItem пересоберёт resyncColorwayDerived
+      // из расцветок; заказ без расцветок — см. восстановление `items`
+      // ниже (V1-3).
       await tx.order.update({
         where: { id: orderId },
         data: {
           routeTemplateId: refs.routeTemplateId,
+          // Аудит движка расчёта 13.09.2026, V1-2: флаг «маршрут правлен
+          // холстом» — свойство варианта. С флагом шаги пересоздаются из
+          // снимка (ниже), при явном `null` `syncOrderRouteStepsSnapshot`
+          // в фазе C пересоберёт маршрут из шаблона — иначе холст одного
+          // варианта оставался маршрутом всех.
+          //
+          // Ревью V1-2: СТАРЫЙ снимок (поля нет — `undefined`) флаг не
+          // трогает: «неизвестно» ≠ «не правлен», и сброс холста на шаблон
+          // при первом переключении вкладки был бы молчаливой потерей
+          // правок. Маршрут такого варианта — текущий маршрут заказа.
+          ...(snap.order.routeCustomizedAt !== undefined
+            ? {
+                routeCustomizedAt: snap.order.routeCustomizedAt
+                  ? new Date(snap.order.routeCustomizedAt)
+                  : null,
+              }
+            : {}),
           color: snap.order.color,
           customerUnitPrice: snap.order.customerUnitPrice,
           customerCurrency: snap.order.customerCurrency,
@@ -348,6 +432,28 @@ export class OrderCalculationsService {
           )),
         },
       });
+
+      // Аудит движка расчёта 13.09.2026, V1-2: правленный холстом маршрут
+      // не выводится из шаблона — пересоздаём состав шагов из снимка
+      // (оверрайды им напишет фаза D). Шаги с удалённой операцией
+      // пропускаем — зеркало SetNull-семантики прочих ссылок снимка.
+      // У старого снимка без поля (`undefined`) шагов нет — не трогаем.
+      if (snap.order.routeCustomizedAt != null) {
+        await tx.orderRouteStep.deleteMany({ where: { orderId } });
+        const stepRows = snap.routeSteps.filter((st) =>
+          refs.validOperationIds.has(st.operationId),
+        );
+        if (stepRows.length > 0) {
+          await tx.orderRouteStep.createMany({
+            data: stepRows.map((st) => ({
+              orderId,
+              index: st.index,
+              operationId: st.operationId,
+              parallelGroup: st.parallelGroup,
+            })),
+          });
+        }
+      }
 
       // Расцветки: полная замена (cascade сносит sizes и variant-scoped
       // параметры; OrderMaterialRequirement/WorkshopNeed уходят в SetNull
@@ -369,6 +475,45 @@ export class OrderCalculationsService {
           select: { id: true },
         });
         variantIdByOrdinal.set(v.ordinal, created.id);
+      }
+
+      // Аудит движка расчёта 13.09.2026, V1-3: у заказа без расцветок
+      // (inline «Сделать расчёт», legacy) `resyncColorwayDerived` видит
+      // пустой агрегат и по правилу «не затираем вслепую» оставляет
+      // `OrderItem` прошлого варианта — тираж протекал между вариантами.
+      // При пустом агрегате восстанавливаем тираж из `items` снимка.
+      // Старые снимки без `items` — оставляем как есть (тиража в них нет).
+      const variantQtyPresent = snap.variants.some((v) =>
+        v.sizes.some(
+          (sz) => sz.qtyPlan > 0 && refs.validSizeIds.has(sz.sizeId),
+        ),
+      );
+      if (!variantQtyPresent && snap.items.length > 0) {
+        const itemRows = this.normalizeSizes(snap.items).filter((it) =>
+          refs.validSizeIds.has(it.sizeId),
+        );
+        const productRef = await tx.order.findUniqueOrThrow({
+          where: { id: orderId },
+          select: {
+            items: { select: { productId: true }, take: 1 },
+            patternItem: { select: { legacyProductId: true } },
+          },
+        });
+        const itemsProductId =
+          productRef.items[0]?.productId ??
+          productRef.patternItem?.legacyProductId ??
+          null;
+        if (itemsProductId && itemRows.length > 0) {
+          await tx.orderItem.deleteMany({ where: { orderId } });
+          await tx.orderItem.createMany({
+            data: itemRows.map((it) => ({
+              orderId,
+              productId: itemsProductId,
+              sizeId: it.sizeId,
+              qtyPlan: it.qtyPlan,
+            })),
+          });
+        }
       }
 
       // Паспорта (сигнальный образец) — восстанавливаем расцветку по
@@ -491,9 +636,12 @@ export class OrderCalculationsService {
         await tx.orderMaterialRequirement.createMany({ data: matRows });
       }
 
+      // Аудит движка расчёта 13.09.2026, V1-5: снимок цели НЕ стираем —
+      // он живёт до успешного конца фаз C–F (`applyDerivedPhases`), чтобы
+      // повторный activate мог долечить производные, а не стать no-op.
       const flipped = await tx.orderCalculation.updateMany({
         where: { id: target.id, isActive: false },
-        data: { isActive: true, snapshot: Prisma.DbNull },
+        data: { isActive: true },
       });
       if (flipped.count !== 1) {
         throw this.conflict(
@@ -518,6 +666,24 @@ export class OrderCalculationsService {
       );
     });
 
+    await this.applyDerivedPhases(orderId, target, snap, actorEmployeeId);
+
+    return this.listForOrder(orderId);
+  }
+
+  /**
+   * Фазы C–F переключения (после коммита A+B). Вынесены отдельно, потому
+   * что их должен уметь повторить `activate` уже активного варианта со
+   * снимком (Аудит движка расчёта 13.09.2026, V1-5: самолечение вместо
+   * no-op). Снимок цели стирается только в самом конце — до этого
+   * «активен со снимком» означает «переключение не завершено».
+   */
+  private async applyDerivedPhases(
+    orderId: string,
+    target: { id: string; title: string },
+    snap: OrderCalculationSnapshotV1,
+    actorEmployeeId?: string | null,
+  ): Promise<void> {
     // --- Фаза C: производные существующим путём ----------------------------
     // Потребности НЕ пересчитываем: строки живут per вариант (фаза E).
     // `calculationSwitch`: агрегат OrderItem («общий план»), снимок
@@ -547,7 +713,227 @@ export class OrderCalculationsService {
       await this.relinkNeedVariants(orderId, target.id);
     }
 
-    return this.listForOrder(orderId);
+    // --- Фаза F: свежесть сметы цели ---------------------------------------
+    // Аудит движка расчёта 13.09.2026, E1-2/V1-1: смета неактивного
+    // варианта могла отстать от правок (строка варианта у закупщика,
+    // order-level логистика/расходы) — пересобираем план по
+    // восстановленным входам и сверяем со сметой; расхождение становится
+    // видимой отметкой «себестоимость устарела» с причиной, а не
+    // безусловным `costEstimateStaleAt = null`. Активация по-прежнему
+    // ничего не считает — только сверяет.
+    await this.costEstimates.markStaleIfActiveEstimateOutdated(orderId);
+
+    // Переключение завершено — снимок цели больше не нужен (V1-5).
+    await this.prisma.orderCalculation.updateMany({
+      where: { id: target.id, isActive: true },
+      data: { snapshot: Prisma.DbNull },
+    });
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, V1-5: долечить переключение, которое
+   * остановилось между фазами A+B и F (активный вариант со снимком).
+   * Снимок, который больше не разбирается, применить нельзя — снимаем
+   * его с предупреждением в лог: входы уже переключены и консистентны, а
+   * производные самолечатся ближайшей правкой расцветки.
+   */
+  private async healPendingSwitch(
+    orderId: string,
+    active: { id: string; title: string; snapshot: Prisma.JsonValue | null },
+    actorEmployeeId?: string | null,
+  ): Promise<void> {
+    const pending = OrderCalculationSnapshotV1Schema.safeParse(active.snapshot);
+    if (!pending.success) {
+      OrderCalculationsService.log.warn(
+        `event=order_calculation.pending_switch_snapshot_invalid orderId=${orderId} calculationId=${active.id}`,
+      );
+      await this.prisma.orderCalculation.updateMany({
+        where: { id: active.id, isActive: true },
+        data: { snapshot: Prisma.DbNull },
+      });
+      return;
+    }
+    OrderCalculationsService.log.warn(
+      `event=order_calculation.pending_switch_heal orderId=${orderId} calculationId=${active.id}`,
+    );
+    await this.applyDerivedPhases(orderId, active, pending.data, actorEmployeeId);
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, V1-5: fail-fast для отказа фазы D.
+   * `updateRouteOverrides` отбивает 400 `ORDER_ROUTE_OVERRIDE_RATE_REQUIRED`,
+   * если шаг переведён на сделку (`FIXED`) без своей расценки, а у
+   * операции в справочнике `fixedRate` с момента снимка сняли. Проверяем
+   * то же правило ДО мутаций — иначе цель уже активна в БД с оверрайдами
+   * прошлого варианта. Смотрим только операции, которые войдут в
+   * восстановленный маршрут (холст — из `routeSteps` снимка, иначе —
+   * из шаблона): оверрайд выпавшей из маршрута операции всё равно не
+   * применится.
+   *
+   * Ревью V1-5: зеркалим и гард L1-10 — «сделка по размерам» (`BY_SIZE`)
+   * обязана иметь ставку по КАЖДОМУ размеру плана ЦЕЛИ (агрегат
+   * `variants[].sizes`, у заказа без расцветок — `items`; только qty > 0):
+   * из `sizeOverrides` снимка, иначе из справочника `OperationRateBySize`.
+   * Без этого снимок, снятый до гарда (BY_SIZE с неполными ставками), или
+   * справочник, из которого ставку размера сняли, отбивались 400 уже в
+   * фазе D — после коммита A+B: цель активна со снимком, и каждый
+   * следующий `activate`/`create` упирался в `healPendingSwitch` с тем же
+   * 400. Фаза D после этой проверки может отказать только при гонке со
+   * справочником между фазами.
+   */
+  private async assertSnapshotOverridesApplicable(
+    orderId: string,
+    snap: OrderCalculationSnapshotV1,
+    refs: SnapshotRefs,
+    title: string,
+  ): Promise<void> {
+    const fixedWithoutRate = snap.routeOverrides.filter(
+      (o) => o.pricingModeOverride === 'FIXED' && o.rateOverride == null,
+    );
+    const bySize = snap.routeOverrides.filter(
+      (o) => o.pricingModeOverride === 'BY_SIZE',
+    );
+    if (fixedWithoutRate.length === 0 && bySize.length === 0) return;
+
+    let plannedOperationIds: Set<string>;
+    // Ревью V1-2: у старого снимка (поле отсутствует) restore маршрут не
+    // трогает — если заказ правлен холстом, в силе остаются его текущие
+    // шаги, иначе фаза C пересоберёт их из шаблона снимка.
+    const legacyKeepsCurrentRoute =
+      snap.order.routeCustomizedAt === undefined &&
+      (await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: { routeCustomizedAt: true },
+      }))?.routeCustomizedAt != null;
+    if (legacyKeepsCurrentRoute) {
+      const currentSteps = await this.prisma.orderRouteStep.findMany({
+        where: { orderId },
+        select: { operationId: true },
+      });
+      plannedOperationIds = new Set(currentSteps.map((st) => st.operationId));
+    } else if (snap.order.routeCustomizedAt != null) {
+      plannedOperationIds = new Set(
+        snap.routeSteps
+          .map((st) => st.operationId)
+          .filter((id) => refs.validOperationIds.has(id)),
+      );
+    } else if (refs.routeTemplateId) {
+      const templateSteps = await this.prisma.routeTemplateStep.findMany({
+        where: { templateId: refs.routeTemplateId },
+        select: { operationId: true },
+      });
+      plannedOperationIds = new Set(templateSteps.map((st) => st.operationId));
+    } else {
+      return;
+    }
+
+    const operationIds = [
+      ...new Set(
+        fixedWithoutRate
+          .map((o) => o.operationId)
+          .filter((id) => plannedOperationIds.has(id)),
+      ),
+    ];
+    if (operationIds.length > 0) {
+      const operations = await this.prisma.operation.findMany({
+        where: { id: { in: operationIds } },
+        select: { id: true, code: true, name: true, fixedRate: true },
+      });
+      const missing = operations.filter((op) => op.fixedRate == null);
+      if (missing.length > 0) {
+        const labels = missing
+          .map((op) => `«${op.name || op.code}»`)
+          .join(', ');
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
+          message:
+            `В варианте «${title}» операци${missing.length === 1 ? 'я' : 'и'} ${labels} ` +
+            `переведен${missing.length === 1 ? 'а' : 'ы'} на сделку без своей расценки, а в справочнике ` +
+            `расценки у не${missing.length === 1 ? 'ё' : 'их'} больше нет. Переключение не выполнено — ` +
+            'задайте расценку операции в справочнике и повторите.',
+        });
+      }
+    }
+
+    // --- BY_SIZE: ставка по каждому размеру плана цели (ревью V1-5) ------
+    const bySizePlanned = bySize.filter((o) =>
+      plannedOperationIds.has(o.operationId),
+    );
+    if (bySizePlanned.length === 0) return;
+    // План цели — тот же агрегат, что соберёт restore: расцветки, а при
+    // пустом агрегате — `items` снимка (V1-3). Размеры, которых больше
+    // нет в справочнике, restore отбрасывает — здесь тоже.
+    const planQtyBySizeId = new Map<string, number>();
+    const addPlan = (sizeId: string, qty: number) => {
+      if (!refs.validSizeIds.has(sizeId)) return;
+      planQtyBySizeId.set(sizeId, (planQtyBySizeId.get(sizeId) ?? 0) + qty);
+    };
+    for (const v of snap.variants) {
+      for (const sz of this.normalizeSizes(v.sizes)) addPlan(sz.sizeId, sz.qtyPlan);
+    }
+    if (![...planQtyBySizeId.values()].some((q) => q > 0)) {
+      planQtyBySizeId.clear();
+      for (const it of snap.items) addPlan(it.sizeId, it.qtyPlan);
+    }
+    const planSizeIds = [...planQtyBySizeId.entries()]
+      .filter(([, qty]) => qty > 0)
+      .map(([sizeId]) => sizeId);
+    if (planSizeIds.length === 0) return;
+
+    const bySizeOperationIds = [
+      ...new Set(bySizePlanned.map((o) => o.operationId)),
+    ];
+    const [catalogRates, operations, sizes] = await Promise.all([
+      this.prisma.operationRateBySize.findMany({
+        where: {
+          operationId: { in: bySizeOperationIds },
+          sizeId: { in: planSizeIds },
+        },
+        select: { operationId: true, sizeId: true },
+      }),
+      this.prisma.operation.findMany({
+        where: { id: { in: bySizeOperationIds } },
+        select: { id: true, code: true, name: true },
+      }),
+      this.prisma.size.findMany({
+        where: { id: { in: planSizeIds } },
+        select: { id: true, code: true },
+      }),
+    ]);
+    const catalog = new Set(
+      catalogRates.map((r) => `${r.operationId}|${r.sizeId}`),
+    );
+    const opLabel = new Map(
+      operations.map((op) => [op.id, op.name || op.code] as const),
+    );
+    const sizeCode = new Map(sizes.map((sz) => [sz.id, sz.code] as const));
+    const problems: string[] = [];
+    for (const o of bySizePlanned) {
+      const overrideRate = new Map(
+        o.sizeOverrides.map((so) => [so.sizeId, so.rate] as const),
+      );
+      const missingSizes = planSizeIds.filter(
+        (sizeId) =>
+          overrideRate.get(sizeId) == null &&
+          !catalog.has(`${o.operationId}|${sizeId}`),
+      );
+      if (missingSizes.length === 0) continue;
+      problems.push(
+        `«${opLabel.get(o.operationId) ?? o.operationId}» (размеры: ${missingSizes
+          .map((id) => sizeCode.get(id) ?? id)
+          .join(', ')})`,
+      );
+    }
+    if (problems.length === 0) return;
+    throw new BadRequestException({
+      statusCode: 400,
+      code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
+      message:
+        `В варианте «${title}» операци${problems.length === 1 ? 'я' : 'и'} ${problems.join(', ')} ` +
+        `переведен${problems.length === 1 ? 'а' : 'ы'} на сделку по размерам без расценки по части размеров плана. ` +
+        'Переключение не выполнено — задайте поразмерные расценки в справочнике операции и повторите.',
+    });
   }
 
   async rename(
@@ -693,12 +1079,16 @@ export class OrderCalculationsService {
       where: { id: orderId },
       select: {
         routeTemplateId: true,
+        // Аудит движка расчёта 13.09.2026, V1-2: холст — свойство варианта.
+        routeCustomizedAt: true,
         color: true,
         customerUnitPrice: true,
         customerCurrency: true,
         materialsAndHardwareCostPolicy: true,
         patternDevelopmentCostRub: true,
         patternDevelopmentCostInCostPrice: true,
+        // Аудит движка расчёта 13.09.2026, V1-3: тираж заказа без расцветок.
+        items: { select: { sizeId: true, qtyPlan: true } },
         variants: {
           orderBy: { ordinal: 'asc' },
           select: {
@@ -709,7 +1099,12 @@ export class OrderCalculationsService {
           },
         },
         routeSteps: {
+          // Аудит движка расчёта 13.09.2026, V1-4: порядок по маршруту —
+          // номер вхождения повторяющейся операции считается по `index`.
+          orderBy: { index: 'asc' },
           select: {
+            index: true,
+            parallelGroup: true,
             operationId: true,
             rateOverride: true,
             timeNormSecOverride: true,
@@ -843,12 +1238,26 @@ export class OrderCalculationsService {
         patternDevelopmentCostRub: dec(order.patternDevelopmentCostRub),
         patternDevelopmentCostInCostPrice:
           order.patternDevelopmentCostInCostPrice,
+        routeCustomizedAt: order.routeCustomizedAt?.toISOString() ?? null,
       },
       variants: order.variants.map((v) => ({
         ordinal: v.ordinal,
         color: v.color,
         techCardId: null,
         sizes: v.sizes.map((s) => ({ sizeId: s.sizeId, qtyPlan: s.qtyPlan })),
+      })),
+      // Аудит движка расчёта 13.09.2026, V1-3: тираж как есть — при пустом
+      // агрегате расцветок restore восстановит `OrderItem` из него.
+      items: order.items.map((it) => ({
+        sizeId: it.sizeId,
+        qtyPlan: it.qtyPlan,
+      })),
+      // Аудит движка расчёта 13.09.2026, V1-2: полный состав шагов — при
+      // `routeCustomizedAt` restore пересоздаёт маршрут из него.
+      routeSteps: order.routeSteps.map((s) => ({
+        index: s.index,
+        operationId: s.operationId,
+        parallelGroup: s.parallelGroup,
       })),
       // Только шаги, где есть хоть один оверрайд — restore пишет
       // остальным явные null.
@@ -872,6 +1281,8 @@ export class OrderCalculationsService {
         )
         .map((s) => ({
           operationId: s.operationId,
+          // V1-4: позиция шага — ключ вхождения при restore.
+          index: s.index,
           rateOverride: dec(s.rateOverride),
           timeNormSecOverride: s.timeNormSecOverride,
           pricingModeOverride: s.pricingModeOverride,
@@ -996,10 +1407,16 @@ export class OrderCalculationsService {
     const sizeIds = [
       ...new Set([
         ...snap.variants.flatMap((v) => v.sizes.map((s) => s.sizeId)),
+        // V1-3: размеры тиража заказа без расцветок.
+        ...snap.items.map((it) => it.sizeId),
         ...snap.routeOverrides.flatMap((o) =>
           o.sizeOverrides.map((so) => so.sizeId),
         ),
       ]),
+    ];
+    // V1-2: операции шагов правленного маршрута.
+    const operationIds = [
+      ...new Set(snap.routeSteps.map((st) => st.operationId)),
     ];
     const supplierIds = [
       ...new Set(
@@ -1016,7 +1433,7 @@ export class OrderCalculationsService {
       ),
     ];
 
-    const [sizes, suppliers, catalogItems, routeTemplate] =
+    const [sizes, suppliers, catalogItems, routeTemplate, operations] =
       await Promise.all([
         sizeIds.length
           ? this.prisma.size.findMany({
@@ -1042,20 +1459,27 @@ export class OrderCalculationsService {
               select: { id: true },
             })
           : Promise.resolve(null),
+        operationIds.length
+          ? this.prisma.operation.findMany({
+              where: { id: { in: operationIds } },
+              select: { id: true },
+            })
+          : Promise.resolve([]),
       ]);
 
     return {
       validSizeIds: new Set(sizes.map((s) => s.id)),
       validSupplierIds: new Set(suppliers.map((s) => s.id)),
       validCatalogItemIds: new Set(catalogItems.map((c) => c.id)),
+      validOperationIds: new Set(operations.map((op) => op.id)),
       routeTemplateId: routeTemplate?.id ?? null,
     };
   }
 
   /**
    * Фаза D: оверлей route-оверрайдов после resync. Пишем значения ВСЕМ
-   * шагам свежего снимка маршрута: из снимка варианта по operationId,
-   * отсутствующим — явные null (иначе carry-механика
+   * шагам свежего снимка маршрута: из снимка варианта — по вхождению
+   * операции (см. ниже), отсутствующим — явные null (иначе carry-механика
    * `syncOrderRouteStepsSnapshot` протащит оверрайды предыдущего
    * варианта). Побочный кейс: операция, добавленная в шаблон после
    * снятия снимка, теряет сид расценки из шаблона — детерминированно и
@@ -1069,19 +1493,31 @@ export class OrderCalculationsService {
    * `outsourced = false` / `outsourcePriceRub = null`, а поразмерные
    * строки (в них живёт `outsourcedQty`) пересоздаются replace-all
    * набором — пустой массив сносит отданный объём предыдущего варианта.
+   *
+   * Аудит движка расчёта 13.09.2026, V1-4: ключ сопоставления —
+   * `(operationId, номер вхождения)`, а не один `operationId`. Операция
+   * может стоять в маршруте дважды (ОТК/ВТО до и после); при ключе по
+   * операции обе строки получали оверрайды одной записи снимка (какой —
+   * решал порядок выдачи БД), а метка подряда первого вхождения
+   * терялась. Номер вхождения записи снимка считается по её `index`
+   * среди `routeSteps` снимка, у свежего шага — по его позиции в
+   * маршруте. Каждая запись достаётся ровно одному шагу, поэтому
+   * прежний гард «подряд только первому вхождению» больше не нужен:
+   * шаг, который нёс метку, восстанавливается как он сам, а объём на
+   * сторону не задваивается. Старые снимки без `index` сопоставляются
+   * по порядку записей (как лежат).
    */
   private async overlayRouteOverrides(
     orderId: string,
     snap: OrderCalculationSnapshotV1,
     actorEmployeeId?: string | null,
   ): Promise<void> {
-    // Порядок ВАЖЕН: подряд восстанавливается только на ПЕРВОЕ вхождение
-    // операции в маршрут (см. ниже), и «первое» должно быть первым по
-    // маршруту, а не случайным порядком выдачи БД.
+    // Порядок ВАЖЕН: номер вхождения операции считается по маршруту, а
+    // не по случайному порядку выдачи БД.
     const freshSteps = await this.prisma.orderRouteStep.findMany({
       where: { orderId },
       orderBy: { index: 'asc' },
-      select: { id: true, operationId: true },
+      select: { id: true, index: true, operationId: true },
     });
     if (freshSteps.length === 0) return;
 
@@ -1097,23 +1533,39 @@ export class OrderCalculationsService {
         (planQtyBySizeId.get(it.sizeId) ?? 0) + it.qtyPlan,
       );
     }
-    const byOperation = new Map(
-      snap.routeOverrides.map((o) => [o.operationId, o] as const),
-    );
-
-    // Подряд в снимке ключуется операцией, а операция может стоять в
-    // маршруте дважды (ОТК/ВТО до и после). Расценка от повтора не
-    // страдает — она за штуку; ОБЪЁМ страдает: «100 шт на сторону»,
-    // разложенные на два вхождения, дали бы двойную стоимость
-    // размещения. Поэтому подряд восстанавливаем только на ПЕРВОЕ
-    // вхождение, остальным пишем явное «своё».
-    const outsourceGiven = new Set<string>();
+    // Ключ вхождения: `operationId#k`, где k — порядковый номер вхождения
+    // операции в маршрут (V1-4). Для записи снимка k = число шагов
+    // снимка с той же операцией и меньшим `index`; для записи без
+    // `index` (старый снимок) — её порядковый номер среди таких же
+    // записей без `index`.
+    const occurrenceKey = (operationId: string, k: number): string =>
+      `${operationId}#${k}`;
+    const byOccurrence = new Map<
+      string,
+      OrderCalculationSnapshotV1['routeOverrides'][number]
+    >();
+    const legacyCounter = new Map<string, number>();
+    for (const o of snap.routeOverrides) {
+      const snapIndex = o.index;
+      let k: number;
+      if (snapIndex == null) {
+        k = legacyCounter.get(o.operationId) ?? 0;
+        legacyCounter.set(o.operationId, k + 1);
+      } else {
+        k = snap.routeSteps.filter(
+          (st) => st.operationId === o.operationId && st.index < snapIndex,
+        ).length;
+      }
+      byOccurrence.set(occurrenceKey(o.operationId, k), o);
+    }
+    const freshCounter = new Map<string, number>();
 
     const dto: UpdateOrderRouteOverridesDto = {
       steps: freshSteps.map((s) => {
-        const o = byOperation.get(s.operationId);
-        const takesOutsource = o != null && !outsourceGiven.has(s.operationId);
-        if (takesOutsource) outsourceGiven.add(s.operationId);
+        const k = freshCounter.get(s.operationId) ?? 0;
+        freshCounter.set(s.operationId, k + 1);
+        const o = byOccurrence.get(occurrenceKey(s.operationId, k));
+        const takesOutsource = o != null;
         return {
           stepId: s.id,
           pricingModeOverride: (o?.pricingModeOverride ??
@@ -1246,6 +1698,9 @@ export class OrderCalculationsService {
       costEstimateCompletedAt: estimate?.completedAt ?? null,
       costEstimateVersion: estimate?.version ?? null,
       // Отметка «себестоимость устарела» относилась к прежней смете.
+      // Свежесть сметы ЦЕЛИ проверяется после пересборки производных
+      // (фаза F `activate`, Аудит движка расчёта 13.09.2026, E1-2/V1-1) —
+      // здесь входы ещё не восстановлены, сверять не с чем.
       costEstimateStaleAt: null,
       costEstimateStaleReason: null,
     };

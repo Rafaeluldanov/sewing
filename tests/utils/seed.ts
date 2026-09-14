@@ -68,6 +68,8 @@ const OP_CODES: Array<{
   name: string;
   category: 'CUTTING' | 'SEWING' | 'QC' | 'IRONING' | 'PACKING';
   sortOrder: number;
+  /** Коробочная упаковка (`Operation.boxPacking`) — терминал коробок и гард `assertPackingActor`. */
+  boxPacking?: boolean;
   pricingMode: 'FIXED' | 'BY_SIZE' | 'SALARY_ONLY';
   fixedRate?: number;
 }> = [
@@ -80,7 +82,9 @@ const OP_CODES: Array<{
   // нужна реальная операция категории IRONING. Имя и порядок — по
   // аналогии с QC/PACKING (они идут между ОТК и упаковкой).
   { code: 'IRONING', name: 'ВТО', category: 'IRONING', sortOrder: 130, pricingMode: 'SALARY_ONLY' },
-  { code: 'PACKING', name: 'Упаковка', category: 'PACKING', sortOrder: 140, pricingMode: 'SALARY_ONLY' },
+  // Аудит 13.09.2026 (T16 аудита цепочки 05.09): без `boxPacking` терминал коробок отвечает
+  // 409 PACKING_SHIFT_REQUIRED — сид отстал от признака, введённого для коробочной упаковки.
+  { code: 'PACKING', name: 'Упаковка', category: 'PACKING', sortOrder: 140, pricingMode: 'SALARY_ONLY', boxPacking: true },
 ];
 
 /**
@@ -178,6 +182,7 @@ export async function seedMinimal(prisma: PrismaClient): Promise<SeedResult> {
         active: true,
         pricingMode: op.pricingMode,
         fixedRate,
+        boxPacking: op.boxPacking ?? false,
       },
       update: {
         name: op.name,
@@ -186,6 +191,7 @@ export async function seedMinimal(prisma: PrismaClient): Promise<SeedResult> {
         active: true,
         pricingMode: op.pricingMode,
         fixedRate,
+        boxPacking: op.boxPacking ?? false,
       },
     });
     operations[op.code] = { id: row.id, code: row.code };

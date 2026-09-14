@@ -43,15 +43,41 @@ const SnapshotVariantSchema = z.object({
 });
 
 /**
- * Per-order оверрайды одного шага маршрута (`OrderRouteStep`), ключ —
- * `operationId` (та же carry-семантика, что у
- * `OrdersService.syncOrderRouteStepsSnapshot`). В снимок попадают только
- * шаги, где есть хоть один оверрайд; при restore остальным шагам
- * пишутся явные `null` — иначе carry протащит оверрайды предыдущего
- * варианта.
+ * Структура одного шага маршрута (`OrderRouteStep`: позиция, операция,
+ * параллельная группа) в снимке варианта.
+ *
+ * Аудит движка расчёта 13.09.2026, V1-2: состав шагов — ось варианта
+ * («другие операции»), а правленный холстом маршрут
+ * (`Order.routeCustomizedAt`) из шаблона не пересобирается — без
+ * состава в снимке маршрут одного варианта становился маршрутом всех.
+ */
+const SnapshotRouteStepSchema = z.object({
+  index: z.number().int(),
+  operationId: z.string().min(1),
+  parallelGroup: z.number().int().nullable(),
+});
+
+/**
+ * Per-order оверрайды одного шага маршрута (`OrderRouteStep`). В снимок
+ * попадают только шаги, где есть хоть один оверрайд; при restore
+ * остальным шагам пишутся явные `null` — иначе carry-механика
+ * `OrdersService.syncOrderRouteStepsSnapshot` протащит оверрайды
+ * предыдущего варианта.
+ *
+ * Ключ сопоставления при restore — `(operationId, номер вхождения)`:
+ * `index` вместе с `routeSteps` снимка даёт номер вхождения операции в
+ * маршрут (Аудит движка расчёта 13.09.2026, V1-4: повтор операции —
+ * ОТК/ВТО до и после — при ключе по одному `operationId` получал
+ * оверрайды одной записи на оба вхождения). `index` — `nullish`: старые
+ * снимки лежат без него и сопоставляются по порядку записей.
  */
 const SnapshotRouteOverrideSchema = z.object({
   operationId: z.string().min(1),
+  index: z
+    .number()
+    .int()
+    .nullish()
+    .transform((v) => v ?? null),
   rateOverride: decimalString.nullable(),
   timeNormSecOverride: z.number().int().nullable(),
   pricingModeOverride: z.string().nullable(),
@@ -252,8 +278,51 @@ export const OrderCalculationSnapshotV1Schema = z.object({
     materialsAndHardwareCostPolicy: z.string(),
     patternDevelopmentCostRub: decimalString.nullable(),
     patternDevelopmentCostInCostPrice: z.boolean(),
+    /**
+     * Аудит движка расчёта 13.09.2026, V1-2: флаг «маршрут правлен
+     * холстом» — свойство варианта. При restore с флагом шаги
+     * пересоздаются из `routeSteps`, при явном `null` он сбрасывается, и
+     * маршрут пересобирается из шаблона. ISO-строка.
+     *
+     * Ревью V1-2: `undefined` (поля нет) и `null` РАЗЛИЧАЮТСЯ и здесь не
+     * схлопываются. Снимки, снятые до правки, лежат без поля — это
+     * «неизвестно», а не «не правлен»: restore такого снимка НЕ трогает
+     * `Order.routeCustomizedAt` и состав шагов (наследует текущее
+     * состояние заказа), иначе первое же переключение вкладки на проде
+     * сбрасывало бы правленный холст на шаблон без предупреждения.
+     * Capture всегда пишет поле явно (ISO либо `null`).
+     */
+    routeCustomizedAt: z.string().nullish(),
   }),
   variants: z.array(SnapshotVariantSchema),
+  /**
+   * Аудит движка расчёта 13.09.2026, V1-3: тираж (`OrderItem`) заказа без
+   * расцветок (inline «Сделать расчёт», legacy) — иначе варианты не могли
+   * отличаться тиражом, а правка items одного варианта протекала в
+   * другой. При непустых `variants` агрегат всё равно пересобирается из
+   * расцветок; `items` восстанавливаются только при пустом агрегате.
+   * `nullish` — старые снимки без поля.
+   */
+  items: z
+    .array(
+      z.object({
+        sizeId: z.string().min(1),
+        qtyPlan: z.number().int().min(0),
+      }),
+    )
+    .nullish()
+    .transform((v) => v ?? []),
+  /**
+   * Аудит движка расчёта 13.09.2026, V1-2: полный состав шагов маршрута
+   * на момент снятия (см. `SnapshotRouteStepSchema`). `nullish` — старые
+   * снимки без поля: состав шагов из них не восстанавливается (ревью
+   * V1-2: у таких снимков `routeCustomizedAt` тоже отсутствует, и маршрут
+   * заказа остаётся текущим).
+   */
+  routeSteps: z
+    .array(SnapshotRouteStepSchema)
+    .nullish()
+    .transform((v) => v ?? []),
   routeOverrides: z.array(SnapshotRouteOverrideSchema),
   techCardParameters: z.array(SnapshotTechCardParameterSchema),
   materialRequirements: z.array(SnapshotMaterialRequirementSchema),

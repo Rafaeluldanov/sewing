@@ -444,6 +444,12 @@ type SnapshotRowForRecompute = {
   requiresColorSelection: boolean;
   selectedColorText: string | null;
   qtySource: string | null;
+  /**
+   * Аудит 13.09.2026, T1-3, ревью: ссылка на источник нормы нужна recompute —
+   * строка «из шаблона» с живым `qtySourceRef` снова примеряется к норме,
+   * когда план возвращается на покрытые размеры.
+   */
+  qtySourceRef: string | null;
 };
 
 @Injectable()
@@ -2297,9 +2303,22 @@ export class OrdersService {
             // «переданное ?? текущее», а не по одному только запросу.
             outsourced: true,
             outsourcePriceRub: true,
-            sizeOverrides: { select: { sizeId: true, outsourcedQty: true } },
+            // Аудит движка расчёта 13.09.2026, L1-10: `rate` и справочник
+            // `ratesBySize` — для гарда «поразмерная сделка без ставки».
+            // Ревью: прежний режим шага — гард бьёт только по ИЗМЕНЕНИЮ
+            // (режим стал BY_SIZE / набор ставок правили), не по replace-all
+            // неизменённого состояния.
+            pricingModeOverride: true,
+            sizeOverrides: {
+              select: { sizeId: true, outsourcedQty: true, rate: true },
+            },
             operation: {
-              select: { code: true, name: true, fixedRate: true },
+              select: {
+                code: true,
+                name: true,
+                fixedRate: true,
+                ratesBySize: { select: { sizeId: true } },
+              },
             },
           },
         },
@@ -2349,7 +2368,8 @@ export class OrdersService {
     // Валидация до записи: каждый шаг принадлежит заказу, каждый размер —
     // из плана заказа (защита от чужих snapshot-ов и опечаток); объём на
     // сторону не больше плана этого размера; при переключении операции на
-    // сделку (`FIXED`) обязана быть расценка, иначе payroll упадёт
+    // сделку (`FIXED`, а с L1-10 — и `BY_SIZE` по каждому размеру плана)
+    // обязана быть расценка, иначе payroll упадёт
     // `OperationRateMissingException` на сканировании.
     for (const step of dto.steps) {
       const orderStep = stepById.get(step.stepId);
@@ -2411,6 +2431,76 @@ export class OrdersService {
             code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
             message: `Операция «${stepLabel}»: при переводе на сделку задайте расценку (₽/шт).`,
           });
+        }
+      } else if (step.pricingModeOverride === 'BY_SIZE') {
+        // Аудит движка расчёта 13.09.2026, L1-10: та же причина, что у FIXED
+        // выше, — гард стоял только на «сделке», а «сделка по размерам» без
+        // единой поразмерной ставки принималась: план по операции 0 (с
+        // warning), а скан по паспорту падал `OperationRateMissingException`.
+        // Ставка нужна по КАЖДОМУ размеру плана: из присланного поразмерного
+        // набора (он replace-all — прежние строки перестанут существовать),
+        // иначе из снимка, иначе из справочника операции (`OperationRateBySize`).
+        const requestedRates =
+          step.sizeOverrides === undefined
+            ? null
+            : new Map(
+                step.sizeOverrides.map(
+                  (o) => [o.sizeId, o.rate ?? null] as const,
+                ),
+              );
+        const storedRates = new Map(
+          orderStep.sizeOverrides.map(
+            (o) =>
+              [o.sizeId, o.rate == null ? null : Number(o.rate)] as const,
+          ),
+        );
+        // Аудит 13.09.2026, L1-10, ревью: гард — только на ИЗМЕНЕНИЕ. Форма
+        // правки маршрута шлёт каждый шаг целиком (replace-all), и шаг, уже
+        // стоявший BY_SIZE без ставок (принят до гарда, с warning в плане),
+        // запирал бы всю форму: нельзя было бы поправить даже расценку
+        // соседней операции. Отбиваем 400, когда режим шага СТАЛ «сделкой
+        // по размерам» или когда набор поразмерных ставок этого шага
+        // правили; неизменённое состояние проходит как раньше — с
+        // предупреждением плана операций (`operationPlanWarnings`), ровно
+        // как обрезка прежнего `outsourcedQty` выше вместо 400.
+        const modeIsNew = orderStep.pricingModeOverride !== 'BY_SIZE';
+        const ratesChanged =
+          requestedRates != null &&
+          (() => {
+            const sizeIds = new Set([
+              ...requestedRates.keys(),
+              ...storedRates.keys(),
+            ]);
+            for (const sizeId of sizeIds) {
+              if (
+                (requestedRates.get(sizeId) ?? null) !==
+                (storedRates.get(sizeId) ?? null)
+              ) {
+                return true;
+              }
+            }
+            return false;
+          })();
+        if (modeIsNew || ratesChanged) {
+          const catalogSizes = new Set(
+            orderStep.operation.ratesBySize.map((r) => r.sizeId),
+          );
+          const missing: string[] = [];
+          for (const [sizeId, planQty] of planQtyBySizeId) {
+            if (planQty <= 0) continue;
+            const overrideRate = requestedRates
+              ? (requestedRates.get(sizeId) ?? null)
+              : (storedRates.get(sizeId) ?? null);
+            if (overrideRate == null && !catalogSizes.has(sizeId)) {
+              missing.push(sizeCodeById.get(sizeId) ?? sizeId);
+            }
+          }
+          if (missing.length > 0) {
+            throw new BadRequestException({
+              code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
+              message: `Операция «${stepLabel}»: при переводе на сделку по размерам задайте расценку (₽/шт) для размеров: ${missing.join(', ')}.`,
+            });
+          }
         }
       }
     }
@@ -3181,14 +3271,21 @@ export class OrdersService {
     // не было — конфликта «агрегат vs ресинк» нет. Делаем ДО перехода
     // статуса: если тем же PATCH заказ уходит в «Расчёт», то к моменту
     // `startCalculation` план уже пересобран из свежих расцветок.
+    //
+    // Аудит движка расчёта 13.09.2026, G9-1 (+ G6-1): расцветки НЕ
+    // пересоздаются (`deleteMany` + create давал новые id, и каскады БД
+    // стирали значения слот-параметров, отвязывали строки снимка и
+    // потребности — ORDER-нормы, расщепления и ручные строки расцветок
+    // терялись, а добор потребности дублировал строки по расцветкам).
+    // Сопоставляем с существующими и меняем только поразмерный план — id
+    // расцветок живут, как у `OrderColorwaysService.update`.
     if (wantsVariantsChange) {
       const variantInputs = dto.variants!.map((v) => ({
         color: v.color,
         sizes: v.sizes ?? [],
       }));
       await this.prisma.$transaction(async (tx) => {
-        await tx.orderVariant.deleteMany({ where: { orderId: id } });
-        await this.writeOrderVariants(tx, id, variantInputs);
+        await this.upsertOrderVariants(tx, id, variantInputs, actorEmployeeId);
       });
       await this.resyncColorwayDerived(id, actorEmployeeId);
     }
@@ -4689,6 +4786,9 @@ export class OrdersService {
     // пересчитать смету, промолчать (сметы ещё нет) или поставить
     // видимую отметку с причиной. Правку строки он не роняет.
     await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
+    // Аудит движка расчёта 13.09.2026, D1-3/D1-10 (ревью): логистика входит в «прочее» факта
+    // документа выпуска — по закрытому заказу это поздний факт, документ узнаёт о нём сам (фоном).
+    this.productionDocuments.refreshLater(orderId, { source: 'order_logistics_line.add' });
     return this.getOne(orderId);
   }
 
@@ -4717,6 +4817,8 @@ export class OrdersService {
       data: buildLogisticsLineData(dto),
     });
     await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
+    // D1-3/D1-10 (ревью): правка суммы — поздний факт документа выпуска (см. `addLogisticsLine`).
+    this.productionDocuments.refreshLater(orderId, { source: 'order_logistics_line.update' });
     return this.getOne(orderId);
   }
 
@@ -4738,6 +4840,8 @@ export class OrdersService {
     }
     await this.prisma.orderLogisticsLine.delete({ where: { id: lineId } });
     await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
+    // D1-3/D1-10 (ревью): удаление — минус к «прочему» факта документа (см. `addLogisticsLine`).
+    this.productionDocuments.refreshLater(orderId, { source: 'order_logistics_line.delete' });
     return this.getOne(orderId);
   }
 
@@ -4902,13 +5006,13 @@ export class OrdersService {
 
   /**
    * Фича «Расцветки» (FEATURE_COLORWAYS): записать расцветки заказа
-   * (`OrderVariant` / `OrderVariantSize`) по порядковому номеру. Общий
-   * примитив для `create()` (первичное создание) и `update()` (полная
-   * замена при редактировании) — держим один источник логики «схлопнуть
-   * дубли размеров + выкинуть нулевые строки», чтобы поверхности не
-   * разъезжались. Вызывающий отвечает за очистку прежних расцветок
-   * (`deleteMany`) перед полной заменой и за вызов `resyncColorwayDerived`
-   * после — здесь только пишем варианты в переданной транзакции.
+   * (`OrderVariant` / `OrderVariantSize`) по порядковому номеру. Примитив
+   * `create()` (первичное создание — прежних расцветок ещё нет); правка
+   * существующего заказа идёт через `upsertOrderVariants`, который делит с
+   * ним логику «схлопнуть дубли размеров + выкинуть нулевые строки»
+   * (`normalizeVariantSizes`), чтобы поверхности не разъезжались.
+   * Вызывающий отвечает за вызов `resyncColorwayDerived` после — здесь
+   * только пишем варианты в переданной транзакции.
    */
   private async writeOrderVariants(
     tx: Prisma.TransactionClient,
@@ -4920,23 +5024,188 @@ export class OrdersService {
   ): Promise<void> {
     for (let ordinal = 0; ordinal < variantInputs.length; ordinal += 1) {
       const v = variantInputs[ordinal];
-      // Схлопываем дубли размеров и выкидываем нулевые строки.
-      const bySize = new Map<string, number>();
-      for (const s of v.sizes) {
-        bySize.set(s.sizeId, (bySize.get(s.sizeId) ?? 0) + s.qtyPlan);
-      }
-      const sizeRows = [...bySize.entries()]
-        .filter(([, q]) => q > 0)
-        .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan }));
       await tx.orderVariant.create({
         data: {
           orderId,
           ordinal,
           color: v.color,
-          sizes: { create: sizeRows },
+          sizes: { create: OrdersService.normalizeVariantSizes(v.sizes) },
         },
       });
     }
+  }
+
+  /** Схлопывает дубли размеров и выкидывает нулевые строки (как `OrderColorwaysService.normalizeSizes`). */
+  private static normalizeVariantSizes(
+    sizes: { sizeId: string; qtyPlan: number }[],
+  ): { sizeId: string; qtyPlan: number }[] {
+    const bySize = new Map<string, number>();
+    for (const s of sizes) {
+      bySize.set(s.sizeId, (bySize.get(s.sizeId) ?? 0) + s.qtyPlan);
+    }
+    return [...bySize.entries()]
+      .filter(([, q]) => q > 0)
+      .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan }));
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, G9-1 (корень общий с b1-6, следствие
+   * в потребности — G6-1): полная картина расцветок из edit-формы / ERP
+   * «дослать план» пишется БЕЗ пересоздания `OrderVariant`.
+   *
+   * Раньше `update()` делал `deleteMany` + `writeOrderVariants`: расцветки
+   * получали новые id, и каскады БД стирали всё, что живёт на id расцветки —
+   * значения слот-параметров (`OrderTechCardParameter`, Cascade), привязку
+   * строк снимка и потребности (`OrderMaterialRequirement` / `WorkshopNeed`,
+   * SetNull). Пересборка снимка после этого материализовала группы заново
+   * (ORDER-нормы, расщепления, выбранные цвета — к шаблону), ручные строки
+   * всех расцветок съезжали на расцветку №0 и считались по её тиражу, а
+   * добор потребности не узнавал старые строки по новым id и дописывал
+   * полный комплект строк по расцветкам ещё раз. Досылка из ERP по замыслу
+   * меняет ТОЛЬКО поразмерный план (`docs/kb/sewing.md` §0.10), правки
+   * внутри заказа обязаны пережить её (JSDoc `materializeTechCardParameters`).
+   *
+   * Сопоставление входа с существующими расцветками:
+   *   1. по цвету — первая ещё не сопоставленная расцветка с таким цветом
+   *      (ordinal asc). Это ключ ERP (`color_key` карточки заказа
+   *      покупателя) и формы; порядок расцветок в запросе роли не играет;
+   *   2. оставшиеся пары — по порядку (ordinal asc ↔ порядок во входе) как
+   *      ПЕРЕИМЕНОВАНИЕ расцветки: та же семантика, что у
+   *      `PATCH /colorways/:id` с новым цветом — id живёт, план заменяется.
+   *      ⚠️ Ревью G9-1: это осознанная трактовка, и она же — её цена. Пара
+   *      «удалили один цвет + добавили другой» в одном сохранении
+   *      неотличима от переименования: id, ORDER-нормы, значения
+   *      слот-параметров, ручные строки снимка и строки потребности
+   *      удалённой расцветки переезжают на новую (Белый → Зелёный
+   *      получает правки Белого). Обратная трактовка («удалить +
+   *      создать») стирала бы правки при ЛЮБОМ переименовании — ровно
+   *      баг G9-1. Поэтому переименование не молчит: каждая пара
+   *      «старый цвет → новый» пишется в аудит (`ORDER_VARIANTS_RENAMED`)
+   *      и в лог; форма и ERP шлют цвет ключом, так что переименование —
+   *      всегда действие менеджера;
+   *   3. лишние существующие удаляются (как `DELETE /colorways/:id`,
+   *      каскады штатные), недостающие создаются.
+   * У сопоставленной расцветки обновляются цвет/ordinal и целиком
+   * заменяется `OrderVariantSize` (поразмерный план = source of truth
+   * формы — как в `OrderColorwaysService.update`; на `OrderVariantSize.id`
+   * обратных FK нет).
+   */
+  private async upsertOrderVariants(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    variantInputs: {
+      color: string;
+      sizes: { sizeId: string; qtyPlan: number }[];
+    }[],
+    actorEmployeeId?: string | null,
+  ): Promise<void> {
+    const existing = await tx.orderVariant.findMany({
+      where: { orderId },
+      orderBy: { ordinal: 'asc' },
+      select: { id: true, ordinal: true, color: true },
+    });
+    const unmatched = [...existing];
+    const matchedId: (string | null)[] = variantInputs.map(() => null);
+    // 1. По цвету.
+    variantInputs.forEach((v, i) => {
+      const idx = unmatched.findIndex((e) => e.color === v.color);
+      if (idx >= 0) {
+        matchedId[i] = unmatched[idx].id;
+        unmatched.splice(idx, 1);
+      }
+    });
+    // 2. Оставшиеся — по порядку (переименование, см. JSDoc: пары «старый
+    // цвет → новый» уходят в аудит — ревью G9-1).
+    const renamed: Array<{ variantId: string; from: string; to: string }> = [];
+    for (let i = 0; i < variantInputs.length; i += 1) {
+      if (matchedId[i]) continue;
+      const e = unmatched.shift();
+      if (!e) break;
+      matchedId[i] = e.id;
+      if (e.color !== variantInputs[i].color) {
+        renamed.push({ variantId: e.id, from: e.color, to: variantInputs[i].color });
+      }
+    }
+    // 3. Лишние расцветки — удалить (освобождает и их ordinal).
+    if (unmatched.length > 0) {
+      await tx.orderVariant.deleteMany({
+        where: { id: { in: unmatched.map((e) => e.id) } },
+      });
+    }
+    // `@@unique([orderId, ordinal])`: перестановка сопоставленных расцветок
+    // упёрлась бы в занятый ordinal соседа, поэтому те, чей ordinal меняется,
+    // сначала уводим на временные отрицательные значения.
+    const ordinalById = new Map(
+      existing.map((e) => [e.id, e.ordinal] as const),
+    );
+    const moving = matchedId
+      .map((id, i) => ({ id, i }))
+      .filter(
+        (m): m is { id: string; i: number } =>
+          m.id != null && ordinalById.get(m.id) !== m.i,
+      );
+    for (const m of moving) {
+      await tx.orderVariant.update({
+        where: { id: m.id },
+        data: { ordinal: -(m.i + 1) },
+      });
+    }
+    for (let i = 0; i < variantInputs.length; i += 1) {
+      const v = variantInputs[i];
+      const sizeRows = OrdersService.normalizeVariantSizes(v.sizes);
+      const id = matchedId[i];
+      if (id) {
+        await tx.orderVariant.update({
+          where: { id },
+          data: {
+            ordinal: i,
+            color: v.color,
+            sizes: { deleteMany: {}, create: sizeRows },
+          },
+        });
+      } else {
+        await tx.orderVariant.create({
+          data: {
+            orderId,
+            ordinal: i,
+            color: v.color,
+            sizes: { create: sizeRows },
+          },
+        });
+      }
+    }
+    if (renamed.length > 0) {
+      // Аудит 13.09.2026, G9-1, ревью: переименование расцветки переносит
+      // на новый цвет всё, что жило на id старой (правки норм, слоты,
+      // ручные строки, строки потребности) — в журнале это должно быть
+      // видно парами «было → стало», иначе «Зелёный с правками Белого»
+      // не объяснить.
+      const pairs = renamed.map((r) => `«${r.from}» → «${r.to}»`).join(', ');
+      await this.audit.log(
+        {
+          event: 'ORDER_VARIANTS_RENAMED',
+          entityType: 'ORDER',
+          entityId: orderId,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            renamed,
+            summary:
+              `Расцветк${renamed.length === 1 ? 'а переименована' : 'и переименованы'}: ${pairs}. ` +
+              'Правки заказа (нормы, слоты, ручные строки, потребность) остались на расцветке.',
+          },
+        },
+        tx,
+      );
+      OrdersService.log.warn(
+        `event=order.variants_renamed order=${orderId} pairs=${pairs}`,
+      );
+    }
+    OrdersService.log.log(
+      `event=order.variants_upserted order=${orderId} ` +
+        `kept=${matchedId.filter(Boolean).length} ` +
+        `created=${matchedId.filter((x) => !x).length} ` +
+        `removed=${unmatched.length} renamed=${renamed.length}`,
+    );
   }
 
   /**
@@ -5514,6 +5783,10 @@ export class OrdersService {
    * селектом, теряла бы связь с номенклатурой (NOMENCLATURE → TEMPLATE)
    * при первом же пересчёте.
    *
+   * Во второй заход идут только СВОБОДНЫЕ источники — занятые первым заходом
+   * исключаются, иначе правило парности (см. `pattern-norms.ts`) ломалось бы
+   * на границе двух вызовов (T1-4).
+   *
    * Мутирует `normsByLine` (дописывает найденное) и возвращает карту
    * `key → единица нормы` для строк, расщеплённых этим заходом.
    */
@@ -5531,9 +5804,20 @@ export class OrdersService {
     }));
     // Матчим ТОЛЬКО против поразмерных источников: плоскую норму («Молния,
     // 1 шт») расщеплять нечем и незачем.
-    const linearSources = normSources.filter(
-      (s) => s.kind === 'LINEAR_M_BY_SIZE',
+    //
+    // Аудит движка расчёта 13.09.2026, T1-4: источники, уже занятые первым
+    // заходом, во второй не передаём. `matchPatternNormSources` считает
+    // «свободным» всё, что получила на вход, и шаг 3 («один источник роли ↔
+    // одна строка») отдавал бы единственную норму роли второй строке той же
+    // роли — «Кашкорсе» получала норму «Рибаны», материал в спецификации
+    // задваивался.
+    const takenSourceIds = new Set(
+      [...normsByLine.values()].map((s) => s.sourceId),
     );
+    const linearSources = normSources.filter(
+      (s) => s.kind === 'LINEAR_M_BY_SIZE' && !takenSourceIds.has(s.sourceId),
+    );
+    if (linearSources.length === 0) return autoNormUnit;
     const retry = matchPatternNormSources(retryInput, linearSources);
     for (const [key, source] of retry) {
       autoNormUnit.set(key, LINEAR_NORM_UNIT);
@@ -5556,6 +5840,11 @@ export class OrdersService {
    * пока эта ветка выходила молча, тираж не считался НИКОГДА — заказ 02-00024
    * ушёл в расчёт с нулевым расходом по всем 11 строкам, а потребность цеха
    * повторила нули и увела шесть материалов в закупку по нулю.
+   *
+   * Возвращает имена строк, которые ПОТЕРЯЛИ норму номенклатуры на этом
+   * пересчёте: источник найден, но с новым размерным планом не пересекается
+   * (Аудит движка расчёта 13.09.2026, T1-3). Вызывающий не молчит об этом —
+   * ставит отметку на заказе.
    */
   private async recomputeSnapshotGroup(
     tx: Prisma.TransactionClient,
@@ -5571,16 +5860,33 @@ export class OrdersService {
       paramValues: Map<string, TechCardParameterValue>;
       normSources: ReadonlyArray<PatternNormSource>;
     },
-  ): Promise<void> {
+  ): Promise<string[]> {
     const { rows, group: g, paramValues, normSources } = input;
+    // Аудит движка расчёта 13.09.2026, T1-8: у группы с НУЛЕВЫМ тиражом
+    // (расцветку обнулили, но не удалили) норму не освежаем вовсе — план
+    // пуст, вывести из него нечего, а связь с номенклатурой и число строки
+    // обязаны дожить до возврата тиража. Пересчитываем только тираж (→ 0),
+    // цвет и ячейки слот-параметров.
+    const refreshNorms = g.qty > 0;
     // Норму из номенклатуры освежаем ТОЛЬКО у строк, которые её оттуда и
     // получили (`qtySource = NOMENCLATURE`): размерный план мог поменяться,
     // а средневзвешенная норма от него зависит. Правку в заказе (`ORDER`) и
     // строки старше признака (`null`) не трогаем — иначе живой заказ тихо
     // поменял бы норму сам.
-    const nomenclatureRows = rows.filter(
-      (r) => r.qtySource === 'NOMENCLATURE',
-    );
+    //
+    // Аудит 13.09.2026, T1-3, ревью: кандидат и строка «из шаблона» с живым
+    // `qtySourceRef` — это NOMENCLATURE-строка, чей источник на прошлом
+    // пересчёте не пересёкся с планом (метка понижена, связь сохранена).
+    // План вернулся на покрытые размеры → норма и метка обязаны вернуться,
+    // иначе спецификация навсегда остаётся на числе прежнего плана, а
+    // потребность считает параметр напрямую — два числа про один материал.
+    const isNormRefreshCandidate = (r: SnapshotRowForRecompute) =>
+      r.qtySource === 'NOMENCLATURE' ||
+      (r.qtySource === 'TEMPLATE' && r.qtySourceRef != null);
+    const nomenclatureRows = refreshNorms
+      ? rows.filter(isNormRefreshCandidate)
+      : [];
+    const lostNormLines: string[] = [];
     const recomputeMatchInput = nomenclatureRows.map((r) => ({
       key: r.id,
       materialRole: r.materialRole,
@@ -5614,10 +5920,17 @@ export class OrdersService {
       const derivedNorm = refreshed
         ? derivePatternNormPerUnit(refreshed, g.sizePlan)
         : null;
+      // Аудит движка расчёта 13.09.2026, T1-3: источник есть, а с новым
+      // размерным планом он не пересекается — норма не выведена. Число
+      // строки остаётся прежним (recompute в шаблон не ходит), но метка ниже
+      // честно станет «из шаблона», а заказ получит отметку: молчать здесь
+      // значит показывать бейдж «из номенклатуры» на числе прежнего плана.
+      if (refreshed && !derivedNorm) lostNormLines.push(r.name);
       // Единица нормы, выданная вторым заходом: строка снова расщеплена,
-      // номенклатурная норма пойдёт в метрах. Без источника (ячейка под
-      // слот-параметром) авто-расщеплению нечего расщеплять.
-      const autoUnit = refreshed
+      // номенклатурная норма пойдёт в метрах. Без выведенной нормы (ячейка
+      // под слот-параметром / нет пересечения с планом, T1-3) расщеплять
+      // нечего — как и в материализации.
+      const autoUnit = derivedNorm
         ? (recomputeAutoNormUnit.get(r.id) ?? null)
         : null;
       const nextNormUnit = autoUnit ?? r.normUnit;
@@ -5655,12 +5968,27 @@ export class OrdersService {
             densityGsm: cells.densityGsm,
           }),
           // Строка потеряла источник в номенклатуре (параметр убрали /
-          // переименовали) — честно переводим её в «из шаблона», иначе UI
-          // обещал бы связь, которой уже нет.
-          ...(r.qtySource === 'NOMENCLATURE'
+          // переименовали) ИЛИ источник с новым планом не пересекается —
+          // честно переводим её в «из шаблона», иначе UI обещал бы связь,
+          // которой уже нет. Аудит движка расчёта 13.09.2026, T1-3: метка и
+          // число решаются ОДНИМ условием — нормой, выведенной из плана
+          // (`derivedNorm`), как в ветке материализации; раньше метку ставил
+          // сам факт «источник нашёлся», и строка с нормой прежнего плана
+          // оставалась «из номенклатуры». При нулевом тираже (T1-8) метку
+          // не трогаем — норма не освежалась.
+          //
+          // Аудит 13.09.2026, T1-3, ревью: ССЫЛКУ при этом не рвём. Источник
+          // нашёлся, но план его не покрывает (`refreshed && !derivedNorm`) —
+          // `qtySourceRef` остаётся: по нему строка вернётся в номенклатуру
+          // на следующем пересчёте (см. `isNormRefreshCandidate`), а расчёт
+          // потребности продолжает видеть явную привязку к параметру
+          // (иначе единственная строка роли считалась бы «убранной из
+          // спецификации» и материал исчезал из закупки). Ссылка обнуляется
+          // только когда источника больше нет вовсе (`!refreshed`).
+          ...(isNormRefreshCandidate(r) && refreshNorms
             ? {
-                qtySource: refreshed ? 'NOMENCLATURE' : 'TEMPLATE',
-                qtySourceRef: refreshed ? refreshed.sourceId : null,
+                qtySource: derivedNorm ? 'NOMENCLATURE' : 'TEMPLATE',
+                qtySourceRef: refreshed?.sourceId ?? null,
               }
             : {}),
           // Цвет расцветки мог измениться — правило то же, что при
@@ -5685,6 +6013,38 @@ export class OrdersService {
         },
       });
     }
+    return lostNormLines;
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, T1-3: строки снимка потеряли норму
+   * номенклатуры (источник есть, с новым размерным планом не пересекается).
+   * Не молчим: отметка на заказе — та же, что у отказа автопересчёта
+   * потребности (`needsStaleAt`/`needsStaleReason`, плашка во вкладке
+   * «Потребность» и предупреждение в сводке). Успешный пересчёт потребности
+   * её снимет — к тому моменту расчёт сам предупредит о непокрытом параметре.
+   */
+  private async markNormSourcesLost(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    lost: ReadonlyArray<{ line: string; color: string | null }>,
+  ): Promise<void> {
+    if (lost.length === 0) return;
+    const listed = lost
+      .map((l) => (l.color ? `«${l.line}» (${l.color})` : `«${l.line}»`))
+      .join(', ');
+    await tx.order.updateMany({
+      where: { id: orderId },
+      data: {
+        needsStaleAt: new Date(),
+        needsStaleReason:
+          `Норма из номенклатуры не покрывает размерный план: ${listed}. ` +
+          'Строки показаны «из шаблона» с прежним числом (связь с номенклатурой сохранена и вернёт норму при возврате плана) — проверьте норму и пересчитайте потребность.',
+      },
+    });
+    OrdersService.log.warn(
+      `event=order.material_snapshot.norm_source_lost order=${orderId} lines=${listed}`,
+    );
   }
 
   private async rebuildMaterialRequirementsSnapshot(
@@ -5963,8 +6323,15 @@ export class OrdersService {
       if (moved.count > 0) {
         // `existing` дальше кормит и preserve-карты, и решение об
         // удалении — держим его в согласии с БД.
+        //
+        // Аудит движка расчёта 13.09.2026, G9-1 (подслучай T1): только
+        // ручные строки — ровно те, что переехали в БД. Без фильтра сюда
+        // попадали и шаблонные строки исчезнувшей группы (orderVariantId
+        // = null после SetNull): в памяти они выглядели строками главной
+        // расцветки, пересчитывались по её тиражу с чужой ORDER-нормой и
+        // не сносились как сироты, а в БД оставались с null.
         for (const r of existing) {
-          if (r.orderVariantId === from) r.orderVariantId = to;
+          if (r.isManual && r.orderVariantId === from) r.orderVariantId = to;
         }
         OrdersService.log.log(
           `event=order.material_snapshot.manual_rekeyed order=${orderId} ` +
@@ -5999,18 +6366,27 @@ export class OrdersService {
       // нечего, значит переживут все — и ручные, и legacy-шаблонные.
       // Слот-параметры не материализуются (спецификации нет), поэтому карта
       // значений пустая: ячейки под параметром остаются как есть.
+      //
+      // Аудит 13.09.2026, T1-8, ревью: группа с НУЛЕВЫМ тиражом не
+      // пропускается — как в основной ветке, её строки пересчитываются в
+      // ноль (норма и связь заморожены, см. `recomputeSnapshotGroup`).
+      // Раньше `continue` оставлял строкам обнулённой расцветки legacy-заказа
+      // прежний `totalQty`, и потребность читала из снимка старый тираж.
+      const lostEarly: Array<{ line: string; color: string | null }> = [];
       for (const g of groups) {
-        if (g.qty <= 0) continue;
         const gk = vk(g.variantId);
         const rows = existing.filter((r) => vk(r.orderVariantId) === gk);
         if (rows.length === 0) continue;
-        await this.recomputeSnapshotGroup(tx, {
+        const lost = await this.recomputeSnapshotGroup(tx, {
           rows,
           group: g,
           paramValues: new Map<string, TechCardParameterValue>(),
           normSources,
         });
+        for (const line of lost) lostEarly.push({ line, color: g.variantColor });
       }
+      // T1-3: строки, потерявшие норму номенклатуры, — отметкой на заказе.
+      await this.markNormSourcesLost(tx, orderId, lostEarly);
       return;
     }
 
@@ -6135,9 +6511,15 @@ export class OrdersService {
     // Слоты-параметры спецификации материализуются в заказ (по расцветке),
     // значения переживают пересборку — они в своей таблице.
     // Делаем ДО построения строк: подстановка читает уже готовые значения.
+    //
+    // Аудит движка расчёта 13.09.2026, T1-8: живыми для слотов считаются ВСЕ
+    // существующие группы (`groups`), а не только дающие строки
+    // (`effectiveGroups`): расцветка с обнулённым тиражом жива, и её значения
+    // («плотность 220») обязаны дожить до возврата тиража — иначе слот
+    // воскресал со значением соседней расцветки и расход в кг менялся молча.
     const valuesByGroup = await this.materializeTechCardParameters(
       orderId,
-      effectiveGroups,
+      groups,
       patternSpec,
       tx,
     );
@@ -6148,22 +6530,31 @@ export class OrdersService {
     // перематериализации → её шаблонные строки будут созданы заново, но РУЧНЫЕ
     // переживают, и их тираж тоже надо пересчитать — иначе после смены техкарты
     // у ручной строки остался бы totalQty от прежнего плана.
+    //
+    // T1-8: группа с нулевым тиражом (живая, но не в `effectiveGroups`) тоже
+    // пересчитывается — ВСЕМИ строками и с замороженной нормой (см.
+    // `recomputeSnapshotGroup`): тираж её строк обязан стать нулём, иначе
+    // расчёт потребности прочитал бы из снимка прежний `totalQty`.
     const recomputeSet = new Set(groupsToRecompute.map((g) => vk(g.variantId)));
-    for (const g of effectiveGroups) {
+    const lostNorms: Array<{ line: string; color: string | null }> = [];
+    for (const g of groups) {
       const gk = vk(g.variantId);
-      const isRecomputeGroup = recomputeSet.has(gk);
+      const isRecomputeGroup = recomputeSet.has(gk) || g.qty <= 0;
       const rows = (existingByGroup.get(gk) ?? []).filter(
         (r) => isRecomputeGroup || r.isManual,
       );
       if (rows.length === 0) continue;
-      await this.recomputeSnapshotGroup(tx, {
+      const lost = await this.recomputeSnapshotGroup(tx, {
         rows,
         group: g,
         paramValues:
           valuesByGroup.get(gk) ?? new Map<string, TechCardParameterValue>(),
         normSources,
       });
+      for (const line of lost) lostNorms.push({ line, color: g.variantColor });
     }
+    // T1-3: строки, потерявшие норму номенклатуры, — отметкой на заказе.
+    await this.markNormSourcesLost(tx, orderId, lostNorms);
 
     const data: Prisma.OrderMaterialRequirementCreateManyInput[] = [];
     for (const g of groupsToMaterialize) {
@@ -6303,7 +6694,11 @@ export class OrdersService {
           sourceTechCardId: null,
           sourcePatternItemId: patternSpec!.patternItemId,
           qtySource: derivedNorm ? 'NOMENCLATURE' : 'TEMPLATE',
-          qtySourceRef: derivedNorm ? (normSource?.sourceId ?? null) : null,
+          // Аудит 13.09.2026, T1-3, ревью: ссылка на найденный источник
+          // остаётся и без выведенной нормы (план не покрыт) — симметрично
+          // recompute: строка «из шаблона» с живым `qtySourceRef` при
+          // возврате плана снова станет «из номенклатуры».
+          qtySourceRef: normSource?.sourceId ?? null,
         });
       }
 
@@ -6403,10 +6798,10 @@ export class OrdersService {
     }
 
     // Сносим строки ТОЛЬКО тех групп, которые перематериализуем, плюс группы,
-    // которых больше нет (расцветку удалили, тираж обнулили, техкарту сняли).
-    // Группы на пересчёте не трогаем — иначе потеряли бы правки, сделанные в
-    // заказе. deleteMany безопасен: WorkshopNeed.sourceId не имеет FK на
-    // снимок (ADR-0022 §«snapshot independence»).
+    // которых больше нет (расцветку удалили). Группы на пересчёте не трогаем
+    // — иначе потеряли бы правки, сделанные в заказе. deleteMany безопасен:
+    // WorkshopNeed.sourceId не имеет FK на снимок (ADR-0022 §«snapshot
+    // independence»).
     //
     // РУЧНЫЕ строки (`isManual`) не сносим НИКОГДА, пока их группа жива — даже
     // при смене техкарты и при «Обновить из шаблона»: шаблон о них не знает,
@@ -6414,14 +6809,23 @@ export class OrdersService {
     // расцветку) — уходят вместе с ней, оставлять их сиротами нельзя.
     // Живая группа = существующая, а НЕ «дающая шаблонные строки»: иначе
     // снятая техкарта или обнулённый тираж уносили бы ручные строки.
+    //
+    // Аудит движка расчёта 13.09.2026, T1-8: сносим по ЯВНОМУ набору
+    // `groupsToMaterialize`, а не «всё, что не на пересчёте». Расцветка с
+    // обнулённым тиражом не попадает ни туда, ни туда, и прежний фильтр читал
+    // это как «перематериализуется»: её шаблонные строки стирались без
+    // замены, а при возврате тиража строились с нуля — правленая норма
+    // (ORDER), фиксированный цвет и расщепление единиц терялись молча.
     const liveGroupKeys = existingGroupKeys;
-    const recomputeKeys = new Set(groupsToRecompute.map((g) => vk(g.variantId)));
+    const materializeKeys = new Set(
+      groupsToMaterialize.map((g) => vk(g.variantId)),
+    );
     const idsToDelete = existing
       .filter((r) => {
         const gk = vk(r.orderVariantId);
         if (!liveGroupKeys.has(gk)) return true; // группы больше нет
         if (r.isManual) return false; // добавлена в заказе — не наша забота
-        return !recomputeKeys.has(gk); // группа перематериализуется
+        return materializeKeys.has(gk); // группа перематериализуется
       })
       .map((r) => r.id);
     if (idsToDelete.length > 0) {
@@ -6614,9 +7018,10 @@ export class OrdersService {
       result.set(gk, values);
     }
 
-    // Группы, которых больше нет (расцветку удалили, тираж обнулили, техкарту
-    // сняли) → их слоты осиротели. Значения таких групп не сохраняем: снимок
-    // для них тоже стирается.
+    // Группы, которых больше нет (расцветку удалили) → их слоты осиротели.
+    // Значения таких групп не сохраняем: снимок для них тоже стирается.
+    // Обнулённый тираж группой не считается мёртвой (T1-8): вызывающий
+    // передаёт сюда все существующие группы, и её значения переживают.
     const orphaned = existing.filter((p) => !liveGroupKeys.has(vk(p.orderVariantId)));
     if (orphaned.length > 0) {
       await tx.orderTechCardParameter.deleteMany({

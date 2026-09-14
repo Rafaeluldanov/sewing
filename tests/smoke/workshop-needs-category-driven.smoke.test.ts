@@ -52,6 +52,8 @@ describe('Shared workshop-needs — source recon + classification', () => {
       'PATTERN_PARAMETER_NORM',
       'PATTERN_SIZE_PARAMETER_VALUE',
       'PATTERN_MATERIAL_AREA',
+      // Ручная строка закупщика (7b6b61e, добор потребности) — ассерт обновлён аудитом 13.09.2026.
+      'MANUAL_ADDITION',
     ]);
   });
 
@@ -214,8 +216,11 @@ describe('WorkshopNeedsService — category-driven + enrichment', () => {
     // Exact match по нормализованному name/fabricType.
     expect(src).toMatch(/normalized\(c\.fabricType\)\s*===\s*target/);
     expect(src).toMatch(/normalized\(c\.name\)\s*===\s*target/);
-    // Single-role fallback.
-    expect(src).toMatch(/if\s*\(candidates\.length === 1\)\s*return\s+candidates\[0\]/);
+    // Single-role fallback — только при совместимом имени (аудит движка
+    // расчёта 13.09.2026, N1-1) и ПОСЛЕ явной привязки `qtySourceRef` (N1-3).
+    expect(src).toMatch(/l\.qtySourceRef === normId/);
+    expect(src).toMatch(/if\s*\(candidates\.length === 1\)\s*\{[\s\S]*?compatible/);
+    expect(src).not.toMatch(/if\s*\(candidates\.length === 1\)\s*return\s+candidates\[0\]/);
     // Нормализация ё→е.
     expect(src).toMatch(/replace\(\/ё\/g,\s*'е'\)/);
   });

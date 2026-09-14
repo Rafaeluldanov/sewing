@@ -614,7 +614,7 @@ describeWithDb('integration — order amendments (quantity)', () => {
     expect(audit).toBe(0);
   });
 
-  test('правка маршрута не в производстве → 409 ORDER_NOT_AMENDABLE', async () => {
+  test('правка маршрута в черновике разрешена (ORDER_ROUTE_EDITABLE_STATUSES, 144f928)', async () => {
     const tpl = await t.prisma.routeTemplate.create({
       data: {
         code: `TPL-AMEND-DRAFT-${Date.now()}`,
@@ -642,8 +642,10 @@ describeWithDb('integration — order amendments (quantity)', () => {
         steps: [{ operationId: seed.operations.PACKING.id }],
         reason: 'правка черновика',
       });
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('ORDER_NOT_AMENDABLE');
+    // С 144f928 (30.07.2026) маршрут правится и до запуска — окно задаёт
+    // ORDER_ROUTE_EDITABLE_STATUSES (DRAFT входит). Ассерт обновлён аудитом 13.09.2026
+    // (b1-17/b3-20): 409 ORDER_NOT_AMENDABLE остаётся для DONE/CANCELLED.
+    expect(res.status).toBe(200);
   });
 
   // ---- Журнал правок ---------------------------------------------------

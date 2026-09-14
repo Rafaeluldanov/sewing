@@ -10,13 +10,17 @@ import type {
   MaterialPriceStep,
   ProductionMaterialLineDto,
 } from '@sewing/shared/material-policy';
+import { PURCHASE_ORDER_LINE_ACTIVE_STATUSES } from '@sewing/shared/purchase-orders';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
-import { erpMaterialFactByNeed } from './erp-material-fact.js';
+import { erpConsumptionSignals, erpMaterialFactByNeed } from './erp-material-fact.js';
 
 const POSTED = 'POSTED';
 const RUB = 'RUB';
+const USD = 'USD';
+const CANCELLED = 'CANCELLED';
 
 const dec = (v: Prisma.Decimal | number | null | undefined): number =>
   v == null ? 0 : Number(v);
@@ -40,6 +44,40 @@ type Agg = { qty: number; rub: number };
 const empty = (): Agg => ({ qty: 0, rub: 0 });
 
 /**
+ * Закупка / приёмка по потребности. Цена — СРЕДНЕВЗВЕШЕННАЯ: копим рубли по оценённой части
+ * (`rub`, `pricedQty`) и делим. Аудит движка расчёта 13.09.2026, D1-6 ≡ E1-8: раньше цена
+ * перезаписывалась каждой строкой («последняя побеждает»), и при двух строках ЗП/приёмки с
+ * разными ценами Σ количества умножалась на случайную из них — сумма зависела от порядка выборки.
+ */
+type PricedAgg = {
+  qty: number;
+  pricedQty: number;
+  rub: number;
+  /** Была строка с ценой в USD, которую нечем перевести в рубли (E1-7). */
+  usdNoRate: boolean;
+  /** Была строка с ценой в валюте, которую движок не переводит вовсе (не RUB/USD; E1-7, ревью). */
+  currencyUnsupported: boolean;
+  confirmed: boolean;
+};
+const emptyPriced = (): PricedAgg => ({
+  qty: 0,
+  pricedQty: 0,
+  rub: 0,
+  usdNoRate: false,
+  currencyUnsupported: false,
+  confirmed: false,
+});
+/**
+ * Почему цену не перевести в рубли: USD без курса сметы — или валюта, курса которой у цеха нет
+ * вовсе. Аудит движка расчёта 13.09.2026, E1-7, ревью: код `MATERIAL_PRICE_USD_NO_RATE`
+ * ставился и для EUR/CNY, а подпись в UI говорила про USD и курс сметы.
+ */
+const noteMissingRate = (acc: PricedAgg, currency: string | null | undefined): void => {
+  if ((currency ?? RUB).toUpperCase() === USD) acc.usdNoRate = true;
+  else acc.currencyUnsupported = true;
+};
+
+/**
  * МАТЕРИАЛ В СЕБЕСТОИМОСТИ ЗАКАЗА — по двум настраиваемым осям.
  *
  * ⛔ ОСИ РАЗНЫЕ, И ЭТО НЕ ПЕДАНТИЗМ. План и факт различаются двумя признаками: количеством и
@@ -54,6 +92,13 @@ const empty = (): Agg => ({ qty: 0, rub: 0 });
  * ⛔ МАТЕРИАЛ ERP НАСТРОЙКАМИ НЕ УПРАВЛЯЕТСЯ. ERP списывает со своего склада по факту выпуска, с
  * конкретного рулона и по цене его партии (правило владельца §0.3). Это уже факт: подменять его
  * нормой или ценой закупки значило бы спорить с чужим учётом.
+ *
+ * Валюта (аудит движка расчёта 13.09.2026, E1-7): котировка, цена ЗП и снимок цены приёмки в USD
+ * переводятся в рубли по курсу АКТИВНОЙ сметы (`OrderCostEstimate.usdRateRub`) — тем же, которым
+ * посчитан план и которым автосписание оценило выдачу. Без курса строка получает `totalRub: null`
+ * и код `MATERIAL_PRICE_USD_NO_RATE`: «нечем перевести» — не то же самое, что «стоило 0 ₽».
+ * Иная валюта (EUR, CNY, …) курса у цеха не имеет вовсе — та же строка с `totalRub: null`, но код
+ * `MATERIAL_PRICE_CURRENCY_UNSUPPORTED` (ревью E1-7): подпись про «курс USD в смете» тут врала бы.
  */
 @Injectable()
 export class OrderMaterialCostService {
@@ -85,64 +130,112 @@ export class OrderMaterialCostService {
         quotedPrice: true,
         quotedCurrency: true,
         erpManagedAt: true,
+        status: true,
       },
     });
-    const needIds = needs.map((n) => n.id);
+    // Аудит движка расчёта 13.09.2026, D1-1: отменённая строка — не потребность (смета, документ
+    // план→факт и доля на паспорт её не видят, здесь она уезжала в `materials_own_rub` нормой).
+    // ЗП и приёмки по ней в затраты не берём, поэтому по отменённым строкам их и не читаем.
+    // Остаётся только реальный расход, если материал успели выдать до отмены, — см. цикл строк.
+    const needIds = needs.filter((n) => n.status !== CANCELLED).map((n) => n.id);
 
-    const [issuedLines, returnsHeader, returnedLines, orderedLines, receivedLines, erpByNeed] =
-      await Promise.all([
-        this.prisma.materialIssueLine.findMany({
-          where: { materialIssue: { orderId, status: POSTED } },
-          select: {
-            workshopNeedId: true,
-            description: true,
-            unit: true,
-            issuedQty: true,
-            totalCost: true,
-          },
-        }),
-        this.prisma.materialIssueReturn.aggregate({
-          where: { orderId, status: POSTED },
-          _sum: { totalCost: true },
-        }),
-        this.prisma.materialIssueReturnLine.findMany({
-          where: { materialIssueReturn: { orderId, status: POSTED } },
-          select: {
-            returnedQty: true,
-            totalCost: true,
-            materialIssueLine: { select: { workshopNeedId: true } },
-          },
-        }),
-        needIds.length
-          ? this.prisma.purchaseOrderLine.findMany({
-              where: {
-                workshopNeedId: { in: needIds },
-                // Отменённая закупка — не обязательство: её строки в затратах не участвуют.
-                purchaseOrder: { cancelledAt: null },
-              },
-              select: {
-                workshopNeedId: true,
-                qty: true,
-                price: true,
-                currency: true,
-                confirmedQty: true,
-                confirmedPrice: true,
-              },
-            })
-          : Promise.resolve([]),
-        needIds.length
-          ? this.prisma.purchaseReceiptLine.findMany({
-              where: { workshopNeedId: { in: needIds } },
-              select: {
-                workshopNeedId: true,
-                receivedQty: true,
-                priceSnapshot: true,
-                currencySnapshot: true,
-              },
-            })
-          : Promise.resolve([]),
-        erpMaterialFactByNeed(this.prisma, orderId),
-      ]);
+    const [
+      issuedLines,
+      returnsHeader,
+      returnedLines,
+      orderedLines,
+      receivedLines,
+      erpByNeed,
+      erpSignals,
+      estimate,
+    ] = await Promise.all([
+      this.prisma.materialIssueLine.findMany({
+        where: { materialIssue: { orderId, status: POSTED } },
+        select: {
+          workshopNeedId: true,
+          description: true,
+          unit: true,
+          issuedQty: true,
+          totalCost: true,
+        },
+      }),
+      this.prisma.materialIssueReturn.aggregate({
+        where: { orderId, status: POSTED },
+        _sum: { totalCost: true },
+      }),
+      this.prisma.materialIssueReturnLine.findMany({
+        where: { materialIssueReturn: { orderId, status: POSTED } },
+        select: {
+          returnedQty: true,
+          totalCost: true,
+          materialIssueLine: { select: { workshopNeedId: true } },
+        },
+      }),
+      needIds.length
+        ? this.prisma.purchaseOrderLine.findMany({
+            where: {
+              workshopNeedId: { in: needIds },
+              // Отменённая закупка — не обязательство: её строки в затратах не участвуют.
+              purchaseOrder: { cancelledAt: null },
+              // Аудит движка расчёта 13.09.2026, E1-8: отменённая СТРОКА живого ЗП — тоже не
+              // обязательство (`PurchaseOrderLine.status` живёт отдельно от заголовка).
+              status: { in: PURCHASE_ORDER_LINE_ACTIVE_STATUSES as string[] },
+            },
+            // Порядок задан ради воспроизводимости: сумма не должна зависеть от плана выборки.
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            select: {
+              workshopNeedId: true,
+              qty: true,
+              price: true,
+              currency: true,
+              confirmedQty: true,
+              confirmedPrice: true,
+            },
+          })
+        : Promise.resolve([]),
+      needIds.length
+        ? this.prisma.purchaseReceiptLine.findMany({
+            where: {
+              workshopNeedId: { in: needIds },
+              // Аудит движка расчёта 13.09.2026, D1-6: отменённая приёмка — не «принято»
+              // (та же выборка, что у документа план→факт).
+              status: POSTED,
+              purchaseReceipt: { status: POSTED },
+            },
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            select: {
+              workshopNeedId: true,
+              receivedQty: true,
+              priceSnapshot: true,
+              currencySnapshot: true,
+            },
+          })
+        : Promise.resolve([]),
+      erpMaterialFactByNeed(this.prisma, orderId),
+      erpConsumptionSignals(this.prisma, orderId),
+      // Аудит движка расчёта 13.09.2026, E1-7: курс USD активной сметы — им посчитан план
+      // (`OrderCostEstimatesService`) и оценена авто-выдача (`resolveAutoIssueUnitCost`).
+      this.prisma.orderCostEstimate.findFirst({
+        where: { orderId, status: 'COMPLETED', AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE] },
+        orderBy: { version: 'desc' },
+        select: { usdRateRub: true },
+      }),
+    ]);
+    const usdRate = estimate?.usdRateRub == null ? null : dec(estimate.usdRateRub);
+    /**
+     * Цена в рублях: RUB — как есть, USD — по курсу сметы. `undefined` — цены нет,
+     * `null` — цена есть, но перевести её в рубли нечем (E1-7).
+     */
+    const rubPrice = (
+      price: Prisma.Decimal | null | undefined,
+      currency: string | null | undefined,
+    ): number | null | undefined => {
+      if (price == null) return undefined;
+      const cur = (currency ?? RUB).toUpperCase();
+      if (cur === RUB) return dec(price);
+      if (cur === USD && usdRate != null && usdRate > 0) return dec(price) * usdRate;
+      return null;
+    };
 
     // --- факты по потребностям ------------------------------------------------
     const issued = new Map<string, Agg>();
@@ -186,45 +279,76 @@ export class OrderMaterialCostService {
       dec(returnsHeader._sum.totalCost) - returnLinesRub,
     );
 
-    const ordered = new Map<string, { qty: number; price: number | null; confirmed: boolean }>();
+    const ordered = new Map<string, PricedAgg>();
     for (const l of orderedLines) {
       if (!l.workshopNeedId) continue;
-      const acc = ordered.get(l.workshopNeedId) ?? { qty: 0, price: null, confirmed: false };
+      const acc = ordered.get(l.workshopNeedId) ?? emptyPriced();
       const qty = l.confirmedQty == null ? dec(l.qty) : dec(l.confirmedQty);
       acc.qty += qty;
       // Цена берётся подтверждённая, если поставщик её подтвердил: платить будем по ней.
-      const price = l.confirmedPrice ?? l.price;
-      if (price != null && (l.currency ?? RUB) === RUB) {
-        acc.price = dec(price);
+      const price = rubPrice(l.confirmedPrice ?? l.price, l.currency);
+      if (price === null) {
+        noteMissingRate(acc, l.currency);
+      } else if (price !== undefined && qty > 0) {
+        // D1-6 ≡ E1-8: взвешиваем количеством, а не перезаписываем.
+        acc.pricedQty += qty;
+        acc.rub += qty * price;
         acc.confirmed = acc.confirmed || l.confirmedPrice != null;
       }
       ordered.set(l.workshopNeedId, acc);
     }
 
-    const received = new Map<string, { qty: number; price: number | null }>();
+    const received = new Map<string, PricedAgg>();
     for (const l of receivedLines) {
       if (!l.workshopNeedId) continue;
-      const acc = received.get(l.workshopNeedId) ?? { qty: 0, price: null };
-      acc.qty += dec(l.receivedQty);
-      if (l.priceSnapshot != null && (l.currencySnapshot ?? RUB) === RUB) {
-        acc.price = dec(l.priceSnapshot);
+      const acc = received.get(l.workshopNeedId) ?? emptyPriced();
+      const qty = dec(l.receivedQty);
+      acc.qty += qty;
+      const price = rubPrice(l.priceSnapshot, l.currencySnapshot);
+      if (price === null) {
+        noteMissingRate(acc, l.currencySnapshot);
+      } else if (price !== undefined && qty > 0) {
+        acc.pricedQty += qty;
+        acc.rub += qty * price;
       }
       received.set(l.workshopNeedId, acc);
     }
+    /** Средневзвешенная цена по оценённой части закупки/приёмки; `null` — оценённой части нет. */
+    const avgPrice = (acc: PricedAgg | undefined): number | null =>
+      acc && acc.pricedQty > 0 ? acc.rub / acc.pricedQty : null;
 
     // --- сборка строк ---------------------------------------------------------
     const lines: ProductionMaterialLineDto[] = [];
     let erpTotal = 0;
     // Масштаб нормы: норма посчитана на весь план, а документ — про фактический выпуск.
     const scale = opts.qtyPlan > 0 ? opts.qtyGood / opts.qtyPlan : 1;
+    // Беспаспортные и непривязанные списания — только там, где расход вообще учитывается.
+    const countsIssued =
+      opts.recognition === OrderMaterialRecognition.BY_CONSUMPTION &&
+      (opts.qtySource === MaterialQtySource.ISSUED ||
+        opts.qtySource === MaterialQtySource.ISSUED_OR_CALCULATED);
+    // Аудит движка расчёта 13.09.2026, D1-12: ERP было что списывать (есть упакованные паспорта) —
+    // значит, у строки под ERP без POSTED-факта расход не «нулевой», а ПОТЕРЯННЫЙ: FAILED/EMPTY,
+    // ещё не отвечено или ERP не прислала разбивку. Такая строка едет нулём с предупреждением —
+    // «тихо потерянный расход хуже явно пропущенного».
+    const erpExpected =
+      erpSignals.pending + erpSignals.posted + erpSignals.failed + erpSignals.empty > 0;
+    let hasErpNeeds = erpByNeed.size > 0;
 
     for (const need of needs) {
       const description = need.description || need.sourceName || 'Материал';
+      const cancelled = need.status === CANCELLED;
+      const fact = erpByNeed.get(need.id);
+      if (need.erpManagedAt) hasErpNeeds = true;
 
       // Материал ERP — чужой факт, настройки к нему не применяются.
-      if (need.erpManagedAt) {
-        const fact = erpByNeed.get(need.id);
-        if (!fact) continue;
+      //
+      // Аудит движка расчёта 13.09.2026, D1-13: ветка выбирается и по ФАКТУ ERP, а не только по
+      // `erpManagedAt`: после `erp-unlink` строка снова «своя», но списанное ERP по ней никуда не
+      // делось — считать по ней ещё и норму значило бы взять тот же материал дважды (второй раз
+      // строкой «Материал ERP без разбивки»). Норму по такой строке не считаем; собственный
+      // расход или закупка, появившиеся после отвязки, идут обычной веткой ниже.
+      if (fact) {
         const qty = dec(fact.qty);
         const rub = dec(fact.rub);
         erpTotal += rub;
@@ -238,13 +362,32 @@ export class OrderMaterialCostService {
           priceStep: 'ERP',
           totalRub: round2(rub),
         });
+        if (need.erpManagedAt) continue;
+      } else if (need.erpManagedAt) {
+        if (cancelled || !erpExpected) continue;
+        // D1-12: строка под ERP, по которой ERP ничего не списала, — нулём и вслух.
+        lines.push({
+          workshopNeedId: need.id,
+          description,
+          unit: need.unit,
+          qty: 0,
+          qtyStep: 'ERP',
+          unitPriceRub: null,
+          priceStep: 'ERP',
+          totalRub: 0,
+        });
+        warnings.push('ERP_MATERIAL_FACT_MISSING');
         continue;
       }
 
       const iss = issued.get(need.id);
-      const ord = ordered.get(need.id);
-      const rec = received.get(need.id);
-      const calculated = dec(need.calculatedQty) * scale;
+      // D1-1: по отменённой строке — только реальный расход (и только там, где он вообще
+      // учитывается); нормы, ЗП и приёмок у неё нет.
+      if (cancelled && !(countsIssued && iss && iss.qty > 0)) continue;
+      const ord = cancelled ? undefined : ordered.get(need.id);
+      const rec = cancelled ? undefined : received.get(need.id);
+      // D1-13: норма не считается, если материал по строке уже списала ERP (см. выше).
+      const calculated = cancelled || fact ? 0 : dec(need.calculatedQty) * scale;
 
       // --- количество
       let qty = 0;
@@ -295,21 +438,27 @@ export class OrderMaterialCostService {
       }
       if (qty <= 0) continue;
 
-      // --- цена
-      const planned =
-        need.quotedPrice != null && (need.quotedCurrency ?? RUB) === RUB
-          ? dec(need.quotedPrice)
-          : null;
+      // --- цена (E1-7: USD — по курсу сметы, `null` — курса нет)
+      const plannedRaw = rubPrice(need.quotedPrice, need.quotedCurrency);
+      const planned = plannedRaw ?? null;
+      const ordPrice = avgPrice(ord);
+      const recPrice = avgPrice(rec);
       let price: number | null = null;
       let priceStep: MaterialPriceStep = 'NONE';
+      // Среди ОПРОШЕННЫХ ступеней была цена в USD без курса — или в валюте без курса вовсе.
+      const plannedCurrency = (need.quotedCurrency ?? RUB).toUpperCase();
+      let sawUsdNoRate = plannedRaw === null && plannedCurrency === USD;
+      let sawUnsupported = plannedRaw === null && plannedCurrency !== USD;
       switch (opts.priceSource) {
         case MaterialPriceSource.PLANNED:
           price = planned;
           priceStep = planned == null ? 'NONE' : 'PLANNED';
           break;
         case MaterialPriceSource.RECEIPT:
-          if (rec?.price != null) {
-            price = rec.price;
+          sawUsdNoRate = sawUsdNoRate || rec?.usdNoRate === true;
+          sawUnsupported = sawUnsupported || rec?.currencyUnsupported === true;
+          if (recPrice != null) {
+            price = recPrice;
             priceStep = 'RECEIPT';
           } else {
             price = planned;
@@ -318,11 +467,17 @@ export class OrderMaterialCostService {
           break;
         case MaterialPriceSource.PURCHASE:
         default:
-          if (ord?.price != null) {
-            price = ord.price;
-            priceStep = ord.confirmed ? 'PURCHASE_CONFIRMED' : 'PURCHASE_ORDERED';
-          } else if (rec?.price != null) {
-            price = rec.price;
+          sawUsdNoRate =
+            sawUsdNoRate || ord?.usdNoRate === true || rec?.usdNoRate === true;
+          sawUnsupported =
+            sawUnsupported ||
+            ord?.currencyUnsupported === true ||
+            rec?.currencyUnsupported === true;
+          if (ordPrice != null) {
+            price = ordPrice;
+            priceStep = ord?.confirmed ? 'PURCHASE_CONFIRMED' : 'PURCHASE_ORDERED';
+          } else if (recPrice != null) {
+            price = recPrice;
             priceStep = 'RECEIPT';
           } else {
             price = planned;
@@ -330,7 +485,13 @@ export class OrderMaterialCostService {
           }
           break;
       }
-      if (price == null) warnings.push('MATERIAL_PRICE_UNKNOWN');
+      // Цена есть только в валюте, а курса нет — это не «цены нет» и тем более не 0 ₽.
+      // USD без курса сметы и иная валюта — разные коды: их лечат по-разному (E1-7, ревью).
+      const usdNoRate = price == null && sawUsdNoRate;
+      const currencyUnsupported = price == null && !sawUsdNoRate && sawUnsupported;
+      if (usdNoRate) warnings.push('MATERIAL_PRICE_USD_NO_RATE');
+      else if (currencyUnsupported) warnings.push('MATERIAL_PRICE_CURRENCY_UNSUPPORTED');
+      else if (price == null) warnings.push('MATERIAL_PRICE_UNKNOWN');
 
       lines.push({
         workshopNeedId: need.id,
@@ -340,15 +501,10 @@ export class OrderMaterialCostService {
         qtyStep,
         unitPriceRub: price == null ? null : round2(price),
         priceStep,
-        totalRub: round2(qty * (price ?? 0)),
+        totalRub: usdNoRate || currencyUnsupported ? null : round2(qty * (price ?? 0)),
       });
     }
 
-    // Беспаспортные и непривязанные списания — только там, где расход вообще учитывается.
-    const countsIssued =
-      opts.recognition === OrderMaterialRecognition.BY_CONSUMPTION &&
-      (opts.qtySource === MaterialQtySource.ISSUED ||
-        opts.qtySource === MaterialQtySource.ISSUED_OR_CALCULATED);
     if (countsIssued) {
       lines.push(...unlinkedIssued);
       if (returnResidualRub > 0.01) {
@@ -365,8 +521,20 @@ export class OrderMaterialCostService {
       }
     }
 
+    // D1-12: состояние ответов ERP — сигналы на уровне заказа. FAILED/EMPTY/молчание по паспорту
+    // прячут его материал целиком, `uncoveredQty` — ERP списала, но партиями не покрыла.
+    if (hasErpNeeds) {
+      if (erpSignals.failed > 0) warnings.push('ERP_CONSUMPTION_FAILED');
+      if (erpSignals.pending > 0) warnings.push('ERP_CONSUMPTION_PENDING');
+      if (erpSignals.empty > 0) warnings.push('ERP_CONSUMPTION_EMPTY');
+      if (dec(erpSignals.uncoveredQty) > 0) warnings.push('ERP_UNCOVERED_QTY');
+    }
+
     const totalRub = round2(
-      lines.reduce((sum, l) => sum + (l.qtyStep === 'ERP' ? 0 : l.totalRub), 0),
+      lines.reduce(
+        (sum, l) => sum + (l.qtyStep === 'ERP' ? 0 : (l.totalRub ?? 0)),
+        0,
+      ),
     );
     if (lines.length === 0) warnings.push('NO_MATERIAL_FACT');
 

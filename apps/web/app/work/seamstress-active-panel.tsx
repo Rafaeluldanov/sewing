@@ -174,10 +174,18 @@ export function SeamstressActivePanel({
    * `evaluateForIssue` (она бы всё равно вернула 409 на
    * `acceptForIssue`, но швея бы успела зря пройти модалку
    * визуальной сверки).
+   *
+   * Аудит 13.09.2026, G3-1, ревью: клиентская сверка не видит, что паспорт
+   * УЖЕ засчитан в очередь (возврат от ОТК на первый шаг, паспорт,
+   * засчитанный на CUTTING-смене и пришедший на ОВР) — сервер такую выдачу
+   * принимает, а модалка без выхода её запирала. Поэтому храним и сам
+   * паспорт: кнопка «Всё равно взять» ведёт в обычную модалку
+   * подтверждения, а истину решает сервер (201 либо 409).
    */
   const [wrongSize, setWrongSize] = useState<{
     scannedSize: string;
     expected: OrderCutIssueRuleBannerOrderDto;
+    passport: PassportConfirmData;
   } | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -305,6 +313,8 @@ export function SeamstressActivePanel({
       // Для `complete`-flow эту проверку не делаем: завершение
       // операции по своему паспорту не регулируется очередью
       // выдачи (правило применяется только на первой выдаче).
+      // Ревью G3-1: это предупреждение, не запрет — из модалки можно
+      // продолжить («Всё равно взять»), серверная проверка главнее.
       if (mode === 'issue' && cutIssueBanner.applicable) {
         const expected = cutIssueBanner.orders.find(
           (o) => o.orderId === res.passport.orderId,
@@ -313,6 +323,7 @@ export function SeamstressActivePanel({
           setWrongSize({
             scannedSize: res.passport.sizeCode,
             expected,
+            passport: res.passport,
           });
           return;
         }
@@ -392,6 +403,20 @@ export function SeamstressActivePanel({
     if (isPending) return;
     setConfirm(null);
     setConfirmMode(null);
+  };
+
+  /**
+   * «Всё равно взять» из модалки «Не тот размер» (ревью G3-1): открываем
+   * обычную модалку подтверждения выдачи — дальше `acceptForIssue` и
+   * серверный `evaluateForIssue` (паспорт уже в очереди → 201, иначе 409
+   * с актуальным текстом «Сначала нужно выдать: …»).
+   */
+  const handleIssueDespiteWrongSize = () => {
+    if (!wrongSize) return;
+    const passport = wrongSize.passport;
+    setWrongSize(null);
+    setConfirmMode('issue');
+    setConfirm(passport);
   };
 
   // -------------------------------------------------------------------
@@ -556,6 +581,7 @@ export function SeamstressActivePanel({
           scannedSize={wrongSize.scannedSize}
           expected={wrongSize.expected}
           onClose={() => setWrongSize(null)}
+          onProceed={handleIssueDespiteWrongSize}
         />
       )}
       {reworkAlert && reworkAlert.length > 0 && (
@@ -779,15 +805,23 @@ function ReworkAlertModal({
  * (`OrderCutIssueRulesService.evaluateForIssue` бросит 409 при
  * `acceptForIssue`), но модалка экономит швее шаг визуальной
  * сверки.
+ *
+ * Аудит 13.09.2026, G3-1, ревью: паспорт, УЖЕ засчитанный в очередь
+ * (возврат от ОТК на первый шаг, повторная выдача после CUTTING-смены),
+ * сервер принимает независимо от размера, а клиент этого признака не
+ * видит — поэтому у модалки есть второй выход «Всё равно взять»
+ * (`onProceed`): обычное подтверждение выдачи, решает сервер.
  */
 function WrongSizeModal({
   scannedSize,
   expected,
   onClose,
+  onProceed,
 }: {
   scannedSize: string;
   expected: OrderCutIssueRuleBannerOrderDto;
   onClose: () => void;
+  onProceed: () => void;
 }) {
   return (
     <ModalPortal>
@@ -828,9 +862,16 @@ function WrongSizeModal({
             обратитесь к мастеру.
           </p>
         )}
+        <p className="modal__text modal__text--muted">
+          Если этот паспорт уже выдавался (вернулся от ОТК или пришёл с
+          раскроя) — его можно взять: очередь его второй раз не считает.
+        </p>
         <div className="modal__actions">
           <button type="button" className="btn btn-primary" onClick={onClose}>
             Понятно
+          </button>
+          <button type="button" className="btn" onClick={onProceed}>
+            Всё равно взять
           </button>
         </div>
       </div>

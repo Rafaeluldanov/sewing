@@ -20,10 +20,17 @@ import {
 } from '../../common/errors.js';
 import { SalaryService } from '../salary/salary.service.js';
 import { resolveEffectiveHourlyRate } from '../salary/salary-rate.js';
+import {
+  cappedWorkedSeconds,
+  rawWorkedSeconds,
+  resolveShiftWorkedCapSeconds,
+} from '../salary/shift-worked-cap.js';
 
 const recutSessionInclude = {
   order: { select: { number: true } },
   employee: { select: { fullName: true } },
+  // Конец своей смены — для флага `longerThanShift` в DTO (G4-3, ревью).
+  shiftSession: { select: { endedAt: true } },
 } satisfies Prisma.RecutSessionInclude;
 
 type RecutSessionRow = Prisma.RecutSessionGetPayload<{
@@ -47,7 +54,19 @@ type RecutSessionRow = Prisma.RecutSessionGetPayload<{
  *     индекс + явная проверка);
  *   - оплата — почасовая ДОПЛАТА сверх смены: при завершении считаем
  *     длительность и `amount`, дневной агрегат ложится строкой
- *     `SalaryEntry(source = RECUT)` через `SalaryService.syncDailyRecut`.
+ *     `SalaryEntry(source = RECUT)` через `SalaryService.syncDailyRecut`;
+ *   - забытый таймер не платит календарные часы (Аудит движка расчёта
+ *     13.09.2026, G4-3): длительность подкроя в деньгах режется тем же
+ *     предохранителем, что и смена (`shift-worked-cap.ts`, K7:
+ *     `shiftMaxDurationHours` или 16 ч) — иначе пт 16:00 → «Завершить» в
+ *     пн 09:00 давало 65 ч × 300 ₽ = 19 500 ₽ за 2 ч работы. Концом смены
+ *     подкрой НЕ режется и закрытием смены НЕ завершается: «жёсткая
+ *     граница сменой или предупреждение мастеру» — решение №12 из списка
+ *     решений владельца по аудиту, оно не принято (ревью G4-3), поэтому
+ *     здесь только предохранитель и ПРЕДУПРЕЖДЕНИЕ: флаги
+ *     `longerThanShift` / `cappedByGuard` в `RecutSessionDto`, флаг
+ *     `activeRecutOverLimit` у мастера (`MasterActiveShiftDto`) и пометка
+ *     в строке `RECUT` ведомости (`SalaryService.syncDailyRecut`).
  */
 @Injectable()
 export class RecutService {
@@ -73,7 +92,7 @@ export class RecutService {
       orderBy: { startedAt: 'desc' },
       include: recutSessionInclude,
     });
-    return row ? this.toDto(row) : null;
+    return row ? this.toDto(row, await resolveShiftWorkedCapSeconds(this.prisma)) : null;
   }
 
   /**
@@ -167,7 +186,7 @@ export class RecutService {
         },
         include: recutSessionInclude,
       });
-      return this.toDto(created);
+      return this.toDto(created, await resolveShiftWorkedCapSeconds(this.prisma));
     } catch (err) {
       // Гонка между проверкой (3) и вставкой: partial-unique индекс
       // `recut_session_active_employee_uniq` поймает дубль.
@@ -185,21 +204,41 @@ export class RecutService {
    * «Завершить подкрой» — `ACTIVE` → `DONE`. Фиксирует длительность,
    * снимок часовой ставки и рассчитанную доплату, затем пересчитывает
    * дневную строку `SalaryEntry(source = RECUT)`.
+   *
+   * Аудит движка расчёта 13.09.2026, G4-3: `endedAt` — момент нажатия
+   * (концом смены не режется — решение №12 за владельцем, см. шапку),
+   * `workedSeconds` — не больше предела `shift-worked-cap.ts` (K7).
+   *
+   * `updateMany` с условием `status = 'ACTIVE'` делает завершение
+   * идемпотентным: параллельное «Завершить»/«Отменить» получает ту же
+   * 409 `RECUT_NOT_ACTIVE`, что и любой не-ACTIVE, а не вторую оплату.
    */
   async complete(id: string, employeeId: string): Promise<RecutSessionDto> {
     const session = await this.loadOwnedActive(id, employeeId);
-
     const endedAt = new Date();
-    const workedSeconds = Math.max(
-      0,
-      Math.floor((endedAt.getTime() - session.startedAt.getTime()) / 1000),
+    const capSeconds = await resolveShiftWorkedCapSeconds(this.prisma);
+    const rawSeconds = rawWorkedSeconds(session.startedAt, endedAt);
+    const workedSeconds = cappedWorkedSeconds(
+      session.startedAt,
+      endedAt,
+      capSeconds,
     );
+    if (workedSeconds < rawSeconds) {
+      // Предохранитель сработал — в лог, в DTO (`cappedByGuard`) и в
+      // пометку строки `RECUT` ведомости (`syncDailyRecut`).
+      this.logger.warn(
+        `event=recut.capped id=${session.id} employeeId=${employeeId} rawSeconds=${rawSeconds} paidSeconds=${workedSeconds} capSeconds=${capSeconds}`,
+      );
+    }
 
-    // Снимок часовой ставки на момент завершения (для аудита/показа).
-    // Платёжный источник истины — агрегат `syncDailyRecut`; здесь снимок
-    // считаем ТОЙ ЖЕ ставкой, чтобы строка сессии и ведомость сходились —
-    // включая месячного окладника, у которого `salaryPerHour` пуст, а
-    // ₽/час производные от нормы часов месяца (см. `salary-rate.ts`).
+    // Снимок часовой ставки (для аудита/показа). Платёжный источник
+    // истины — агрегат `syncDailyRecut`; здесь снимок считаем ТОЙ ЖЕ
+    // ставкой, чтобы строка сессии и ведомость сходились — включая
+    // месячного окладника, у которого `salaryPerHour` пуст, а ₽/час
+    // производные от нормы часов месяца (см. `salary-rate.ts`). Дата
+    // ставки — день СТАРТА, как у `syncDailyRecut(employeeId, startedAt)`
+    // (Аудит движка расчёта 13.09.2026, G4-3, поправка скептика: по
+    // `endedAt` снимок месячника расходился с ведомостью на границе месяца).
     const employee = await this.prisma.employee.findUnique({
       where: { id: employeeId },
       select: {
@@ -209,7 +248,11 @@ export class RecutService {
       },
     });
     const ratePerHour = employee
-      ? await resolveEffectiveHourlyRate(this.prisma, employee, endedAt)
+      ? await resolveEffectiveHourlyRate(
+          this.prisma,
+          employee,
+          session.startedAt,
+        )
       : null;
     const amount =
       ratePerHour !== null
@@ -218,8 +261,8 @@ export class RecutService {
             .toDecimalPlaces(2)
         : null;
 
-    const updated = await this.prisma.recutSession.update({
-      where: { id },
+    const res = await this.prisma.recutSession.updateMany({
+      where: { id: session.id, status: 'ACTIVE' },
       data: {
         status: 'DONE',
         endedAt,
@@ -227,11 +270,15 @@ export class RecutService {
         ratePerHour,
         amount,
       },
+    });
+    if (res.count === 0) throw new RecutNotActiveException();
+    const updated = await this.prisma.recutSession.findUniqueOrThrow({
+      where: { id: session.id },
       include: recutSessionInclude,
     });
 
     await this.safeSyncRecutSalary(employeeId, session.startedAt);
-    return this.toDto(updated);
+    return this.toDto(updated, capSeconds);
   }
 
   /**
@@ -247,7 +294,7 @@ export class RecutService {
       include: recutSessionInclude,
     });
     await this.safeSyncRecutSalary(employeeId, session.startedAt);
-    return this.toDto(updated);
+    return this.toDto(updated, await resolveShiftWorkedCapSeconds(this.prisma));
   }
 
   // ---------------------------------------------------------------------------
@@ -284,7 +331,28 @@ export class RecutService {
     }
   }
 
-  private toDto(row: RecutSessionRow): RecutSessionDto {
+  /**
+   * Флаги предупреждения (Аудит движка расчёта 13.09.2026, G4-3, ревью:
+   * вместо жёсткой границы сменой) выводятся из данных, поля в схеме нет:
+   *   - `longerThanShift` — своя смена уже закрыта, а подкрой идёт
+   *     (ACTIVE) или закончился после её конца (DONE);
+   *   - `cappedByGuard` — DONE: `endedAt − startedAt` больше
+   *     `workedSeconds`; ACTIVE: тикает уже дольше предела — доплата
+   *     будет обрезана.
+   */
+  private toDto(row: RecutSessionRow, capSeconds: number): RecutSessionDto {
+    const shiftEnd = row.shiftSession?.endedAt ?? null;
+    const active = row.status === 'ACTIVE';
+    const longerThanShift =
+      shiftEnd !== null &&
+      (active || (row.endedAt !== null && row.endedAt > shiftEnd));
+    let cappedByGuard = false;
+    if (active) {
+      cappedByGuard = rawWorkedSeconds(row.startedAt, new Date()) > capSeconds;
+    } else if (row.status === 'DONE' && row.endedAt) {
+      cappedByGuard =
+        rawWorkedSeconds(row.startedAt, row.endedAt) > (row.workedSeconds ?? 0);
+    }
     return {
       id: row.id,
       orderId: row.orderId,
@@ -297,6 +365,8 @@ export class RecutService {
       workedSeconds: row.workedSeconds ?? null,
       ratePerHour: row.ratePerHour === null ? null : Number(row.ratePerHour),
       amount: row.amount === null ? null : Number(row.amount),
+      longerThanShift,
+      cappedByGuard,
     };
   }
 }

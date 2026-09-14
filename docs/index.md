@@ -489,6 +489,9 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   `PAYROLL_ACCRUAL_DOCUMENT_INVALID_STATE` /
   `PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND` /
   `PAYROLL_ACCRUAL_LINE_ALREADY_PAID` /
+  `PAYROLL_ACCRUAL_LINE_NON_POSITIVE` (422, аудит 13.09.2026, K1:
+  удержание больше начислений; полный зачёт «в ноль» проводится
+  выплатой на 0 ₽) /
   `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`. AuditEntityType
   `PAYROLL_ACCRUAL_DOCUMENT` (5 событий). UI — не реализован (STEP 6.5+).
   Документы: [`docs/api.md §30c`](./api.md#30c-payroll-accrual-documents),

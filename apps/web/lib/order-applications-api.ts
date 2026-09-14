@@ -44,7 +44,10 @@ export function getOrderApplications(
  * 409 `ORDER_APPLICATION_ORDER_LOCKED`.
  *
  * Потребность цеха backend догоняет сам: на `CALCULATION` — полным
- * пересчётом, после завершения расчёта (`isOrderApplicationsLateEdit`)
+ * пересчётом (если он отбит строками в работе у закупщика — точечной
+ * синхронизацией строк нанесений + отметка `needsStaleAt` на заказе,
+ * аудит движка расчёта 13.09.2026, G10-1), после завершения расчёта
+ * (`isOrderApplicationsLateEdit`)
  * — точечной синхронизацией строк нанесений. Там же жёстче удаление:
  * нанесение, по которому уже пошла закупка, отбивается 409
  * `ORDER_APPLICATION_HAS_PURCHASE`.

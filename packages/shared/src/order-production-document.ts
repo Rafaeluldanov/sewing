@@ -266,9 +266,25 @@ export interface OrderProductionDocumentTotalsDto {
   varianceDirectRub: string;
 
   revenueRub: string | null;
-  /** Маржа = выручка − прямая с/с факт (только если выручка в RUB). */
+  /**
+   * Маржа = выручка − прямая с/с факт (только если выручка в RUB).
+   *
+   * ⛔ Это маржа ПО ПРЯМЫМ ЗАТРАТАМ: логистика, прочие расходы и разработка лекала в
+   * `factDirectRub` не входят (аудит движка расчёта 13.09.2026, E1-6, ревью). Смета и документ
+   * выпуска для ERP (`other_rub`) их считают — сравнивать маржу отсюда с ними напрямую нельзя;
+   * подпись — `marginNote`.
+   */
   marginRub: string | null;
+  /**
+   * Подпись к `marginRub` — что в неё НЕ вошло (`PRODUCTION_DOC_MARGIN_NOTE`); `null`, когда
+   * маржи нет. Отдельным полем, а не в названии: имена существующих полей читает фронт ERP.
+   */
+  marginNote: string | null;
 }
+
+/** Подпись к марже документа план→факт (E1-6, ревью): чего в ней нет. */
+export const PRODUCTION_DOC_MARGIN_NOTE =
+  'по прямым затратам — без логистики, прочих расходов и разработки лекала';
 
 export interface OrderProductionDocumentDto {
   header: OrderProductionDocumentHeaderDto;

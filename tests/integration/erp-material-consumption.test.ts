@@ -10,7 +10,10 @@
  *   2. автосписание при выдаче кроя строк под ERP НЕ создаёт (иначе расход задвоится), и
  *      ручной документ расхода по такой потребности отбивается 409;
  *   3. факт ERP (`PUT /api/integrations/erp-consumption`) входит в себестоимость паспорта и в
- *      план→факт заказа как «списано».
+ *      план→факт заказа как «списано»;
+ *   4. (аудит движка расчёта 13.09.2026, D1-2) факт ERP — факт ДОКУМЕНТА ВЫПУСКА: `ack` сам
+ *      будит документ, а отпечаток фактов знает про списания ERP, поэтому поздний ответ ERP
+ *      не замораживает `materialsErpRub` на нуле до ручной кнопки.
  */
 import { Prisma } from '@prisma/client';
 import request from 'supertest';
@@ -18,9 +21,12 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 
 import { loginAs, startTestApp, stopTestApp, type TestApp } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
+import {
+  buildErpConsumptionService,
+  buildProductionDocumentsService,
+} from '../utils/erp-services';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
-import { ErpConsumptionService } from '../../apps/api/src/modules/integrations/erp-consumption.service.js';
 
 describeWithDb('integration — материал под ERP: списание при выпуске и факт в себестоимости', () => {
   let t: TestApp;
@@ -177,7 +183,7 @@ describeWithDb('integration — материал под ERP: списание п
     await pack(passportId);
     // Сервис зовём напрямую: ручка машинная (@MachineScopes), а машинного токена в тестовом
     // приложении нет — проверяем контракт очереди, а не авторизацию.
-    const queue = await new ErpConsumptionService(t.prisma).listPending(10);
+    const queue = await buildErpConsumptionService(t).listPending(10);
     expect(queue.count).toBe(1);
     const item = queue.items[0] as Record<string, any>;
     expect(item.passport_id).toBe(passportId);
@@ -260,5 +266,105 @@ describeWithDb('integration — материал под ERP: списание п
     expect(Number(row!.planRub)).toBe(300);
     // Количество плана остаётся расчётным расходом — его сравнивают с «выдано».
     expect(Number(row!.planQty)).toBe(5);
+  });
+
+  // ---------------------------------------------------------------------------
+  // ФАКТ ERP В ДОКУМЕНТЕ ВЫПУСКА (аудит движка расчёта 13.09.2026, D1-2)
+  // ---------------------------------------------------------------------------
+
+  /** Упакованный паспорт → закрытие заказа настоящей ручкой → документ выпуска READY. */
+  async function closedWithReleaseDoc(): Promise<{
+    orderId: string;
+    passportId: string;
+    workshopNeedId: string;
+  }> {
+    const ctx = await prepare();
+    await pack(ctx.passportId);
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${ctx.orderId}/complete`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    const doc = await releaseDoc(ctx.orderId);
+    expect(doc.status).toBe('READY');
+    expect(doc.cost.materialsErpRub).toBe(0);
+    expect(doc.recalculatedAt).toBeNull();
+    return ctx;
+  }
+
+  async function releaseDoc(orderId: string): Promise<Record<string, any>> {
+    const res = await request(t.app.getHttpServer())
+      .get(`/api/admin/orders/${orderId}/production-document`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    return res.body as Record<string, any>;
+  }
+
+  test('D1-2: ответ ERP по списанию сам будит документ выпуска — без кнопки и без чтения', async () => {
+    const { orderId, passportId, workshopNeedId } = await closedWithReleaseDoc();
+
+    // Тик ERP: списала 2 кг на 640 ₽ и ответила — настоящий путь `ack`.
+    const documents = buildProductionDocumentsService(t);
+    const ack = await buildErpConsumptionService(t, documents).ack([
+      {
+        passport_id: passportId, state: 'POSTED', amount_rub: 640, erp_document_ref: 'СП-1',
+        lines: [{ workshop_need_id: workshopNeedId, description: 'Кулирка чёрная', unit: 'кг', qty: 2, amount_rub: 640 }],
+      },
+    ]);
+    expect(ack.accepted).toBe(1);
+    // Ревью D1-2: ответ ушёл СРАЗУ после записи строк — пересборка идёт фоном, а не в ответе
+    // (ERP шлёт до 100 паспортов за PUT с таймаутом 20 с). Тест ждёт фоновую задачу.
+    const before = await t.prisma.productionDocument.findUnique({ where: { orderId } });
+    expect(before?.status).toBe('READY');
+    await documents.settleDeferredRefreshes();
+
+    // Снимок в БД уже обновлён — никто документ не открывал и кнопку не жал.
+    const row = await t.prisma.productionDocument.findUnique({ where: { orderId } });
+    expect(Number(row?.materialsErpRub)).toBe(640);
+    expect(Number(row?.totalRub)).toBe(640);
+    expect(row?.status).toBe('READY');
+    expect(row?.recalculatedAt).toBeTruthy();
+    expect(row?.costWarnings).not.toContain('NO_MATERIAL_FACT');
+
+    // И карточка отдаёт то же самое с отметкой пересборки.
+    const doc = await releaseDoc(orderId);
+    expect(doc.cost.materialsErpRub).toBe(640);
+    expect(doc.cost.totalRub).toBe(640);
+    expect(doc.recalculatedAt).toBeTruthy();
+    expect(doc.recalcReason).toBeTruthy();
+  });
+
+  test('D1-2: списание ERP входит в отпечаток фактов — документ пересобирается при чтении', async () => {
+    const { orderId, passportId, workshopNeedId } = await closedWithReleaseDoc();
+
+    // Факт ERP лёг мимо `ack` (ремонтный скрипт, прямая запись) — будить документ некому,
+    // и его обязан поймать отпечаток фактов при следующем чтении.
+    await t.prisma.erpMaterialConsumption.create({
+      data: {
+        passportId, orderId, state: 'POSTED', erpDocumentRef: 'СП-2',
+        amountRub: new Prisma.Decimal('640'),
+        lines: {
+          create: [{
+            workshopNeedId, description: 'Кулирка чёрная', unit: 'кг',
+            qty: new Prisma.Decimal('2'), amountRub: new Prisma.Decimal('640'),
+          }],
+        },
+      },
+    });
+
+    const doc = await releaseDoc(orderId);
+    expect(doc.cost.materialsErpRub).toBe(640);
+    expect(doc.cost.totalRub).toBe(640);
+    expect(doc.recalculatedAt).toBeTruthy();
+    expect(doc.status).toBe('READY');
+
+    // Сторно в ERP — тоже факт: `REVERSED` не расход, документ обязан вернуться к нулю.
+    await t.prisma.erpMaterialConsumption.update({
+      where: { passportId },
+      data: { state: 'REVERSED' },
+    });
+    const reversed = await releaseDoc(orderId);
+    expect(reversed.cost.materialsErpRub).toBe(0);
+    expect(reversed.cost.totalRub).toBe(0);
   });
 });

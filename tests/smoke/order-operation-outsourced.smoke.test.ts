@@ -286,18 +286,30 @@ describe('Сторонние услуги — OrdersService: снимок и п�
     expect(src).toMatch(/ORDER_ROUTE_OVERRIDE_RATE_REQUIRED/);
   });
 
-  test('повтор операции в маршруте: подряд достаётся ПЕРВОМУ вхождению', () => {
+  test('повтор операции в маршруте: carry — первому вхождению, restore варианта — по вхождению', () => {
     // Расценка от повтора не страдает (она за штуку), а ОБЪЁМ страдает:
     // «100 шт на сторону», разложенные на два вхождения одной операции
-    // (ОТК/ВТО до и после), дали бы двойную стоимость размещения. И carry
-    // снимка, и восстановление варианта ключуются `operationId`, поэтому
-    // оба обязаны отдавать подряд только первому шагу.
+    // (ОТК/ВТО до и после), дали бы двойную стоимость размещения.
+    //
+    // Два механизма ключуются ПО-РАЗНОМУ (Аудит 13.09.2026, V1-4, ревью):
+    //   - carry при пересборке снимка шагов (`syncOrderRouteStepsSnapshot`)
+    //     знает только `operationId` прежних шагов → подряд отдаётся
+    //     ПЕРВОМУ вхождению, второе получает явный сброс;
+    //   - restore варианта (`overlayRouteOverrides`) ключует записи снимка
+    //     по `(operationId, № вхождения)`: каждая запись достаётся ровно
+    //     одному шагу, двойного счёта нет, а метка первого вхождения не
+    //     теряется. Прежний гард `outsourceGiven` (ключ по operationId)
+    //     здесь удалён — его возврат снова склеил бы два вхождения.
     expect(ordersSrc()).toMatch(/const outsourceCarried = new Set<string>\(\)/);
     const calcSrc = readSrc(
       'apps/api/src/modules/order-calculations/order-calculations.service.ts',
     );
-    expect(calcSrc).toMatch(/const outsourceGiven = new Set<string>\(\)/);
-    // Порядок «первого» должен быть порядком маршрута, а не выдачи БД.
+    expect(calcSrc).not.toMatch(/const outsourceGiven = new Set<string>\(\)/);
+    expect(calcSrc).toMatch(/const occurrenceKey = \(operationId: string, k: number\): string =>/);
+    expect(calcSrc).toMatch(/byOccurrence\.get\(occurrenceKey\(s\.operationId, k\)\)/);
+    // Номер вхождения записи снимка — по её `index` среди `routeSteps` снимка.
+    expect(calcSrc).toMatch(/st\.operationId === o\.operationId && st\.index < snapIndex/);
+    // Порядок вхождений должен быть порядком маршрута, а не выдачи БД.
     expect(calcSrc).toMatch(/orderBy: \{ index: 'asc' \}/);
   });
 

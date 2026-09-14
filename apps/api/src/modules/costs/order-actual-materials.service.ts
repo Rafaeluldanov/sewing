@@ -6,17 +6,30 @@ import type {
   OrderActualMaterialsReportDto,
   OrderActualMaterialsRowDto,
 } from '@sewing/shared/order-actual-materials';
+import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
 
-/** Материальные `sourceType` потребности цеха (для fallback-плана). */
-const MATERIAL_NEED_SOURCE_TYPES = new Set([
-  'TECH_CARD_MATERIAL_LINE',
-  'ORDER_MATERIAL_REQUIREMENT',
-  'PATTERN_PARAMETER_NORM',
-]);
+/**
+ * Материальная ли строка (ткань/фурнитура) — по канонической классификации
+ * `getWorkshopNeedKind` (роль → источник → метод), как смета
+ * (`OrderCostEstimatesService` пишет `line.kind` ею же) и документ план→факт.
+ *
+ * Аудит движка расчёта 13.09.2026, D1-11: прежний фильтр по трём `sourceType`
+ * ронял основную ткань по параметрам лекала (`PATTERN_SIZE_PARAMETER_VALUE`,
+ * `PATTERN_MATERIAL_AREA`) и ручные строки закупщика (`MANUAL_ADDITION` с
+ * материальной ролью) — план без сметы молча занижался.
+ */
+const isMaterialOrHardware = (wn: {
+  sourceType: string | null;
+  calculationMethod: string;
+  materialRole: string | null;
+}): boolean => {
+  const kind = getWorkshopNeedKind(wn);
+  return kind === 'MATERIAL' || kind === 'HARDWARE';
+};
 
 /**
  * Себестоимость, Фаза 2 (первый срез): отчёт «Материалы план → факт по
@@ -24,10 +37,14 @@ const MATERIAL_NEED_SOURCE_TYPES = new Set([
  *
  * Read-модель поверх существующих данных (новых таблиц нет):
  *   - ПЛАН — активный `OrderCostEstimate` (строки kind MATERIAL/HARDWARE),
- *     fallback на RUB-строки `WorkshopNeed`, иначе нет плана;
+ *     fallback на строки `WorkshopNeed` вида MATERIAL/HARDWARE (цена ERP,
+ *     иначе котировка закупщика в RUB), иначе нет плана;
  *   - ФАКТ — POSTED `PurchaseReceiptLine` (`receivedQty × priceSnapshot`),
  *     привязка к заказу через `receipt.customerOrderId` или
- *     `line.workshopNeed.orderId`.
+ *     `line.workshopNeed.orderId`;
+ *   - политика заказа `materialsAndHardwareCostPolicy = EXCLUDE`
+ *     (давальческое) зануляет ДЕНЬГИ материала/фурнитуры и в плане, и в
+ *     факте — как документ план→факт и смета (аудит 13.09.2026, D1-11).
  *
  * Себестоимость ПОТРЕБЛЯЕТ факт приёмок — проводок не пишет. Курс USD для
  * факта берётся из активной сметы заказа (если нет — USD-строки факта не
@@ -69,7 +86,16 @@ export class OrderActualMaterialsService {
         priceSnapshot: true,
         currencySnapshot: true,
         purchaseReceipt: { select: { customerOrderId: true } },
-        workshopNeed: { select: { orderId: true } },
+        // D1-11: классификация потребности строки — чтобы при EXCLUDE занулять
+        // только материал/фурнитуру, а нанесение/прочее (их платит цех) оставить.
+        workshopNeed: {
+          select: {
+            orderId: true,
+            sourceType: true,
+            calculationMethod: true,
+            materialRole: true,
+          },
+        },
       },
     });
 
@@ -108,6 +134,8 @@ export class OrderActualMaterialsService {
       select: {
         id: true,
         number: true,
+        // D1-11: давальческое сырьё — деньги материала/фурнитуры вне себестоимости.
+        materialsAndHardwareCostPolicy: true,
         operationCostPlanRub: true,
         // СТОРОННИЕ УСЛУГИ: сколько из плана операций — деньги подрядчика
         // (см. `OrderOperationPlanService`). Своего ФАКТА у них в цехе нет:
@@ -173,10 +201,14 @@ export class OrderActualMaterialsService {
           select: {
             orderId: true,
             sourceType: true,
+            calculationMethod: true,
+            materialRole: true,
             purchaseQty: true,
             calculatedQty: true,
             quotedPrice: true,
             quotedCurrency: true,
+            erpManagedAt: true,
+            erpUnitPriceRub: true,
           },
         })
       : [];
@@ -201,6 +233,14 @@ export class OrderActualMaterialsService {
     for (const orderId of orderIds) {
       const warnings = new Set<string>();
       const est = estimateByOrder.get(orderId);
+      // Аудит движка расчёта 13.09.2026, D1-11: давальческое сырьё/фурнитура
+      // (`EXCLUDE`) — деньги MATERIAL/HARDWARE не входят ни в план, ни в факт,
+      // как в смете (`OrderCostEstimatesService`) и документе план→факт
+      // (`OrderProductionDocumentService`). Смета хранит строки ПОЛНОЙ
+      // стоимостью, исключение живёт только на её агрегате — поэтому гейт здесь.
+      const excludeMatHw =
+        (orderById.get(orderId)?.materialsAndHardwareCostPolicy ?? 'INCLUDE') ===
+        'EXCLUDE';
 
       // --- ПЛАН ---
       let plan = new Prisma.Decimal(0);
@@ -209,21 +249,35 @@ export class OrderActualMaterialsService {
         planSource = 'COST_ESTIMATE';
         for (const ln of est.lines) {
           if (ln.kind === 'MATERIAL' || ln.kind === 'HARDWARE') {
+            if (excludeMatHw) continue;
             plan = plan.add(ln.lineTotalRub);
           }
         }
       } else {
         const wns = needsByOrder.get(orderId) ?? [];
-        const material = wns.filter((wn) =>
-          MATERIAL_NEED_SOURCE_TYPES.has(wn.sourceType ?? ''),
-        );
+        // D1-11: материал/фурнитура — по роли/источнику/методу, а не по трём
+        // `sourceType`; иначе ткань по параметрам лекала и ручные строки
+        // закупщика выпадали из плана.
+        const material = wns.filter((wn) => isMaterialOrHardware(wn));
         if (material.length > 0) {
           planSource = 'WORKSHOP_NEED';
           for (const wn of material) {
+            if (excludeMatHw) continue;
             const qty = wn.purchaseQty ?? wn.calculatedQty;
-            const price = wn.quotedPrice;
+            // D1-11: материал под ERP — цена её заказа поставщику (₽), она главнее
+            // котировки закупщика цеха (так же в смете и документе план→факт);
+            // раньше строка под ERP без `quotedPrice` давала план 0 без предупреждения.
+            // Аудит 13.09.2026, E1-10, ревью: гард `> 0` — как у сметы, план→факта и v2;
+            // `Decimal(0)` истинен, и уже сохранённый `erpUnitPriceRub = 0` давал план 0 ₽
+            // вместо котировки закупщика — витрины расходились ровно на ошибку E1-10.
+            const erpPrice =
+              wn.erpManagedAt && wn.erpUnitPriceRub?.greaterThan(0)
+                ? wn.erpUnitPriceRub
+                : null;
+            const price = erpPrice ?? wn.quotedPrice;
             if (qty == null || price == null) continue;
-            if ((wn.quotedCurrency ?? 'RUB') !== 'RUB') {
+            const currency = erpPrice != null ? 'RUB' : (wn.quotedCurrency ?? 'RUB');
+            if (currency !== 'RUB') {
               warnings.add('PLAN_USD_SKIPPED');
               continue;
             }
@@ -241,10 +295,15 @@ export class OrderActualMaterialsService {
           warnings.add('NO_PRICE');
           continue;
         }
+        // D1-11: при EXCLUDE деньги приёмки материала/фурнитуры — ноль; приёмка по
+        // потребности нанесения/прочего остаётся (её платит цех). Непривязанная
+        // приёмка — материал: своей строки потребности у нанесения в приёмках нет.
+        const zeroCost =
+          excludeMatHw && (l.workshopNeed == null || isMaterialOrHardware(l.workshopNeed));
         const currency = l.currencySnapshot ?? 'RUB';
         const base = new Prisma.Decimal(l.receivedQty).mul(l.priceSnapshot);
         if (currency === 'RUB') {
-          fact = fact.add(base);
+          if (!zeroCost) fact = fact.add(base);
           countedLines += 1;
         } else {
           // USD-факт: курс берём из активной сметы заказа
@@ -252,7 +311,7 @@ export class OrderActualMaterialsService {
             warnings.add('USD_NO_RATE');
             continue;
           }
-          fact = fact.add(base.mul(est.usdRateRub));
+          if (!zeroCost) fact = fact.add(base.mul(est.usdRateRub));
           countedLines += 1;
         }
       }

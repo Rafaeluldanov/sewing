@@ -6,6 +6,7 @@ import {
   needDescription,
   resolvePassportNeedShares,
 } from '../material-issues/passport-need-share.js';
+import { ProductionDocumentsService } from '../production-documents/production-documents.service.js';
 
 /**
  * ОЧЕРЕДЬ СПИСАНИЯ МАТЕРИАЛА В ERP по факту выпуска цеха (лестница остатков, шаг 5).
@@ -30,7 +31,12 @@ import {
 export class ErpConsumptionService {
   private readonly logger = new Logger(ErpConsumptionService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Аудит движка расчёта 13.09.2026, D1-2: ответ ERP — факт материала документа выпуска, и
+    // документ обязан его увидеть сам, а не ждать кнопки.
+    private readonly productionDocuments: ProductionDocumentsService,
+  ) {}
 
   /** Сколько паспортов отдаём за один опрос (у ERP на каждый — своя транзакция списания). */
   private static readonly DEFAULT_LIMIT = 50;
@@ -161,6 +167,17 @@ export class ErpConsumptionService {
    * Замена, а не слияние: повторный ответ по паспорту (сторно, повторное списание) заменяет
    * строки целиком — иначе после сторно рядом лежали бы старая и новая правда о расходе.
    * Неизвестный паспорт не роняет пакет: он мог быть удалён, пока ERP списывала.
+   *
+   * Аудит движка расчёта 13.09.2026, D1-2: по каждому затронутому заказу после записи будим
+   * документ выпуска — ответ ERP обычно приходит ПОЗЖЕ, чем документ стал READY (закрытие
+   * коробки), и без побудки `materialsErpRub` в снимке и в очереди сдачи оставался 0.
+   *
+   * ⛔ Ревью D1-2: побудка — ФОНОМ (`refreshLater`), а не в ответе. ERP шлёт до 100 паспортов за
+   * один PUT с таймаутом 20 с; синхронная пересборка 15–20 закрытых заказов (разноска оклада по
+   * окну производства у каждого) не укладывалась в него, ERP не помечала пакет доставленным и
+   * повторяла его каждым тиком — ответы не доставлялись никогда, а цех без конца пересобирал.
+   * Ответ уходит сразу после записи строк; согласованность держит отпечаток фактов и очередь
+   * сдачи, фон лишь ускоряет. Сбой пересборки ответ не отменяет: факт уже записан.
    */
   async ack(items: AckItem[]): Promise<{
     accepted: number;
@@ -168,6 +185,7 @@ export class ErpConsumptionService {
   }> {
     let accepted = 0;
     const skipped: Array<{ passport_id: string; reason: string }> = [];
+    const touchedOrderIds = new Set<string>();
     for (const item of items) {
       const passportId = String(item?.passport_id ?? '');
       if (!passportId) {
@@ -232,6 +250,7 @@ export class ErpConsumptionService {
           });
         });
         accepted += 1;
+        touchedOrderIds.add(passport.orderId);
         this.logger.log(
           `event=erp_consumption.ack passportId=${passportId} state=${state} ` +
             `lines=${lines.length} amountRub=${header.amountRub?.toString() ?? '-'} ` +
@@ -243,6 +262,12 @@ export class ErpConsumptionService {
         );
         skipped.push({ passport_id: passportId, reason: 'ack_failed' });
       }
+    }
+    // D1-2 (ревью): пересборка документов выпуска по затронутым заказам — в фоне, дедуп по
+    // заказу и лог ошибок внутри `refreshLater`. Безусловно, а не по отпечатку: ответ FAILED/EMPTY
+    // денег не несёт и в отпечаток не входит, но меняет предупреждения документа (D1-12).
+    for (const orderId of touchedOrderIds) {
+      this.productionDocuments.refreshLater(orderId, { source: 'erp_consumption.ack' });
     }
     return { accepted, skipped };
   }

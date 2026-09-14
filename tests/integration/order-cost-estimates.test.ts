@@ -9,7 +9,8 @@
  *   2. USD без usdRateRub → 422 ORDER_CALCULATION_USD_RATE_REQUIRED;
  *   3. USD с usdRateRub → 201, lineTotalRub = qty × price × rate;
  *   4. Reopen-calculation → status = CALCULATION + estimate REVOKED,
- *      WorkshopNeed остаются нетронутыми;
+ *      WorkshopNeed остаются нетронутыми; отметка «себестоимость
+ *      устарела» снимается вместе с отозванной сметой (E1-12);
  *   5. Incomplete (нет цены) → 422 ORDER_CALCULATION_INCOMPLETE;
  *   6. complete-calculation из не-CALCULATION → 409
  *      ORDER_CALCULATION_INVALID_STATUS.
@@ -396,6 +397,57 @@ describeWithDb('integration — order cost estimates', () => {
       expect(Number(n.quotedPrice)).toBe(50);
       expect(n.quotedCurrency).toBe('RUB');
     }
+  });
+
+  test('reopen-calculation снимает отметку «себестоимость устарела» (аудит 13.09.2026, E1-12)', async () => {
+    const orderId = await prepareCalculationOrder(t, seed, cookie);
+    const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });
+    for (const n of needs) {
+      await request(t.app.getHttpServer())
+        .patch(`/api/workshop-needs/${n.id}`)
+        .set('Cookie', cookie)
+        .send({ purchaseQty: '7', quotedPrice: '50', quotedCurrency: 'RUB' })
+        .expect(200);
+    }
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', cookie)
+      .send({})
+      .expect(201);
+
+    // Автопересчёт отбит (например, USD без курса) — на заказе висит отметка «устарела».
+    await t.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        costEstimateStaleAt: new Date(),
+        costEstimateStaleReason: 'USD без курса',
+      },
+    });
+
+    // Reopen отзывает смету, к которой отметка относилась, — отметка обязана уйти вместе
+    // с ней. Раньше в `CALCULATION` оставалась плашка «Себестоимость устарела» с кнопкой
+    // «Пересчитать», отвечающей 409 (`recalculateCostEstimate` из `CALCULATION` запрещён).
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/reopen-calculation`)
+      .set('Cookie', cookie)
+      .send({ reason: 'вернули на пересчёт' })
+      .expect(201);
+    const order = await t.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(order.status).toBe('CALCULATION');
+    expect(order.costEstimateTotalRub).toBeNull();
+    expect(order.costEstimateStaleAt).toBeNull();
+    expect(order.costEstimateStaleReason).toBeNull();
+
+    // Контроль: повторный «Завершить расчёт» собирает свежую смету без отметки.
+    const again = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', cookie)
+      .send({})
+      .expect(201);
+    expect(again.body.version).toBe(2);
+    const after = await t.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(after.status).toBe('CALCULATION_DONE');
+    expect(after.costEstimateStaleAt).toBeNull();
   });
 
   // -------------------------------------------------------------------------

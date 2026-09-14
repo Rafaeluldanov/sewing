@@ -238,7 +238,17 @@
   `snapshot: Json?` (снимок входов
   неактивного варианта, контракт
   `@sewing/shared/order-calculations::OrderCalculationSnapshotV1Schema`;
-  `null` у активного — его состояние = живые данные заказа).
+  `null` у активного — его состояние = живые данные заказа; аудит движка
+  расчёта 13.09.2026, V1-5: у активного снимок остаётся до завершения
+  всех фаз переключения — «активен со снимком» = переключение не
+  завершено, повторный activate долечивает производные). В снимке v1
+  также: `order.routeCustomizedAt` + `routeSteps[]` (состав правленного
+  холстом маршрута, V1-2), `items[]` (тираж заказа без расцветок, V1-3),
+  `routeOverrides[].index` (вхождение операции, V1-4) — все nullish, старые
+  снимки читаются. Ревью V1-2: у старого снимка `order.routeCustomizedAt`
+  отсутствует (`undefined`, не `null`) — restore такого снимка маршрут и
+  флаг заказа НЕ трогает (наследует текущее состояние); сброс холста на
+  шаблон — только при явном `null`, который пишет capture.
   `onDelete: Cascade` от `Order`. НЕ путать с `OrderVariant`
   (расцветка): расцветки живут внутри каждого варианта. См.
   `apps/api/src/modules/order-calculations/*`.
@@ -1276,7 +1286,12 @@ master-action'ом, удаление, упаковка прямо из ячей�
   (`apps/api/src/modules/orders/cost-estimate-scope.ts`).
   Переключение вкладки переносит `Order.costEstimate*` на смету цели и
   двигает статус заказа `CALCULATION ↔ CALCULATION_DONE`; удаление
-  варианта переводит его смету в `REVOKED`.
+  варианта переводит его смету в `REVOKED`. Аудит движка расчёта
+  13.09.2026, E1-2/V1-1: автопересчёт после правки
+  (`syncAfterNeedsChange`) пересобирает и сметы НЕактивных вариантов по
+  их строкам и снимку (order-level логистика/расходы входят в каждую), а
+  при переключении смета цели сверяется с входами — расхождение →
+  `Order.costEstimateStaleAt` + причина.
 - Snapshot переписывается «как есть»: имя поставщика,
   имя номенклатуры, цена, валюта, курс USD на момент расчёта.
 
@@ -1481,9 +1496,20 @@ master-action'ом, удаление, упаковка прямо из ячей�
 - `ConstructorTaskSizeRow` — строки таблицы «Размер / Кулирка /
   Кашкорсе» (погонные метры на изделие). FK `sizeId` nullable
   (`onDelete: SetNull`) + `sizeCodeSnapshot` (защита от
-  переименования/удаления `Size`). UNIQUE `(taskId, sizeId)`. На
-  сохранении backend создаёт `PatternMaterialArea` с конверсией
-  `areaM2 = linearMeters × CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`.
+  переименования/удаления `Size`). UNIQUE `(taskId, sizeId)`.
+  `PatternMaterialArea` на сохранении берётся ТОЛЬКО из calc-payload
+  (м² по размерам, как ввёл менеджер); конверсии погонных метров в м²
+  через ширину рулона код не делает (Аудит движка расчёта 13.09.2026,
+  K9 — прежняя формулировка описывала несуществующую конверсию; ревью:
+  мёртвые `CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`/`metersToAreaM2`
+  удалены из `@sewing/shared`). Сами метры при `complete()` переносятся в
+  `PatternItemSizeParameterValue` лекала
+  (`ConstructorTasksService.syncSizeParameterValuesFromTask`): колонка
+  «Кулирка» → ровно один активный `LINEAR_M_BY_SIZE`-параметр роли
+  `MAIN_FABRIC`, «Кашкорсе» → ровно один параметр роли `RIB` (по
+  совпадению label, затем по подтипу, иначе первый по `sortOrder`);
+  заменяются только пары (параметр, размер задачи) с заполненным
+  числом — нормы других размеров и пустая колонка не трогаются.
 - `ConstructorTaskFile` — вложения (`onDelete: Cascade`), формат не
   ограничен (валидация только по размеру). `direction` (`INITIAL` —
   бриф менеджера при `saveDraft`; `REWORK` — файлы возврата при

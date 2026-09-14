@@ -7,6 +7,7 @@ import type {
   OrderProductionOperationRowDto,
   ProductionDocMaterialPlanSource,
 } from '@sewing/shared/order-production-document';
+import { PRODUCTION_DOC_MARGIN_NOTE } from '@sewing/shared/order-production-document';
 import { normalizeColorOrNull } from '@sewing/shared/colors';
 import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 
@@ -183,7 +184,12 @@ export class OrderProductionDocumentService {
     if (estimate) {
       for (const ln of estimate.lines) {
         if (ln.workshopNeedId == null) continue;
-        if (ln.kind !== 'MATERIAL' && ln.kind !== 'HARDWARE') continue;
+        // Аудит движка расчёта 13.09.2026, D1-9: план строки берём из сметы для ВСЕХ видов
+        // (MATERIAL/HARDWARE/APPLICATION/OTHER) — раньше нанесение и прочее отсекались по
+        // `kind`, и строка считалась заново из живой потребности (USD — вовсе пропадала с
+        // `PLAN_USD_SKIPPED`), хотя смета уже хранит `lineTotalRub` по курсу. Строки без
+        // `workshopNeedId` (EXTRA_COST и т. п.) отсекает проверка выше; EXCLUDE для
+        // нанесения/прочего решается `preserveKeys` в `buildMaterials`, не здесь.
         planRubByNeed.set(
           ln.workshopNeedId,
           (planRubByNeed.get(ln.workshopNeedId) ?? new Prisma.Decimal(0)).add(
@@ -340,6 +346,9 @@ export class OrderProductionDocumentService {
         varianceDirectRub: this.m(factDirect.sub(planDirect)).toFixed(2),
         revenueRub,
         marginRub,
+        // Аудит движка расчёта 13.09.2026, E1-6, ревью: маржа здесь — по прямым затратам,
+        // без логистики/прочих/лекала, и это обязано быть подписано, а не подразумеваться.
+        marginNote: marginRub == null ? null : PRODUCTION_DOC_MARGIN_NOTE,
       },
       warnings: [...docWarnings],
     };
@@ -443,7 +452,7 @@ export class OrderProductionDocumentService {
         materialRole: wn.materialRole,
       });
       if (kind === 'APPLICATION' || kind === 'OTHER') preserveKeys.add(wn.id);
-      // Деньги плана: из сметы, иначе «к закупке» × цена (RUB).
+      // Деньги плана: из сметы, иначе «к закупке» × цена (RUB; USD — по курсу сметы, D1-9).
       //
       // ⛔ Количество для ДЕНЕГ — `purchaseQty ?? calculatedQty`, то же, что берут смета
       // (`OrderCostEstimatesService`) и сводка себестоимости (`production-cost-v2`). Раньше
@@ -462,13 +471,23 @@ export class OrderProductionDocumentService {
       if (fromEstimate != null) {
         planRub = fromEstimate;
         planSource = 'COST_ESTIMATE';
-      } else if (wn.erpManagedAt && wn.erpUnitPriceRub) {
+      } else if (wn.erpManagedAt && wn.erpUnitPriceRub?.greaterThan(0)) {
         // Материал под ERP — цена её заказа поставщику (факт), рубли.
+        // Аудит движка расчёта 13.09.2026, E1-10: цена ERP ≤ 0 — «не задана», идём к
+        // `quotedPrice` (иначе Decimal(0) истинен и план строки молча = 0 ₽).
         planRub = new Prisma.Decimal(planQty).mul(wn.erpUnitPriceRub);
         planSource = 'WORKSHOP_NEED';
       } else if (wn.quotedPrice != null) {
         if ((wn.quotedCurrency ?? 'RUB') === 'RUB') {
           planRub = new Prisma.Decimal(planQty).mul(wn.quotedPrice);
+          planSource = 'WORKSHOP_NEED';
+        } else if (usdRateRub != null) {
+          // Аудит движка расчёта 13.09.2026, D1-9: курс сметы уже в руках — USD-строку
+          // считаем той же формулой, что смета (`round2(round2(qty × price) × курс)`), а не
+          // выбрасываем с предупреждением «без курса».
+          planRub = this.m(
+            this.m(new Prisma.Decimal(planQty).mul(wn.quotedPrice)).mul(usdRateRub),
+          );
           planSource = 'WORKSHOP_NEED';
         } else {
           docWarnings.add('PLAN_USD_SKIPPED');

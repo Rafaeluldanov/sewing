@@ -3,6 +3,7 @@ import { OrderStatus, PassportStatus } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { OrderFactCostService } from '../costs/order-fact-cost.service.js';
+import { ProductionDocumentsService } from '../production-documents/production-documents.service.js';
 
 /** Что ERP отвечает по сданному заказу. */
 export type ProductionAckItem = {
@@ -16,6 +17,9 @@ export type ProductionAckItem = {
   posted_at?: string | null;
   error?: string | null;
 };
+
+/** Строка страницы очереди сдачи: документ и его ключ курсора (G7-1). */
+type QueueRow = { id: string; orderId: string; queue_at: Date };
 
 /**
  * Сдача заказа в ERP: ДОКУМЕНТ ПРОИЗВОДСТВА, а не паспорт (решение владельца 04.09.2026).
@@ -36,11 +40,16 @@ export type ProductionAckItem = {
 export class ErpProductionService {
   private static readonly DEFAULT_LIMIT = 20;
   private static readonly MAX_LIMIT = 100;
+  /** Сколько раз перечитывать страницу после освежения (D1-3/G7-1). */
+  private static readonly REFRESH_ROUNDS = 3;
   private readonly logger = new Logger(ErpProductionService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly cost: OrderFactCostService,
+    // Аудит движка расчёта 13.09.2026, D1-3: очередь обязана отдавать документ, сверенный с
+    // фактами цеха, а не снимок на момент фиксации.
+    private readonly productionDocuments: ProductionDocumentsService,
   ) {}
 
   /** Отсечка: документы, готовые раньше неё, в выгрузку не попадают. Без неё выгрузка ПУСТА. */
@@ -56,19 +65,60 @@ export class ErpProductionService {
   }
 
   /**
+   * Одна страница очереди: ключ сортировки и ключ курсора — ОДНО И ТО ЖЕ поле `queue_at`.
+   *
+   * `queue_at = GREATEST(readyAt, COALESCE(recalculatedAt, readyAt))` — момент, когда документ в
+   * последний раз стал «новостью» для ERP: готовность или пересборка. Считается в SQL: колонки
+   * такой нет (схема не менялась), а индекс по `readyAt`/`recalculatedAt` под `GREATEST` не
+   * работает — READY-документов ERP-заказов в окне курсора немного, полный просмотр дёшев.
+   */
+  private queuePage(since: Date, take: number): Promise<QueueRow[]> {
+    return this.prisma.$queryRaw<QueueRow[]>`
+      SELECT d."id", d."orderId",
+             GREATEST(d."readyAt", COALESCE(d."recalculatedAt", d."readyAt")) AS "queue_at"
+        FROM "ProductionDocument" d
+        JOIN "Order" o ON o."id" = d."orderId"
+       WHERE d."status" = 'READY'
+         AND d."readyAt" IS NOT NULL
+         AND o."erpCustomerOrderId" IS NOT NULL
+         AND GREATEST(d."readyAt", COALESCE(d."recalculatedAt", d."readyAt")) >= ${since}
+       ORDER BY "queue_at" ASC, d."id" ASC
+       LIMIT ${take}
+    `;
+  }
+
+  /**
    * Готовые документы выпуска для ERP: она их ЧИТАЕТ и приходует у себя.
    *
    * ⛔ Согласования нет (решение владельца 08.09.2026): документ выпуска — наш, и его состояние
    * не зависит от того, ответила ERP или нет. Раньше очередь держалась на ответе (`ack` создавал
-   * строку, и заказ уходил навсегда); теперь это КУРСОР — `?ready_from=` по дате готовности.
+   * строку, и заказ уходил навсегда); теперь это КУРСОР — `?ready_from=`.
    * Повтор гасит ERP у себя по номеру нашего документа: он стабилен и не меняется.
    *
-   * ⛔ Отсечка обязательна: без неё очередь ПУСТА, а не «без фильтра». `gte: undefined` в Prisma
-   * молча исчезает из запроса, и первый же опрос отдал бы весь архив сдач.
+   * ⛔ КЛЮЧ КУРСОРА = КЛЮЧ СОРТИРОВКИ (аудит движка расчёта 13.09.2026, G7-1, ревью ERP). У
+   * каждого документа в ответе есть `queue_at` = max(`ready_at`, `recalculated_at`); страница
+   * отобрана по `queue_at >= ready_from` и отсортирована по `queue_at ASC, id ASC`. ERP хранит
+   * курсор = max(`queue_at`) страницы и шлёт его следующим `ready_from`. Раньше фильтр был
+   * «readyAt ≥ since ИЛИ recalculatedAt ≥ since» при сортировке по `readyAt`: как только в окне
+   * набиралось ≥ limit пересобранных документов со старым `readyAt`, они занимали всю страницу,
+   * курсор ERP (max ready_at) уезжал НАЗАД, и новые сдачи не приезжали никогда.
+   * Документ с `queue_at`, равным курсору, приходит повторно (`>=`) — так не теряется сосед по
+   * миллисекунде; ERP гасит повтор по номеру документа.
+   *
+   * ⛔ Отсечка обязательна: без неё очередь ПУСТА, а не «без фильтра» — первый же опрос отдал бы
+   * весь архив сдач. `ready_from` (синонимы `closed_from`, настройка `fg_since`) — см. `cutoff`.
    *
    * Документы, ПЕРЕСОБРАННЫЕ после фиксации (поздний факт — списание задним числом, правка
-   * начисления), попадают в выборку повторно по `recalculatedAt`: у ERP должна быть возможность
-   * увидеть исправленную сумму, иначе расхождение осталось бы только у нас.
+   * начисления), попадают в выборку повторно через `recalculatedAt` в `queue_at`: у ERP должна
+   * быть возможность увидеть исправленную сумму, иначе расхождение осталось бы только у нас.
+   *
+   * Аудит движка расчёта 13.09.2026, D1-3: перед чтением снимков документы страницы СВЕРЯЮТСЯ с
+   * фактами цеха по отпечатку (`refreshStaleForOrders`). Пересобранный документ получает
+   * `recalculatedAt = now`, то есть уезжает в КОНЕЦ очереди и освобождает место на странице —
+   * поэтому страница перечитывается, пока в ней не останется несверенных документов (не больше
+   * трёх кругов: страховка от бесконечного цикла при непрерывно меняющихся фактах). Документы,
+   * чей поздний факт лёг вне окна курсора, освежают сами писатели фактов
+   * (`ProductionDocumentsService.refreshLater`) — и тогда они тоже возвращаются в очередь.
    */
   async listPending(
     limit?: number,
@@ -81,15 +131,24 @@ export class ErpProductionService {
     const since = await this.cutoff(readyFrom);
     if (!since) return { count: 0, items: [] };
 
+    // D1-3 + G7-1: освежаем документы страницы по отпечатку и перечитываем её, пока в ней есть
+    // ещё не сверенные (пересобранные уезжают в конец очереди, на их место приходят следующие).
+    const checked = new Set<string>();
+    let page = await this.queuePage(since, take);
+    for (let round = 0; round < ErpProductionService.REFRESH_ROUNDS; round++) {
+      const unchecked = page.filter((row) => !checked.has(row.orderId));
+      if (unchecked.length === 0) break;
+      await this.productionDocuments.refreshStaleForOrders(
+        unchecked.map((row) => row.orderId),
+      );
+      for (const row of unchecked) checked.add(row.orderId);
+      page = await this.queuePage(since, take);
+    }
+    if (page.length === 0) return { count: 0, items: [] };
+    const queueAtById = new Map(page.map((row) => [row.id, row.queue_at]));
+
     const docs = await this.prisma.productionDocument.findMany({
-      where: {
-        status: 'READY',
-        OR: [{ readyAt: { gte: since } }, { recalculatedAt: { gte: since } }],
-        // Собственный заказ цеха ERP не касается: приходовать его ей некуда.
-        order: { erpCustomerOrderId: { not: null } },
-      },
-      orderBy: [{ readyAt: 'asc' }, { number: 'asc' }],
-      take,
+      where: { id: { in: page.map((row) => row.id) } },
       select: {
         id: true,
         number: true,
@@ -140,6 +199,9 @@ export class ErpProductionService {
       },
     });
     if (docs.length === 0) return { count: 0, items: [] };
+    // Порядок — строго как в странице очереди (`queue_at ASC, id ASC`): `IN (...)` его не хранит.
+    const position = new Map(page.map((row, index) => [row.id, index]));
+    docs.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
 
     // Брак ПО ПРИЧИНАМ: в ERP до сих пор ехала только сумма, и «почему недосдали» не отвечал
     // никто. Причина — свойство паспорта, поэтому берётся живой выборкой по паспортам строки:
@@ -185,6 +247,8 @@ export class ErpProductionService {
       closed_at: doc.closedAt.toISOString(),
       ready_at: doc.readyAt?.toISOString() ?? null,
       recalculated_at: doc.recalculatedAt?.toISOString() ?? null,
+      // G7-1: ключ курсора ERP — max(ready_at, recalculated_at), он же ключ сортировки страницы.
+      queue_at: (queueAtById.get(doc.id) ?? doc.readyAt ?? doc.closedAt).toISOString(),
       recalc_reason: doc.recalcReason,
       pattern_item_id: doc.order.patternItemId,
       pattern_name: doc.order.patternNameSnapshot,

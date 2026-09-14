@@ -22,6 +22,10 @@
  *                    `apps/web/lib/workshop-needs-api.ts`.
  *   - Группировка needs по `getWorkshopNeedKind` из
  *                    `@sewing/shared/workshop-needs`.
+ *   - Арифметика ветки «смета не зафиксирована» (аудит движка расчёта
+ *                    13.09.2026, E1-5) вынесена в чистый модуль
+ *                    `apps/web/components/orders/order-planned-cost-preview.ts`
+ *                    и покрыта `tests/unit/order-planned-cost-preview.test.ts`.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -44,12 +48,16 @@ function exists(relativePath: string): boolean {
 describe('Web — OrderPlannedCostSummaryCard component file', () => {
   const componentPath =
     'apps/web/components/orders/order-planned-cost-summary-card.tsx';
+  const previewPath =
+    'apps/web/components/orders/order-planned-cost-preview.ts';
 
   test('файл компонента создан', () => {
     expect(exists(componentPath)).toBe(true);
+    expect(exists(previewPath)).toBe(true);
   });
 
   const src = read(componentPath);
+  const preview = read(previewPath);
 
   test('компонент экспортирует именованный async server component', () => {
     expect(src).toMatch(
@@ -64,7 +72,12 @@ describe('Web — OrderPlannedCostSummaryCard component file', () => {
     expect(src).toMatch(
       /from '@sewing\/shared\/workshop-needs'/,
     );
-    expect(src).toMatch(/getWorkshopNeedKind/);
+    // E1-5: арифметика ветки workshopNeeds — в order-planned-cost-preview.ts.
+    expect(preview).toMatch(
+      /from '@sewing\/shared\/workshop-needs'/,
+    );
+    expect(preview).toMatch(/getWorkshopNeedKind\(/);
+    expect(src).toMatch(/from '\.\/order-planned-cost-preview'/);
   });
 
   test('используются ORDER_COST_ESTIMATE_LINE_KIND_LABELS из shared', () => {
@@ -98,9 +111,10 @@ describe('Web — OrderPlannedCostSummaryCard component file', () => {
   });
 
   test('USD-строки не попадают в RUB-итог и помечаются hasUsdLines', () => {
-    // Логика «если USD — поднять флаг и пропустить».
+    // Логика «если USD — поднять флаг и пропустить» (в preview-модуле).
     expect(src).toMatch(/hasUsdLines/);
-    expect(src).toMatch(/'USD'/);
+    expect(preview).toMatch(/hasUsdLines/);
+    expect(preview).toMatch(/'USD'/);
     // Варнинг текстом про курс USD/RUB.
     expect(src).toMatch(/USD\/RUB/);
     // Перенос строк в JSX-тексте допустим — проверяем фразу с
@@ -111,11 +125,28 @@ describe('Web — OrderPlannedCostSummaryCard component file', () => {
   });
 
   test('используется purchaseQty ?? calculatedQty для finalQty', () => {
-    expect(src).toMatch(/purchaseQty\s*\?\?\s*need\.calculatedQty/);
+    expect(preview).toMatch(/purchaseQty\s*\?\?\s*need\.calculatedQty/);
   });
 
   test('строки с CANCELLED-статусом не учитываются', () => {
-    expect(src).toMatch(/'CANCELLED'/);
+    expect(preview).toMatch(/'CANCELLED'/);
+  });
+
+  test('E1-5: прикидка до сметы включает цену ERP, прочие расходы и разработку лекала', () => {
+    // Аудит движка расчёта 13.09.2026, E1-5: состав прикидки = состав
+    // сметы (`assembleEstimatePlan`), иначе итог меняется после
+    // «Завершить расчёт» без изменения данных.
+    // Ревью 14.09 (E1-5/E1-10): цена ERP берётся только под ERP и только при > 0.
+    expect(preview).toMatch(/need\.erpManagedAt\s*\?\s*parseAmount\(need\.erpUnitPriceRub\)/);
+    expect(preview).toMatch(/erpPriceRaw\s*>\s*0/);
+    expect(preview).toMatch(/includeInCostPrice/);
+    expect(preview).toMatch(/patternDevelopmentCostRub/);
+    expect(preview).toMatch(/patternDevelopmentCostInCostPrice\s*===\s*false/);
+    expect(preview).toMatch(/export function buildPreviewBuckets/);
+    // Компонент грузит прочие расходы сам (их нет в OrderDetailDto) и
+    // собирает прикидку одним вызовом.
+    expect(src).toMatch(/listOrderExtraCosts\(order\.id\)/);
+    expect(src).toMatch(/buildPreviewBuckets\(\{\s*needs,\s*extraCosts,\s*order\s*\}\)/);
   });
 
   test('операционный stale-badge «Требует пересчёта» виден при isStaleOps', () => {

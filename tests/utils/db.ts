@@ -48,6 +48,11 @@ export async function resetDatabase(prisma: {
   // TRUNCATE с CASCADE снимает FK и быстрее, чем serial DELETE.
   // Список таблиц синхронизирован с `prisma/schema.prisma`.
   const tables = [
+    // Аудит движка расчёта 13.09.2026 (попутное замечание): singleton настроек не
+    // трункейтился, и политика материала из одного файла доживала до соседей в той же
+    // БД (material-policy.test.ts → «поздний факт» в production-document.test.ts).
+    // Сервис создаёт запись лениво, поэтому снос безопасен.
+    'CompanySettings',
     'AuditLog',
     // PHASE 3 «PayrollPayout»: выплаты + строки. Подчинены `Employee`
     // (несколько relation-ов: employee/createdBy/issuedBy/...). Без

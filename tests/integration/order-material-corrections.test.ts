@@ -146,6 +146,37 @@ describeWithDb('integration — order material corrections', () => {
     expect(del.body.code).toBe('WORKSHOP_NEED_NOT_MANUAL');
   });
 
+  test('ручную строку под заказом поставщику ERP удалить нельзя (409 WORKSHOP_NEED_ERP_STATE)', async () => {
+    // Аудит движка расчёта 13.09.2026, N2-16: `erpLink` берёт под заказ и
+    // ручные строки, а `deleteManual` `erpManagedAt` не проверял — строка
+    // физически удалялась, связь ERP оставалась сиротой (ручкой `unlink`
+    // её потом не снять). Гард — тот же, что в `cancel()`.
+    const orderId = await prepareCalculationOrder(t, seed, cookie);
+    const created = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/manual`)
+      .set('Cookie', cookie)
+      .send({ description: 'Стропа', unit: 'м', calculatedQty: '5', materialRole: 'PACKAGING' })
+      .expect(201);
+    const needId = created.body.id as string;
+    // Как после машинного `erp-link` {status: ORDERED}.
+    await t.prisma.workshopNeed.update({
+      where: { id: needId },
+      data: { status: 'ORDERED', erpManagedAt: new Date(), erpPurchaseOrderRef: 'ФС-000086' },
+    });
+
+    const del = await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/workshop-needs/${needId}`)
+      .set('Cookie', cookie);
+    expect(del.status).toBe(409);
+    expect(del.body.code).toBe('WORKSHOP_NEED_ERP_STATE');
+    expect(String(del.body.message)).toContain('ФС-000086');
+    // Строка на месте, связь ERP цела.
+    const still = await t.prisma.workshopNeed.findUnique({ where: { id: needId } });
+    expect(still).not.toBeNull();
+    expect(still?.erpManagedAt).not.toBeNull();
+    expect(still?.status).toBe('ORDERED');
+  });
+
   // -------------------------------------------------------------------------
   // 3. Прочие расходы: CRUD
   // -------------------------------------------------------------------------

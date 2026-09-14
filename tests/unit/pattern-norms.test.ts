@@ -340,12 +340,24 @@ describe('derivePatternNormPerUnit', () => {
     expect(derivePatternNormPerUnit(cordLinear, plan)?.qtyPerUnit).toBe(1.1);
   });
 
-  test('план пуст — среднее арифметическое по заполненным размерам', () => {
-    const derived = derivePatternNormPerUnit(cordLinear, [
-      { sizeId: 's', qtyPlan: 0 },
-      { sizeId: 'm', qtyPlan: 0 },
-    ]);
-    expect(derived?.qtyPerUnit).toBe(1.15);
+  test('план пуст (все покрытые размеры с нулём) — null, а не среднее арифметическое', () => {
+    // Аудит движка расчёта 13.09.2026, T1-2: значение у размера с нулевым
+    // тиражом норму не даёт — иначе строка получала бы норму размера,
+    // которого в заказе нет, а потребность по тому же параметру — пусто.
+    expect(
+      derivePatternNormPerUnit(cordLinear, [
+        { sizeId: 's', qtyPlan: 0 },
+        { sizeId: 'm', qtyPlan: 0 },
+      ]),
+    ).toBeNull();
+    // Покрытые размеры с нулём + непокрытый с тиражом — тоже null:
+    // пересечения значений с живым планом нет.
+    expect(
+      derivePatternNormPerUnit(cordLinear, [
+        { sizeId: 'm', qtyPlan: 0 },
+        { sizeId: 'xxl', qtyPlan: 100 },
+      ]),
+    ).toBeNull();
   });
 
   test('нет пересечения с планом — null (норма шаблона остаётся)', () => {

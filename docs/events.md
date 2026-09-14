@@ -727,6 +727,14 @@ audit-событий не существует.
   фильтровать по этому полю.
 - `ORDER_PATTERN_CHANGED` — `OrdersService.update` при смене лекала
   (`orders.service.ts:1353`).
+- `ORDER_VARIANTS_RENAMED` — `OrdersService.upsertOrderVariants` (из
+  `update` с полной картиной расцветок / ERP «дослать план»), когда
+  несопоставленная по цвету расцветка сопоставлена по порядку и
+  получила другой цвет: payload `renamed[] {variantId, from, to}` +
+  `summary`. Ревью G9-1 (аудит движка расчёта 13.09.2026): правки заказа
+  (нормы, слоты, ручные строки, потребность) остаются на расцветке, и
+  пара «удалили цвет + добавили другой» в одном сохранении читается как
+  переименование — журнал это называет явно.
 - `ORDER_OPERATION_PLAN_RECALCULATED` —
   `OrdersService.recalcOrderOperationPlan` (`orders.service.ts:922`).
 - `ORDER_STARTED` — `OrdersService.start`
@@ -845,7 +853,15 @@ audit-событий не существует.
     `PassportsService.issueToEmployee`. `entityId =
     OrderCutIssueRule.id`, payload содержит `passportId` /
     `qty` / `beforeIssued` / `afterIssued` / `sizeCode` /
-    `orderId`.
+    `orderId`. На один паспорт — не больше одного CONSUMED без
+    парного RELEASED: повторные выдачи того же паспорта (handoff
+    между операциями) очередью не считаются (Аудит движка расчёта
+    13.09.2026, G3-1).
+  - `ORDER_CUT_ISSUE_RULE_RELEASED` — откат последнего CONSUMED
+    при `MasterActionsService.returnToCell` (паспорт вернулся в
+    ячейку). `entityId = OrderCutIssueRule.id` той строки, что была
+    инкрементирована; payload `passportId` / `qty` / `queueIndex` /
+    `sizeCode` / `sizeId` / `orderId`.
 
 <a id="33b-payroll-payout"></a>
 
@@ -925,9 +941,15 @@ PayrollPayout.id`. `employeeId` события (см. `AuditLogInput`) — эт�
 
 - `PAYROLL_ACCRUAL_DOCUMENT_PAID` — `PayrollAccrualDocumentsService.pay`.
   Документ проведён (`POST /…/:id/pay`): `DRAFT → PAID`; созданы
-  `PayrollPayout` ISSUED для каждой строки с `amountToPayRub > 0`.
+  `PayrollPayout` ISSUED для каждой строки с начислениями
+  (`amountToPayRub ≥ 0`, полный зачёт «в ноль» — выплата на 0 ₽) и для
+  строки с одной положительной корректировкой.
   Payload — `{ documentId, accrualDate, payoutsCreated, totalToPayRub,
-  paidById, paidAt }`.
+  adjustmentsCount, totalAdjustRub, skippedLineIds, paidById, paidAt,
+  source, externalRef }`. Аудит 13.09.2026, K1, ревью: `adjustmentsCount`
+  / `totalAdjustRub` считаются только по реально созданным
+  ADJUSTMENT-строкам; `skippedLineIds` — строки без начислений с одним
+  удержанием, по которым выплата не создана (удержание не применено).
 
 - `PAYROLL_ACCRUAL_DOCUMENT_CANCELLED` — `PayrollAccrualDocumentsService.cancel`.
   Черновик отменён (`POST /…/:id/cancel`): `DRAFT → CANCELLED`.
@@ -1096,6 +1118,8 @@ DRAFT → CALCULATION → CALCULATION_DONE → IN_PRODUCTION → DONE
   (`orders.service.ts:1327`);
 - `ORDER_PATTERN_CHANGED` — смена лекала
   (`orders.service.ts:1353`);
+- `ORDER_VARIANTS_RENAMED` — переименование расцветок при полной замене
+  картины расцветок (пары «старый цвет → новый», ревью G9-1);
 - `ORDER_PATTERN_SNAPSHOT_CREATED` — фиксация snapshot-а лекала в
   `start`/`startCalculation` (`orders.service.ts:1754`,
   `orders.service.ts:1961`);

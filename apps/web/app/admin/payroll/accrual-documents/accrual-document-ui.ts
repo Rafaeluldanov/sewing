@@ -6,10 +6,11 @@
  * пригодные как в RSC, так и в client-компонентах.
  */
 import type { AdminStatusTone } from '@/lib/admin-labels';
-import type {
-  PayrollAccrualDocumentDto,
-  PayrollAccrualDocumentListItemDto,
-  PayrollAccrualDocumentStatus,
+import {
+  isNonPositiveAccrualLine,
+  type PayrollAccrualDocumentDto,
+  type PayrollAccrualDocumentListItemDto,
+  type PayrollAccrualDocumentStatus,
 } from '@sewing/shared/payroll-accrual-documents';
 
 export function formatRub(value: number): string {
@@ -90,10 +91,33 @@ export function canPayDocument(doc: PayrollAccrualDocumentDto): boolean {
 
 /**
  * Причина блокировки кнопки «Выплатить». `null` если кнопка разблокирована.
- * STEP 6.4: корректировки поддержаны — нет блокировки по manualAdjustRub.
+ * STEP 6.4: корректировки поддержаны — нет блокировки по manualAdjustRub как таковому.
+ *
+ * Аудит движка расчёта 13.09.2026, K1: строка «начисления есть, к выплате < 0»
+ * (удержание больше начислений) — сервер ответит 422
+ * `PAYROLL_ACCRUAL_LINE_NON_POSITIVE`; показываем причину и кого править ЗАРАНЕЕ,
+ * чтобы менеджер не узнавал об этом только из ошибки проведения. Правило то же,
+ * что на сервере (`isNonPositiveAccrualLine` из shared). Ревью K1: полный зачёт
+ * «в ноль» (нетто 0) не блокирует — сервер проводит его выплатой на 0 ₽.
  */
 export function getPayBlockedReason(
-  _doc: PayrollAccrualDocumentDto,
+  doc: PayrollAccrualDocumentDto,
 ): string | null {
+  const bad = doc.lines.filter(isNonPositiveAccrualLine);
+  if (bad.length > 0) {
+    const who = bad
+      .map(
+        (l) =>
+          `${l.employee.fullName || l.employeeId} (начислено ${formatRub(
+            l.amountPieceworkRub + l.amountSalaryRub,
+          )}, к выплате ${formatRub(l.amountToPayRub)})`,
+      )
+      .join('; ');
+    return (
+      `Удержание больше начислений: ${who}. Выплата по такой строке не создаётся, ` +
+      'а начисления ушли бы в следующую ведомость повторно. Уменьшите корректировку, ' +
+      'чтобы к выплате осталось не меньше 0 ₽; остаток удержания перенесите в следующую ведомость.'
+    );
+  }
   return null;
 }

@@ -2728,6 +2728,9 @@ export class PassportsService {
     const cutIssueRuleEnforcement =
       await this.orderCutIssueRules.evaluateForIssue(
         {
+          // Аудит движка расчёта 13.09.2026, G3-1: id нужен сервису,
+          // чтобы не засчитывать один паспорт в очередь дважды.
+          id: passport.id,
           orderId: passport.orderId,
           sizeId: passport.sizeId,
           qtyCut: passport.qtyCut,

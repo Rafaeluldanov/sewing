@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OrderStatus, Prisma, type Order } from '@prisma/client';
+import { OrderCalculationSnapshotV1Schema } from '@sewing/shared';
 import {
   ORDER_COST_ESTIMATE_LINE_KIND_LABELS,
   type CompleteOrderCalculationDto,
@@ -25,6 +26,14 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from './cost-estimate-scope.js';
+
+/**
+ * Аудит 13.09.2026, E1-1, ревью: окно дебаунса автопересчёта сметы для
+ * машинного пути ERP (`erp-link`/`erp-unlink` идут построчно). Смета,
+ * пересчитанная моложе окна, новой версией не заменяется — заказ получает
+ * отметку «устарела» (см. `syncAfterNeedsChange`).
+ */
+export const ERP_ESTIMATE_SYNC_WINDOW_MS = 60_000;
 
 /**
  * Сервис «Себестоимость заказа» (см.
@@ -82,10 +91,16 @@ export class OrderCostEstimatesService {
    *
    * Бросает `OrderCalculationIncompleteException` /
    * `OrderCalculationUsdRateRequiredException` до изменения данных.
+   *
+   * `needsWhere` — скоуп строк потребности: по умолчанию тираж АКТИВНОГО
+   * варианта (`TIRAGE_NEED_WHERE`). Аудит движка расчёта 13.09.2026,
+   * E1-2/V1-1: смету НЕактивного варианта собирают по его собственным
+   * строкам (`orderCalculationId` варианта) — см. `syncAfterNeedsChange`.
    */
   private async assembleEstimatePlan(
     order: Order,
     usdRateInput: string | null | undefined,
+    needsWhere: Prisma.WorkshopNeedWhereInput = TIRAGE_NEED_WHERE,
   ): Promise<{
     lineCreates: Prisma.OrderCostEstimateLineUncheckedCreateWithoutEstimateInput[];
     totalCostRub: Prisma.Decimal;
@@ -107,7 +122,7 @@ export class OrderCostEstimatesService {
       where: {
         orderId,
         NOT: { status: 'CANCELLED' },
-        AND: [TIRAGE_NEED_WHERE],
+        AND: [needsWhere],
       },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       include: {
@@ -158,7 +173,11 @@ export class OrderCostEstimatesService {
       // своей не вводил.
       // Под ERP её цена — факт нашего заказа поставщику, она главнее плановой цены закупщика
       // цеха (то же правило в автосписании и план→факте).
-      const erpPrice = n.erpManagedAt && n.erpUnitPriceRub ? n.erpUnitPriceRub : null;
+      // Аудит движка расчёта 13.09.2026, E1-10: цена ERP ≤ 0 — «не задана», fallback на
+      // `quotedPrice` (`Prisma.Decimal(0)` — объект, истинен; строка ЗП ERP без цены блокировала
+      // смету «Цена должна быть > 0» при валидной цене закупщика).
+      const erpPrice =
+        n.erpManagedAt && n.erpUnitPriceRub?.greaterThan(0) ? n.erpUnitPriceRub : null;
       if (n.quotedPrice == null && erpPrice == null) {
         errors.push({
           needId: n.id,
@@ -169,10 +188,17 @@ export class OrderCostEstimatesService {
       }
       const quotedPrice = new Prisma.Decimal(erpPrice ?? n.quotedPrice!);
       if (!quotedPrice.greaterThan(0)) {
+        // Аудит движка расчёта 13.09.2026, N2-5: `QuotedPriceField` пропускает 0 («бесплатный
+        // материал»), а смета его отвергает; решение владельца «цена 0 = бесплатно или запрет»
+        // НЕ принято — семантику не меняем, но причина обязана подсказывать выход, а не
+        // повторять условие гарда.
         errors.push({
           needId: n.id,
           description: n.description,
-          reason: 'Цена должна быть > 0.',
+          reason:
+            'Цена 0 — смета её не принимает: укажите цену больше 0; ' +
+            'давальческий материал исключают политикой «Не учитывать материалы и фурнитуру» ' +
+            'или гашением строки.',
         });
         continue;
       }
@@ -560,8 +586,9 @@ export class OrderCostEstimatesService {
 
   /**
    * Вернуть заказ на пересчёт: помечает активный
-   * `OrderCostEstimate` как `REVOKED`, чистит snapshot-поля заказа,
-   * возвращает статус в `CALCULATION`. `WorkshopNeed`,
+   * `OrderCostEstimate` как `REVOKED`, чистит snapshot-поля заказа
+   * (включая отметку `costEstimateStaleAt/Reason` — она про отозванную
+   * смету), возвращает статус в `CALCULATION`. `WorkshopNeed`,
    * `PurchaseOrder`, `PurchaseReceipt` не трогаем — закупщик
    * редактирует существующие строки заново.
    *
@@ -626,6 +653,11 @@ export class OrderCostEstimatesService {
           costEstimateTotalRub: null,
           costEstimateCompletedAt: null,
           costEstimateVersion: null,
+          // Аудит движка расчёта 13.09.2026, E1-12: отметка «себестоимость устарела» относилась
+          // к смете, которую мы только что отозвали; в `CALCULATION` она рисовала плашку с кнопкой
+          // «Пересчитать», отвечающей 409 (`recalculateCostEstimate` из `CALCULATION` запрещён).
+          costEstimateStaleAt: null,
+          costEstimateStaleReason: null,
         },
       });
 
@@ -843,14 +875,52 @@ export class OrderCostEstimatesService {
    *
    * Никогда не бросает: правка потребности не должна отваливаться из-за
    * сметы.
+   *
+   * Аудит движка расчёта 13.09.2026, E1-2/V1-1: сметы НЕактивных
+   * вариантов догоняют правку тем же вызовом (`syncInactiveVariantEstimates`)
+   * — закупщик правит строки любого варианта, а order-level расходы
+   * (логистика, прочие) входят в смету каждого. Раньше пересчитывался
+   * только активный, и при переключении вкладки устаревшая сумма
+   * становилась «Расчёт завершён». Возвращаемое значение — по-прежнему
+   * про смету активного варианта (её читают плашка и UI).
+   *
+   * Аудит 13.09.2026, E1-1, ревью — машинный путь ERP
+   * (`opts.erpBatch`, зовут `erpLink`/`erpUnlink`): ERP заводит ЗП
+   * ПОСТРОЧНО, по `erp-link` на каждую строку, и без дебаунса 20 строк
+   * давали 20 версий сметы и 20 аудит-записей за одну кнопку. Правило
+   * простое и детерминированное (без таймеров процесса): если активная
+   * смета пересчитана меньше `ERP_ESTIMATE_SYNC_WINDOW_MS` назад, новую
+   * версию не плодим — ставим отметку «устарела» с причиной «цена ERP
+   * обновлена»; первая связь серии (смета старше окна) пересчитывает
+   * сразу, следующая за окном — тоже, и она же снимет отметку. Сметы
+   * НЕактивных вариантов на этом пути не пересобираются вовсе: их
+   * расхождение поймает сверка при активации
+   * (`markStaleIfActiveEstimateOutdated`, фаза F). Ручные правки закупщика
+   * (`update`/`cancel`/…) дебаунсом не трогаем — там одна правка = одно
+   * действие человека.
    */
   async syncAfterNeedsChange(
     orderId: string,
     actorEmployeeId?: string | null,
+    opts?: { erpBatch?: boolean },
   ): Promise<{ recalculated: boolean; staleReason: string | null }> {
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) return { recalculated: false, staleReason: null };
 
+    const result = await this.syncActiveEstimate(order, actorEmployeeId, opts);
+    if (!opts?.erpBatch) {
+      await this.syncInactiveVariantEstimates(order, actorEmployeeId);
+    }
+    return result;
+  }
+
+  /** Смета АКТИВНОГО варианта — тело `syncAfterNeedsChange` до аудита. */
+  private async syncActiveEstimate(
+    order: Order,
+    actorEmployeeId?: string | null,
+    opts?: { erpBatch?: boolean },
+  ): Promise<{ recalculated: boolean; staleReason: string | null }> {
+    const orderId = order.id;
     const active = await this.prisma.orderCostEstimate.findFirst({
       where: {
         orderId,
@@ -891,6 +961,23 @@ export class OrderCostEstimatesService {
         return { recalculated: false, staleReason: null };
       }
 
+      // Ревью E1-1: серия связей из ERP — не версия на строку (см. JSDoc
+      // `syncAfterNeedsChange`). Смета моложе окна → только отметка.
+      if (
+        opts?.erpBatch &&
+        Date.now() - active.completedAt.getTime() < ERP_ESTIMATE_SYNC_WINDOW_MS
+      ) {
+        const reason =
+          'Цена ERP обновлена — себестоимость устарела. Смета уже пересчитывалась ' +
+          'меньше минуты назад (серия связей из ERP): нажмите «Пересчитать» или дождитесь следующей правки.';
+        await this.markStale(orderId, reason);
+        this.logger.log(
+          `event=order.cost_estimate.erp_sync_deferred orderId=${orderId} ` +
+            `estimateVersion=${active.version}`,
+        );
+        return { recalculated: false, staleReason: reason };
+      }
+
       await this.recalculateCostEstimate(
         orderId,
         {
@@ -917,6 +1004,227 @@ export class OrderCostEstimatesService {
       );
       await this.markStale(orderId, reason);
       return { recalculated: false, staleReason: reason };
+    }
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, E1-2/V1-1: сметы НЕактивных
+   * вариантов просчёта.
+   *
+   * Смета живёт per вариант (`OrderCostEstimate.orderCalculationId`), а
+   * правка меняет её у любого варианта: закупщик на `/admin/workshop-needs`
+   * правит цену строки неактивного варианта, менеджер добавляет строку
+   * логистики (входит в смету КАЖДОГО варианта). Для каждого неактивного
+   * варианта с `COMPLETED`-сметой собираем план по ЕГО строкам
+   * (`orderCalculationId` варианта, без образца) и ЕГО order-level входам
+   * из снимка (политика давальческого сырья, разработка лекала) и, если
+   * план разошёлся со сметой, пересобираем её новой версией + обновляем
+   * ярлык вкладки. Поля `Order.costEstimate*` не трогаем — они про
+   * активный вариант.
+   *
+   * Только пока вкладки живые (до запуска в производство): после
+   * `IN_PRODUCTION` прочие варианты — история просчёта.
+   *
+   * Отдельного поля «устарела» у варианта нет, поэтому невозможный
+   * пересчёт (нет цены, нет курса USD) здесь только логируется — его
+   * поймает сверка при активации (`markStaleIfActiveEstimateOutdated`).
+   * Никогда не бросает.
+   */
+  private async syncInactiveVariantEstimates(
+    order: Order,
+    actorEmployeeId?: string | null,
+  ): Promise<void> {
+    if (
+      order.status !== OrderStatus.DRAFT &&
+      order.status !== OrderStatus.CALCULATION &&
+      order.status !== OrderStatus.CALCULATION_DONE &&
+      order.status !== OrderStatus.SAMPLE_PRODUCTION
+    ) {
+      return;
+    }
+    const orderId = order.id;
+    let inactive: Array<{ id: string; title: string; snapshot: Prisma.JsonValue | null }>;
+    try {
+      inactive = await this.prisma.orderCalculation.findMany({
+        where: {
+          orderId,
+          isActive: false,
+          costEstimates: { some: { status: 'COMPLETED' } },
+        },
+        select: { id: true, title: true, snapshot: true },
+      });
+    } catch (e) {
+      this.logger.warn(
+        `event=order.cost_estimate.variant_autosync_failed orderId=${orderId} ` +
+          `reason=${e instanceof Error ? e.message : String(e)}`,
+      );
+      return;
+    }
+
+    for (const calc of inactive) {
+      try {
+        const estimate = await this.prisma.orderCostEstimate.findFirst({
+          where: { orderId, orderCalculationId: calc.id, status: 'COMPLETED' },
+          orderBy: { version: 'desc' },
+          include: { lines: { orderBy: { createdAt: 'asc' } } },
+        });
+        if (!estimate) continue;
+
+        // Order-level входы сметы, принадлежащие ВАРИАНТУ, лежат в его
+        // снимке; нечитаемый снимок — вариант всё равно не активируется
+        // (`SNAPSHOT_INVALID`), его смету не трогаем.
+        const parsed = OrderCalculationSnapshotV1Schema.safeParse(calc.snapshot);
+        if (!parsed.success) continue;
+        const variantOrder: Order = {
+          ...order,
+          materialsAndHardwareCostPolicy:
+            parsed.data.order.materialsAndHardwareCostPolicy,
+          patternDevelopmentCostRub:
+            parsed.data.order.patternDevelopmentCostRub == null
+              ? null
+              : new Prisma.Decimal(parsed.data.order.patternDevelopmentCostRub),
+          patternDevelopmentCostInCostPrice:
+            parsed.data.order.patternDevelopmentCostInCostPrice,
+        };
+        const usdRateRub = estimate.usdRateRub
+          ? estimate.usdRateRub.toString()
+          : null;
+        const plan = await this.assembleEstimatePlan(variantOrder, usdRateRub, {
+          orderSampleId: null,
+          orderCalculationId: calc.id,
+        });
+        if (samePlanAsEstimate(plan.lineCreates, plan.totalCostRub, estimate)) {
+          continue;
+        }
+
+        const created = await this.prisma.$transaction(async (tx) => {
+          await tx.orderCostEstimate.update({
+            where: { id: estimate.id },
+            data: {
+              status: 'REVOKED',
+              revokedAt: new Date(),
+              revokedById: actorEmployeeId ?? null,
+            },
+          });
+          const lastVersionAgg = await tx.orderCostEstimate.aggregate({
+            where: { orderId },
+            _max: { version: true },
+          });
+          const row = await tx.orderCostEstimate.create({
+            data: {
+              orderId,
+              orderCalculationId: calc.id,
+              version: (lastVersionAgg._max.version ?? 0) + 1,
+              status: 'COMPLETED',
+              totalCostRub: plan.totalCostRub,
+              usdRateRub: plan.usdRateRub,
+              completedById: actorEmployeeId ?? null,
+              comment: 'Автопересчёт после правки потребности',
+              lines: { create: plan.lineCreates },
+            },
+            select: { id: true, version: true, totalCostRub: true },
+          });
+          // Ярлык вкладки неактивного варианта — иначе ряд вкладок
+          // сравнивал бы устаревшие деньги.
+          await tx.orderCalculation.update({
+            where: { id: calc.id },
+            data: { costTotalRub: row.totalCostRub },
+          });
+          await this.audit.log(
+            {
+              event: 'ORDER_COST_ESTIMATE_RECALCULATED',
+              entityType: 'ORDER_COST_ESTIMATE',
+              entityId: row.id,
+              employeeId: actorEmployeeId ?? null,
+              payload: {
+                orderId,
+                orderCalculationId: calc.id,
+                orderStatus: order.status,
+                revokedEstimateId: estimate.id,
+                revokedVersion: estimate.version,
+                version: row.version,
+                totalCostRub: row.totalCostRub.toString(),
+                linesCount: plan.linesCount,
+                extraCostsCount: plan.extraCostsCount,
+              },
+            },
+            tx,
+          );
+          return row;
+        });
+        this.logger.log(
+          `event=order.cost_estimate.variant_recalculated orderId=${orderId} ` +
+            `calculationId=${calc.id} estimateId=${created.id} version=${created.version} ` +
+            `totalCostRub=${created.totalCostRub.toString()}`,
+        );
+      } catch (e) {
+        this.logger.warn(
+          `event=order.cost_estimate.variant_autosync_failed orderId=${orderId} ` +
+            `calculationId=${calc.id} reason=${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Аудит движка расчёта 13.09.2026, E1-2/V1-1: сверка сметы АКТИВНОГО
+   * варианта с его текущими входами. Зовётся `OrderCalculationsService`
+   * после переключения вкладки (фаза F), когда входы цели восстановлены:
+   * план пересобирается и сравнивается со сметой — совпал → отметка
+   * «устарела» снята; разошёлся или собрать нельзя (нет цены / курса) →
+   * `Order.costEstimateStaleAt` + причина для плашки «Пересчитать».
+   * Ничего не пересчитывает — активация не считает.
+   *
+   * Best-effort: никогда не бросает.
+   */
+  async markStaleIfActiveEstimateOutdated(
+    orderId: string,
+  ): Promise<{ stale: boolean; reason: string | null }> {
+    try {
+      const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+      if (!order) return { stale: false, reason: null };
+      const active = await this.prisma.orderCostEstimate.findFirst({
+        where: {
+          orderId,
+          status: 'COMPLETED',
+          AND: [ACTIVE_CALCULATION_ESTIMATE_WHERE],
+        },
+        orderBy: { version: 'desc' },
+        include: { lines: { orderBy: { createdAt: 'asc' } } },
+      });
+      if (!active) {
+        await this.clearStale(orderId);
+        return { stale: false, reason: null };
+      }
+      let reason: string;
+      try {
+        const plan = await this.assembleEstimatePlan(
+          order,
+          active.usdRateRub ? active.usdRateRub.toString() : null,
+        );
+        if (samePlanAsEstimate(plan.lineCreates, plan.totalCostRub, active)) {
+          await this.clearStale(orderId);
+          return { stale: false, reason: null };
+        }
+        reason =
+          `Смета варианта (версия ${active.version}, ${active.totalCostRub.toString()} ₽) ` +
+          `собрана по прежним данным — по текущим строкам выходит ${plan.totalCostRub.toString()} ₽. ` +
+          'Пересчитайте себестоимость.';
+      } catch (e) {
+        reason =
+          e instanceof OrderCalculationUsdRateRequiredException ||
+          e instanceof OrderCalculationIncompleteException
+            ? (e.message ?? 'Себестоимость не пересчитана.')
+            : 'Смета варианта могла устареть — пересчитайте себестоимость вручную.';
+      }
+      await this.markStale(orderId, reason);
+      return { stale: true, reason };
+    } catch (e) {
+      this.logger.warn(
+        `event=order.cost_estimate.freshness_check_failed orderId=${orderId} ` +
+          `reason=${e instanceof Error ? e.message : String(e)}`,
+      );
+      return { stale: false, reason: null };
     }
   }
 

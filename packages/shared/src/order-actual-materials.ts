@@ -4,10 +4,13 @@
  *
  * Read-модель поверх существующих данных (новых таблиц нет):
  *   - ПЛАН — активный `OrderCostEstimate` (строки kind MATERIAL/HARDWARE),
- *     либо fallback на `WorkshopNeed` (RUB), либо нет плана;
+ *     либо fallback на `WorkshopNeed` вида MATERIAL/HARDWARE (цена ERP или
+ *     котировка в RUB), либо нет плана;
  *   - ФАКТ — POSTED `PurchaseReceiptLine` по заказу (`receivedQty ×
  *     priceSnapshot`→RUB), привязка к заказу через `receipt.customerOrderId`
- *     или `line.workshopNeed.orderId`.
+ *     или `line.workshopNeed.orderId`;
+ *   - политика заказа `materialsAndHardwareCostPolicy = EXCLUDE` зануляет
+ *     деньги материала/фурнитуры в плане и факте (аудит 13.09.2026, D1-11).
  *
  * Себестоимость ПОТРЕБЛЯЕТ факт приёмок — она не пишет проводок. Курс
  * USD для факта берётся из активной сметы заказа; если его нет, USD-строки
