@@ -228,7 +228,9 @@ describeWithDb('integration — E2E production golden path', () => {
     expect(passportAfterSewing.status).toBe('IN_PROGRESS');
 
     // Display: на оверлоке висит ✔=12 (буфер «готово, ждёт следующего
-    // шага», см. `buildSewingRoute` L1241-1254).
+    // шага», см. `buildSewingRoute` L1241-1254). Матрица согласована:
+    // паспорт ушёл из `qtySewing` в `qtySewingDone` («Сшито, ждёт ОТК»,
+    // ADR-0013 §«SEWING_DONE bucket»).
     {
       const display = await getDisplay(t, cookies.admin);
       const op = display.sewingRoute.find(
@@ -238,6 +240,8 @@ describeWithDb('integration — E2E production golden path', () => {
       const row = op!.rows.find((r) => r.size === 'M')!;
       expect(row.inProgress).toBe(0);
       expect(row.done).toBe(QTY);
+      expect(display.totals.qtySewing).toBe(0);
+      expect(display.totals.qtySewingDone).toBe(QTY);
     }
 
     // Швея уходит со смены — на equipment больше не должно быть
@@ -282,6 +286,8 @@ describeWithDb('integration — E2E production golden path', () => {
       const display = await getDisplay(t, cookies.admin);
       expect(display.totals.qtyQc).toBe(0);
       expect(display.totals.qtyQcDone).toBe(QTY);
+      // Буфер пошива очистился сканом ОТК (категория сменилась).
+      expect(display.totals.qtySewingDone).toBe(0);
       // SEW_OVERLOCK_1 остаётся ВИДИМ в sewingRoute (есть в snapshot
       // маршрута активного заказа — контракт «весь маршрут активных
       // заказов»), но без работы: ▶/✔ должны быть равны 0 для всех
@@ -504,6 +510,7 @@ describeWithDb('integration — E2E production golden path', () => {
 interface DisplaySnapshot {
   totals: {
     qtySewing: number;
+    qtySewingDone: number;
     qtyQc: number;
     qtyQcDone: number;
     qtyWto: number;

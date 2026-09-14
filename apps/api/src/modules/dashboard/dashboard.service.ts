@@ -296,6 +296,11 @@ export class DashboardService {
         hasOpenBox: p.boxItems.some((bi) => bi.box.closedAt === null),
         hasFreshQcPassed: freshQcPassedSet.has(p.id),
         hasFreshWtoPassed: freshWtoPassedSet.has(p.id),
+        // Pipeline дашборда стадию `SEWING_DONE` не выделяет
+        // (`PRODUCTION_DASHBOARD_STAGES` без неё) — завершённые и
+        // ждущие ОТК паспорта остаются в `SEWING`, поэтому флаг не
+        // вычисляем. См. ADR-0013 §«SEWING_DONE bucket».
+        hasFreshSewingFinished: false,
       };
       const bucket = bucketOf(proj);
       if (!bucket) continue;

@@ -2687,7 +2687,8 @@ ADR-0013, `docs/production-flow.md §15`, `docs/api.md §32`.
 | Bucket    | Условие на паспорте                                                                                                          | qty       |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------- | --------- |
 | `CUT`     | `status = CREATED` ИЛИ (rare) `IN_PROGRESS + currentOperationCategory = CUTTING + currentEmployeeId = null` (CUT-rollback мастером). | `qtyCut`  |
-| `SEWING`  | `IN_PROGRESS + currentOperationCategory ∈ {CUTTING, SEWING}` (CUTTING сюда попадает после `issueToEmployee` до первого `OPERATION_SCAN`) ИЛИ `currentOperationCategory = null` (защита от «дыр»). | `qtyCut`  |
+| `SEWING`  | `IN_PROGRESS + currentOperationCategory ∈ {CUTTING, SEWING}` (CUTTING сюда попадает после `issueToEmployee` до первого `OPERATION_SCAN`) ИЛИ `currentOperationCategory = null` (защита от «дыр»); и НЕ `SEWING_DONE`. | `qtyCut`  |
+| `SEWING_DONE` | `IN_PROGRESS + currentOperationCategory = SEWING + currentEmployeeId = null + свежий OPERATION_FINISHED по текущей операции` (`createdAt > max(ISSUED_TO_EMPLOYEE, OPERATION_SCAN)`). «Сшито, ждёт ОТК», ADR-0013 §«SEWING_DONE bucket». | `qtyCut`  |
 | `QC`      | `IN_PROGRESS + currentOperationCategory = QC + НЕТ свежего QC_PASSED`.                                                       | `qtyCut`  |
 | `QC_DONE` | `IN_PROGRESS + currentOperationCategory = QC + есть свежий QC_PASSED` (`createdAt > max(OPERATION_SCAN.createdAt)`).         | `qtyCut`  |
 | `WTO`     | `IN_PROGRESS + currentOperationCategory = IRONING + НЕТ свежего WTO_PASSED`.                                                 | `qtyCut`  |

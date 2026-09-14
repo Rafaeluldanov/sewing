@@ -13,7 +13,19 @@
  *   - `SEWING`   — `IN_PROGRESS` + `currentOperation.category ∈ {CUTTING,SEWING}`
  *                  (qty = `qtyCut`). CUTTING сюда попадает после выдачи
  *                  кроя до первого `OPERATION_SCAN` — паспорт уже на руках
- *                  у швеи и фактически едет в шитьё.
+ *                  у швеи и фактически едет в шитьё. Сюда же — паспорт
+ *                  без исполнителя, который ждёт выдачи после отката
+ *                  (мастер/ОТК вернули на швейный шаг).
+ *   - `SEWING_DONE` — `IN_PROGRESS` + `category = SEWING` +
+ *                  `currentEmployeeId = null` + есть свежий
+ *                  `PassportEvent(OPERATION_FINISHED)` по текущей
+ *                  операции (новее последних `ISSUED_TO_EMPLOYEE` /
+ *                  `OPERATION_SCAN`). Швея нажала «Завершить», паспорт
+ *                  лежит в WIP-буфере и ждёт скана следующего шага
+ *                  (обычно ОТК). Полный аналог `QC_DONE`/`WTO_DONE` для
+ *                  пошива, см. ADR-0013 §«SEWING_DONE bucket».
+ *                  Перекрывает `SEWING`: один паспорт лежит ровно в
+ *                  одной ячейке.
  *   - `QC`       — `IN_PROGRESS` + `currentOperation.category = QC`
  *                  (qty = `qtyCut`).
  *   - `QC_DONE`  — `IN_PROGRESS` + `category = QC` + есть свежий
@@ -98,6 +110,7 @@ export type ShopfloorScope = (typeof SHOPFLOOR_SCOPES)[number];
 export const SHOPFLOOR_STAGES = [
   'CUT',
   'SEWING',
+  'SEWING_DONE',
   'QC',
   'QC_DONE',
   'WTO',
@@ -109,7 +122,27 @@ export type ShopfloorStage = (typeof SHOPFLOOR_STAGES)[number];
 
 export interface ShopfloorSummaryDto {
   qtyCut: number;
+  /**
+   * «В пошиве» — паспорт `IN_PROGRESS` на швейном шаге и сейчас на
+   * руках у швеи (`currentEmployeeId != null`), либо без исполнителя
+   * ждёт выдачи после отката (свежего `OPERATION_FINISHED` по текущей
+   * операции нет). Завершённые и лежащие в буфере — в `qtySewingDone`.
+   */
   qtySewing: number;
+  /**
+   * «Сшито, ждёт ОТК» — паспорт ещё `IN_PROGRESS` и
+   * `currentOperation.category = SEWING`, исполнитель снят
+   * (`currentEmployeeId = null`), а по текущей операции есть
+   * `PassportEvent(OPERATION_FINISHED)`, более свежее, чем последние
+   * `ISSUED_TO_EMPLOYEE` / `OPERATION_SCAN` этого паспорта. Иначе
+   * говоря — швея нажала «Завершить операцию», паспорт лежит в
+   * WIP-буфере, а следующий шаг (ОТК) его ещё не отсканировал.
+   *
+   * Полный аналог `qtyQcDone`/`qtyWtoDone` для пошива: бакеты
+   * `SEWING`/`SEWING_DONE` взаимоисключающие, сумма всех бакетов не
+   * меняется. См. ADR-0013 §«SEWING_DONE bucket».
+   */
+  qtySewingDone: number;
   qtyQc: number;
   /**
    * «Проверено ОТК» — паспорт ещё `IN_PROGRESS` и `currentOperation.category = QC`,
@@ -179,6 +212,7 @@ export interface ShopfloorOrderOptionDto extends ShopfloorOrderRefDto {
 export const SHOPFLOOR_STAGE_LABELS: Record<ShopfloorStage, string> = {
   CUT: 'Крой',
   SEWING: 'Пошив',
+  SEWING_DONE: 'Сшито, ждёт ОТК',
   QC: 'ОТК',
   QC_DONE: 'Проверено ОТК',
   WTO: 'ВТО',
@@ -193,6 +227,7 @@ export const SHOPFLOOR_STAGE_QTY_KEYS: Record<
 > = {
   CUT: 'qtyCut',
   SEWING: 'qtySewing',
+  SEWING_DONE: 'qtySewingDone',
   QC: 'qtyQc',
   QC_DONE: 'qtyQcDone',
   WTO: 'qtyWto',
@@ -388,6 +423,9 @@ export const SHOPFLOOR_DISPLAY_SEWING_PENDING_KEY = '__pending__';
  * Инвариант: `Σ values(sewingByOp) === qtySewing` (на любом уровне —
  * row, color total, grand total). Ключи `sewingByOp` всегда являются
  * подмножеством `ShopfloorDisplayDto.sewingColumns[].key`.
+ * Бакет `SEWING_DONE` (`qtySewingDone`) в `sewingByOp` НЕ входит —
+ * это буфер «сшито, ждёт ОТК», его по операциям раскладывает
+ * `sewingRoute[].rows[].done` (см. `buildSewingRoute`).
  */
 export interface ShopfloorDisplayMatrixSummary extends ShopfloorSummaryDto {
   sewingByOp: Record<string, number>;
@@ -613,10 +651,12 @@ export interface ShopfloorDisplayRouteOperationDto {
  * клеточные) колонки.
  *
  * Намеренно НЕ входят в этот список:
- *   - `SEWING` — на display board стадия пошива раскладывается на
- *     отдельные операции (Оверлок 1, Киперка, Распошивальная и т. п.),
- *     каждая из которых рендерится как split-колонка `▶/✔` из
- *     `ShopfloorDisplayDto.sewingRoute` (см. `buildSewingRoute`).
+ *   - `SEWING` / `SEWING_DONE` — на display board стадия пошива
+ *     раскладывается на отдельные операции (Оверлок 1, Киперка,
+ *     Распошивальная и т. п.), каждая из которых рендерится как
+ *     split-колонка `▶/✔` из `ShopfloorDisplayDto.sewingRoute` (см.
+ *     `buildSewingRoute`). `qtySewing`/`qtySewingDone` матрицы на
+ *     дисплее идут только в KPI «В работе».
  *   - `QC` / `QC_DONE` / `WTO` / `WTO_DONE` — `QC` и `WTO` теперь
  *     тоже рендерятся как split-колонки `▶/✔` (полный аналог
  *     sewing-операций; см. `docs/screens.md §9a.4`):

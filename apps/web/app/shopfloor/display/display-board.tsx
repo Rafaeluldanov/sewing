@@ -995,6 +995,7 @@ function KpiRow({
 const STAGE_TONE: Record<ShopfloorStage, string> = {
   CUT: 'neutral',
   SEWING: 'accent',
+  SEWING_DONE: 'ok-soft',
   QC: 'neutral',
   QC_DONE: 'ok-soft',
   WTO: 'neutral',
@@ -1015,10 +1016,11 @@ const STAGE_TONE: Record<ShopfloorStage, string> = {
  *
  * который читается оператором слева направо без скачков.
  *
- * `SHOPFLOOR_DISPLAY_MATRIX_STAGES` намеренно не содержит ни `SEWING`,
- * ни `QC`/`QC_DONE`/`WTO`/`WTO_DONE` (см. блок-комментарий у этой
- * константы) — поэтому достаточно отрезать всё после `CUT` в `after`,
- * между ними UI отдельным циклом рендерит split-блоки.
+ * `SHOPFLOOR_DISPLAY_MATRIX_STAGES` намеренно не содержит ни
+ * `SEWING`/`SEWING_DONE`, ни `QC`/`QC_DONE`/`WTO`/`WTO_DONE` (см.
+ * блок-комментарий у этой константы) — поэтому достаточно отрезать всё
+ * после `CUT` в `after`, между ними UI отдельным циклом рендерит
+ * split-блоки.
  */
 function splitStagesAroundSewing(
   stages: readonly ShopfloorStage[],
@@ -2069,6 +2071,8 @@ function summaryQty(s: ShopfloorSummaryDto, stage: ShopfloorStage): number {
       return s.qtyCut;
     case 'SEWING':
       return s.qtySewing;
+    case 'SEWING_DONE':
+      return s.qtySewingDone;
     case 'QC':
       return s.qtyQc;
     case 'QC_DONE':
@@ -2385,6 +2389,7 @@ function StageIcon({ stage }: { stage: ShopfloorStage }) {
     case 'CUT':
       return <IconCuttingTable />;
     case 'SEWING':
+    case 'SEWING_DONE':
       return <IconSewingMachine />;
     case 'QC':
     case 'QC_DONE':
@@ -2752,6 +2757,7 @@ function emptySummary(): ShopfloorSummaryDto {
   return {
     qtyCut: 0,
     qtySewing: 0,
+    qtySewingDone: 0,
     qtyQc: 0,
     qtyQcDone: 0,
     qtyWto: 0,

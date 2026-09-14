@@ -324,7 +324,7 @@ orderId).
 
 ```ts
 producedToday  = Σ qtyGood по PassportEvent(PACKED) за UTC-сегодня
-inWork         = qtySewing + qtyQc + qtyQcDone + qtyWto + qtyWtoDone + qtyPacking
+inWork         = qtySewing + qtySewingDone + qtyQc + qtyQcDone + qtyWto + qtyWtoDone + qtyPacking
 waiting        = qtyCut          // алиас для UI «Ждёт»
 qc             = qtyQc + qtyQcDone
 wto            = qtyWto + qtyWtoDone
@@ -353,7 +353,7 @@ defect         = qtyDefect
 `SHOPFLOOR_STAGES` (`packages/shared/src/shopfloor.ts`):
 
 ```ts
-['CUT', 'SEWING', 'QC', 'QC_DONE', 'WTO', 'WTO_DONE', 'PACKING', 'FINISHED']
+['CUT', 'SEWING', 'SEWING_DONE', 'QC', 'QC_DONE', 'WTO', 'WTO_DONE', 'PACKING', 'FINISHED']
 ```
 
 Bucket-ы взаимоисключающие — один паспорт лежит ровно в
@@ -367,9 +367,13 @@ Bucket-ы взаимоисключающие — один паспорт леж�
 ['CUT', 'PACKING', 'FINISHED']
 ```
 
-`SEWING` намеренно отсутствует: на дисплее стадия пошива
-раскладывается на отдельные операции через `sewingColumns[]`
-и/или `sewingRoute[]` (см. §6.3 / §6.4).
+`SEWING` / `SEWING_DONE` намеренно отсутствуют: на дисплее стадия
+пошива раскладывается на отдельные операции через `sewingColumns[]`
+и/или `sewingRoute[]` (см. §6.3 / §6.4). `qtySewingDone` («Сшито,
+ждёт ОТК», ADR-0013 §«SEWING_DONE bucket») на дисплее идёт только в
+KPI «В работе» и `totals`; в `sewingByOp` он не входит (инвариант
+`Σ sewingByOp === qtySewing`), по операциям буфер показывает
+`sewingRoute[].rows[].done`.
 
 `QC / QC_DONE / WTO / WTO_DONE` тоже не входят в этот список:
 UI рисует их парой `▶/✔` под общим заголовком «ОТК» / «ВТО»

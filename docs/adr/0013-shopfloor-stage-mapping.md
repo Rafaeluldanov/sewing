@@ -37,7 +37,8 @@
 | Bucket     | Условие на паспорте                                                                              | qty       |
 |------------|--------------------------------------------------------------------------------------------------|-----------|
 | `CUT`      | `status = CREATED`                                                                               | `qtyCut`  |
-| `SEWING`   | `status = IN_PROGRESS` AND `currentOperation.category ∈ {CUTTING, SEWING}` (или `null`)          | `qtyCut`  |
+| `SEWING`   | `status = IN_PROGRESS` AND `currentOperation.category ∈ {CUTTING, SEWING}` (или `null`) AND не `SEWING_DONE` | `qtyCut`  |
+| `SEWING_DONE` | `status = IN_PROGRESS` AND `category = SEWING` AND `currentEmployeeId = null` AND свежий `OPERATION_FINISHED` по текущей операции (см. §«SEWING_DONE bucket») | `qtyCut`  |
 | `QC`       | `status = IN_PROGRESS` AND `currentOperation.category = QC` AND нет свежего `QC_PASSED`          | `qtyCut`  |
 | `QC_DONE`  | `status = IN_PROGRESS` AND `category = QC` AND свежий `QC_PASSED` (см. §«QC_DONE bucket»)        | `qtyCut`  |
 | `WTO`      | `status = IN_PROGRESS` AND `category = IRONING` AND нет свежего `WTO_PASSED`                     | `qtyCut`  |
@@ -153,6 +154,94 @@
   категории `IRONING`) гарантирует, что паспорт без `QC_PASSED` не
   может попасть в `WTO`/`WTO_DONE` — backend возвращает 409
   `PASSPORT_NOT_QC_PASSED` ещё до записи `OPERATION_SCAN`.
+
+## SEWING_DONE bucket («Сшито, ждёт ОТК»)
+
+- Дата: 2026-09-14
+
+`PassportsService.completeOperationByEmployee` («Завершить операцию»
+у швеи) сознательно **не двигает** паспорт на следующий шаг: он
+снимает исполнителя (`currentEmployeeId = null`), оставляет
+`currentOperationId` / `currentRouteStepIndex` на завершённом шаге и
+пишет `PassportEvent(OPERATION_FINISHED, operationId = завершённая
+операция)`. Следующий шаг (ОТК или следующая швейная операция)
+перехватывает паспорт своим `OPERATION_SCAN`/`issue`. До этого
+паспорт физически лежит в WIP-буфере «сшито, ждёт ОТК».
+
+Без отдельного бакета такой паспорт оставался в колонке `Пошив`
+вместе с теми, что реально на руках у швей, и начальник цеха не
+отличал «13 паспортов шьются» от «3 сшиты и ждут ОТК» (живой пример
+— заказ ФС-000003: 16 паспортов на ПРЯМОСТРОЧКЕ, из них 13 на руках
+(155 шт) и 3 завершены (36 шт); ещё 6 на ОТК (67 шт)). На
+`/shopfloor/display` эта разница уже была видна как `▶/✔` в
+`sewingRoute`, а в матрице `/shopfloor/state` (ею пользуется и ERP)
+— нет.
+
+Решение: производный бакет `SEWING_DONE`, полный аналог
+`QC_DONE`/`WTO_DONE` для пошива, без новых таблиц/полей.
+
+Условие: паспорт `IN_PROGRESS`, `currentOperation.category = SEWING`,
+`currentEmployeeId = null`, и есть `PassportEvent(OPERATION_FINISHED)`
+с `operationId = Passport.currentOperationId`, у которого
+`createdAt > max(createdAt)` последних `ISSUED_TO_EMPLOYEE` и
+`OPERATION_SCAN` этого паспорта (по любой операции), либо таких
+событий нет вовсе.
+
+Свойства:
+
+- `SEWING` и `SEWING_DONE` **взаимоисключающие** — паспорт лежит ровно в
+  одной ячейке (см. `bucketOf` в `shopfloor-projection.ts`); сумма
+  всех бакетов не меняется.
+- `SEWING` теперь означает «на руках у швеи (`currentEmployeeId != null`)
+  либо без исполнителя ждёт выдачи» (после отката мастером /
+  возврата ОТК на переделку, после `returnToCell`, после
+  `setRouteStep` вперёд на ещё не начатый шаг).
+- Паспорт уходит из `SEWING_DONE` автоматически:
+  1) ОТК (или следующая швейная операция) делает `OPERATION_SCAN` /
+     `issue` — категория `currentOperation` сменится либо появится
+     исполнитель, и `hasFreshSewingFinished` перестанет быть «свежим»;
+  2) мастер откатывает паспорт назад (`setRouteStep` backward с
+     ячейкой) или ОТК возвращает на переделку (`returnToRework`) —
+     паспорт встаёт на ранее завершённую операцию, но её старый
+     `OPERATION_FINISHED` заведомо старше выдачи/скана следующего
+     шага → паспорт в `SEWING` («ждёт выдачи»); после повторного
+     `issue` → `complete` он снова попадёт в `SEWING_DONE`;
+  3) либо `Passport.status` станет терминальным (`PACKED`/`CANCELLED`).
+- Почему `OPERATION_FINISHED` фильтруется **по текущей операции**:
+  `closeUnclosedOperationByEmployee` дописывает финиш по СТАРОЙ
+  операции паспорта, уже уехавшего дальше (долг швеи, см. `GET
+  /api/shifts/my-unclosed`), — такой финиш не должен двигать бакет.
+- CUT-rollback (`CUTTING` без исполнителя → `CUT`) проверяется в
+  `bucketOf` **раньше** буфера пошива; сервис и так считает флаг только
+  для категории `SEWING`.
+- На `/shopfloor/display` `qtySewingDone` участвует в KPI «В работе»
+  и в `totals`, но в `sewingByOp` **не входит** (инвариант
+  `Σ sewingByOp === qtySewing` сохранён): по операциям этот буфер уже
+  показывает `sewingRoute[].rows[].done` (`buildSewingRoute` считает
+  ✔ по `currentEmployeeId = null` + `currentRouteStepIndex`, без
+  событий — грубее, но для TV достаточно). Pipeline дашборда
+  (`PRODUCTION_DASHBOARD_STAGES`) стадию не выделяет — там
+  `hasFreshSewingFinished = false`, завершённые остаются в `SEWING`.
+- Запрос узкий: отдельный groupBy по `PassportEvent` ограничен id
+  кандидатов (`IN_PROGRESS` + `SEWING` + без исполнителя) и тремя
+  типами (`OPERATION_FINISHED`, `ISSUED_TO_EMPLOYEE`, `OPERATION_SCAN`);
+  в `by` добавлен `operationId`, чтобы отфильтровать финиш по текущей
+  операции. Гоняется параллельно с QC/WTO-groupBy
+  (`ShopfloorService.computeFreshSewingFinishedSet`).
+- Порядок в `SHOPFLOOR_STAGES`: `… 'SEWING', 'SEWING_DONE', 'QC',
+  'QC_DONE', …`; подпись `SEWING_DONE: 'Сшито, ждёт ОТК'`; поле
+  `qtySewingDone` в `ShopfloorSummaryDto` (строки и summary). Контракт
+  общий с ERP (`GET /api/shopfloor/state`).
+
+Альтернативы (отвергнуты):
+
+- **Считать ✔ как `buildSewingRoute` (без событий, только
+  `currentEmployeeId = null`).** Тогда паспорт, откаченный мастером в
+  ячейку или возвращённый ОТК на переделку, показывался бы как «сшит»,
+  хотя физически ждёт выдачи. Для матрицы, которую читает ERP, нужен
+  честный признак завершения — им и является `OPERATION_FINISHED`.
+- **Расширять `PassportEventType`/`PassportStatus`.** Те же причины,
+  что у `QC_DONE`: непропорционально ради визуального движения.
 
 ## Аппроксимация колонки `PACKING`
 

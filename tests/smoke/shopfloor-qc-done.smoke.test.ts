@@ -39,6 +39,7 @@ function passport(overrides: Partial<ProjectionPassport>): ProjectionPassport {
     hasOpenBox: false,
     hasFreshQcPassed: false,
     hasFreshWtoPassed: false,
+    hasFreshSewingFinished: false,
     ...overrides,
   };
 }
@@ -97,6 +98,7 @@ describe('shopfloor projection: QC_DONE bucket (после «Проверка в
     const sumLive =
       summary.qtyCut +
       summary.qtySewing +
+      summary.qtySewingDone +
       summary.qtyQc +
       summary.qtyQcDone +
       summary.qtyWto +

@@ -40,6 +40,7 @@ function passport(overrides: Partial<ProjectionPassport>): ProjectionPassport {
     hasOpenBox: false,
     hasFreshQcPassed: false,
     hasFreshWtoPassed: false,
+    hasFreshSewingFinished: false,
     ...overrides,
   };
 }
@@ -104,6 +105,7 @@ describe('shopfloor projection: WTO_DONE bucket (после «Завершить
     const sumLive =
       summary.qtyCut +
       summary.qtySewing +
+      summary.qtySewingDone +
       summary.qtyQc +
       summary.qtyQcDone +
       summary.qtyWto +

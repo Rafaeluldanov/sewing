@@ -39,6 +39,7 @@ export default async function ShopfloorPage({ searchParams }: PageProps) {
       summary: {
         qtyCut: 0,
         qtySewing: 0,
+        qtySewingDone: 0,
         qtyQc: 0,
         qtyQcDone: 0,
         qtyWto: 0,

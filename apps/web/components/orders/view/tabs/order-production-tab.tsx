@@ -551,8 +551,10 @@ interface ProductionMatrixProps {
  * Группа «В цеху сейчас» повторяет доску монитора: ▶ — в работе на
  * этапе сейчас (красным), ✔ — выполнено и ждёт следующий шаг (буфер,
  * зелёным). Бакет CUT = «раскроено, ждёт швею» → показываем как ✔
- * (готов к пошиву); SEWING/PACKING — только ▶ (промежуточного
- * «done»-бакета у них в проекции нет); QC/WTO — пара ▶/✔.
+ * (готов к пошиву); SEWING/QC/WTO — пара ▶/✔ (`qtySewing` +
+ * `qtySewingDone` «сшито, ждёт ОТК», см. ADR-0013 §«SEWING_DONE
+ * bucket»); PACKING — только ▶ (промежуточного «done»-бакета у него
+ * в проекции нет).
  */
 function ProductionMatrix({
   rows,
@@ -571,6 +573,7 @@ function ProductionMatrix({
     defect: 0,
     wCut: 0,
     wSew: 0,
+    wSewDone: 0,
     wQc: 0,
     wQcDone: 0,
     wWto: 0,
@@ -596,6 +599,7 @@ function ProductionMatrix({
     if (sf) {
       totals.wCut += sf.qtyCut;
       totals.wSew += sf.qtySewing;
+      totals.wSewDone += sf.qtySewingDone;
       totals.wQc += sf.qtyQc;
       totals.wQcDone += sf.qtyQcDone;
       totals.wWto += sf.qtyWto;
@@ -621,7 +625,11 @@ function ProductionMatrix({
         </td>
         {/* В цеху сейчас (▶ в работе / ✔ готово к следующему шагу) */}
         <WipCell eligible={shopfloorEligible} done={sf?.qtyCut} />
-        <WipCell eligible={shopfloorEligible} now={sf?.qtySewing} />
+        <WipCell
+          eligible={shopfloorEligible}
+          now={sf?.qtySewing}
+          done={sf?.qtySewingDone}
+        />
         <WipCell
           eligible={shopfloorEligible}
           now={sf?.qtyQc}
@@ -703,7 +711,12 @@ function ProductionMatrix({
               {totals.defect}
             </td>
             <WipCell eligible={shopfloorEligible} done={totals.wCut} foot />
-            <WipCell eligible={shopfloorEligible} now={totals.wSew} foot />
+            <WipCell
+              eligible={shopfloorEligible}
+              now={totals.wSew}
+              done={totals.wSewDone}
+              foot
+            />
             <WipCell
               eligible={shopfloorEligible}
               now={totals.wQc}

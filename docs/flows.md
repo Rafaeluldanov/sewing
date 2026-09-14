@@ -1066,6 +1066,16 @@ Stage buckets:
 - `SEWING`   — `IN_PROGRESS` AND `currentOperation.category ∈ {CUTTING, SEWING}` (qty = `qtyCut`).
   Категория `CUTTING` сюда попадает после `ISSUED_TO_EMPLOYEE` до
   первого `OPERATION_SCAN` (паспорт уже на руках у швеи; см. F3a/F4).
+  Паспорт на руках у швеи либо без исполнителя ждёт выдачи (после
+  отката мастером / возврата ОТК на переделку).
+- `SEWING_DONE` — «Сшито, ждёт ОТК». `IN_PROGRESS` AND `category = SEWING`
+  AND `currentEmployeeId = null` AND есть `PassportEvent(OPERATION_FINISHED)`
+  по ТЕКУЩЕЙ операции паспорта, более свежее, чем последние
+  `ISSUED_TO_EMPLOYEE` / `OPERATION_SCAN` (qty = `qtyCut`). Производный
+  бакет: после «Завершить операцию» (F4, `completeOperationByEmployee`) крой визуально уезжает из
+  колонки `Пошив` в `Сшито, ждёт ОТК` и остаётся там, пока ОТК не
+  сделает `OPERATION_SCAN`. Полный аналог `QC_DONE`, см. ADR-0013
+  §«SEWING_DONE bucket».
 - `QC`       — `IN_PROGRESS` AND `category = QC` AND нет свежего
   `PassportEvent(QC_PASSED)` (qty = `qtyCut`).
 - `QC_DONE`  — «Проверено ОТК». `IN_PROGRESS` AND `category = QC` AND

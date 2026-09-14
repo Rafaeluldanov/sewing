@@ -490,12 +490,14 @@ describeWithDb('integration — full production flow (MVP 1.1)', () => {
       .send({})
       .expect(201);
 
-    // Проверяем «до»: паспорт ещё на пошиве, в bucket SEWING (не QC).
+    // Проверяем «до»: паспорт ещё на пошиве (на руках у швеи), в bucket
+    // SEWING — не SEWING_DONE (операция не завершена) и не QC.
     const before = await request(t.app.getHttpServer())
       .get(`/api/shopfloor/state?orderId=${orderId}`)
       .set('Cookie', cookies.manager)
       .expect(200);
     expect(before.body.summary.qtySewing).toBe(1);
+    expect(before.body.summary.qtySewingDone).toBe(0);
     expect(before.body.summary.qtyQc).toBe(0);
     expect(before.body.summary.qtyQcDone).toBe(0);
 
@@ -522,6 +524,7 @@ describeWithDb('integration — full production flow (MVP 1.1)', () => {
       .set('Cookie', cookies.manager)
       .expect(200);
     expect(after.body.summary.qtySewing).toBe(0);
+    expect(after.body.summary.qtySewingDone).toBe(0);
     expect(after.body.summary.qtyQc).toBe(1);
     expect(after.body.summary.qtyQcDone).toBe(0);
   });

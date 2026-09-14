@@ -148,7 +148,10 @@ export class ShopfloorService {
           // CUT мастером» (CUTTING + employee == null → CUT). Без
           // этого поля master-rollback на крой исчезает с экрана.
           currentEmployeeId: true,
-          currentOperation: { select: { category: true } },
+          // `id` операции нужен derived-стадии `SEWING_DONE`: свежесть
+          // `OPERATION_FINISHED` считается только по ТЕКУЩЕЙ операции
+          // паспорта (см. `computeFreshSewingFinishedSet`).
+          currentOperation: { select: { id: true, category: true } },
           // Все BoxItem текущего паспорта; реально на MVP их максимум один
           // (UNIQUE `(boxId, passportId)` + ADR-0011 §3 — один паспорт в
           // одну коробку), но запрашиваем массивом, чтобы spec был
@@ -173,36 +176,66 @@ export class ShopfloorService {
     // узким даже на больших активных заказах. См. F11/F5/F6.
     const qcCandidateIds: string[] = [];
     const wtoCandidateIds: string[] = [];
+    // Кандидаты derived-стадии `SEWING_DONE` («Сшито, ждёт ОТК»):
+    // `IN_PROGRESS` + категория SEWING + исполнитель снят. Паспорт на
+    // руках у швеи в буфере быть не может, поэтому его события даже не
+    // читаем. Значение — id текущей операции (по ней фильтруется
+    // `OPERATION_FINISHED`). См. `computeFreshSewingFinishedSet`.
+    const sewingCandidateOps = new Map<string, string>();
     for (const p of passports) {
       if (p.status !== PassportStatus.IN_PROGRESS) continue;
       const cat = p.currentOperation?.category;
       if (cat === OperationCategory.QC) qcCandidateIds.push(p.id);
       else if (cat === OperationCategory.IRONING) wtoCandidateIds.push(p.id);
+      else if (
+        cat === OperationCategory.SEWING &&
+        p.currentEmployeeId === null &&
+        p.currentOperation
+      ) {
+        sewingCandidateOps.set(p.id, p.currentOperation.id);
+      }
     }
 
     const candidateIds = [...qcCandidateIds, ...wtoCandidateIds];
     const freshQcPassedSet = new Set<string>();
     const freshWtoPassedSet = new Set<string>();
-    if (candidateIds.length > 0) {
-      // Один групповой запрос на оба derived-стейджа: типы взаимно
-      // не пересекаются, фильтр по `passportId` сужает выборку до
-      // нужных кандидатов, а `_max(createdAt)` даёт «последнюю» метку
-      // каждого типа на паспорт без гонок (сортировка по времени
-      // монотонна в рамках одного скан-сценария).
-      const eventMaxes = await this.prisma.passportEvent.groupBy({
-        by: ['passportId', 'type'],
-        where: {
-          passportId: { in: candidateIds },
-          type: {
-            in: [
-              PassportEventType.QC_PASSED,
-              PassportEventType.WTO_PASSED,
-              PassportEventType.OPERATION_SCAN,
-            ],
-          },
-        },
-        _max: { createdAt: true },
-      });
+    // Два независимых узких запроса гоняем параллельно: QC/WTO-события
+    // и sewing-события читаются по разным наборам кандидатов. Alias
+    // типа — как в `getDisplaySummary`: чтобы fallback
+    // `Promise.resolve([])` сохранял тот же type-shape без обходов
+    // overload'ов Prisma-клиента.
+    type EventMaxRow = {
+      passportId: string;
+      type: PassportEventType;
+      _max: { createdAt: Date | null };
+    };
+    const eventMaxesPromise =
+      candidateIds.length > 0
+        ? // Один групповой запрос на оба derived-стейджа: типы взаимно
+          // не пересекаются, фильтр по `passportId` сужает выборку до
+          // нужных кандидатов, а `_max(createdAt)` даёт «последнюю» метку
+          // каждого типа на паспорт без гонок (сортировка по времени
+          // монотонна в рамках одного скан-сценария).
+          (this.prisma.passportEvent.groupBy({
+            by: ['passportId', 'type'],
+            where: {
+              passportId: { in: candidateIds },
+              type: {
+                in: [
+                  PassportEventType.QC_PASSED,
+                  PassportEventType.WTO_PASSED,
+                  PassportEventType.OPERATION_SCAN,
+                ],
+              },
+            },
+            _max: { createdAt: true },
+          }) as unknown as Promise<EventMaxRow[]>)
+        : Promise.resolve<EventMaxRow[]>([]);
+    const [eventMaxes, freshSewingFinishedSet] = await Promise.all([
+      eventMaxesPromise,
+      this.computeFreshSewingFinishedSet(sewingCandidateOps),
+    ]);
+    if (eventMaxes.length > 0) {
       const lastQc = new Map<string, Date>();
       const lastWto = new Map<string, Date>();
       const lastScan = new Map<string, Date>();
@@ -242,6 +275,7 @@ export class ShopfloorService {
       hasOpenBox: p.boxItems.some((bi) => bi.box.closedAt === null),
       hasFreshQcPassed: freshQcPassedSet.has(p.id),
       hasFreshWtoPassed: freshWtoPassedSet.has(p.id),
+      hasFreshSewingFinished: freshSewingFinishedSet.has(p.id),
     }));
 
     // Для среза по одному заказу — ограничиваем размеры теми, что есть
@@ -283,6 +317,7 @@ export class ShopfloorService {
           sizeSortOrder: s.sortOrder,
           qtyCut: 0,
           qtySewing: 0,
+          qtySewingDone: 0,
           qtyQc: 0,
           qtyQcDone: 0,
           qtyWto: 0,
@@ -303,6 +338,79 @@ export class ShopfloorService {
       summary,
       rows,
     };
+  }
+
+  /**
+   * Derived-стадия `SEWING_DONE` («Сшито, ждёт ОТК»), см. ADR-0013
+   * §«SEWING_DONE bucket». Полный аналог `freshQcPassedSet` /
+   * `freshWtoPassedSet`, только терминальное событие пошива —
+   * `OPERATION_FINISHED` (его пишет `completeOperationByEmployee`,
+   * снимая исполнителя и оставляя `currentOperationId` на завершённом
+   * шаге), а «перехватом» считаются и `OPERATION_SCAN`, и
+   * `ISSUED_TO_EMPLOYEE` (выдача без скана — тоже возврат в работу).
+   *
+   * Вход — `Map<passportId, currentOperationId>` кандидатов
+   * (`IN_PROGRESS` + категория SEWING + `currentEmployeeId = null`).
+   * Паспорт попадает в результат, если
+   * `max(OPERATION_FINISHED по текущей операции) >
+   *  max(ISSUED_TO_EMPLOYEE, OPERATION_SCAN по любой операции)`.
+   *
+   * Почему `OPERATION_FINISHED` фильтруется по текущей операции:
+   *   - `closeUnclosedOperationByEmployee` дописывает финиш по СТАРОЙ
+   *     операции паспорта, уже уехавшего дальше, — этот «долг» не
+   *     должен двигать бакет;
+   *   - откат (мастер `setRouteStep` назад, ОТК `returnToRework`)
+   *     переводит паспорт на ранее завершённую операцию: её старый
+   *     финиш заведомо старше выдачи/скана следующего шага, поэтому
+   *     паспорт корректно остаётся в `SEWING` («ждёт выдачи»).
+   *
+   * Запрос узкий: groupBy по `PassportEvent` ограничен id кандидатов и
+   * тремя типами событий, чтобы поллинг каждые 3 секунды не сканировал
+   * всю таблицу событий. `operationId` в `by` нужен ровно для фильтра
+   * финиша; максимум по «перехвату» берём в JS поверх всех операций.
+   */
+  private async computeFreshSewingFinishedSet(
+    currentOpByPassport: ReadonlyMap<string, string>,
+  ): Promise<Set<string>> {
+    const out = new Set<string>();
+    if (currentOpByPassport.size === 0) return out;
+    const rows = await this.prisma.passportEvent.groupBy({
+      by: ['passportId', 'type', 'operationId'],
+      where: {
+        passportId: { in: [...currentOpByPassport.keys()] },
+        type: {
+          in: [
+            PassportEventType.OPERATION_FINISHED,
+            PassportEventType.ISSUED_TO_EMPLOYEE,
+            PassportEventType.OPERATION_SCAN,
+          ],
+        },
+      },
+      _max: { createdAt: true },
+    });
+    const lastFinished = new Map<string, Date>();
+    const lastTaken = new Map<string, Date>();
+    for (const row of rows) {
+      const at = row._max.createdAt;
+      if (!at) continue;
+      if (row.type === PassportEventType.OPERATION_FINISHED) {
+        if (row.operationId !== currentOpByPassport.get(row.passportId)) {
+          continue;
+        }
+        const prev = lastFinished.get(row.passportId);
+        if (!prev || at > prev) lastFinished.set(row.passportId, at);
+      } else {
+        const prev = lastTaken.get(row.passportId);
+        if (!prev || at > prev) lastTaken.set(row.passportId, at);
+      }
+    }
+    for (const id of currentOpByPassport.keys()) {
+      const finishedAt = lastFinished.get(id);
+      if (!finishedAt) continue;
+      const takenAt = lastTaken.get(id);
+      if (!takenAt || finishedAt > takenAt) out.add(id);
+    }
+    return out;
   }
 
   // -------------------------------------------------------------------------
@@ -763,11 +871,21 @@ export class ShopfloorService {
     // «видимых размеров». См. `getState` для более длинного коммента.
     const qcCandidateIds: string[] = [];
     const wtoCandidateIds: string[] = [];
+    // Кандидаты `SEWING_DONE` — как в `getState` (см.
+    // `computeFreshSewingFinishedSet`): SEWING без исполнителя.
+    const sewingCandidateOps = new Map<string, string>();
     for (const p of passports) {
       if (p.status !== PassportStatus.IN_PROGRESS) continue;
       const cat = p.currentOperation?.category;
       if (cat === OperationCategory.QC) qcCandidateIds.push(p.id);
       else if (cat === OperationCategory.IRONING) wtoCandidateIds.push(p.id);
+      else if (
+        cat === OperationCategory.SEWING &&
+        p.currentEmployeeId === null &&
+        p.currentOperation
+      ) {
+        sewingCandidateOps.set(p.id, p.currentOperation.id);
+      }
     }
     const candidateIds = [...qcCandidateIds, ...wtoCandidateIds];
 
@@ -777,11 +895,15 @@ export class ShopfloorService {
     const startOfDayUtc = new Date();
     startOfDayUtc.setUTCHours(0, 0, 0, 0);
 
-    // Три независимых запроса гоняем параллельно одним `Promise.all`:
+    // Независимые запросы гоняем параллельно одним `Promise.all`:
     //   1) eventMaxes — derived QC_DONE/WTO_DONE для матрицы;
     //   2) packedToday — KPI «Выпущено сегодня»;
     //   3) listEquipmentStatus — плитки оборудования (внутри тоже
-    //      параллелизован).
+    //      параллелизован);
+    //   4) activeOrders — снимки маршрутов;
+    //   5) freshSewingFinishedSet — derived SEWING_DONE (свой узкий
+    //      groupBy по sewing-кандидатам, см.
+    //      `computeFreshSewingFinishedSet`).
     // Раньше эти три запроса шли последовательно (eventMaxes →
     // packedToday → equipment), что добавляло 2 лишних DB round-trip'а
     // в latency каждого polling-цикла. Контракт ответа /api/shopfloor/display
@@ -872,11 +994,18 @@ export class ShopfloorService {
       },
     });
 
-    const [eventMaxes, packedToday, equipmentBundle, activeOrders] = await Promise.all([
+    const [
+      eventMaxes,
+      packedToday,
+      equipmentBundle,
+      activeOrders,
+      freshSewingFinishedSet,
+    ] = await Promise.all([
       eventMaxesPromise,
       packedTodayPromise,
       equipmentPromise,
       activeOrdersPromise,
+      this.computeFreshSewingFinishedSet(sewingCandidateOps),
     ]);
 
     // routeSteps зависят от списка активных orderId — гоняем отдельным
@@ -997,6 +1126,7 @@ export class ShopfloorService {
         hasOpenBox: p.boxItems.some((bi) => bi.box.closedAt === null),
         hasFreshQcPassed: freshQcPassedSet.has(p.id),
         hasFreshWtoPassed: freshWtoPassedSet.has(p.id),
+        hasFreshSewingFinished: freshSewingFinishedSet.has(p.id),
       };
     });
 
@@ -1020,9 +1150,11 @@ export class ShopfloorService {
 
     // KPI «В работе» — всё, что внутри pipeline (CUT уже распределили
     // как «ждёт», поэтому inWork считается без него и без FINISHED).
-    // Это согласуется с подписью UI «В работе» / «Ждёт».
+    // Это согласуется с подписью UI «В работе» / «Ждёт». `SEWING_DONE`
+    // — буфер внутри pipeline, как QC_DONE/WTO_DONE, поэтому тоже здесь.
     const inWork =
       totals.qtySewing +
+      totals.qtySewingDone +
       totals.qtyQc +
       totals.qtyQcDone +
       totals.qtyWto +

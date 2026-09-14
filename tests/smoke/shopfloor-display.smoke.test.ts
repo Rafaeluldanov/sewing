@@ -68,6 +68,7 @@ function pp(
     hasOpenBox: false,
     hasFreshQcPassed: false,
     hasFreshWtoPassed: false,
+    hasFreshSewingFinished: false,
     ...overrides,
   };
 }

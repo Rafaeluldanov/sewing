@@ -26,6 +26,11 @@ import {
  *   - CUT      — `status = CREATED`                                (qty = qtyCut)
  *   - SEWING   — `status = IN_PROGRESS` AND
  *                `currentOperation.category ∈ {CUTTING, SEWING}`   (qty = qtyCut)
+ *                (на руках у швеи либо ждёт выдачи после отката)
+ *   - SEWING_DONE — `status = IN_PROGRESS` AND `category = SEWING` AND
+ *                `currentEmployeeId = null` AND есть свежий
+ *                `PassportEvent(OPERATION_FINISHED)` по текущей операции
+ *                (см. ADR-0013 §«SEWING_DONE bucket»)             (qty = qtyCut)
  *   - QC       — `status = IN_PROGRESS` AND `category = QC`        (qty = qtyCut)
  *   - QC_DONE  — `status = IN_PROGRESS` AND `category = QC` AND
  *                есть свежий `PassportEvent(QC_PASSED)`             (qty = qtyCut)
@@ -90,6 +95,27 @@ export interface ProjectionPassport {
    * По умолчанию `false`.
    */
   hasFreshWtoPassed: boolean;
+  /**
+   * Аналог `hasFreshQcPassed` для пошива: `true`, если у паспорта есть
+   * `PassportEvent(OPERATION_FINISHED)` по ТЕКУЩЕЙ операции
+   * (`operationId = Passport.currentOperationId`), более свежее, чем
+   * последние `ISSUED_TO_EMPLOYEE` и `OPERATION_SCAN` этого паспорта.
+   * Иначе говоря — швея нажала «Завершить операцию»
+   * (`completeOperationByEmployee` снял исполнителя и оставил
+   * `currentOperationId` на завершённом шаге), а следующий шаг (ОТК)
+   * паспорт ещё не отсканировал. Используется для derived-стадии
+   * `SEWING_DONE` («Сшито, ждёт ОТК») — см. ADR-0013 §«SEWING_DONE
+   * bucket».
+   *
+   * Фильтр по текущей операции важен: `closeUnclosedOperationByEmployee`
+   * дописывает `OPERATION_FINISHED` по СТАРОЙ операции паспорта, который
+   * уже уехал дальше, — такой «долг» не должен двигать бакет. Откат
+   * (мастер `setRouteStep` назад, ОТК `returnToRework`) старый
+   * `OPERATION_FINISHED` не обнуляет, но он заведомо старше выдачи /
+   * скана следующего шага — паспорт корректно остаётся в `SEWING`
+   * («ждёт выдачи»). По умолчанию `false`.
+   */
+  hasFreshSewingFinished: boolean;
 }
 
 export interface ProjectionSize {
@@ -113,6 +139,7 @@ function emptySummary(): ShopfloorSummaryDto {
   return {
     qtyCut: 0,
     qtySewing: 0,
+    qtySewingDone: 0,
     qtyQc: 0,
     qtyQcDone: 0,
     qtyWto: 0,
@@ -162,6 +189,23 @@ export function bucketOf(p: ProjectionPassport): ShopfloorStage | null {
     // в SEWING-фолбеке и был виден в правильной колонке.
     if (cat === OperationCategory.CUTTING && p.currentEmployeeId === null) {
       return 'CUT';
+    }
+    // SEWING и SEWING_DONE взаимоисключающие (полный аналог QC/QC_DONE):
+    // пока паспорт на руках у швеи (`currentEmployeeId != null`) или
+    // без исполнителя ждёт выдачи после отката (свежего
+    // OPERATION_FINISHED по текущей операции нет) — он в SEWING; после
+    // «Завершить операцию» (`completeOperationByEmployee` снимает
+    // исполнителя и пишет OPERATION_FINISHED на текущую операцию) —
+    // переезжает в SEWING_DONE и лежит там, пока следующий шаг (ОТК)
+    // не сделает OPERATION_SCAN — тогда сменится категория
+    // currentOperation. См. ADR-0013 §«SEWING_DONE bucket».
+    //
+    // Проверка стоит ПОСЛЕ CUT-rollback ветки: паспорт на CUTTING без
+    // исполнителя — это крой в ячейке, а не буфер пошива. Сервис
+    // заполняет `hasFreshSewingFinished` только для категории SEWING,
+    // поэтому CUTTING/`null` сюда не попадут даже с true.
+    if (p.currentEmployeeId === null && p.hasFreshSewingFinished) {
+      return 'SEWING_DONE';
     }
     // SEWING-бакет ловит все «живые» паспорта в работе, у которых
     // currentOperation либо в категории SEWING, либо в категории
@@ -220,6 +264,9 @@ export function projectShopfloor(
       case 'SEWING':
         row.qtySewing += qty;
         break;
+      case 'SEWING_DONE':
+        row.qtySewingDone += qty;
+        break;
       case 'QC':
         row.qtyQc += qty;
         break;
@@ -251,6 +298,7 @@ export function projectShopfloor(
     const hasAny =
       r.qtyCut +
         r.qtySewing +
+        r.qtySewingDone +
         r.qtyQc +
         r.qtyQcDone +
         r.qtyWto +
@@ -272,6 +320,7 @@ export function projectShopfloor(
   const summary = rows.reduce<ShopfloorSummaryDto>((acc, r) => {
     acc.qtyCut += r.qtyCut;
     acc.qtySewing += r.qtySewing;
+    acc.qtySewingDone += r.qtySewingDone;
     acc.qtyQc += r.qtyQc;
     acc.qtyQcDone += r.qtyQcDone;
     acc.qtyWto += r.qtyWto;
@@ -404,6 +453,7 @@ export function normalizeColor(raw: string | null | undefined): {
 function addToSummary(acc: ShopfloorSummaryDto, src: ShopfloorSummaryDto): void {
   acc.qtyCut += src.qtyCut;
   acc.qtySewing += src.qtySewing;
+  acc.qtySewingDone += src.qtySewingDone;
   acc.qtyQc += src.qtyQc;
   acc.qtyQcDone += src.qtyQcDone;
   acc.qtyWto += src.qtyWto;
@@ -567,6 +617,14 @@ export function projectShopfloorDisplay(
         }
         break;
       }
+      case 'SEWING_DONE':
+        // Буфер «сшито, ждёт ОТК». В `sewingByOp` сознательно НЕ
+        // раскладываем: инвариант `Σ sewingByOp === qtySewing`
+        // сохраняется, а по операциям этот буфер на дисплее показывает
+        // `sewingRoute[].rows[].done` (см. `buildSewingRoute`).
+        row.qtySewingDone += qty;
+        totals.qtySewingDone += qty;
+        break;
       case 'QC':
         row.qtyQc += qty;
         totals.qtyQc += qty;

@@ -1085,7 +1085,8 @@ null` определяет, в какой bucket падает паспорт. Э
 | Bucket | Условие на паспорте | qty |
 | --- | --- | --- |
 | `CUT` | `status = CREATED` ИЛИ (rare) `status = IN_PROGRESS` + `currentOperationCategory = CUTTING` + `currentEmployeeId = null` (CUT-rollback мастером, см. `shopfloor-projection.ts §bucketOf`). | `qtyCut` |
-| `SEWING` | `status = IN_PROGRESS` + `currentOperationCategory ∈ {CUTTING, SEWING}` (CUTTING сюда попадает после `issueToEmployee` до первого `OPERATION_SCAN` — паспорт уже у швеи) ИЛИ `currentOperationCategory = null` (защита от «дыр»). | `qtyCut` |
+| `SEWING` | `status = IN_PROGRESS` + `currentOperationCategory ∈ {CUTTING, SEWING}` (CUTTING сюда попадает после `issueToEmployee` до первого `OPERATION_SCAN` — паспорт уже у швеи) ИЛИ `currentOperationCategory = null` (защита от «дыр»); и НЕ `SEWING_DONE`. | `qtyCut` |
+| `SEWING_DONE` | `status = IN_PROGRESS` + `currentOperationCategory = SEWING` + `currentEmployeeId = null` + есть `OPERATION_FINISHED` по текущей операции (`operationId = currentOperationId`), `createdAt > max(ISSUED_TO_EMPLOYEE, OPERATION_SCAN)`. «Сшито, ждёт ОТК», см. ADR-0013 §«SEWING_DONE bucket». | `qtyCut` |
 | `QC` | `status = IN_PROGRESS` + `currentOperationCategory = QC` + НЕТ свежего `QC_PASSED`. | `qtyCut` |
 | `QC_DONE` | `status = IN_PROGRESS` + `currentOperationCategory = QC` + есть свежий `QC_PASSED` (`createdAt > max(OPERATION_SCAN.createdAt)` для того же паспорта). | `qtyCut` |
 | `WTO` | `status = IN_PROGRESS` + `currentOperationCategory = IRONING` + НЕТ свежего `WTO_PASSED`. | `qtyCut` |
