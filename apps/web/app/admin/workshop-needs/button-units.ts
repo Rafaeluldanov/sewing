@@ -195,3 +195,28 @@ export function packFieldToSubmit(args: {
   if (packSize === '') return null;
   return args.convert(value, packSize);
 }
+
+/**
+ * Что отправить на backend в поле `packSize` («Шт/упак») кнопочной строки
+ * (аудит движка расчёта 13.09.2026, N2-1, ревью).
+ *
+ * Скрытое поле уходило на КАЖДОЕ сохранение (и в режиме упаковок, и без
+ * него — пустой строкой), поэтому `trackOptional('packSize')` на backend
+ * всегда считал поле изменённым: в логе/аудите правки статуса появлялся
+ * `packSize`, а без упаковок писался null поверх null. Та же логика, что у
+ * `packFieldToSubmit`:
+ *
+ *   - `null` — НЕ отправлять: значение как при загрузке строки;
+ *   - `''`   — закупщик стёр «Шт/упак», очистку передаём;
+ *   - иначе  — новое значение (trim).
+ */
+export function packSizeToSubmit(args: {
+  /** Текущее «Шт/упак». */
+  value: string;
+  /** «Шт/упак» при загрузке строки (из БД). */
+  initialValue: string;
+}): string | null {
+  const value = args.value.trim();
+  if (value === args.initialValue.trim()) return null;
+  return value;
+}

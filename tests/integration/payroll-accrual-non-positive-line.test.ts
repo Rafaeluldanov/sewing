@@ -8,17 +8,26 @@
  * OperationEntry снова (5 000 начислено, −5 000 аванс → вторая ведомость опять
  * платит 5 000), а удержание сгорало.
  *
+ * Ревью K1: полный зачёт «в ноль» — штатный случай ведомости и НЕ должен её
+ * запирать: по строке с нетто 0 создаётся выплата на 0 ₽ (PIECEWORK закрывает
+ * начисления, ADJUSTMENT = −Σ начислений). 422 остаётся только для нетто < 0.
+ *
  * Ожидаемое поведение (закреплено здесь):
- *   1. PATCH строки с корректировкой, дающей «к выплате ≤ 0» при начислениях > 0,
- *      → 422 PAYROLL_ACCRUAL_LINE_NON_POSITIVE; строка и итоги не меняются
- *      (зачёт «в ноль» −5 000 и удержание больше начислений −6 000).
+ *   1. PATCH строки с удержанием больше начислений (−6 000 при 5 000) → 422
+ *      PAYROLL_ACCRUAL_LINE_NON_POSITIVE; строка и итоги не меняются.
+ *   1b. PATCH −5 000 (зачёт «в ноль») → 200, нетто 0; pay → 200, PayrollPayout
+ *      на 0 ₽ с PIECEWORK 5 000 + ADJUSTMENT −5 000; entry А закрыт; ведомость
+ *      №2 его не берёт; заявки казначейства нет; аудит PAID: adjustmentsCount=1,
+ *      totalAdjustRub=−5 000, skippedLineIds=[].
  *   2. Контроль границы: −4 999 → нетто 1 ₽ проходит, pay создаёт PIECEWORK 5 000 +
  *      ADJUSTMENT −4 999, следующая ведомость entry А не содержит.
- *   3. Строка стала «≤ 0» уже после PATCH (начисления уменьшились, recompute) →
+ *   3. Строка стала «< 0» уже после PATCH (начисления уменьшились, recompute) →
  *      pay → 422, документ остаётся DRAFT, ни одной выплаты (и по соседней
  *      строке тоже — транзакция откатывается).
  *   4. Строка без начислений с одним удержанием (0 / −500) — как раньше:
- *      pay проходит, строка пропускается без выплаты, соседняя строка выплачена.
+ *      pay проходит, строка пропускается без выплаты, соседняя строка выплачена;
+ *      аудит PAID не приписывает ей корректировку (adjustmentsCount=0,
+ *      skippedLineIds=[её id]).
  *
  * Контракт — `docs/api.md §30c`, `docs/domain.md §10.9`.
  */
@@ -242,13 +251,26 @@ describeWithDb('integration — payroll accrual documents: строка с не�
     return { A, B, entryA, entryB, doc1, lineA, lineB };
   }
 
+  async function paidAuditPayload(docId: string) {
+    const rows = await t.prisma.auditLog.findMany({
+      where: { entityType: 'PAYROLL_ACCRUAL_DOCUMENT', entityId: docId, event: 'PAYROLL_ACCRUAL_DOCUMENT_PAID' },
+    });
+    expect(rows).toHaveLength(1);
+    return rows[0]!.payload as {
+      payoutsCreated: number;
+      adjustmentsCount: number;
+      totalAdjustRub: number;
+      skippedLineIds: string[];
+    };
+  }
+
   // ---------------------------------------------------------------------------
-  // 1. PATCH: удержание ≥ начислений отбивается 422, строка не меняется
+  // 1. PATCH: удержание БОЛЬШЕ начислений отбивается 422, строка не меняется
   // ---------------------------------------------------------------------------
 
   for (const [label, adjust] of [
-    ['зачёт аванса «в ноль» (+5 000 / −5 000)', -5000],
     ['удержание больше начислений (+5 000 / −6 000)', -6000],
+    ['удержание больше начислений на копейку (+5 000 / −5 000,01)', -5000.01],
   ] as const) {
     test(`PATCH строки: ${label} → 422 PAYROLL_ACCRUAL_LINE_NON_POSITIVE, строка и итоги без изменений`, async () => {
       const s = await seedTwoLines();
@@ -256,7 +278,7 @@ describeWithDb('integration — payroll accrual documents: строка с не�
       const patched = await patchLine(s.doc1.id, s.lineA.id, adjust, 'аванс/удержание');
       expect(patched.status, JSON.stringify(patched.body)).toBe(422);
       expect(patched.body.code).toBe('PAYROLL_ACCRUAL_LINE_NON_POSITIVE');
-      // Подсказка: удержать можно меньше суммы начислений.
+      // Подсказка: удержать можно не больше суммы начислений.
       expect(String(patched.body.message)).toContain('5000.00');
 
       // Строка и итоги документа — как до запроса.
@@ -279,6 +301,65 @@ describeWithDb('integration — payroll accrual documents: строка с не�
       expect(audit).toHaveLength(0);
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // 1b. Полный зачёт «в ноль» — штатный случай: выплата на 0 ₽ закрывает начисления
+  // ---------------------------------------------------------------------------
+
+  test('зачёт аванса «в ноль» (+5 000 / −5 000): PATCH 200, pay 200 → выплата 0 ₽ (PIECEWORK 5 000 + ADJUSTMENT −5 000), ведомость №2 без entry А', async () => {
+    const s = await seedTwoLines();
+
+    const patched = await patchLine(s.doc1.id, s.lineA.id, -5000, 'аванс зачтён целиком');
+    expect(patched.status, JSON.stringify(patched.body)).toBe(200);
+    const lineA1 = (patched.body as DocBody).lines.find((l) => l.employeeId === s.A)!;
+    expect(lineA1.amountToPayRub).toBeCloseTo(0, 2);
+    expect((patched.body as DocBody).totalToPayRub).toBeCloseTo(3000, 2);
+
+    const paid = await pay(s.doc1.id);
+    expect(paid.status, JSON.stringify(paid.body)).toBe(200);
+    expect(paid.body.status).toBe('PAID');
+    const paidLines = (paid.body as DocBody).lines;
+    const paidLineA = paidLines.find((l) => l.employeeId === s.A)!;
+    expect(paidLineA.payoutId, 'строка с нетто 0 привязана к выплате').not.toBeNull();
+    expect(paidLines.find((l) => l.employeeId === s.B)!.payoutId).not.toBeNull();
+
+    // Выплата на 0 ₽: PIECEWORK 5 000 закрывает entry А, ADJUSTMENT −5 000 фиксирует зачёт.
+    const coveredA = await activeLinesForEntry(s.entryA.id);
+    expect(coveredA, 'entry А закрыт ровно одной активной PayrollPayoutLine').toHaveLength(1);
+    expect(coveredA[0]!.payoutId).toBe(paidLineA.payoutId);
+    const payoutA = await t.prisma.payrollPayout.findUniqueOrThrow({
+      where: { id: paidLineA.payoutId! },
+      include: { lines: true },
+    });
+    expect(payoutA.status).toBe('ISSUED');
+    expect(Number(payoutA.amountTotalRub)).toBeCloseTo(0, 2);
+    expect(Number(payoutA.amountPieceworkRub)).toBeCloseTo(5000, 2);
+    const piecework = payoutA.lines.filter((l) => l.kind === 'PIECEWORK');
+    expect(piecework).toHaveLength(1);
+    expect(Number(piecework[0]!.amountRub)).toBeCloseTo(5000, 2);
+    const adj = payoutA.lines.filter((l) => l.kind === 'ADJUSTMENT');
+    expect(adj).toHaveLength(1);
+    expect(Number(adj[0]!.amountRub)).toBeCloseTo(-5000, 2);
+    expect(payoutA.lines).toHaveLength(2);
+
+    // Заявка казначейства на 0 ₽ не создаётся.
+    const salaryRequests = await t.prisma.supplierPayment.findMany({
+      where: { payrollPayoutId: payoutA.id },
+    });
+    expect(salaryRequests).toHaveLength(0);
+
+    // Аудит PAID: корректировка засчитана ровно один раз, пропущенных строк нет.
+    const payload = await paidAuditPayload(s.doc1.id);
+    expect(payload.payoutsCreated).toBe(2);
+    expect(payload.adjustmentsCount).toBe(1);
+    expect(payload.totalAdjustRub).toBeCloseTo(-5000, 2);
+    expect(payload.skippedLineIds).toEqual([]);
+
+    // Ведомость №2 на позднюю дату: начисления обоих закрыты — А не появляется снова.
+    const doc2 = await createDoc(ACCRUAL_DATE_2);
+    expect(doc2.lines.find((l) => l.employeeId === s.A)).toBeUndefined();
+    expect(doc2.lines.find((l) => l.employeeId === s.B)).toBeUndefined();
+  });
 
   // ---------------------------------------------------------------------------
   // 2. Контроль границы: −4 999 → нетто 1 ₽ проходит и закрывает начисления
@@ -315,10 +396,10 @@ describeWithDb('integration — payroll accrual documents: строка с не�
   });
 
   // ---------------------------------------------------------------------------
-  // 3. Строка стала «≤ 0» после PATCH (начисления уменьшились) → pay 422, DRAFT
+  // 3. Строка стала «< 0» после PATCH (начисления уменьшились) → pay 422, DRAFT
   // ---------------------------------------------------------------------------
 
-  test('pay: строка «начисления есть, к выплате ≤ 0» (после recompute) → 422, документ DRAFT, выплат нет ни по одной строке', async () => {
+  test('pay: строка «начисления есть, к выплате < 0» (после recompute) → 422, документ DRAFT, выплат нет ни по одной строке', async () => {
     const A = seed.employees.seamstress.id;
     const B = seed.employees.cutter.id;
     // А: два начисления 3 000 + 2 000; Б: 3 000.
@@ -369,15 +450,21 @@ describeWithDb('integration — payroll accrual documents: строка с не�
     });
     expect(paidAudit).toHaveLength(0);
 
-    // Менеджер уменьшает удержание до суммы меньше начислений — документ проводится.
+    // Менеджер уменьшает удержание до суммы начислений (зачёт «в ноль») — документ
+    // проводится: выплата А на 0 ₽ закрывает entry А1, 1 000 уходит в следующую ведомость.
     const lineAAfter = after.lines.find((l) => l.employeeId === A)!;
-    const fixed = await patchLine(doc1.id, lineAAfter.id, -2999, 'аванс: 2 999 сейчас, 1 001 — в следующую ведомость');
+    const fixed = await patchLine(doc1.id, lineAAfter.id, -3000, 'аванс: 3 000 сейчас, 1 000 — в следующую ведомость');
     expect(fixed.status, JSON.stringify(fixed.body)).toBe(200);
+    expect((fixed.body as DocBody).lines.find((l) => l.employeeId === A)!.amountToPayRub).toBeCloseTo(0, 2);
     const paid2 = await pay(doc1.id);
     expect(paid2.status, JSON.stringify(paid2.body)).toBe(200);
     expect(paid2.body.status).toBe('PAID');
     expect(await activeLinesForEntry(entryA1.id)).toHaveLength(1);
     expect(await activeLinesForEntry(entryB.id)).toHaveLength(1);
+    const payoutA = await t.prisma.payrollPayout.findUniqueOrThrow({
+      where: { id: (paid2.body as DocBody).lines.find((l) => l.employeeId === A)!.payoutId! },
+    });
+    expect(Number(payoutA.amountTotalRub)).toBeCloseTo(0, 2);
   });
 
   // ---------------------------------------------------------------------------
@@ -410,5 +497,17 @@ describeWithDb('integration — payroll accrual documents: строка с не�
     expect(lines.find((l) => l.employeeId === s.A)!.payoutId).toBeNull();
     expect(lines.find((l) => l.employeeId === s.B)!.payoutId).not.toBeNull();
     expect(await activeLinesForEntry(s.entryB.id)).toHaveLength(1);
+
+    // Ревью K1: аудит PAID не приписывает пропущенной строке корректировку —
+    // ADJUSTMENT-строка по ней не создана, удержание −500 в выплату не попало.
+    const payload = await paidAuditPayload(s.doc1.id);
+    expect(payload.payoutsCreated).toBe(1);
+    expect(payload.adjustmentsCount).toBe(0);
+    expect(payload.totalAdjustRub).toBeCloseTo(0, 2);
+    expect(payload.skippedLineIds).toEqual([lineA2.id]);
+    const adjustments = await t.prisma.payrollPayoutLine.findMany({
+      where: { kind: 'ADJUSTMENT', payout: { employeeId: s.A } },
+    });
+    expect(adjustments).toHaveLength(0);
   });
 });

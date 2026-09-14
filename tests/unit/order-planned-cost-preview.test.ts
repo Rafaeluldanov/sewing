@@ -90,6 +90,47 @@ describe('order-planned-cost-preview — E1-5: цена ERP главнее quote
     expect(b.hasUsdLines).toBe(false);
   });
 
+  test('ревью E1-5: erpUnitPriceRub «0» под ERP — цена не задана, берётся quotedPrice (зеркало E1-10 на бэке)', () => {
+    const b = bucketsFromWorkshopNeeds([
+      need({
+        erpManagedAt: '2026-09-13T00:00:00.000Z',
+        erpUnitPriceRub: '0',
+        quotedPrice: '450',
+        quotedCurrency: 'RUB',
+        calculatedQty: '100',
+      }),
+    ]);
+    expect(b.materialsRub).toBe(45_000);
+    expect(b.hasUsdLines).toBe(false);
+  });
+
+  test('ревью E1-5: erpUnitPriceRub «0» под ERP и quotedPrice в USD → USD-флаг, как у обычной строки', () => {
+    const b = bucketsFromWorkshopNeeds([
+      need({
+        erpManagedAt: '2026-09-13T00:00:00.000Z',
+        erpUnitPriceRub: '0',
+        quotedPrice: '9',
+        quotedCurrency: 'USD',
+        calculatedQty: '100',
+      }),
+    ]);
+    expect(b.materialsRub).toBe(0);
+    expect(b.hasUsdLines).toBe(true);
+  });
+
+  test('ревью E1-5: erpUnitPriceRub «0» под ERP без quotedPrice — строка пропускается', () => {
+    const b = bucketsFromWorkshopNeeds([
+      need({
+        erpManagedAt: '2026-09-13T00:00:00.000Z',
+        erpUnitPriceRub: '0',
+        quotedPrice: null,
+        calculatedQty: '100',
+      }),
+    ]);
+    expect(b.materialsRub).toBe(0);
+    expect(b.hasUsdLines).toBe(false);
+  });
+
   test('erpUnitPriceRub без erpManagedAt не используется (как в смете)', () => {
     const b = bucketsFromWorkshopNeeds([
       need({ erpUnitPriceRub: '450', quotedPrice: null }),

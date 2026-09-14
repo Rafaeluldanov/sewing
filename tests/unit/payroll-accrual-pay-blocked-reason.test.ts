@@ -1,10 +1,13 @@
 /**
- * Unit — правило «строка ведомости с начислениями и к выплате ≤ 0»
+ * Unit — правило «строка ведомости с начислениями и к выплате < 0»
  * (аудит движка расчёта 13.09.2026, K1) на стороне shared/web:
  *   - `isNonPositiveAccrualLine` (`packages/shared/src/payroll-accrual-documents.ts`) —
  *     то же правило, что и 422 `PAYROLL_ACCRUAL_LINE_NON_POSITIVE` сервера;
  *   - `getPayBlockedReason` (`apps/web/app/admin/payroll/accrual-documents/accrual-document-ui.ts`)
  *     — раньше всегда `null`; теперь блокирует «Выплатить» и называет сотрудников.
+ *
+ * Ревью K1: полный зачёт «в ноль» (нетто ровно 0) — штатный случай, сервер
+ * проводит его выплатой на 0 ₽; правило и кнопка его НЕ блокируют.
  */
 import { describe, expect, test } from 'vitest';
 import {
@@ -68,16 +71,21 @@ function doc(lines: PayrollAccrualDocumentLineDto[], status: PayrollAccrualDocum
 }
 
 describe('isNonPositiveAccrualLine (K1)', () => {
-  test('зачёт аванса «в ноль»: 5 000 / −5 000 → true', () => {
-    expect(isNonPositiveAccrualLine(line({ amountPieceworkRub: 5000, amountSalaryRub: 0, manualAdjustRub: -5000 }))).toBe(true);
+  test('зачёт аванса «в ноль»: 5 000 / −5 000 → false (ревью K1: выплата на 0 ₽ закрывает начисления)', () => {
+    expect(isNonPositiveAccrualLine(line({ amountPieceworkRub: 5000, amountSalaryRub: 0, manualAdjustRub: -5000 }))).toBe(false);
   });
 
   test('удержание больше начислений: 5 000 / −6 000 → true', () => {
     expect(isNonPositiveAccrualLine(line({ amountPieceworkRub: 5000, amountSalaryRub: 0, manualAdjustRub: -6000 }))).toBe(true);
   });
 
-  test('оклад тоже считается начислением: 0 + 2 000 / −2 000 → true', () => {
-    expect(isNonPositiveAccrualLine(line({ amountPieceworkRub: 0, amountSalaryRub: 2000, manualAdjustRub: -2000 }))).toBe(true);
+  test('удержание больше начислений на копейку: 5 000 / −5 000,01 → true', () => {
+    expect(isNonPositiveAccrualLine(line({ amountPieceworkRub: 5000, amountSalaryRub: 0, manualAdjustRub: -5000.01 }))).toBe(true);
+  });
+
+  test('оклад тоже считается начислением: 0 + 2 000 / −2 500 → true; 0 + 2 000 / −2 000 → false', () => {
+    expect(isNonPositiveAccrualLine(line({ amountPieceworkRub: 0, amountSalaryRub: 2000, manualAdjustRub: -2500 }))).toBe(true);
+    expect(isNonPositiveAccrualLine(line({ amountPieceworkRub: 0, amountSalaryRub: 2000, manualAdjustRub: -2000 }))).toBe(false);
   });
 
   test('граница: 5 000 / −4 999 → false (нетто 1 ₽ — выплата закроет начисления)', () => {
@@ -107,14 +115,20 @@ describe('getPayBlockedReason (K1)', () => {
     expect(getPayBlockedReason(doc([line({ amountPieceworkRub: 0, amountSalaryRub: 0, manualAdjustRub: -500 })]))).toBeNull();
   });
 
-  test('строка «начисления есть, к выплате ≤ 0» → причина с именем сотрудника и суммами', () => {
+  test('полный зачёт «в ноль» 5 000 / −5 000 не блокирует (ревью K1)', () => {
+    const d = doc([line({ amountPieceworkRub: 5000, amountSalaryRub: 0, manualAdjustRub: -5000 })]);
+    expect(getPayBlockedReason(d)).toBeNull();
+    expect(canPayDocument(d)).toBe(true);
+  });
+
+  test('строка «начисления есть, к выплате < 0» → причина с именем сотрудника и суммами', () => {
     const reason = getPayBlockedReason(
       doc([
         line({
           employee: { id: 'a', fullName: 'Иванова А.', role: 'SEAMSTRESS' },
           amountPieceworkRub: 5000,
           amountSalaryRub: 0,
-          manualAdjustRub: -5000,
+          manualAdjustRub: -6000,
         }),
         line({
           id: 'b',
@@ -137,7 +151,7 @@ describe('getPayBlockedReason (K1)', () => {
     const reason = getPayBlockedReason(
       doc([
         line({ id: 'a', employee: { id: 'a', fullName: 'Иванова А.', role: 'SEAMSTRESS' }, amountPieceworkRub: 5000, amountSalaryRub: 0, manualAdjustRub: -6000 }),
-        line({ id: 'b', employee: { id: 'b', fullName: 'Петров Б.', role: 'CUTTER' }, amountPieceworkRub: 0, amountSalaryRub: 2000, manualAdjustRub: -2000 }),
+        line({ id: 'b', employee: { id: 'b', fullName: 'Петров Б.', role: 'CUTTER' }, amountPieceworkRub: 0, amountSalaryRub: 2000, manualAdjustRub: -2500 }),
       ]),
     );
     expect(reason).toContain('Иванова А.');

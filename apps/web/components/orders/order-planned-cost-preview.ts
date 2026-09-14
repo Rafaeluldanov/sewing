@@ -20,7 +20,8 @@
  * данных. Теперь прикидка зеркалит состав сметы:
  *
  *   - строка потребности: цена = `erpUnitPriceRub` (RUB), если строка
- *     под ERP (`erpManagedAt`) и цена ERP задана; иначе `quotedPrice` в
+ *     под ERP (`erpManagedAt`) и цена ERP задана (`> 0`; ноль/пусто —
+ *     «не задана», как на бэке после E1-10); иначе `quotedPrice` в
  *     `quotedCurrency`; количество = `purchaseQty ?? calculatedQty`;
  *   - прочие расходы с `includeInCostPrice` → «Прочее» (USD → warning,
  *     как у строк потребности);
@@ -127,10 +128,14 @@ export function bucketsFromWorkshopNeeds(
 
     // Аудит движка расчёта 13.09.2026, E1-5: цена ERP главнее quotedPrice
     // и всегда в рублях — ровно как в `assembleEstimatePlan`.
-    const erpPrice =
-      need.erpManagedAt && need.erpUnitPriceRub
-        ? parseAmount(need.erpUnitPriceRub)
-        : null;
+    // Ревью E1-5: цена ERP ≤ 0 — «не задана», fallback на `quotedPrice`
+    // (зеркало бэка после E1-10: ERP прислал связь без цены — строка «0»
+    // считалась заданной ценой и выпадала из прикидки, а смета брала её по
+    // quotedPrice; итог снова «прыгал» после фиксации).
+    const erpPriceRaw = need.erpManagedAt
+      ? parseAmount(need.erpUnitPriceRub)
+      : null;
+    const erpPrice = erpPriceRaw != null && erpPriceRaw > 0 ? erpPriceRaw : null;
     const price = erpPrice ?? parseAmount(need.quotedPrice);
     if (price == null || price <= 0) continue;
     const qtyRaw = need.purchaseQty ?? need.calculatedQty;

@@ -20,6 +20,7 @@ import {
   isButtonNeed,
   isPackMode,
   packFieldToSubmit,
+  packSizeToSubmit,
   packagesToPieces,
   piecesToPackages,
   pricePerPackToPiece,
@@ -181,5 +182,28 @@ describe('button-units — N2-1: packFieldToSubmit — поле уходит т�
         convert: packagesToPieces,
       }),
     ).toBeNull();
+  });
+});
+
+describe('button-units — N2-1 (ревью): «Шт/упак» уходит только при изменении', () => {
+  test('значение как при загрузке → null (поле не отправляется, trackOptional не видит правки)', () => {
+    expect(packSizeToSubmit({ value: '1000', initialValue: '1000' })).toBeNull();
+    expect(packSizeToSubmit({ value: ' 1000 ', initialValue: '1000' })).toBeNull();
+  });
+
+  test('строка без упаковок, поле пустое и было пустым → null (не null поверх null)', () => {
+    expect(packSizeToSubmit({ value: '', initialValue: '' })).toBeNull();
+  });
+
+  test('закупщик ввёл «Шт/упак» впервые → значение', () => {
+    expect(packSizeToSubmit({ value: '500', initialValue: '' })).toBe('500');
+  });
+
+  test('закупщик стёр «Шт/упак» → пустая строка (очистка передаётся)', () => {
+    expect(packSizeToSubmit({ value: '', initialValue: '1000' })).toBe('');
+  });
+
+  test('изменил значение → новое значение', () => {
+    expect(packSizeToSubmit({ value: '2000', initialValue: '1000' })).toBe('2000');
   });
 });

@@ -70,6 +70,7 @@ import {
   isButtonNeed,
   isPackMode,
   packFieldToSubmit,
+  packSizeToSubmit,
   packagesToPieces,
   piecesToPackages,
   pricePerPackToPiece,
@@ -402,6 +403,13 @@ export function InlineEditWorkshopNeedRow({
         convert: pricePerPackToPiece,
       })
     : null;
+  // Ревью N2-1: «Шт/упак» тоже уходит ТОЛЬКО при изменении — иначе
+  // `trackOptional('packSize')` на backend считал поле изменённым на каждом
+  // сохранении (packSize в changedFields аудита при правке одного статуса,
+  // null поверх null без упаковок).
+  const submitPackSize = isButton
+    ? packSizeToSubmit({ value: packSizeValue, initialValue: initialPackSize })
+    : null;
 
   // Значения, которые реально уйдут на backend (всегда в метрах /
   // цене за метр). Если поле не редактировали — отправляем исходное
@@ -551,7 +559,9 @@ export function InlineEditWorkshopNeedRow({
                       value={submitButtonQty}
                     />
                   )}
-                  <input type="hidden" name="packSize" value={packSizeValue.trim()} />
+                  {submitPackSize !== null && (
+                    <input type="hidden" name="packSize" value={submitPackSize} />
+                  )}
                 </>
               )}
             </>
@@ -593,11 +603,11 @@ export function InlineEditWorkshopNeedRow({
                     title="Укажите штук в упаковке — после сохранения строка перейдёт в упаковки"
                     disabled={isCancelled || isLockedByPo}
                   />
-                  {!(isCancelled || isLockedByPo) && (
+                  {!(isCancelled || isLockedByPo) && submitPackSize !== null && (
                     <input
                       type="hidden"
                       name="packSize"
-                      value={packSizeValue.trim()}
+                      value={submitPackSize}
                     />
                   )}
                 </label>

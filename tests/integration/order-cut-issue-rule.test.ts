@@ -34,6 +34,11 @@
  *       консумят повторно и не блокируют 409 паспорт уже закрытого
  *       размера; после `returnToCell` (RELEASED) следующая выдача
  *       считается снова.
+ *  T24–T25. Ревью G3-1: проверка «уже засчитан» читает AuditLog по
+ *       `entityId ∈ {все строки правила заказа}` — зачёт под погашенной
+ *       строкой (очередь отключена) не теряется; та же проверка стоит в
+ *       `consumeInTx` внутри транзакции выдачи — устаревший evaluation
+ *       (двойной клик) не даёт второго CONSUMED.
  *
  * Маршрут заказа: `SEW_OVERLOCK_1 → SEW_OVERLOCK_2 → QC` — швея
  * с активной сменой на `overlock-01/SEW_OVERLOCK_1` встаёт ровно
@@ -51,6 +56,9 @@ import {
 } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
+import { OperationCategory } from '@prisma/client';
+import { AuditService } from '@sewing/api/modules/audit/audit.service';
+import { OrderCutIssueRulesService } from '@sewing/api/modules/order-cut-issue-rules/order-cut-issue-rules.service';
 
 describeWithDb('integration — order cut issue rules', () => {
   let t: TestApp;
@@ -1279,5 +1287,115 @@ describeWithDb('integration — order cut issue rules', () => {
     await issue(cookies.seamstress, P1).expect(201);
     expect(await issuedQtyOf(orderId, S)).toBe(4);
     expect(await consumedCount(P1)).toBe(2);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Ревью G3-1: выборка «уже засчитан» по id строк правила заказа (и погашенных);
+  // повтор проверки внутри транзакции выдачи.
+  // ---------------------------------------------------------------------------
+
+  test('T24. ревью G3-1: зачёт под погашенной строкой (очередь 1 отключена) не теряется — handoff на OV2 не консумит очередь 2 и не даёт 409', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 100 },
+      { sizeKey: 'M', qtyPlan: 100 },
+    ]);
+    const S = sizeIdByKey.S!;
+    const M = sizeIdByKey.M!;
+    // Очередь 1: S 3; очередь 2: M 10 (отдельные строки правила — разные id).
+    await bulkUpsertRules(orderId, [{ sizeId: S, requiredQty: 3 }], cookies.manager, 1).expect(201);
+    await bulkUpsertRules(orderId, [{ sizeId: M, requiredQty: 10 }], cookies.manager, 2).expect(201);
+
+    const P1 = await createAndPlace(orderId, S, 2, 'R-G31-T24');
+    await startSeamstressShift();
+    await issue(cookies.seamstress, P1).expect(201);
+    const q1Rule = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, queueIndex: 1, sizeId: S },
+    });
+    expect(q1Rule.issuedQty).toBe(2);
+    const consumed = await t.prisma.auditLog.findMany({
+      where: { event: 'ORDER_CUT_ISSUE_RULE_CONSUMED', payload: { path: ['passportId'], equals: P1 } },
+    });
+    expect(consumed).toHaveLength(1);
+    expect(consumed[0]!.entityId).toBe(q1Rule.id);
+    await completeOp(cookies.seamstress, P1);
+
+    // Очередь 1 отключают — строка, под которой зачтён P1, становится неактивной.
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/cut-issue-rules/queues/1/disable`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+
+    // Handoff P1 на OV2: текущая очередь — №2 (только M). P1 размера S уже
+    // засчитан под погашенной строкой → выдача проходит без 409 и без
+    // второго CONSUMED; очередь 2 не тронута.
+    await switchOp(cookies.seamstress, 'SEW_OVERLOCK_2');
+    await issue(cookies.seamstress, P1).expect(201);
+    expect(await consumedCount(P1)).toBe(1);
+    const q2Rule = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, queueIndex: 2, sizeId: M },
+    });
+    expect(q2Rule.issuedQty).toBe(0);
+    await completeOp(cookies.seamstress, P1);
+
+    // Контроль: новый паспорт S на первой операции по-прежнему отбивается
+    // текущей очередью 2 (S в ней нет) — серверная истина не ослаблена.
+    const P2 = await createAndPlace(orderId, S, 2, 'R-G31-T24b');
+    await switchOp(cookies.seamstress, 'SEW_OVERLOCK_1');
+    const r = await issue(cookies.seamstress, P2).expect(409);
+    expect(r.body?.code).toBe('ORDER_CUT_ISSUE_RULE_VIOLATION');
+    expect(await consumedCount(P2)).toBe(0);
+  });
+
+  test('T25. ревью G3-1: consumeInTx с устаревшим evaluation (двойной клик) не засчитывает паспорт второй раз', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 20 },
+    ]);
+    const S = sizeIdByKey.S!;
+    await bulkUpsertRules(orderId, [{ sizeId: S, requiredQty: 10 }]).expect(201);
+    const P1 = await createAndPlace(orderId, S, 4, 'R-G31-T25');
+    await startSeamstressShift();
+
+    // Сервис на ПРЯМОМ prisma-клиенте тестов: DI-версия из контейнера ходит
+    // через PrismaService-прокси, которому нужен TenantContext HTTP-запроса
+    // (тот же приём, что в `tests/utils/erp-services.ts`).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const directPrisma = t.prisma as any;
+    const rules = new OrderCutIssueRulesService(
+      directPrisma,
+      new AuditService(directPrisma),
+    );
+    const passport = await t.prisma.passport.findUniqueOrThrow({ where: { id: P1 } });
+    // Pre-check первого клика — до транзакции выдачи.
+    const stale = await rules.evaluateForIssue(
+      {
+        id: passport.id,
+        orderId: passport.orderId,
+        sizeId: passport.sizeId,
+        qtyCut: passport.qtyCut,
+        currentRouteStepIndex: passport.currentRouteStepIndex,
+      },
+      OperationCategory.SEWING,
+    );
+    expect(stale).not.toBeNull();
+    expect(stale!.orderRuleIds.length).toBeGreaterThan(0);
+
+    // Реальная выдача (второй клик успел первым) — CONSUMED записан.
+    await issue(cookies.seamstress, P1).expect(201);
+    expect(await issuedQtyOf(orderId, S)).toBe(4);
+    expect(await consumedCount(P1)).toBe(1);
+
+    // Транзакция первого клика доходит до consume с устаревшим evaluation:
+    // повторная проверка внутри транзакции видит CONSUMED → без инкремента.
+    await t.prisma.$transaction((tx) =>
+      rules.consumeInTx(tx, stale, {
+        passportId: P1,
+        orderId,
+        employeeId: seed.employees.seamstress.id,
+        qty: passport.qtyCut,
+      }),
+    );
+    expect(await issuedQtyOf(orderId, S)).toBe(4);
+    expect(await consumedCount(P1)).toBe(1);
   });
 });
