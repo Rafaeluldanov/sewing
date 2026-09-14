@@ -36,6 +36,7 @@ import {
   Calendar,
   CheckCircle2,
   ClipboardList,
+  Compass,
   Pencil,
   Truck,
   User,
@@ -197,7 +198,25 @@ export function OrderManagementHeader({
       <header className="order-hero-card__head">
         <div className="order-hero-card__identity">
           <span className="order-hero-card__eyebrow">Карточка заказа</span>
-          <h2 className="order-hero-card__title">Заказ {order.number}</h2>
+          <div className="order-hero-card__title-row">
+            <h2 className="order-hero-card__title">Заказ {order.number}</h2>
+            {/*
+              «Схема стенда» — буква «П» по реальному маршруту заказа с QR
+              рабочих мест, стеллажом и живыми паспортами
+              (`/admin/orders/[id]/stand`, см. `docs/screens.md §7.7`).
+              Стоит у номера, а не в action-row: это не действие над
+              заказом, а второе окно на него — открывают на большом экране
+              рядом с цехом и сканируют прямо с него.
+            */}
+            <Link
+              href={`/admin/orders/${order.id}/stand`}
+              className="admin-btn admin-btn--ghost order-hero-card__stand-link"
+              title="Схема движения заказа по маршруту: QR рабочих мест, стеллаж, паспорта"
+            >
+              <Compass size={16} strokeWidth={1.6} aria-hidden />
+              Схема стенда
+            </Link>
+          </div>
         </div>
         <div className="order-hero-card__status">
           {/*

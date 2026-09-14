@@ -2319,6 +2319,18 @@ DTO: `packages/shared/src/payroll-calendar.ts`. Домен:
 
 DTO: `packages/shared/src/shopfloor.ts`. ADR: 0007, 0013.
 
+### 32a. Схема стенда по заказу
+
+Источник: `shopfloor/order-stand.controller.ts`. Класс RBAC не задан —
+как у `/shopfloor/*`: любой вошедший сотрудник (read-only проекция,
+секретов нет; QR-payload'ы — штатные форматы ADR-0008).
+
+| Метод | Путь | RBAC | Описание |
+| --- | --- | --- | --- |
+| GET | `/api/orders/:id/stand` | Any auth | «Схема стенда» по заказу (`OrderStandDto`): шаги маршрута заказа (`OrderRouteStep`) с рабочим местом под операцию (`equipment:{id}`) и счётчиками (в работе / ждёт / прошло), блок раскроя (`CuttingTask` + выпущенные паспорта), паспорта с текущим положением (`place`: ячейка / у исполнителя / буфер `*_DONE` / коробка) и подсказкой «следующий скан», активные ячейки (`cell:{id}`) со счётом паспортов ЭТОГО заказа, коробки (`box:{id}`), готовность к крою (`CutReadinessService`, fail-soft → `null`). Стадия паспорта — та же `bucketOf`, что у монитора цеха (ADR-0013). 404 `ORDER_NOT_FOUND`. UI: `/admin/orders/[id]/stand`, поллинг 5 с. |
+
+DTO: `packages/shared/src/order-stand.ts`. См. `docs/screens.md §7.7`.
+
 ---
 
 <a id="33-display-screens"></a>

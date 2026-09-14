@@ -70,6 +70,7 @@
     "./supplier-payment-requests": "./src/supplier-payment-requests.ts",
     "./purchase-receipts": "./src/purchase-receipts.ts",
     "./cut-readiness": "./src/cut-readiness.ts",
+    "./order-stand": "./src/order-stand.ts",
     "./order-applications": "./src/order-applications.ts",
     "./order-material-arrivals": "./src/order-material-arrivals.ts",
     "./material-issues": "./src/material-issues.ts",

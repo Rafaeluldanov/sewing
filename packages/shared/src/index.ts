@@ -90,3 +90,4 @@ export * from './workplace';
 export * from './colorways';
 export * from './order-calculations';
 export * from './amendments';
+export * from './order-stand';
