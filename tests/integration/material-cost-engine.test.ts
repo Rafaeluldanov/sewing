@@ -444,4 +444,19 @@ describeWithDb('integration — движок материала факта: от
     expect(unknown.cost.warnings).not.toContain('MATERIAL_PRICE_USD_NO_RATE');
     expect(unknown.materialLines.find((l: any) => l.workshopNeedId === needId).totalRub).toBe(0);
   });
+
+  test('E1-7 (ревью): котировка в EUR — «валюта без курса», а не «нет курса USD»', async () => {
+    const { orderId, needId } = await usdOrder();
+    // Курс USD у сметы есть, но строка в EUR: её переводить нечем — и подпись про USD врала бы.
+    await t.prisma.workshopNeed.update({ where: { id: needId }, data: { quotedCurrency: 'EUR' } });
+    await setSources('ISSUED', 'PLANNED');
+    const doc = await rebuild(orderId);
+    const line = doc.materialLines.find((l: any) => l.workshopNeedId === needId);
+    expect(line.unitPriceRub).toBeNull();
+    expect(line.totalRub).toBeNull();
+    expect(doc.cost.warnings).toContain('MATERIAL_PRICE_CURRENCY_UNSUPPORTED');
+    expect(doc.cost.warnings).not.toContain('MATERIAL_PRICE_USD_NO_RATE');
+    expect(doc.cost.warnings).not.toContain('MATERIAL_PRICE_UNKNOWN');
+    expect(doc.cost.materialsOwnRub).toBe(0);
+  });
 });

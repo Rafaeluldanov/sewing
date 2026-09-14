@@ -55,6 +55,8 @@ type PricedAgg = {
   rub: number;
   /** Была строка с ценой в USD, которую нечем перевести в рубли (E1-7). */
   usdNoRate: boolean;
+  /** Была строка с ценой в валюте, которую движок не переводит вовсе (не RUB/USD; E1-7, ревью). */
+  currencyUnsupported: boolean;
   confirmed: boolean;
 };
 const emptyPriced = (): PricedAgg => ({
@@ -62,8 +64,18 @@ const emptyPriced = (): PricedAgg => ({
   pricedQty: 0,
   rub: 0,
   usdNoRate: false,
+  currencyUnsupported: false,
   confirmed: false,
 });
+/**
+ * Почему цену не перевести в рубли: USD без курса сметы — или валюта, курса которой у цеха нет
+ * вовсе. Аудит движка расчёта 13.09.2026, E1-7, ревью: код `MATERIAL_PRICE_USD_NO_RATE`
+ * ставился и для EUR/CNY, а подпись в UI говорила про USD и курс сметы.
+ */
+const noteMissingRate = (acc: PricedAgg, currency: string | null | undefined): void => {
+  if ((currency ?? RUB).toUpperCase() === USD) acc.usdNoRate = true;
+  else acc.currencyUnsupported = true;
+};
 
 /**
  * МАТЕРИАЛ В СЕБЕСТОИМОСТИ ЗАКАЗА — по двум настраиваемым осям.
@@ -85,6 +97,8 @@ const emptyPriced = (): PricedAgg => ({
  * переводятся в рубли по курсу АКТИВНОЙ сметы (`OrderCostEstimate.usdRateRub`) — тем же, которым
  * посчитан план и которым автосписание оценило выдачу. Без курса строка получает `totalRub: null`
  * и код `MATERIAL_PRICE_USD_NO_RATE`: «нечем перевести» — не то же самое, что «стоило 0 ₽».
+ * Иная валюта (EUR, CNY, …) курса у цеха не имеет вовсе — та же строка с `totalRub: null`, но код
+ * `MATERIAL_PRICE_CURRENCY_UNSUPPORTED` (ревью E1-7): подпись про «курс USD в смете» тут врала бы.
  */
 @Injectable()
 export class OrderMaterialCostService {
@@ -274,7 +288,7 @@ export class OrderMaterialCostService {
       // Цена берётся подтверждённая, если поставщик её подтвердил: платить будем по ней.
       const price = rubPrice(l.confirmedPrice ?? l.price, l.currency);
       if (price === null) {
-        acc.usdNoRate = true;
+        noteMissingRate(acc, l.currency);
       } else if (price !== undefined && qty > 0) {
         // D1-6 ≡ E1-8: взвешиваем количеством, а не перезаписываем.
         acc.pricedQty += qty;
@@ -292,7 +306,7 @@ export class OrderMaterialCostService {
       acc.qty += qty;
       const price = rubPrice(l.priceSnapshot, l.currencySnapshot);
       if (price === null) {
-        acc.usdNoRate = true;
+        noteMissingRate(acc, l.currencySnapshot);
       } else if (price !== undefined && qty > 0) {
         acc.pricedQty += qty;
         acc.rub += qty * price;
@@ -431,8 +445,10 @@ export class OrderMaterialCostService {
       const recPrice = avgPrice(rec);
       let price: number | null = null;
       let priceStep: MaterialPriceStep = 'NONE';
-      // Среди ОПРОШЕННЫХ ступеней была цена в USD без курса.
-      let sawUsdNoRate = plannedRaw === null;
+      // Среди ОПРОШЕННЫХ ступеней была цена в USD без курса — или в валюте без курса вовсе.
+      const plannedCurrency = (need.quotedCurrency ?? RUB).toUpperCase();
+      let sawUsdNoRate = plannedRaw === null && plannedCurrency === USD;
+      let sawUnsupported = plannedRaw === null && plannedCurrency !== USD;
       switch (opts.priceSource) {
         case MaterialPriceSource.PLANNED:
           price = planned;
@@ -440,6 +456,7 @@ export class OrderMaterialCostService {
           break;
         case MaterialPriceSource.RECEIPT:
           sawUsdNoRate = sawUsdNoRate || rec?.usdNoRate === true;
+          sawUnsupported = sawUnsupported || rec?.currencyUnsupported === true;
           if (recPrice != null) {
             price = recPrice;
             priceStep = 'RECEIPT';
@@ -452,6 +469,10 @@ export class OrderMaterialCostService {
         default:
           sawUsdNoRate =
             sawUsdNoRate || ord?.usdNoRate === true || rec?.usdNoRate === true;
+          sawUnsupported =
+            sawUnsupported ||
+            ord?.currencyUnsupported === true ||
+            rec?.currencyUnsupported === true;
           if (ordPrice != null) {
             price = ordPrice;
             priceStep = ord?.confirmed ? 'PURCHASE_CONFIRMED' : 'PURCHASE_ORDERED';
@@ -464,9 +485,12 @@ export class OrderMaterialCostService {
           }
           break;
       }
-      // Цена есть только в USD, а курса нет — это не «цены нет» и тем более не 0 ₽.
+      // Цена есть только в валюте, а курса нет — это не «цены нет» и тем более не 0 ₽.
+      // USD без курса сметы и иная валюта — разные коды: их лечат по-разному (E1-7, ревью).
       const usdNoRate = price == null && sawUsdNoRate;
+      const currencyUnsupported = price == null && !sawUsdNoRate && sawUnsupported;
       if (usdNoRate) warnings.push('MATERIAL_PRICE_USD_NO_RATE');
+      else if (currencyUnsupported) warnings.push('MATERIAL_PRICE_CURRENCY_UNSUPPORTED');
       else if (price == null) warnings.push('MATERIAL_PRICE_UNKNOWN');
 
       lines.push({
@@ -477,7 +501,7 @@ export class OrderMaterialCostService {
         qtyStep,
         unitPriceRub: price == null ? null : round2(price),
         priceStep,
-        totalRub: usdNoRate ? null : round2(qty * (price ?? 0)),
+        totalRub: usdNoRate || currencyUnsupported ? null : round2(qty * (price ?? 0)),
       });
     }
 

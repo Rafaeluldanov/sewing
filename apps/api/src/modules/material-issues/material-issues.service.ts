@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { CompanySettingsService } from '../company-settings/company-settings.service.js';
+import { ProductionDocumentsService } from '../production-documents/production-documents.service.js';
 import { StockService } from '../stock/stock.service.js';
 import {
   MaterialIssueAlreadyReturnedException,
@@ -167,6 +168,9 @@ export class MaterialIssuesService {
     private readonly audit: AuditService,
     private readonly stock: StockService,
     private readonly companySettings: CompanySettingsService,
+    // Аудит движка расчёта 13.09.2026, D1-3, ревью: проведённая выдача и возврат по уже
+    // закрытому заказу — поздний факт документа выпуска; документ обязан узнать о нём сам.
+    private readonly productionDocuments: ProductionDocumentsService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -474,6 +478,9 @@ export class MaterialIssuesService {
     this.logger.log(
       `event=material_issue.post id=${updated.id} totalCost=${updated.totalCost.toString()}`,
     );
+    // D1-3 (ревью): выдача задним числом по READY-заказу — фоном, после коммита, не в ответе.
+    // Раньше ERP узнавала о ней только после открытия карточки документа в цехе.
+    this.productionDocuments.refreshLater(updated.orderId, { source: 'material_issue.post' });
     return toDetail(updated);
   }
 
@@ -943,6 +950,9 @@ export class MaterialIssuesService {
       `event=material_issue.return.created materialIssueId=${issue.id} returnId=${created.id} ` +
         `lines=${created.lines.length} totalCost=${created.totalCost.toString()}`,
     );
+    // D1-3 (ревью): возврат — минус к факту материала READY-заказа, документ выпуска обязан
+    // его увидеть без чтения карточки. Фоном, после коммита.
+    this.productionDocuments.refreshLater(issue.orderId, { source: 'material_issue.return' });
 
     return toReturnDetail(created);
   }

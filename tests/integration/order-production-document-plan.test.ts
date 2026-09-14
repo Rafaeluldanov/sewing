@@ -51,7 +51,12 @@ type EstimateLine = {
 };
 type DocBody = {
   materials: MaterialRow[];
-  totals: { planMaterialsRub: string; planDirectRub: string };
+  totals: {
+    planMaterialsRub: string;
+    planDirectRub: string;
+    marginRub: string | null;
+    marginNote: string | null;
+  };
   warnings: string[];
 };
 
@@ -242,5 +247,28 @@ describeWithDb('integration — документ план→факт: план �
     expect(lateRow!.planSource).toBe('WORKSHOP_NEED');
     expect(doc.warnings).not.toContain('PLAN_USD_SKIPPED');
     expect(doc.totals.planMaterialsRub).toBe((FABRIC_PLAN_RUB + APP_PLAN_RUB + APP_PLAN_RUB).toFixed(2));
+  });
+
+  test('E1-6 (ревью): маржа документа подписана «по прямым затратам» — без логистики/прочих/лекала', async () => {
+    const { orderId } = await prepare('RUB');
+    // Без цены клиента маржи нет — и подписи тоже.
+    let doc = await getDocument(orderId);
+    expect(doc.totals.marginRub).toBeNull();
+    expect(doc.totals.marginNote).toBeNull();
+
+    // Выручка в рублях + логистика 45 000: в `factDirect` она не входит, и маржа завышена ровно
+    // на неё — подпись обязана это сказать, а имена прежних полей остаются (их читает фронт ERP).
+    await t.prisma.order.update({
+      where: { id: orderId },
+      data: { customerUnitPrice: new Prisma.Decimal(1000), customerCurrency: 'RUB' },
+    });
+    await t.prisma.orderLogisticsLine.create({
+      data: { orderId, sortOrder: 0, name: 'Доставка ткани', costRub: new Prisma.Decimal(45000) },
+    });
+    doc = await getDocument(orderId);
+    expect(doc.totals.marginRub).not.toBeNull();
+    expect(doc.totals.marginNote).toBe(
+      'по прямым затратам — без логистики, прочих расходов и разработки лекала',
+    );
   });
 });

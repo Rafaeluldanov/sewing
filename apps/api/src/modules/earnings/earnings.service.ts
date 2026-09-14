@@ -23,6 +23,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OperationsService } from '../operations/operations.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { ProductionDocumentsService } from '../production-documents/production-documents.service.js';
 import { isPieceworkEligible } from '../employees/compensation.js';
 import { isEarningsManager } from './earnings.constants.js';
 
@@ -87,11 +88,16 @@ const LOCKED_PAYOUT_STATUSES = [
 @Injectable()
 export class EarningsService {
   private readonly logger = new Logger(EarningsService.name);
+  /** Пауза перед сверкой документа выпуска: дать транзакции упаковки закоммититься (D1-3). */
+  private static readonly LATE_FACT_REFRESH_DELAY_MS = 1000;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly operations: OperationsService,
     private readonly audit: AuditService,
+    // Аудит движка расчёта 13.09.2026, D1-3, ревью: утверждение начислений по заказу с уже
+    // сформированным документом выпуска — поздний факт, документ обязан узнать о нём сам.
+    private readonly productionDocuments: ProductionDocumentsService,
   ) {}
 
   // ===========================================================================
@@ -939,6 +945,12 @@ export class EarningsService {
    *
    * Возвращает количество затронутых записей — удобно для логирования
    * и тестов, но в самом `PackingService` не обязательно.
+   *
+   * Аудит движка расчёта 13.09.2026, D1-3 (ревью): если что-то подтверждено, документ выпуска
+   * заказа получает отложенную сверку (`refreshLater`, по отпечатку и с задержкой — мы внутри
+   * чужой транзакции). Штатное закрытие коробки пересобирает документ само, и тогда сверка
+   * находит отпечаток совпавшим и выходит; ловит она утверждение по уже СФОРМИРОВАННОМУ
+   * документу, о котором до сих пор узнавала только карточка в UI.
    */
   async approvePendingForPassport(
     tx: Prisma.TransactionClient,
@@ -955,6 +967,19 @@ export class EarningsService {
         approvedAt,
       },
     });
+    if (result.count > 0) {
+      const passport = await tx.passport.findUnique({
+        where: { id: passportId },
+        select: { orderId: true },
+      });
+      if (passport?.orderId) {
+        this.productionDocuments.refreshLater(passport.orderId, {
+          source: 'earnings.approve',
+          whenStale: true,
+          delayMs: EarningsService.LATE_FACT_REFRESH_DELAY_MS,
+        });
+      }
+    }
     return result.count;
   }
 

@@ -588,7 +588,16 @@ export function ProductionDocumentView({
                   <td />
                 </tr>
                 <tr>
-                  <td style={{ fontWeight: 700 }}>Маржа</td>
+                  <td style={{ fontWeight: 700 }}>
+                    Маржа
+                    {/* Аудит 13.09.2026, E1-6, ревью: маржа по прямым затратам — без
+                        логистики/прочих/лекала; без подписи читалась как полная. */}
+                    {t.marginNote && (
+                      <div className="admin-muted" style={{ fontSize: 12, fontWeight: 400 }}>
+                        {t.marginNote}
+                      </div>
+                    )}
+                  </td>
                   <td />
                   <td
                     style={{

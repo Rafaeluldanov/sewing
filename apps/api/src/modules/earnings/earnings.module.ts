@@ -3,6 +3,7 @@ import { EarningsService } from './earnings.service.js';
 import { EarningsController } from './earnings.controller.js';
 import { PassportEarningsController } from './passport-earnings.controller.js';
 import { OperationsModule } from '../operations/operations.module.js';
+import { ProductionDocumentsModule } from '../production-documents/production-documents.module.js';
 
 /**
  * Модуль сдельных начислений (Шаг 9 MVP).
@@ -18,7 +19,10 @@ import { OperationsModule } from '../operations/operations.module.js';
  * PHASE 2 STEP 1 (см. ADR-0020).
  */
 @Module({
-  imports: [OperationsModule],
+  // `ProductionDocumentsModule` — аудит движка расчёта 13.09.2026, D1-3 (ревью): утверждение
+  // начислений будит документ выпуска. Модуль документов зависит только от `CostsModule`,
+  // цикла с `PackingModule`/`PassportsModule` не образуется.
+  imports: [OperationsModule, ProductionDocumentsModule],
   controllers: [EarningsController, PassportEarningsController],
   providers: [EarningsService],
   exports: [EarningsService],
