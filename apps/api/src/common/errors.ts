@@ -2573,6 +2573,25 @@ export class MasterSelfOperationReworkFirstException extends BusinessException {
 }
 
 /**
+ * «Выполнить операцию самой»: мастер выбрала зачесть работу сделкой
+ * (`payMode = PIECEWORK`), а сдельной расценки у операции для этого
+ * паспорта нет — в заказе она окладная (`pricingModeOverride`) или
+ * справочник не даёт ставки (`OperationsService.resolveRate` → `null`).
+ * Молча выполнить без начисления нельзя: мастер ждёт денег. Список
+ * шагов (`self-operation-steps`) отдаёт `pieceworkRate = null` заранее,
+ * так что штатный UI сюда не приходит.
+ */
+export class MasterSelfOperationNoPieceworkRateException extends BusinessException {
+  constructor(operationName: string) {
+    super(
+      'MASTER_SELF_OPERATION_NO_PIECEWORK_RATE',
+      `У операции «${operationName}» нет сдельной расценки в этом заказе — зачесть её можно только в счёт оклада.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Сотрудник пытается завершить операцию, которая стоит в маршруте
  * РАНЬШЕ текущего `currentRouteStepIndex` паспорта. Обычный
  * complete-operation не может откатывать паспорт назад — этим

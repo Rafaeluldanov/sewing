@@ -231,6 +231,36 @@ describe('master-actions smoke — «выполнить операцию сам�
     expect(serviceSrc).not.toMatch(/syncDailySalary\(/);
   });
 
+  test('зачёт работы: выбор мастера доходит до начисления, расценка — из resolveRate', () => {
+    const shared = readSrc('packages/shared/src/master-actions.ts');
+    expect(shared).toMatch(/MasterSelfOperationPayModeSchema = z\.enum\(\['PIECEWORK', 'SALARY'\]\)/);
+    expect(shared).toMatch(/payMode: MasterSelfOperationPayModeSchema\.optional\(\)/);
+    expect(shared).toMatch(/defaultPayMode: MasterSelfOperationPayMode/);
+
+    const serviceSrc = readSrc(
+      'apps/api/src/modules/master-actions/master-actions.service.ts',
+    );
+    // Сделка без расценки — отказ ДО движения паспорта.
+    expect(serviceSrc).toMatch(/MasterSelfOperationNoPieceworkRateException/);
+    expect(serviceSrc).toMatch(/this\.operations\.resolveRate\(/);
+    // Выбор прокидывается в канал швеи, а не реализуется своей записью.
+    expect(serviceSrc).toMatch(
+      /pieceworkOverride: payMode === 'PIECEWORK' \? 'FORCE' : 'SKIP'/,
+    );
+    // Аудит хранит режим и сумму — для доначисления по журналу.
+    expect(serviceSrc).toMatch(/payload\.payMode = input\.payMode/);
+
+    const earnings = readSrc('apps/api/src/modules/earnings/earnings.service.ts');
+    expect(earnings).toMatch(/pieceworkOverride === 'SKIP'\) return/);
+    expect(earnings).toMatch(/pieceworkOverride !== 'FORCE' &&\s*!isPieceworkEligible/);
+
+    const passports = readSrc('apps/api/src/modules/passports/passports.service.ts');
+    expect(passports).toMatch(/opts: \{ pieceworkOverride\?: PieceworkOverride \} = \{\}/);
+
+    const errors = readSrc('apps/api/src/common/errors.ts');
+    expect(errors).toMatch(/MASTER_SELF_OPERATION_NO_PIECEWORK_RATE/);
+  });
+
   test('UI: пункт в sheet, список шагов и предупреждение про оклад', () => {
     const src = readSrc('apps/web/app/master/passport-actions-sheet.tsx');
     expect(src).toMatch(/Выполнить операцию самой/);
@@ -240,9 +270,16 @@ describe('master-actions smoke — «выполнить операцию сам�
     // Недоступный шаг остаётся в списке с причиной отказа.
     expect(src).toMatch(/blockedReason/);
     expect(src).toMatch(/master-actions-sheet__step--blocked/);
-    // Оклад: предупреждение показывается ДО нажатия.
-    expect(src).toMatch(/pieceworkPaid/);
+    // Как зачесть работу — выбор мастера ДО нажатия (14.09.2026):
+    // сделка с суммой по расценке маршрута или оклад без начисления.
+    expect(src).toMatch(/Как зачесть работу/);
+    expect(src).toMatch(/defaultPayMode/);
+    expect(src).toMatch(/pieceworkRate/);
+    expect(src).toMatch(/pieceworkAmount/);
+    expect(src).toMatch(/payMode,/);
     expect(src).toMatch(/сдельного начисления/);
+    // Сделка без расценки не предлагается — форма сама уходит в оклад.
+    expect(src).toMatch(/pieceworkRate === null\) setPayMode\('SALARY'\)/);
 
     const css = readSrc('apps/web/app/globals.css');
     expect(css).toMatch(/\.master-actions-sheet__menu-item--work/);

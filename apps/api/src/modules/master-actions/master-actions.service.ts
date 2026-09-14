@@ -24,6 +24,7 @@ import {
   type RouteWorkPermitDto,
   type MasterSelfOperationDto,
   type MasterSelfOperationEquipmentDto,
+  type MasterSelfOperationPayMode,
   type MasterSelfOperationStepDto,
   type MasterSelfOperationStepsDto,
   type MasterTransferCandidateDto,
@@ -36,6 +37,7 @@ import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-is
 import { WorkInProgressService } from '../work-in-progress/work-in-progress.service.js';
 import { PassportsService } from '../passports/passports.service.js';
 import { MeService } from '../me/me.service.js';
+import { OperationsService } from '../operations/operations.service.js';
 import { isPieceworkEligible } from '../employees/compensation.js';
 import {
   closeShiftSegments,
@@ -51,11 +53,13 @@ import {
   MasterSelfOperationEquipmentNotAllowedException,
   MasterSelfOperationEquipmentRequiredException,
   MasterSelfOperationNoEquipmentException,
+  MasterSelfOperationNoPieceworkRateException,
   MasterSelfOperationReworkFirstException,
   MasterSelfOperationShiftBusyException,
   MasterTargetEmployeeInactiveException,
   MasterTargetEmployeeNotFoundException,
   MasterTargetOperationAlreadyFinishedException,
+  OperationRateMissingException,
   RouteWorkPermitNotFoundException,
   RouteWorkPermitOperationAlreadyInRouteException,
   PassportTerminalForMasterException,
@@ -102,6 +106,11 @@ export class MasterActionsService {
     // сотрудника подписан `JWT_SECRET`, и читать секрет вторым местом
     // нельзя, разъедется с местом подписи.
     private readonly me: MeService,
+    // `resolveRate` — единственный источник истины по сдельной расценке
+    // (снимок маршрута: `rateOverride`/`pricingModeOverride`/поразмерные
+    // переопределения). «Выполнить операцию самой» показывает мастеру
+    // сумму до нажатия и отказывает в сделке, если расценки нет.
+    private readonly operations: OperationsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -1092,7 +1101,7 @@ export class MasterActionsService {
       select: {
         index: true,
         operationId: true,
-        operation: { select: { id: true, name: true } },
+        operation: { select: { id: true, code: true, name: true } },
       },
     });
     if (steps.length === 0) {
@@ -1109,6 +1118,14 @@ export class MasterActionsService {
         passport.id,
         s.operationId,
       );
+      // Сумма сделки — та же, что положит `createPendingForCompletedOperation`:
+      // расценка прохода × `qtyCut`. Показываем ДО нажатия, чтобы выбор
+      // «сделка/оклад» был выбором с цифрой, а не вслепую.
+      const rate = await this.resolveSelfOperationRate(passport, {
+        operationId: s.operationId,
+        operationCode: s.operation.code,
+        stepIndex: s.index,
+      });
       out.push({
         index: s.index,
         operationId: s.operationId,
@@ -1119,25 +1136,71 @@ export class MasterActionsService {
         blockedCode: preview.code,
         blockedReason: preview.message,
         equipment: equipmentByOperation.get(s.operationId) ?? [],
+        pieceworkRate: rate === null ? null : Number(rate.toFixed(2)),
+        pieceworkAmount:
+          rate === null
+            ? null
+            : Number(rate.times(passport.qtyCut).toFixed(2)),
       });
     }
 
-    // Сдельная строка создаётся только сотруднику НЕ на чистом окладе
-    // (см. `EarningsService.createPendingForCompletedOperation`). Мастер
-    // на окладе — работа зачтётся в маршрут, но денег не принесёт, и
-    // сказать об этом надо до нажатия, а не после.
+    return {
+      passportId: passport.id,
+      qty: passport.qtyCut,
+      steps: out,
+      defaultPayMode: await this.defaultSelfOperationPayMode(actor),
+    };
+  }
+
+  /**
+   * Предвыбор режима зачёта по типу оплаты актора — то, что до 14.09.2026
+   * было единственным правилом: сдельщице/смешанной — сделка, окладнице —
+   * оклад (см. `EarningsService.createPendingForCompletedOperation`).
+   * Теперь это только умолчание: мастер меняет режим на каждую операцию.
+   */
+  private async defaultSelfOperationPayMode(
+    actor: AuthPrincipal,
+  ): Promise<MasterSelfOperationPayMode> {
     const employee = await this.prisma.employee.findUnique({
       where: { id: actor.employeeId },
       select: { compensationType: true },
     });
+    return employee && isPieceworkEligible(employee.compensationType)
+      ? 'PIECEWORK'
+      : 'SALARY';
+  }
 
-    return {
-      passportId: passport.id,
-      steps: out,
-      pieceworkPaid: employee
-        ? isPieceworkEligible(employee.compensationType)
-        : false,
-    };
+  /**
+   * Сдельная расценка операции для этого паспорта — ровно так, как её
+   * возьмёт начисление: `resolveRate` по размеру паспорта, с
+   * переопределениями снимка маршрута, адресуя проход по `index`.
+   * `null` — расценки нет (окладная в заказе операция, пустой
+   * справочник) либо это `CUT_CUT`, который оплачивается выпуском
+   * паспорта, а не завершением (immediate-ветка раскройщика).
+   *
+   * Незаполненная ставка (`OPERATION_RATE_MISSING`) здесь — тоже
+   * `null`, а не ошибка: список шагов обязан открыться, а сделка по
+   * такой операции просто недоступна. Швея на `/work` в этом случае
+   * получает 409 при завершении — мастеру отказываем раньше, до
+   * движения паспорта.
+   */
+  private async resolveSelfOperationRate(
+    passport: { orderId: string; sizeId: string },
+    step: { operationId: string; operationCode: string; stepIndex: number },
+  ): Promise<Prisma.Decimal | null> {
+    if (step.operationCode === 'CUT_CUT') return null;
+    try {
+      return await this.operations.resolveRate(
+        step.operationId,
+        passport.sizeId,
+        undefined,
+        passport.orderId,
+        step.stepIndex,
+      );
+    } catch (e) {
+      if (e instanceof OperationRateMissingException) return null;
+      throw e;
+    }
   }
 
   /**
@@ -1172,13 +1235,37 @@ export class MasterActionsService {
 
     const steps = await this.prisma.orderRouteStep.findMany({
       where: { orderId: passport.orderId },
-      select: { operationId: true, operation: { select: { name: true } } },
+      orderBy: { index: 'asc' },
+      select: {
+        index: true,
+        operationId: true,
+        operation: { select: { code: true, name: true } },
+      },
     });
     if (steps.length === 0) {
       throw new MasterOrderHasNoRouteSnapshotException();
     }
     const target = steps.find((s) => s.operationId === dto.operationId);
     if (!target) throw new MasterRouteStepNotInSnapshotException();
+
+    // Как зачесть работу — выбор мастера; без поля действует прежнее
+    // правило «по типу оплаты». Сделка без расценки — отказ ДО того, как
+    // паспорт сдвинется: выполнить и не начислить хуже, чем не выполнить.
+    const payMode: MasterSelfOperationPayMode =
+      dto.payMode ?? (await this.defaultSelfOperationPayMode(actor));
+    const pieceworkRate =
+      payMode === 'PIECEWORK'
+        ? await this.resolveSelfOperationRate(passport, {
+            operationId: target.operationId,
+            operationCode: target.operation.code,
+            stepIndex: target.index,
+          })
+        : null;
+    if (payMode === 'PIECEWORK' && pieceworkRate === null) {
+      throw new MasterSelfOperationNoPieceworkRateException(
+        target.operation.name,
+      );
+    }
 
     // Открытый возврат от ОТК перехватывает взятие паспорта: он уводит
     // его на операцию переделки, а не на выбранную (см.
@@ -1249,6 +1336,9 @@ export class MasterActionsService {
         await this.passports.completeOperationByEmployee(
           passport.id,
           actor.employeeId,
+          // Выбор мастера обходит `isPieceworkEligible` в обе стороны:
+          // сделка окладнице, оклад сдельщице. Расценку не обходит.
+          { pieceworkOverride: payMode === 'PIECEWORK' ? 'FORCE' : 'SKIP' },
         );
       } catch (e) {
         // `issueToEmployee` уже закрепил паспорт за мастером, а
@@ -1289,13 +1379,23 @@ export class MasterActionsService {
         operationName: target.operation.name,
         equipmentId,
         technicalShift: technicalShiftId !== null,
+        // Режим зачёта и сумма — чтобы доначисление по журналу (как за
+        // 27 паспортов до 14.09.2026) не требовало восстанавливать
+        // расценку задним числом.
+        payMode,
+        pieceworkRate:
+          pieceworkRate === null ? null : Number(pieceworkRate.toFixed(2)),
+        pieceworkAmount:
+          pieceworkRate === null
+            ? null
+            : Number(pieceworkRate.times(passport.qtyCut).toFixed(2)),
         before,
         after: this.snapshot(updated),
       }),
     });
 
     this.logger.log(
-      `event=master.self-operation passportId=${passport.id} actor=${actor.employeeId} operationId=${target.operationId} equipmentId=${equipmentId} technicalShift=${technicalShiftId !== null}`,
+      `event=master.self-operation passportId=${passport.id} actor=${actor.employeeId} operationId=${target.operationId} equipmentId=${equipmentId} technicalShift=${technicalShiftId !== null} payMode=${payMode}`,
     );
 
     return {
@@ -1587,6 +1687,10 @@ export class MasterActionsService {
     equipmentId?: string;
     /** Смена была заведена самим действием и закрыта следом. */
     technicalShift?: boolean;
+    /** «Выполнить операцию самой»: как мастер зачла работу и почём. */
+    payMode?: MasterSelfOperationPayMode;
+    pieceworkRate?: number | null;
+    pieceworkAmount?: number | null;
     before: MasterActionPassportSnapshotDto;
     after: MasterActionPassportSnapshotDto;
     targetEmployeeId?: string;
@@ -1624,6 +1728,11 @@ export class MasterActionsService {
     if (input.operationName) payload.operationName = input.operationName;
     if (input.equipmentId) payload.equipmentId = input.equipmentId;
     if (input.technicalShift) payload.technicalShift = true;
+    if (input.payMode) {
+      payload.payMode = input.payMode;
+      payload.pieceworkRate = input.pieceworkRate ?? null;
+      payload.pieceworkAmount = input.pieceworkAmount ?? null;
+    }
     if (input.targetEmployeeId) payload.targetEmployeeId = input.targetEmployeeId;
     if (input.cellId) payload.cellId = input.cellId;
     if (input.cellCode) payload.cellCode = input.cellCode;

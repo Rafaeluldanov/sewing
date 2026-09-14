@@ -435,11 +435,35 @@ export interface ResolvedEmployeeQrDto {
  *   - `reason` НЕ требуем (в отличие от остальных действий мастера):
  *     мастер фиксирует свою работу, а не правит чужую.
  */
+/**
+ * Как зачесть работу мастера (14.09.2026).
+ *
+ * До этого решала только `Employee.compensationType`: мастер на окладе
+ * не получала за операцию ничего, и 27 паспортов на проде (пуговицы и
+ * петли по 02-00003, прямострочка по ФС-000003) ушли без начисления.
+ * Теперь мастер выбирает сама, для каждой операции:
+ *   - `PIECEWORK` — сдельная строка `OperationEntry` по расценке
+ *     маршрута, как у швеи, НЕЗАВИСИМО от типа оплаты мастера;
+ *   - `SALARY` — сдельной строки нет даже у сдельщицы/смешанной: работа
+ *     покрыта окладом, в маршрут и историю паспорта она попадает всё
+ *     равно.
+ */
+export const MasterSelfOperationPayModeSchema = z.enum(['PIECEWORK', 'SALARY']);
+export type MasterSelfOperationPayMode = z.infer<
+  typeof MasterSelfOperationPayModeSchema
+>;
+
 export const MasterSelfOperationSchema = z.object({
   /** Операция из маршрута заказа этого паспорта. */
   operationId: z.string().min(1),
   /** Станок; обязателен, только если к операции привязано несколько. */
   equipmentId: z.string().min(1).optional(),
+  /**
+   * Как зачесть работу. Без поля — по типу оплаты мастера
+   * (`defaultPayMode` из `self-operation-steps`): сдельщице сделка,
+   * окладнице оклад — прежнее поведение для старых клиентов.
+   */
+  payMode: MasterSelfOperationPayModeSchema.optional(),
   comment: z.string().max(500).optional(),
 });
 export type MasterSelfOperationDto = z.infer<typeof MasterSelfOperationSchema>;
@@ -472,18 +496,32 @@ export interface MasterSelfOperationStepDto {
   blockedReason: string | null;
   /** Активные станки операции; пусто — операцию выполнить не на чем. */
   equipment: MasterSelfOperationEquipmentDto[];
+  /**
+   * Сдельная расценка за единицу для ЭТОГО паспорта (размер + снимок
+   * маршрута: `rateOverride`, `pricingModeOverride`, поразмерные
+   * переопределения — `OperationsService.resolveRate`). `null` —
+   * операция в этом заказе окладная или расценки нет: режим
+   * `PIECEWORK` для неё недоступен (сервер ответит 409
+   * `MASTER_SELF_OPERATION_NO_PIECEWORK_RATE`).
+   */
+  pieceworkRate: number | null;
+  /** `pieceworkRate × qtyCut` паспорта — сумма, которую мастер увидит в начислениях. */
+  pieceworkAmount: number | null;
 }
 
 /** Ответ `GET /api/master-actions/passports/:id/self-operation-steps`. */
 export interface MasterSelfOperationStepsDto {
   passportId: string;
+  /** Количество по паспорту (`qtyCut`) — множитель сдельной суммы. */
+  qty: number;
   steps: MasterSelfOperationStepDto[];
   /**
-   * Получит ли актор сдельное начисление за выполненную операцию.
-   * У мастера на окладе — `false`, и UI обязан сказать это заранее:
-   * иначе выполненная работа выглядит потерянными деньгами.
+   * Предвыбор режима зачёта по типу оплаты актора: сдельщице/смешанной —
+   * `PIECEWORK`, окладнице — `SALARY`. Мастер меняет его в форме на
+   * каждую операцию; UI обязан показать выбор ДО нажатия — выполненная
+   * без начисления работа выглядит потерянными деньгами.
    */
-  pieceworkPaid: boolean;
+  defaultPayMode: MasterSelfOperationPayMode;
 }
 
 // ---------------------------------------------------------------------------

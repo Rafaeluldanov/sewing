@@ -63,6 +63,7 @@ function makeService(row: ReturnType<typeof passportRow>) {
     {} as never,
     {} as never,
     {} as never,
+    {} as never,
   );
   return { service, prisma, update, auditLog };
 }

@@ -1033,6 +1033,53 @@ describeWithDb('integration — master actions (Stage 2)', () => {
     const qc = byOp(seed.operations.QC.id);
     expect(qc.available).toBe(false);
     expect(qc.blockedReason).toBeTruthy();
+
+    // Сумма сделки — заранее, тем же расчётом, что и начисление:
+    // BY_SIZE 10 ₽ × qtyCut 5. Окладная ОТК — расценки нет.
+    expect(res.body.qty).toBe(5);
+    expect(current).toMatchObject({ pieceworkRate: 10, pieceworkAmount: 50 });
+    expect(qc).toMatchObject({ pieceworkRate: null, pieceworkAmount: null });
+    // Мастер из сида — не чистый оклад → предвыбор «сделка».
+    expect(res.body.defaultPayMode).toBe('PIECEWORK');
+  });
+
+  test('self-operation-steps: расценка учитывает снимок маршрута (rateOverride, оклад в заказе)', async () => {
+    const { passportId, orderId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+    // `rateOverride` действует в режиме FIXED; BY_SIZE-операцию заказ
+    // переводит на фикс и задаёт цену (см. `OperationsService.resolveRate`).
+    await t.prisma.orderRouteStep.update({
+      where: { orderId_index: { orderId, index: 1 } },
+      data: { pricingModeOverride: 'FIXED', rateOverride: 12.5 },
+    });
+    await t.prisma.orderRouteStep.update({
+      where: { orderId_index: { orderId, index: 2 } },
+      data: { pricingModeOverride: 'SALARY_ONLY' },
+    });
+    await t.prisma.employee.update({
+      where: { id: seed.employees.master.id },
+      data: { compensationType: 'SALARY', salaryPerHour: 300 },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get(`/api/master-actions/passports/${passportId}/self-operation-steps`)
+      .set('Cookie', cookies.master)
+      .expect(200);
+    const byOp = (id: string) =>
+      res.body.steps.find(
+        (s: { operationId: string }) => s.operationId === id,
+      );
+    expect(byOp(seed.operations.SEW_OVERLOCK_1.id)).toMatchObject({
+      pieceworkRate: 12.5,
+      pieceworkAmount: 62.5,
+    });
+    expect(byOp(seed.operations.SEW_OVERLOCK_2.id)).toMatchObject({
+      pieceworkRate: null,
+      pieceworkAmount: null,
+    });
+    expect(res.body.defaultPayMode).toBe('SALARY');
   });
 
   test('self-operation: паспорт едет по маршруту, смена закрывается, оклад не трогаем', async () => {
@@ -1113,6 +1160,208 @@ describeWithDb('integration — master actions (Stage 2)', () => {
     };
     expect(payload.technicalShift).toBe(true);
     expect(payload.comment).toBe('пришила пуговицы сама');
+  });
+
+  test('self-operation: payMode=PIECEWORK — окладнице начисляется сделка по расценке маршрута', async () => {
+    const { passportId, orderId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+      qtyCut: 7,
+    });
+    await t.prisma.employee.update({
+      where: { id: seed.employees.master.id },
+      data: { compensationType: 'SALARY', salaryPerHour: 300 },
+    });
+    // Переопределение расценки в заказе обязано дойти до начисления.
+    await t.prisma.orderRouteStep.update({
+      where: { orderId_index: { orderId, index: 1 } },
+      data: { pricingModeOverride: 'FIXED', rateOverride: 6.25 },
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        payMode: 'PIECEWORK',
+      })
+      .expect(201);
+
+    const entries = await t.prisma.operationEntry.findMany({
+      where: { employeeId: seed.employees.master.id },
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      passportId,
+      operationId: seed.operations.SEW_OVERLOCK_1.id,
+      qty: 7,
+      status: 'PENDING_RELEASE',
+      approvalMode: 'AFTER_RELEASE',
+      sourceEventType: 'OPERATION_TRANSITION',
+    });
+    expect(Number(entries[0]!.ratePerUnit)).toBe(6.25);
+    expect(Number(entries[0]!.amount)).toBe(43.75);
+
+    // Оклад по-прежнему не трогаем: сделка — не повод синхронизировать
+    // повременные часы за минуту работы.
+    expect(
+      await t.prisma.salaryEntry.count({
+        where: { employeeId: seed.employees.master.id },
+      }),
+    ).toBe(0);
+
+    // В журнале — режим и сумма: доначисление по аудиту не должно
+    // восстанавливать расценку задним числом.
+    const audit = await t.prisma.auditLog.findFirst({
+      where: {
+        event: 'MASTER_PASSPORT_SELF_OPERATION',
+        entityId: passportId,
+      },
+    });
+    expect(audit?.payload).toMatchObject({
+      payMode: 'PIECEWORK',
+      pieceworkRate: 6.25,
+      pieceworkAmount: 43.75,
+    });
+  });
+
+  test('self-operation: payMode=SALARY — сдельщице строки нет, работа зачтена в маршрут', async () => {
+    const { passportId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+    await t.prisma.employee.update({
+      where: { id: seed.employees.master.id },
+      data: { compensationType: 'MIXED', salaryPerHour: 300 },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        payMode: 'SALARY',
+      })
+      .expect(201);
+    expect(res.body.passport.currentOperation?.id).toBe(
+      seed.operations.SEW_OVERLOCK_1.id,
+    );
+
+    expect(
+      await t.prisma.operationEntry.count({
+        where: { employeeId: seed.employees.master.id },
+      }),
+    ).toBe(0);
+    const finished = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'OPERATION_FINISHED' },
+    });
+    expect(finished).toBe(1);
+    const audit = await t.prisma.auditLog.findFirst({
+      where: {
+        event: 'MASTER_PASSPORT_SELF_OPERATION',
+        entityId: passportId,
+      },
+    });
+    expect(audit?.payload).toMatchObject({
+      payMode: 'SALARY',
+      pieceworkRate: null,
+      pieceworkAmount: null,
+    });
+  });
+
+  test('self-operation: без payMode решает тип оплаты — MIXED получает сделку, как раньше', async () => {
+    const { passportId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+    await t.prisma.employee.update({
+      where: { id: seed.employees.master.id },
+      data: { compensationType: 'MIXED', salaryPerHour: 300 },
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({ operationId: seed.operations.SEW_OVERLOCK_1.id })
+      .expect(201);
+
+    const entries = await t.prisma.operationEntry.findMany({
+      where: { employeeId: seed.employees.master.id },
+    });
+    expect(entries).toHaveLength(1);
+    expect(Number(entries[0]!.amount)).toBe(50);
+  });
+
+  test('self-operation: payMode=PIECEWORK без расценки → 409, паспорт не сдвинут', async () => {
+    const { passportId, orderId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+    await t.prisma.orderRouteStep.update({
+      where: { orderId_index: { orderId, index: 1 } },
+      data: { pricingModeOverride: 'SALARY_ONLY' },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        payMode: 'PIECEWORK',
+      })
+      .expect(409);
+    expect(res.body.code).toBe('MASTER_SELF_OPERATION_NO_PIECEWORK_RATE');
+
+    // Отказ — до движения: ни событий, ни технической смены.
+    expect(await t.prisma.passportEvent.count({ where: { passportId } })).toBe(0);
+    expect(
+      await t.prisma.shiftSession.count({
+        where: { employeeId: seed.employees.master.id },
+      }),
+    ).toBe(0);
+  });
+
+  test('self-operation-steps: незаполненная ставка не роняет список — сделка недоступна', async () => {
+    const { passportId } = await setupPassport({
+      currentEmployeeId: null,
+      currentRouteStepIndex: 1,
+    });
+    await t.prisma.operationRateBySize.deleteMany({
+      where: { operationId: seed.operations.SEW_OVERLOCK_1.id },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get(`/api/master-actions/passports/${passportId}/self-operation-steps`)
+      .set('Cookie', cookies.master)
+      .expect(200);
+    const step = res.body.steps.find(
+      (s: { operationId: string }) =>
+        s.operationId === seed.operations.SEW_OVERLOCK_1.id,
+    );
+    expect(step).toMatchObject({ available: true, pieceworkRate: null });
+
+    const post = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        payMode: 'PIECEWORK',
+      })
+      .expect(409);
+    expect(post.body.code).toBe('MASTER_SELF_OPERATION_NO_PIECEWORK_RATE');
+  });
+
+  test('self-operation: payMode вне enum → 400 VALIDATION_ERROR', async () => {
+    const { passportId } = await setupPassport({ currentEmployeeId: null });
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/self-operation`)
+      .set('Cookie', cookies.master)
+      .send({
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        payMode: 'BONUS',
+      })
+      .expect(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
   });
 
   test('self-operation: операция вне маршрута заказа → 409', async () => {

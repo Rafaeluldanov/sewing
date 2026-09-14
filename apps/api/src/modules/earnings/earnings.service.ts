@@ -57,6 +57,14 @@ const LOCKED_PAYOUT_STATUSES = [
 ] as const;
 
 /**
+ * Явный выбор исполнителя, как зачесть завершённую операцию — см.
+ * `createPendingForCompletedOperation`. Прокидывается из
+ * `PassportsService.completeOperationByEmployee` и приходит от мастера
+ * («Выполнить операцию самой», `MasterSelfOperationDto.payMode`).
+ */
+export type PieceworkOverride = 'FORCE' | 'SKIP';
+
+/**
  * Сервис сдельных начислений (Шаг 9 MVP).
  *
  * Делает три большие вещи:
@@ -785,6 +793,16 @@ export class EarningsService {
       qty: number;
       sourceEventId?: string | null;
       /**
+       * Явный выбор исполнителя, как зачесть работу (мастер цеха,
+       * «Выполнить операцию самой», 14.09.2026): `FORCE` — сдельная
+       * строка нужна даже окладнику (`isPieceworkEligible` не смотрим),
+       * `SKIP` — строки не будет даже у сдельщика (работа покрыта
+       * окладом). Без поля — по типу оплаты сотрудника, как раньше.
+       * Расценку это не обходит: окладная в заказе операция и с `FORCE`
+       * строки не даст (`resolveRate` → `null`).
+       */
+      pieceworkOverride?: PieceworkOverride;
+      /**
        * Создать сразу `APPROVED` (а не `PENDING_RELEASE`). Нужен для
        * retroactive-веток ВТО/ОТК на паспортах в статусе `PACKED`:
        * закрытие коробки уже было, второго `approvePendingForPassport`
@@ -802,6 +820,7 @@ export class EarningsService {
   ): Promise<void> {
     if (!args.operationId || !args.employeeId) return;
     if (args.qty <= 0) return;
+    if (args.pieceworkOverride === 'SKIP') return;
 
     const op = await tx.operation.findUnique({
       where: { id: args.operationId },
@@ -830,7 +849,12 @@ export class EarningsService {
       select: { id: true, compensationType: true, active: true },
     });
     if (!employee || !employee.active) return;
-    if (!isPieceworkEligible(employee.compensationType)) return;
+    if (
+      args.pieceworkOverride !== 'FORCE' &&
+      !isPieceworkEligible(employee.compensationType)
+    ) {
+      return;
+    }
 
     // orderId нужен, чтобы resolveRate подхватил переопределённую
     // изделием расценку (`OrderRouteStep.rateOverride`) для FIXED-операций.

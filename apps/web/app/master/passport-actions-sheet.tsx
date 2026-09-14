@@ -26,6 +26,7 @@ import {
   parseAnyEmployeeQr,
   type MasterActionReason,
   type MasterCallPassportDto,
+  type MasterSelfOperationPayMode,
   type MasterSelfOperationStepDto,
   type MasterSelfOperationStepsDto,
   type MasterTransferCandidateDto,
@@ -906,6 +907,11 @@ interface SelfOperationBodyProps {
  *
  * Станок спрашиваем, только если к операции их привязано несколько:
  * у «ПУГОВИЦА» рабочее место одно и подставляется само.
+ *
+ * Как зачесть работу — выбор мастера на каждую операцию (14.09.2026):
+ * «сделка» с суммой по расценке маршрута или «оклад» без начисления.
+ * Предвыбор — по типу оплаты (`defaultPayMode`); у операции без
+ * расценки сделка недоступна, и форма сама переключает на оклад.
  */
 function SelfOperationBody({
   passport,
@@ -919,6 +925,7 @@ function SelfOperationBody({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [equipmentId, setEquipmentId] = useState<string>('');
+  const [payMode, setPayMode] = useState<MasterSelfOperationPayMode>('SALARY');
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -934,6 +941,11 @@ function SelfOperationBody({
       setPicked(first?.operationId ?? null);
       setEquipmentId(
         first && first.equipment.length === 1 ? first.equipment[0]!.id : '',
+      );
+      setPayMode(
+        first && first.pieceworkRate === null
+          ? 'SALARY'
+          : res.result.defaultPayMode,
       );
     } else {
       setLoadError(res.error);
@@ -953,15 +965,20 @@ function SelfOperationBody({
     // Один станок — подставляем молча, несколько — мастер выбирает
     // сама (по `equipmentId` события считают загрузку оборудования).
     setEquipmentId(step.equipment.length === 1 ? step.equipment[0]!.id : '');
+    // Сделка без расценки невозможна (сервер ответит 409) — не оставляем
+    // выбранной недоступную кнопку.
+    if (step.pieceworkRate === null) setPayMode('SALARY');
   }, []);
 
   const noEquipment = !!pickedStep && pickedStep.equipment.length === 0;
   const needsEquipmentChoice = !!pickedStep && pickedStep.equipment.length > 1;
+  const pieceworkAvailable = !!pickedStep && pickedStep.pieceworkRate !== null;
   const canSubmit =
     !!pickedStep &&
     pickedStep.available &&
     !noEquipment &&
-    (!needsEquipmentChoice || equipmentId !== '');
+    (!needsEquipmentChoice || equipmentId !== '') &&
+    (payMode === 'SALARY' || pieceworkAvailable);
 
   const submit = useCallback(async () => {
     if (!pickedStep || !canSubmit || busy) return;
@@ -970,6 +987,7 @@ function SelfOperationBody({
     try {
       res = await masterSelfOperationAction(passport.id, {
         operationId: pickedStep.operationId,
+        payMode,
         ...(equipmentId ? { equipmentId } : {}),
         ...(comment.trim() ? { comment: comment.trim() } : {}),
       });
@@ -977,7 +995,11 @@ function SelfOperationBody({
       setBusy(false);
     }
     if (res.ok) {
-      onSuccess(`Операция «${pickedStep.operationName}» выполнена`);
+      onSuccess(
+        payMode === 'PIECEWORK' && pickedStep.pieceworkAmount !== null
+          ? `Операция «${pickedStep.operationName}» выполнена, начислено ${formatRub(pickedStep.pieceworkAmount)}`
+          : `Операция «${pickedStep.operationName}» выполнена`,
+      );
       onClose();
     } else {
       onError(res.error);
@@ -991,6 +1013,7 @@ function SelfOperationBody({
     onError,
     onSuccess,
     passport.id,
+    payMode,
     pickedStep,
   ]);
 
@@ -1101,12 +1124,75 @@ function SelfOperationBody({
             </div>
           )}
 
-          {!data.pieceworkPaid && (
-            <p className="master-actions-sheet__notice">
-              У вас оклад — сдельного начисления за операцию не будет. Работа
-              зачтётся в маршрут и в историю паспорта.
-            </p>
-          )}
+          <div className="master-actions-sheet__field">
+            <label className="master-actions-sheet__label">
+              Как зачесть работу{' '}
+              <span className="master-actions-sheet__required">*</span>
+            </label>
+            <ul className="master-actions-sheet__steps">
+              <li>
+                <label
+                  className={
+                    'master-actions-sheet__step' +
+                    (payMode === 'PIECEWORK'
+                      ? ' master-actions-sheet__step--active'
+                      : '') +
+                    (pieceworkAvailable
+                      ? ''
+                      : ' master-actions-sheet__step--blocked')
+                  }
+                >
+                  <input
+                    type="radio"
+                    name="self-operation-pay-mode"
+                    value="PIECEWORK"
+                    checked={payMode === 'PIECEWORK'}
+                    onChange={() => setPayMode('PIECEWORK')}
+                    disabled={busy || !pieceworkAvailable}
+                  />
+                  <span>
+                    <strong>Сделка</strong>
+                    {pickedStep && pickedStep.pieceworkAmount !== null
+                      ? ` · ${formatRub(pickedStep.pieceworkAmount)} (${data.qty} шт × ${formatRub(pickedStep.pieceworkRate ?? 0)})`
+                      : ''}
+                    <span className="master-actions-sheet__step-note">
+                      {pieceworkAvailable
+                        ? 'Начисление появится в ваших сдельных, подтвердится при упаковке.'
+                        : pickedStep
+                          ? 'У этой операции нет сдельной расценки в заказе.'
+                          : 'Сначала выберите операцию.'}
+                    </span>
+                  </span>
+                </label>
+              </li>
+              <li>
+                <label
+                  className={
+                    'master-actions-sheet__step' +
+                    (payMode === 'SALARY'
+                      ? ' master-actions-sheet__step--active'
+                      : '')
+                  }
+                >
+                  <input
+                    type="radio"
+                    name="self-operation-pay-mode"
+                    value="SALARY"
+                    checked={payMode === 'SALARY'}
+                    onChange={() => setPayMode('SALARY')}
+                    disabled={busy}
+                  />
+                  <span>
+                    <strong>Оклад</strong>
+                    <span className="master-actions-sheet__step-note">
+                      Без сдельного начисления — работа покрыта окладом, в
+                      маршрут и историю паспорта она зачтётся.
+                    </span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+          </div>
 
           <div className="master-actions-sheet__field">
             <label
@@ -1608,3 +1694,11 @@ function QcActionBody({
   );
 }
 
+
+/** Сумма сделки в форме «выполнить операцию самой»: расценки бывают копеечными (6,25 ₽), поэтому до 2 знаков. */
+function formatRub(value: number): string {
+  return `${value.toLocaleString('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })} ₽`;
+}

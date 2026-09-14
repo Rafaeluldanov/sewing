@@ -77,7 +77,10 @@ import {
 import { OperationCategory, Role } from '@prisma/client';
 import { PassportNumberService } from './passport-number.service.js';
 import { buildPassportPrintUrl, buildPassportQrPayload } from './qr.js';
-import { EarningsService } from '../earnings/earnings.service.js';
+import {
+  EarningsService,
+  type PieceworkOverride,
+} from '../earnings/earnings.service.js';
 import { CuttingClosureService } from '../cutting-closure/cutting-closure.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { CutReleasePolicyService } from '../cut-release-policy/cut-release-policy.service.js';
@@ -3410,10 +3413,17 @@ export class PassportsService {
    * (например, сразу после `place` или после `PACKED`) — 409
    * `PASSPORT_NOT_IN_PROGRESS`. Нельзя «завершить» операцию, стоящую
    * в маршруте раньше текущего шага — 409 `PASSPORT_COMPLETE_BACKWARD`.
+   *
+   * `opts.pieceworkOverride` — явный выбор исполнителя, как зачесть
+   * работу (мастер цеха, «Выполнить операцию самой»): `FORCE` — сдельная
+   * строка даже окладнику, `SKIP` — без строки даже сдельщику. Швея с
+   * `/work` ничего не передаёт — решает её тип оплаты, как раньше (см.
+   * `EarningsService.createPendingForCompletedOperation`).
    */
   async completeOperationByEmployee(
     passportId: string,
     employeeId: string,
+    opts: { pieceworkOverride?: PieceworkOverride } = {},
   ): Promise<PassportDetailDto> {
     const passport = await this.prisma.passport.findUnique({
       where: { id: passportId },
@@ -3572,6 +3582,9 @@ export class PassportsService {
         sizeId: passport.sizeId,
         qty: passport.qtyCut,
         sourceEventId: finishedEvent.id,
+        ...(opts.pieceworkOverride
+          ? { pieceworkOverride: opts.pieceworkOverride }
+          : {}),
       });
       // Audit: швея явно завершила свою операцию (см. ТЗ §7.2).
       // Payload расширен before/after-снэпшотами и `completedOperationId`

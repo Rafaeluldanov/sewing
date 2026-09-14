@@ -5,6 +5,7 @@ import { QcModule } from '../qc/qc.module.js';
 import { PassportQtyCorrectionsModule } from '../passport-qty-corrections/passport-qty-corrections.module.js';
 import { PassportsModule } from '../passports/passports.module.js';
 import { MeModule } from '../me/me.module.js';
+import { OperationsModule } from '../operations/operations.module.js';
 import { MasterActionsController } from './master-actions.controller.js';
 import { MasterActionsService } from './master-actions.service.js';
 
@@ -47,6 +48,10 @@ import { MasterActionsService } from './master-actions.service.js';
     // мастера принимают «Мой QR-код» сотрудника
     // (`SEWING_EMPLOYEE:<token>`), а секрет подписи живёт там.
     MeModule,
+    // `OperationsModule` — ради `OperationsService.resolveRate`: сумма
+    // сделки за «выполнить операцию самой» считается тем же кодом, что
+    // и начисление, и показывается мастеру до нажатия.
+    OperationsModule,
   ],
   controllers: [MasterActionsController],
   providers: [MasterActionsService],
