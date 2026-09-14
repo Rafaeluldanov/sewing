@@ -536,6 +536,18 @@ describeWithDb('integration — расцветки заказа: upsert вмес
       [seed.sizes.M]: 45,
       [seed.sizes.L]: 5,
     });
+    // Ревью G9-1: переименование по порядку не молчит — в журнале пара
+    // «Белый → Синий» (правки Белого остались на расцветке с id Белого).
+    const renamedEvents = await t.prisma.auditLog.findMany({
+      where: { entityId: orderId, event: 'ORDER_VARIANTS_RENAMED' },
+    });
+    expect(renamedEvents).toHaveLength(1);
+    const renamedPayload = renamedEvents[0]!.payload as {
+      renamed: Array<{ variantId: string; from: string; to: string }>;
+      summary: string;
+    };
+    expect(renamedPayload.renamed).toEqual([{ variantId: whiteId, from: 'Белый', to: 'Синий' }]);
+    expect(renamedPayload.summary).toContain('«Белый» → «Синий»');
 
     // Одна расцветка: лишняя удаляется, оставшаяся узнана по цвету.
     await http()
@@ -548,5 +560,9 @@ describeWithDb('integration — расцветки заказа: upsert вмес
     expect(last.vs[0].id).toBe(whiteId);
     expect(last.vs[0].ordinal).toBe(0);
     expect(last.vs[0].color).toBe('Синий');
+    // Сопоставление по цвету — не переименование: нового события нет.
+    expect(
+      await t.prisma.auditLog.count({ where: { entityId: orderId, event: 'ORDER_VARIANTS_RENAMED' } }),
+    ).toBe(1);
   });
 });

@@ -444,6 +444,12 @@ type SnapshotRowForRecompute = {
   requiresColorSelection: boolean;
   selectedColorText: string | null;
   qtySource: string | null;
+  /**
+   * Аудит 13.09.2026, T1-3, ревью: ссылка на источник нормы нужна recompute —
+   * строка «из шаблона» с живым `qtySourceRef` снова примеряется к норме,
+   * когда план возвращается на покрытые размеры.
+   */
+  qtySourceRef: string | null;
 };
 
 @Injectable()
@@ -2299,6 +2305,10 @@ export class OrdersService {
             outsourcePriceRub: true,
             // Аудит движка расчёта 13.09.2026, L1-10: `rate` и справочник
             // `ratesBySize` — для гарда «поразмерная сделка без ставки».
+            // Ревью: прежний режим шага — гард бьёт только по ИЗМЕНЕНИЮ
+            // (режим стал BY_SIZE / набор ставок правили), не по replace-all
+            // неизменённого состояния.
+            pricingModeOverride: true,
             sizeOverrides: {
               select: { sizeId: true, outsourcedQty: true, rate: true },
             },
@@ -2439,26 +2449,58 @@ export class OrdersService {
                 ),
               );
         const storedRates = new Map(
-          orderStep.sizeOverrides.map((o) => [o.sizeId, o.rate] as const),
+          orderStep.sizeOverrides.map(
+            (o) =>
+              [o.sizeId, o.rate == null ? null : Number(o.rate)] as const,
+          ),
         );
-        const catalogSizes = new Set(
-          orderStep.operation.ratesBySize.map((r) => r.sizeId),
-        );
-        const missing: string[] = [];
-        for (const [sizeId, planQty] of planQtyBySizeId) {
-          if (planQty <= 0) continue;
-          const overrideRate = requestedRates
-            ? (requestedRates.get(sizeId) ?? null)
-            : (storedRates.get(sizeId) ?? null);
-          if (overrideRate == null && !catalogSizes.has(sizeId)) {
-            missing.push(sizeCodeById.get(sizeId) ?? sizeId);
+        // Аудит 13.09.2026, L1-10, ревью: гард — только на ИЗМЕНЕНИЕ. Форма
+        // правки маршрута шлёт каждый шаг целиком (replace-all), и шаг, уже
+        // стоявший BY_SIZE без ставок (принят до гарда, с warning в плане),
+        // запирал бы всю форму: нельзя было бы поправить даже расценку
+        // соседней операции. Отбиваем 400, когда режим шага СТАЛ «сделкой
+        // по размерам» или когда набор поразмерных ставок этого шага
+        // правили; неизменённое состояние проходит как раньше — с
+        // предупреждением плана операций (`operationPlanWarnings`), ровно
+        // как обрезка прежнего `outsourcedQty` выше вместо 400.
+        const modeIsNew = orderStep.pricingModeOverride !== 'BY_SIZE';
+        const ratesChanged =
+          requestedRates != null &&
+          (() => {
+            const sizeIds = new Set([
+              ...requestedRates.keys(),
+              ...storedRates.keys(),
+            ]);
+            for (const sizeId of sizeIds) {
+              if (
+                (requestedRates.get(sizeId) ?? null) !==
+                (storedRates.get(sizeId) ?? null)
+              ) {
+                return true;
+              }
+            }
+            return false;
+          })();
+        if (modeIsNew || ratesChanged) {
+          const catalogSizes = new Set(
+            orderStep.operation.ratesBySize.map((r) => r.sizeId),
+          );
+          const missing: string[] = [];
+          for (const [sizeId, planQty] of planQtyBySizeId) {
+            if (planQty <= 0) continue;
+            const overrideRate = requestedRates
+              ? (requestedRates.get(sizeId) ?? null)
+              : (storedRates.get(sizeId) ?? null);
+            if (overrideRate == null && !catalogSizes.has(sizeId)) {
+              missing.push(sizeCodeById.get(sizeId) ?? sizeId);
+            }
           }
-        }
-        if (missing.length > 0) {
-          throw new BadRequestException({
-            code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
-            message: `Операция «${stepLabel}»: при переводе на сделку по размерам задайте расценку (₽/шт) для размеров: ${missing.join(', ')}.`,
-          });
+          if (missing.length > 0) {
+            throw new BadRequestException({
+              code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
+              message: `Операция «${stepLabel}»: при переводе на сделку по размерам задайте расценку (₽/шт) для размеров: ${missing.join(', ')}.`,
+            });
+          }
         }
       }
     }
@@ -3243,7 +3285,7 @@ export class OrdersService {
         sizes: v.sizes ?? [],
       }));
       await this.prisma.$transaction(async (tx) => {
-        await this.upsertOrderVariants(tx, id, variantInputs);
+        await this.upsertOrderVariants(tx, id, variantInputs, actorEmployeeId);
       });
       await this.resyncColorwayDerived(id, actorEmployeeId);
     }
@@ -5027,9 +5069,20 @@ export class OrdersService {
    *   1. по цвету — первая ещё не сопоставленная расцветка с таким цветом
    *      (ordinal asc). Это ключ ERP (`color_key` карточки заказа
    *      покупателя) и формы; порядок расцветок в запросе роли не играет;
-   *   2. оставшиеся пары — по порядку (переименование расцветки в форме:
-   *      та же семантика, что у `PATCH /colorways/:id` с новым цветом —
-   *      id живёт, план заменяется);
+   *   2. оставшиеся пары — по порядку (ordinal asc ↔ порядок во входе) как
+   *      ПЕРЕИМЕНОВАНИЕ расцветки: та же семантика, что у
+   *      `PATCH /colorways/:id` с новым цветом — id живёт, план заменяется.
+   *      ⚠️ Ревью G9-1: это осознанная трактовка, и она же — её цена. Пара
+   *      «удалили один цвет + добавили другой» в одном сохранении
+   *      неотличима от переименования: id, ORDER-нормы, значения
+   *      слот-параметров, ручные строки снимка и строки потребности
+   *      удалённой расцветки переезжают на новую (Белый → Зелёный
+   *      получает правки Белого). Обратная трактовка («удалить +
+   *      создать») стирала бы правки при ЛЮБОМ переименовании — ровно
+   *      баг G9-1. Поэтому переименование не молчит: каждая пара
+   *      «старый цвет → новый» пишется в аудит (`ORDER_VARIANTS_RENAMED`)
+   *      и в лог; форма и ERP шлют цвет ключом, так что переименование —
+   *      всегда действие менеджера;
    *   3. лишние существующие удаляются (как `DELETE /colorways/:id`,
    *      каскады штатные), недостающие создаются.
    * У сопоставленной расцветки обновляются цвет/ordinal и целиком
@@ -5044,6 +5097,7 @@ export class OrdersService {
       color: string;
       sizes: { sizeId: string; qtyPlan: number }[];
     }[],
+    actorEmployeeId?: string | null,
   ): Promise<void> {
     const existing = await tx.orderVariant.findMany({
       where: { orderId },
@@ -5060,12 +5114,17 @@ export class OrdersService {
         unmatched.splice(idx, 1);
       }
     });
-    // 2. Оставшиеся — по порядку (переименование).
+    // 2. Оставшиеся — по порядку (переименование, см. JSDoc: пары «старый
+    // цвет → новый» уходят в аудит — ревью G9-1).
+    const renamed: Array<{ variantId: string; from: string; to: string }> = [];
     for (let i = 0; i < variantInputs.length; i += 1) {
       if (matchedId[i]) continue;
       const e = unmatched.shift();
       if (!e) break;
       matchedId[i] = e.id;
+      if (e.color !== variantInputs[i].color) {
+        renamed.push({ variantId: e.id, from: e.color, to: variantInputs[i].color });
+      }
     }
     // 3. Лишние расцветки — удалить (освобождает и их ordinal).
     if (unmatched.length > 0) {
@@ -5115,11 +5174,37 @@ export class OrdersService {
         });
       }
     }
+    if (renamed.length > 0) {
+      // Аудит 13.09.2026, G9-1, ревью: переименование расцветки переносит
+      // на новый цвет всё, что жило на id старой (правки норм, слоты,
+      // ручные строки, строки потребности) — в журнале это должно быть
+      // видно парами «было → стало», иначе «Зелёный с правками Белого»
+      // не объяснить.
+      const pairs = renamed.map((r) => `«${r.from}» → «${r.to}»`).join(', ');
+      await this.audit.log(
+        {
+          event: 'ORDER_VARIANTS_RENAMED',
+          entityType: 'ORDER',
+          entityId: orderId,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            renamed,
+            summary:
+              `Расцветк${renamed.length === 1 ? 'а переименована' : 'и переименованы'}: ${pairs}. ` +
+              'Правки заказа (нормы, слоты, ручные строки, потребность) остались на расцветке.',
+          },
+        },
+        tx,
+      );
+      OrdersService.log.warn(
+        `event=order.variants_renamed order=${orderId} pairs=${pairs}`,
+      );
+    }
     OrdersService.log.log(
       `event=order.variants_upserted order=${orderId} ` +
         `kept=${matchedId.filter(Boolean).length} ` +
         `created=${matchedId.filter((x) => !x).length} ` +
-        `removed=${unmatched.length}`,
+        `removed=${unmatched.length} renamed=${renamed.length}`,
     );
   }
 
@@ -5788,8 +5873,18 @@ export class OrdersService {
     // а средневзвешенная норма от него зависит. Правку в заказе (`ORDER`) и
     // строки старше признака (`null`) не трогаем — иначе живой заказ тихо
     // поменял бы норму сам.
+    //
+    // Аудит 13.09.2026, T1-3, ревью: кандидат и строка «из шаблона» с живым
+    // `qtySourceRef` — это NOMENCLATURE-строка, чей источник на прошлом
+    // пересчёте не пересёкся с планом (метка понижена, связь сохранена).
+    // План вернулся на покрытые размеры → норма и метка обязаны вернуться,
+    // иначе спецификация навсегда остаётся на числе прежнего плана, а
+    // потребность считает параметр напрямую — два числа про один материал.
+    const isNormRefreshCandidate = (r: SnapshotRowForRecompute) =>
+      r.qtySource === 'NOMENCLATURE' ||
+      (r.qtySource === 'TEMPLATE' && r.qtySourceRef != null);
     const nomenclatureRows = refreshNorms
-      ? rows.filter((r) => r.qtySource === 'NOMENCLATURE')
+      ? rows.filter(isNormRefreshCandidate)
       : [];
     const lostNormLines: string[] = [];
     const recomputeMatchInput = nomenclatureRows.map((r) => ({
@@ -5881,10 +5976,19 @@ export class OrdersService {
           // сам факт «источник нашёлся», и строка с нормой прежнего плана
           // оставалась «из номенклатуры». При нулевом тираже (T1-8) метку
           // не трогаем — норма не освежалась.
-          ...(r.qtySource === 'NOMENCLATURE' && refreshNorms
+          //
+          // Аудит 13.09.2026, T1-3, ревью: ССЫЛКУ при этом не рвём. Источник
+          // нашёлся, но план его не покрывает (`refreshed && !derivedNorm`) —
+          // `qtySourceRef` остаётся: по нему строка вернётся в номенклатуру
+          // на следующем пересчёте (см. `isNormRefreshCandidate`), а расчёт
+          // потребности продолжает видеть явную привязку к параметру
+          // (иначе единственная строка роли считалась бы «убранной из
+          // спецификации» и материал исчезал из закупки). Ссылка обнуляется
+          // только когда источника больше нет вовсе (`!refreshed`).
+          ...(isNormRefreshCandidate(r) && refreshNorms
             ? {
                 qtySource: derivedNorm ? 'NOMENCLATURE' : 'TEMPLATE',
-                qtySourceRef: derivedNorm ? (refreshed?.sourceId ?? null) : null,
+                qtySourceRef: refreshed?.sourceId ?? null,
               }
             : {}),
           // Цвет расцветки мог измениться — правило то же, что при
@@ -5935,7 +6039,7 @@ export class OrdersService {
         needsStaleAt: new Date(),
         needsStaleReason:
           `Норма из номенклатуры не покрывает размерный план: ${listed}. ` +
-          'Строки переведены в «из шаблона» с прежним числом — проверьте норму и пересчитайте потребность.',
+          'Строки показаны «из шаблона» с прежним числом (связь с номенклатурой сохранена и вернёт норму при возврате плана) — проверьте норму и пересчитайте потребность.',
       },
     });
     OrdersService.log.warn(
@@ -6262,9 +6366,14 @@ export class OrdersService {
       // нечего, значит переживут все — и ручные, и legacy-шаблонные.
       // Слот-параметры не материализуются (спецификации нет), поэтому карта
       // значений пустая: ячейки под параметром остаются как есть.
+      //
+      // Аудит 13.09.2026, T1-8, ревью: группа с НУЛЕВЫМ тиражом не
+      // пропускается — как в основной ветке, её строки пересчитываются в
+      // ноль (норма и связь заморожены, см. `recomputeSnapshotGroup`).
+      // Раньше `continue` оставлял строкам обнулённой расцветки legacy-заказа
+      // прежний `totalQty`, и потребность читала из снимка старый тираж.
       const lostEarly: Array<{ line: string; color: string | null }> = [];
       for (const g of groups) {
-        if (g.qty <= 0) continue;
         const gk = vk(g.variantId);
         const rows = existing.filter((r) => vk(r.orderVariantId) === gk);
         if (rows.length === 0) continue;
@@ -6585,7 +6694,11 @@ export class OrdersService {
           sourceTechCardId: null,
           sourcePatternItemId: patternSpec!.patternItemId,
           qtySource: derivedNorm ? 'NOMENCLATURE' : 'TEMPLATE',
-          qtySourceRef: derivedNorm ? (normSource?.sourceId ?? null) : null,
+          // Аудит 13.09.2026, T1-3, ревью: ссылка на найденный источник
+          // остаётся и без выведенной нормы (план не покрыт) — симметрично
+          // recompute: строка «из шаблона» с живым `qtySourceRef` при
+          // возврате плана снова станет «из номенклатуры».
+          qtySourceRef: normSource?.sourceId ?? null,
         });
       }
 

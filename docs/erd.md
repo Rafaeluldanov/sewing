@@ -245,7 +245,10 @@
   также: `order.routeCustomizedAt` + `routeSteps[]` (состав правленного
   холстом маршрута, V1-2), `items[]` (тираж заказа без расцветок, V1-3),
   `routeOverrides[].index` (вхождение операции, V1-4) — все nullish, старые
-  снимки читаются.
+  снимки читаются. Ревью V1-2: у старого снимка `order.routeCustomizedAt`
+  отсутствует (`undefined`, не `null`) — restore такого снимка маршрут и
+  флаг заказа НЕ трогает (наследует текущее состояние); сброс холста на
+  шаблон — только при явном `null`, который пишет capture.
   `onDelete: Cascade` от `Order`. НЕ путать с `OrderVariant`
   (расцветка): расцветки живут внутри каждого варианта. См.
   `apps/api/src/modules/order-calculations/*`.
@@ -1496,9 +1499,10 @@ master-action'ом, удаление, упаковка прямо из ячей�
   переименования/удаления `Size`). UNIQUE `(taskId, sizeId)`.
   `PatternMaterialArea` на сохранении берётся ТОЛЬКО из calc-payload
   (м² по размерам, как ввёл менеджер); конверсии погонных метров в м²
-  через `CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M` код не делает (Аудит
-  движка расчёта 13.09.2026, K9 — прежняя формулировка описывала
-  несуществующую конверсию). Сами метры при `complete()` переносятся в
+  через ширину рулона код не делает (Аудит движка расчёта 13.09.2026,
+  K9 — прежняя формулировка описывала несуществующую конверсию; ревью:
+  мёртвые `CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`/`metersToAreaM2`
+  удалены из `@sewing/shared`). Сами метры при `complete()` переносятся в
   `PatternItemSizeParameterValue` лекала
   (`ConstructorTasksService.syncSizeParameterValuesFromTask`): колонка
   «Кулирка» → ровно один активный `LINEAR_M_BY_SIZE`-параметр роли

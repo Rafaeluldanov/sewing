@@ -704,7 +704,12 @@ export class WorkshopNeedsService {
     // `Order.costEstimateTotalRub` жили со старой ценой без отметки «устарела», пока любая
     // соседняя правка не меняла итог «сама». Правило `domain.md §1.5`: ручка, меняющая источник
     // сметы, заканчивается `syncAfterNeedsChange` (best-effort, не бросает — как у `update`).
-    await this.costEstimates.syncAfterNeedsChange(existing.orderId, actorEmployeeId);
+    // Ревью E1-1: ERP шлёт `erp-link`/`erp-unlink` на КАЖДУЮ строку ЗП — `erpBatch` дебаунсит
+    // версии сметы (не чаще раза в окно; между — отметка «устарела» с причиной) и не трогает
+    // сметы неактивных вариантов (их поймает сверка при активации).
+    await this.costEstimates.syncAfterNeedsChange(existing.orderId, actorEmployeeId, {
+      erpBatch: true,
+    });
     return this.getOne(id);
   }
 
@@ -760,7 +765,12 @@ export class WorkshopNeedsService {
     });
     // Аудит движка расчёта 13.09.2026, E1-1: цена ERP снята — смета снова считает по `quotedPrice`
     // закупщика цеха и обязана это отразить сразу (симметрично `erpLink`).
-    await this.costEstimates.syncAfterNeedsChange(existing.orderId, actorEmployeeId);
+    // Ревью E1-1: ERP шлёт `erp-link`/`erp-unlink` на КАЖДУЮ строку ЗП — `erpBatch` дебаунсит
+    // версии сметы (не чаще раза в окно; между — отметка «устарела» с причиной) и не трогает
+    // сметы неактивных вариантов (их поймает сверка при активации).
+    await this.costEstimates.syncAfterNeedsChange(existing.orderId, actorEmployeeId, {
+      erpBatch: true,
+    });
     return this.getOne(id);
   }
 
@@ -2121,6 +2131,18 @@ export class WorkshopNeedsService {
     // по описанию БЕЗ расцветки. Иначе к живым строкам по расцветкам,
     // посчитанным до правила схлопывания (da74850), добор дописывал третью,
     // суммарную строку — двойной счёт количества и денег.
+    //
+    // Аудит 13.09.2026, N1-7, ревью — ОБРАТНОЕ направление: схлопнутый
+    // материал ПОЛУЧИЛ цвет в одной из расцветок («Дублерин» → «Дублерин
+    // серый» у Белого). Новая строка расцветки несёт цвет в описании и
+    // расцветку в ключе, а старая order-level строка лежит без цвета и с
+    // `orderVariantId = null` — ключи не совпадали, и добор дописывал
+    // строку расцветки рядом с суммарной (50 + 30 при норме 50). Строка
+    // расцветки с цветом узнаёт старую order-level строку того же
+    // источника по `sourceId` (у головной расцветки схлопнутой строки) или
+    // по описанию БЕЗ цвета; `mergedFrom` старой строки в БД не хранится.
+    // Совпало → строку не создаём, а предупреждаем: закупщик пересчитывает
+    // старую строку сам (её количество и описание добор не переписывает).
     let appendSkipped = 0;
     if (appendMissing) {
       const sourceKey = (r: {
@@ -2156,6 +2178,31 @@ export class WorkshopNeedsService {
       const byDescriptionAnyVariant = new Set(
         liveRows.map((r) => descriptionText(r.description)),
       );
+      // Ревью N1-7 (обратное направление): живые order-level строки по
+      // источнику и по описанию — для строк расцветок, получивших цвет.
+      const orderLevelRows = liveRows.filter((r) => r.orderVariantId == null);
+      const orderLevelBySource = new Set(
+        orderLevelRows.map((r) => [r.sourceType, r.sourceId ?? ''].join('|')),
+      );
+      const orderLevelByDescription = new Set(
+        orderLevelRows.map((r) =>
+          [r.sourceType, descriptionText(r.description)].join('|'),
+        ),
+      );
+      // Описание строки БЕЗ её цвета — так его собрал бы `buildDescription`
+      // для бесцветной строки: цвет стоит одной из частей после «головы»
+      // («Дублерин серый, ширина 90 см» → «Дублерин ширина 90 см»,
+      // «Кулирка 180 г/м², серый» → «Кулирка 180 г/м²»).
+      const stripColor = (description: string, color: string): string => {
+        const c = color.trim();
+        if (c === '') return description;
+        for (const needle of [`, ${c}`, ` ${c},`, ` ${c}`]) {
+          const stripped = description.replace(needle, needle === ` ${c},` ? ' ' : '');
+          if (stripped !== description) return stripped.replace(/\s+/g, ' ').trim();
+        }
+        return description;
+      };
+      const recoloredCollapsed: string[] = [];
       const missing = computed.filter((c) => {
         const variantId = c.orderVariantId ?? null;
         const pairs: Array<{ sourceId: string; orderVariantId: string | null }> = [
@@ -2178,11 +2225,31 @@ export class WorkshopNeedsService {
               }),
             ),
         );
-        const colorless = (c.resolvedColorText ?? '').trim() === '';
+        const color = (c.resolvedColorText ?? '').trim();
+        const colorless = color === '';
         const knownColorless =
           colorless && byDescriptionAnyVariant.has(descriptionText(c.description));
-        return !knownByPair && !knownColorless;
+        // Ревью N1-7: строка расцветки С цветом против старой order-level
+        // строки того же источника (схлопнутый материал получил цвет).
+        const knownRecoloredCollapsed =
+          !colorless &&
+          variantId != null &&
+          (orderLevelBySource.has([c.sourceType, c.sourceId].join('|')) ||
+            orderLevelByDescription.has(
+              [c.sourceType, descriptionText(stripColor(c.description, color))].join('|'),
+            ));
+        if (knownRecoloredCollapsed && !knownByPair) {
+          recoloredCollapsed.push(c.description);
+        }
+        return !knownByPair && !knownColorless && !knownRecoloredCollapsed;
       });
+      if (recoloredCollapsed.length > 0) {
+        warnings.push(
+          `Материал сменил цвет, а в потребности уже есть его общая строка на весь заказ: ` +
+            `${recoloredCollapsed.map((d) => `«${d}»`).join(', ')}. Строка расцветки не дописана — ` +
+            'пересчитайте общую строку вручную или выполните полный пересчёт.',
+        );
+      }
       appendSkipped = computed.length - missing.length;
       computed.splice(0, computed.length, ...missing);
     }
@@ -3587,6 +3654,18 @@ export class WorkshopNeedsService {
    *      17 подтипов, и единственной строкой роли может оказаться другой
    *      материал: «Кнопки» принимались за «Молнию», её норма ставилась по
    *      кнопкам, а сами кнопки гасились как «уже учтённые».
+   *
+   * ⚠️ Ревью N1-1 (аудит 13.09.2026), известная цена шага 4: у legacy-снимков
+   * без единой привязки (`qtySourceRef` нигде) единственная строка роли с
+   * НЕсовместимым именем («Кашкорсе 2x2» под параметром «Рибана») больше
+   * не обогащает параметр — потребность считается по единице параметра
+   * без ширины/плотности/ORDER-нормы, а для `PACKAGING` норма и строка
+   * спецификации могут посчитаться рядом. Сверка по `subtypeKey` строки ↔
+   * подтипу параметра (ZIPPER ↔ ZIPPER) и прежний single-role fallback для
+   * legacy-снимков с предупреждением НЕ реализованы: `SourceLine`/норма
+   * подтип не несут, а возврат fallback без сверки вернул бы сам N1-1.
+   * Лечится в заказе привязкой строки к параметру («Обновить из
+   * номенклатуры» / правка строки) — тогда срабатывает шаг 1.
    */
   private findEnrichmentLine(input: {
     roleKey: string | null;

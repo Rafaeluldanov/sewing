@@ -26,7 +26,11 @@
  *   6. аудит движка расчёта 13.09.2026, N1-7/N2-3: схлопнутая order-level
  *      строка «материала без цвета» узнаёт живые строки по расцветкам,
  *      посчитанные до правила схлопывания (da74850), — третья, суммарная
- *      строка не дописывается (иначе 30 + 20 + 50 = 100 м при норме 50).
+ *      строка не дописывается (иначе 30 + 20 + 50 = 100 м при норме 50);
+ *   7. ревью N1-7 (обратное направление): схлопнутый материал получил цвет
+ *      в одной расцветке — строка расцветки узнаёт старую order-level
+ *      строку (по источнику / описанию без цвета) и не дописывается рядом
+ *      с ней (иначе 50 + 30 = 80 м при норме 50); добор предупреждает.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -462,5 +466,116 @@ describeWithDb('integration — workshop needs append missing', () => {
     });
     expect(order.needsStaleAt).not.toBeNull();
     expect(order.needsStaleReason ?? '').toMatch(/дописан/u);
+  });
+
+  test('N1-7 (ревью, обратное направление): схлопнутый материал получил цвет — строка расцветки не дописывается рядом с общей', async () => {
+    const pattern = await request(t.app.getHttpServer())
+      .post('/api/patterns')
+      .set('Cookie', manager)
+      .send({ name: 'Футболка P-APP-7', article: 'P-APP-7' })
+      .expect(201);
+    const patternItemId = pattern.body.id as string;
+    const spec = await createSpecPattern(t, manager, {
+      article: 'P-APP-7-SPEC',
+      materialLines: [
+        { name: 'Кулирка', unit: 'м пог.', qtyPerUnit: '1', materialRole: 'MAIN_FABRIC', fabricType: 'Кулирка', colorRule: 'ORDER_COLOR' },
+        { name: 'Дублерин', unit: 'м пог.', qtyPerUnit: '0.5', materialRole: 'LINING', fabricType: 'Дублерин', colorRule: 'NO_COLOR' },
+      ],
+    });
+    await copySpecLinesTo(t, spec.id, patternItemId);
+    const created = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', manager)
+      .send({
+        orderDate: '2026-09-13T00:00:00.000Z',
+        productId: seed.product.id,
+        clientId: seed.client.id,
+        patternItemId,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+        variants: [
+          { color: 'Белый', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 60 }] },
+          { color: 'Чёрный', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }] },
+        ],
+      })
+      .expect(201);
+    const orderId = created.body.id as string;
+    await t.prisma.order.update({ where: { id: orderId }, data: { status: 'CALCULATION' } });
+    const calc = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    const lining = (calc.body.needs as Array<{ id: string; sourceName: string | null; orderVariantId: string | null; calculatedQty: string }>)
+      .filter((x) => x.sourceName === 'Дублерин');
+    expect(lining).toHaveLength(1);
+    expect(lining[0]!.orderVariantId).toBeNull();
+    expect(Number(lining[0]!.calculatedQty)).toBeCloseTo(50, 4);
+    const collapsedId = lining[0]!.id;
+
+    // Закупщик тронул общую строку → полный пересчёт запрещён, работает добор.
+    await request(t.app.getHttpServer())
+      .patch(`/api/workshop-needs/${collapsedId}`)
+      .set('Cookie', manager)
+      .send({ status: 'REVIEWED', purchaseQty: '50', quotedPrice: '120', quotedCurrency: 'RUB' })
+      .expect(200);
+
+    const liningRows = () =>
+      t.prisma.workshopNeed.findMany({
+        where: { orderId, materialRole: 'LINING' },
+        select: { id: true, orderVariantId: true, calculatedQty: true, description: true },
+      });
+
+    // Менеджер задал дублерину цвет «серый» в расцветке ЧЁРНЫЙ (не головной
+    // расцветке схлопнутой строки — sourceId не совпадёт, узнаётся по
+    // описанию без цвета). Авто-путь: правка спецификации → 409 → добор.
+    const specRows = await t.prisma.orderMaterialRequirement.findMany({
+      where: { orderId, materialRole: 'LINING' },
+      include: { orderVariant: true },
+      orderBy: { orderVariant: { ordinal: 'asc' } },
+    });
+    expect(specRows).toHaveLength(2);
+    const blackLine = specRows.find((r) => r.orderVariant?.color === 'Чёрный')!;
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/tech-card/lines/${blackLine.id}`)
+      .set('Cookie', manager)
+      .send({ colorText: 'серый' })
+      .expect(200);
+    let rows = await liningRows();
+    expect(rows.map((r) => r.id)).toEqual([collapsedId]);
+    expect(Number(rows[0]!.calculatedQty)).toBeCloseTo(50, 4);
+
+    // Явный добор: та же строка, предупреждение о смене цвета, ничего не создано.
+    const appended = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', manager)
+      .send({ appendMissing: true })
+      .expect(201);
+    expect(appended.body.count).toBe(0);
+    expect((appended.body.warnings as string[]).join('\n')).toMatch(/сменил цвет/u);
+    expect((appended.body.warnings as string[]).join('\n')).toMatch(/серый/u);
+    rows = await liningRows();
+    expect(rows.map((r) => r.id)).toEqual([collapsedId]);
+
+    // И в головной расцветке (Белый) — узнаётся по sourceId; сумма всё ещё 50.
+    const whiteLine = specRows.find((r) => r.orderVariant?.color === 'Белый')!;
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/tech-card/lines/${whiteLine.id}`)
+      .set('Cookie', manager)
+      .send({ colorText: 'бежевый' })
+      .expect(200);
+    rows = await liningRows();
+    expect(rows.map((r) => r.id)).toEqual([collapsedId]);
+    expect(rows.reduce((s, r) => s + Number(r.calculatedQty), 0)).toBeCloseTo(50, 4);
+
+    // Полный пересчёт (force) — честные две строки по расцветкам: 30 + 20.
+    const forced = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', manager)
+      .send({ force: true })
+      .expect(201);
+    expect(forced.body.count).toBeGreaterThanOrEqual(3);
+    rows = await liningRows();
+    expect(rows).toHaveLength(2);
+    expect(rows.reduce((s, r) => s + Number(r.calculatedQty), 0)).toBeCloseTo(50, 4);
   });
 });

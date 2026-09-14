@@ -28,6 +28,14 @@ import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from './cost-estimate-scope.js';
 
 /**
+ * Аудит 13.09.2026, E1-1, ревью: окно дебаунса автопересчёта сметы для
+ * машинного пути ERP (`erp-link`/`erp-unlink` идут построчно). Смета,
+ * пересчитанная моложе окна, новой версией не заменяется — заказ получает
+ * отметку «устарела» (см. `syncAfterNeedsChange`).
+ */
+export const ERP_ESTIMATE_SYNC_WINDOW_MS = 60_000;
+
+/**
  * Сервис «Себестоимость заказа» (см.
  * `prisma/schema.prisma::OrderCostEstimate`,
  * `packages/shared/src/order-cost-estimates.ts`).
@@ -875,16 +883,34 @@ export class OrderCostEstimatesService {
    * только активный, и при переключении вкладки устаревшая сумма
    * становилась «Расчёт завершён». Возвращаемое значение — по-прежнему
    * про смету активного варианта (её читают плашка и UI).
+   *
+   * Аудит 13.09.2026, E1-1, ревью — машинный путь ERP
+   * (`opts.erpBatch`, зовут `erpLink`/`erpUnlink`): ERP заводит ЗП
+   * ПОСТРОЧНО, по `erp-link` на каждую строку, и без дебаунса 20 строк
+   * давали 20 версий сметы и 20 аудит-записей за одну кнопку. Правило
+   * простое и детерминированное (без таймеров процесса): если активная
+   * смета пересчитана меньше `ERP_ESTIMATE_SYNC_WINDOW_MS` назад, новую
+   * версию не плодим — ставим отметку «устарела» с причиной «цена ERP
+   * обновлена»; первая связь серии (смета старше окна) пересчитывает
+   * сразу, следующая за окном — тоже, и она же снимет отметку. Сметы
+   * НЕактивных вариантов на этом пути не пересобираются вовсе: их
+   * расхождение поймает сверка при активации
+   * (`markStaleIfActiveEstimateOutdated`, фаза F). Ручные правки закупщика
+   * (`update`/`cancel`/…) дебаунсом не трогаем — там одна правка = одно
+   * действие человека.
    */
   async syncAfterNeedsChange(
     orderId: string,
     actorEmployeeId?: string | null,
+    opts?: { erpBatch?: boolean },
   ): Promise<{ recalculated: boolean; staleReason: string | null }> {
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) return { recalculated: false, staleReason: null };
 
-    const result = await this.syncActiveEstimate(order, actorEmployeeId);
-    await this.syncInactiveVariantEstimates(order, actorEmployeeId);
+    const result = await this.syncActiveEstimate(order, actorEmployeeId, opts);
+    if (!opts?.erpBatch) {
+      await this.syncInactiveVariantEstimates(order, actorEmployeeId);
+    }
     return result;
   }
 
@@ -892,6 +918,7 @@ export class OrderCostEstimatesService {
   private async syncActiveEstimate(
     order: Order,
     actorEmployeeId?: string | null,
+    opts?: { erpBatch?: boolean },
   ): Promise<{ recalculated: boolean; staleReason: string | null }> {
     const orderId = order.id;
     const active = await this.prisma.orderCostEstimate.findFirst({
@@ -932,6 +959,23 @@ export class OrderCostEstimatesService {
       if (samePlanAsEstimate(plan.lineCreates, plan.totalCostRub, active)) {
         await this.clearStale(orderId);
         return { recalculated: false, staleReason: null };
+      }
+
+      // Ревью E1-1: серия связей из ERP — не версия на строку (см. JSDoc
+      // `syncAfterNeedsChange`). Смета моложе окна → только отметка.
+      if (
+        opts?.erpBatch &&
+        Date.now() - active.completedAt.getTime() < ERP_ESTIMATE_SYNC_WINDOW_MS
+      ) {
+        const reason =
+          'Цена ERP обновлена — себестоимость устарела. Смета уже пересчитывалась ' +
+          'меньше минуты назад (серия связей из ERP): нажмите «Пересчитать» или дождитесь следующей правки.';
+        await this.markStale(orderId, reason);
+        this.logger.log(
+          `event=order.cost_estimate.erp_sync_deferred orderId=${orderId} ` +
+            `estimateVersion=${active.version}`,
+        );
+        return { recalculated: false, staleReason: reason };
       }
 
       await this.recalculateCostEstimate(

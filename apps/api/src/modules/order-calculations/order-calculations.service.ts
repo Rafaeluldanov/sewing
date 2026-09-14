@@ -59,11 +59,13 @@ interface SnapshotRefs {
  *
  * Переключение (`activate`) — многошаговая операция:
  *   0) fail-fast гейты ДО любых мутаций (статус, валидность снимка и
- *      его FK-ссылок, применимость оверрайдов снимка — V1-5, расцветки
- *      под паспортами образца);
+ *      его FK-ссылок, применимость оверрайдов снимка — V1-5: `FIXED` без
+ *      расценки и `BY_SIZE` без ставки по размеру плана цели (зеркало
+ *      гарда L1-10), расцветки под паспортами образца);
  *   A+B) одна транзакция: capture живого состояния в старый активный →
  *      restore снимка целевого (Order-поля, включая `routeCustomizedAt`;
- *      состав шагов правленного холстом маршрута — V1-2; себестоимость
+ *      состав шагов правленного холстом маршрута — V1-2; старый снимок
+ *      без этих полей маршрут и флаг НЕ трогает — ревью V1-2; себестоимость
  *      +статус целевого варианта; расцветки; тираж заказа без расцветок
  *      из `items` — V1-3; паспорта образца по цвету; параметры техкарт;
  *      снимок материалов);
@@ -327,7 +329,12 @@ export class OrderCalculationsService {
     // фазы D (400 `ORDER_ROUTE_OVERRIDE_RATE_REQUIRED`) проверяем ЗДЕСЬ,
     // до мутаций — иначе цель уже активна в БД с оверрайдами прошлого
     // варианта, а UI показывает «не удалось переключить».
-    await this.assertSnapshotOverridesApplicable(snap, refs, target.title);
+    await this.assertSnapshotOverridesApplicable(
+      orderId,
+      snap,
+      refs,
+      target.title,
+    );
 
     // Гейт стадии сигнального образца (переключение доступно вплоть до
     // запуска в производство): restore пересоздаёт `OrderVariant`, а
@@ -391,12 +398,21 @@ export class OrderCalculationsService {
           routeTemplateId: refs.routeTemplateId,
           // Аудит движка расчёта 13.09.2026, V1-2: флаг «маршрут правлен
           // холстом» — свойство варианта. С флагом шаги пересоздаются из
-          // снимка (ниже), без флага `syncOrderRouteStepsSnapshot` в фазе
-          // C пересоберёт маршрут из шаблона — иначе холст одного
+          // снимка (ниже), при явном `null` `syncOrderRouteStepsSnapshot`
+          // в фазе C пересоберёт маршрут из шаблона — иначе холст одного
           // варианта оставался маршрутом всех.
-          routeCustomizedAt: snap.order.routeCustomizedAt
-            ? new Date(snap.order.routeCustomizedAt)
-            : null,
+          //
+          // Ревью V1-2: СТАРЫЙ снимок (поля нет — `undefined`) флаг не
+          // трогает: «неизвестно» ≠ «не правлен», и сброс холста на шаблон
+          // при первом переключении вкладки был бы молчаливой потерей
+          // правок. Маршрут такого варианта — текущий маршрут заказа.
+          ...(snap.order.routeCustomizedAt !== undefined
+            ? {
+                routeCustomizedAt: snap.order.routeCustomizedAt
+                  ? new Date(snap.order.routeCustomizedAt)
+                  : null,
+              }
+            : {}),
           color: snap.order.color,
           customerUnitPrice: snap.order.customerUnitPrice,
           customerCurrency: snap.order.customerCurrency,
@@ -421,6 +437,7 @@ export class OrderCalculationsService {
       // не выводится из шаблона — пересоздаём состав шагов из снимка
       // (оверрайды им напишет фаза D). Шаги с удалённой операцией
       // пропускаем — зеркало SetNull-семантики прочих ссылок снимка.
+      // У старого снимка без поля (`undefined`) шагов нет — не трогаем.
       if (snap.order.routeCustomizedAt != null) {
         await tx.orderRouteStep.deleteMany({ where: { orderId } });
         const stepRows = snap.routeSteps.filter((st) =>
@@ -752,8 +769,20 @@ export class OrderCalculationsService {
    * восстановленный маршрут (холст — из `routeSteps` снимка, иначе —
    * из шаблона): оверрайд выпавшей из маршрута операции всё равно не
    * применится.
+   *
+   * Ревью V1-5: зеркалим и гард L1-10 — «сделка по размерам» (`BY_SIZE`)
+   * обязана иметь ставку по КАЖДОМУ размеру плана ЦЕЛИ (агрегат
+   * `variants[].sizes`, у заказа без расцветок — `items`; только qty > 0):
+   * из `sizeOverrides` снимка, иначе из справочника `OperationRateBySize`.
+   * Без этого снимок, снятый до гарда (BY_SIZE с неполными ставками), или
+   * справочник, из которого ставку размера сняли, отбивались 400 уже в
+   * фазе D — после коммита A+B: цель активна со снимком, и каждый
+   * следующий `activate`/`create` упирался в `healPendingSwitch` с тем же
+   * 400. Фаза D после этой проверки может отказать только при гонке со
+   * справочником между фазами.
    */
   private async assertSnapshotOverridesApplicable(
+    orderId: string,
     snap: OrderCalculationSnapshotV1,
     refs: SnapshotRefs,
     title: string,
@@ -761,10 +790,28 @@ export class OrderCalculationsService {
     const fixedWithoutRate = snap.routeOverrides.filter(
       (o) => o.pricingModeOverride === 'FIXED' && o.rateOverride == null,
     );
-    if (fixedWithoutRate.length === 0) return;
+    const bySize = snap.routeOverrides.filter(
+      (o) => o.pricingModeOverride === 'BY_SIZE',
+    );
+    if (fixedWithoutRate.length === 0 && bySize.length === 0) return;
 
     let plannedOperationIds: Set<string>;
-    if (snap.order.routeCustomizedAt != null) {
+    // Ревью V1-2: у старого снимка (поле отсутствует) restore маршрут не
+    // трогает — если заказ правлен холстом, в силе остаются его текущие
+    // шаги, иначе фаза C пересоберёт их из шаблона снимка.
+    const legacyKeepsCurrentRoute =
+      snap.order.routeCustomizedAt === undefined &&
+      (await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: { routeCustomizedAt: true },
+      }))?.routeCustomizedAt != null;
+    if (legacyKeepsCurrentRoute) {
+      const currentSteps = await this.prisma.orderRouteStep.findMany({
+        where: { orderId },
+        select: { operationId: true },
+      });
+      plannedOperationIds = new Set(currentSteps.map((st) => st.operationId));
+    } else if (snap.order.routeCustomizedAt != null) {
       plannedOperationIds = new Set(
         snap.routeSteps
           .map((st) => st.operationId)
@@ -787,22 +834,105 @@ export class OrderCalculationsService {
           .filter((id) => plannedOperationIds.has(id)),
       ),
     ];
-    if (operationIds.length === 0) return;
-    const operations = await this.prisma.operation.findMany({
-      where: { id: { in: operationIds } },
-      select: { id: true, code: true, name: true, fixedRate: true },
-    });
-    const missing = operations.filter((op) => op.fixedRate == null);
-    if (missing.length === 0) return;
-    const labels = missing.map((op) => `«${op.name || op.code}»`).join(', ');
+    if (operationIds.length > 0) {
+      const operations = await this.prisma.operation.findMany({
+        where: { id: { in: operationIds } },
+        select: { id: true, code: true, name: true, fixedRate: true },
+      });
+      const missing = operations.filter((op) => op.fixedRate == null);
+      if (missing.length > 0) {
+        const labels = missing
+          .map((op) => `«${op.name || op.code}»`)
+          .join(', ');
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
+          message:
+            `В варианте «${title}» операци${missing.length === 1 ? 'я' : 'и'} ${labels} ` +
+            `переведен${missing.length === 1 ? 'а' : 'ы'} на сделку без своей расценки, а в справочнике ` +
+            `расценки у не${missing.length === 1 ? 'ё' : 'их'} больше нет. Переключение не выполнено — ` +
+            'задайте расценку операции в справочнике и повторите.',
+        });
+      }
+    }
+
+    // --- BY_SIZE: ставка по каждому размеру плана цели (ревью V1-5) ------
+    const bySizePlanned = bySize.filter((o) =>
+      plannedOperationIds.has(o.operationId),
+    );
+    if (bySizePlanned.length === 0) return;
+    // План цели — тот же агрегат, что соберёт restore: расцветки, а при
+    // пустом агрегате — `items` снимка (V1-3). Размеры, которых больше
+    // нет в справочнике, restore отбрасывает — здесь тоже.
+    const planQtyBySizeId = new Map<string, number>();
+    const addPlan = (sizeId: string, qty: number) => {
+      if (!refs.validSizeIds.has(sizeId)) return;
+      planQtyBySizeId.set(sizeId, (planQtyBySizeId.get(sizeId) ?? 0) + qty);
+    };
+    for (const v of snap.variants) {
+      for (const sz of this.normalizeSizes(v.sizes)) addPlan(sz.sizeId, sz.qtyPlan);
+    }
+    if (![...planQtyBySizeId.values()].some((q) => q > 0)) {
+      planQtyBySizeId.clear();
+      for (const it of snap.items) addPlan(it.sizeId, it.qtyPlan);
+    }
+    const planSizeIds = [...planQtyBySizeId.entries()]
+      .filter(([, qty]) => qty > 0)
+      .map(([sizeId]) => sizeId);
+    if (planSizeIds.length === 0) return;
+
+    const bySizeOperationIds = [
+      ...new Set(bySizePlanned.map((o) => o.operationId)),
+    ];
+    const [catalogRates, operations, sizes] = await Promise.all([
+      this.prisma.operationRateBySize.findMany({
+        where: {
+          operationId: { in: bySizeOperationIds },
+          sizeId: { in: planSizeIds },
+        },
+        select: { operationId: true, sizeId: true },
+      }),
+      this.prisma.operation.findMany({
+        where: { id: { in: bySizeOperationIds } },
+        select: { id: true, code: true, name: true },
+      }),
+      this.prisma.size.findMany({
+        where: { id: { in: planSizeIds } },
+        select: { id: true, code: true },
+      }),
+    ]);
+    const catalog = new Set(
+      catalogRates.map((r) => `${r.operationId}|${r.sizeId}`),
+    );
+    const opLabel = new Map(
+      operations.map((op) => [op.id, op.name || op.code] as const),
+    );
+    const sizeCode = new Map(sizes.map((sz) => [sz.id, sz.code] as const));
+    const problems: string[] = [];
+    for (const o of bySizePlanned) {
+      const overrideRate = new Map(
+        o.sizeOverrides.map((so) => [so.sizeId, so.rate] as const),
+      );
+      const missingSizes = planSizeIds.filter(
+        (sizeId) =>
+          overrideRate.get(sizeId) == null &&
+          !catalog.has(`${o.operationId}|${sizeId}`),
+      );
+      if (missingSizes.length === 0) continue;
+      problems.push(
+        `«${opLabel.get(o.operationId) ?? o.operationId}» (размеры: ${missingSizes
+          .map((id) => sizeCode.get(id) ?? id)
+          .join(', ')})`,
+      );
+    }
+    if (problems.length === 0) return;
     throw new BadRequestException({
       statusCode: 400,
       code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
       message:
-        `В варианте «${title}» операци${missing.length === 1 ? 'я' : 'и'} ${labels} ` +
-        `переведен${missing.length === 1 ? 'а' : 'ы'} на сделку без своей расценки, а в справочнике ` +
-        `расценки у не${missing.length === 1 ? 'ё' : 'их'} больше нет. Переключение не выполнено — ` +
-        'задайте расценку операции в справочнике и повторите.',
+        `В варианте «${title}» операци${problems.length === 1 ? 'я' : 'и'} ${problems.join(', ')} ` +
+        `переведен${problems.length === 1 ? 'а' : 'ы'} на сделку по размерам без расценки по части размеров плана. ` +
+        'Переключение не выполнено — задайте поразмерные расценки в справочнике операции и повторите.',
     });
   }
 

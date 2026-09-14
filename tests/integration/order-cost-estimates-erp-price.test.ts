@@ -7,6 +7,9 @@
  *      её СРАЗУ (`domain.md §1.5`: ручка, меняющая источник сметы, заканчивается
  *      `syncAfterNeedsChange`). `erp-unlink` — симметрично: цена ERP снята → снова
  *      `quotedPrice`. Раньше обе ручки молчали, и итог менялся «сам» от любой соседней правки.
+ *      Ревью E1-1: ERP шлёт ручки построчно — активная смета моложе окна
+ *      (`ERP_ESTIMATE_SYNC_WINDOW_MS`) новой версией не заменяется, заказ получает отметку
+ *      «устарела» с причиной «Цена ERP обновлена»; ручные правки закупщика дебаунса не знают.
  *   2. E1-10: `erpUnitPriceRub = "0"` (строка ЗП ERP ещё без цены) — это «цена не задана»,
  *      а не «главнее плановой»: нормализуется в `null`, смета и план→факт берут `quotedPrice`.
  *      Раньше `Prisma.Decimal(0)` был истинен → «Цена должна быть > 0» → отметка «устарела»
@@ -22,6 +25,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 
 import { loginAs, startTestApp, stopTestApp, type TestApp } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
+import { ERP_ESTIMATE_SYNC_WINDOW_MS } from '@sewing/api/modules/orders/order-cost-estimates.service';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 import { createSpecPattern } from '../utils/spec';
 
@@ -135,8 +139,17 @@ describeWithDb('integration — цена ERP в смете себестоимо�
       });
   }
 
-  test('E1-1: erp-link с ценой ERP пересчитывает смету сразу, erp-unlink возвращает цену закупщика', async () => {
+  /** Состарить активную смету: серия ERP считается «завершённой», окно дебаунса прошло. */
+  async function ageActiveEstimate(orderId: string): Promise<void> {
+    await t.prisma.orderCostEstimate.updateMany({
+      where: { orderId, status: 'COMPLETED' },
+      data: { completedAt: new Date(Date.now() - 2 * ERP_ESTIMATE_SYNC_WINDOW_MS) },
+    });
+  }
+
+  test('E1-1: erp-link с ценой ERP пересчитывает смету, серия связей ERP дебаунсится отметкой «устарела», erp-unlink возвращает цену закупщика', async () => {
     const { orderId, needId } = await completedAt50k();
+    await ageActiveEstimate(orderId);
 
     // ERP заводит ЗП по 450 ₽/м — цена ERP главнее плановой, смета обязана догнать без клика.
     const link = await erpLink(needId, { erpUnitPriceRub: '450' }).expect(201);
@@ -157,7 +170,18 @@ describeWithDb('integration — цена ERP в смете себестоимо�
     expect(afterComment.total).toBe(45_000);
     expect(afterComment.version).toBe(2);
 
-    // ERP отказалась от потребности — цена ERP снята, смета снова по quotedPrice, сразу.
+    // Ревью E1-1: следующая связь ERP в том же окне (ERP шлёт по строке ЗП) — не версия сметы,
+    // а отметка «устарела» с причиной: 20 строк не должны давать 20 версий.
+    await erpLink(needId, { erpUnitPriceRub: '440' }).expect(201);
+    const debounced = await orderMoney(orderId);
+    expect(debounced.total).toBe(45_000);
+    expect(debounced.version).toBe(2);
+    expect(debounced.stale).toBe(true);
+    expect(debounced.reason ?? '').toMatch(/Цена ERP обновлена/u);
+
+    // Окно прошло — ERP отказалась от потребности: цена ERP снята, смета снова по quotedPrice,
+    // отметка снята пересчётом.
+    await ageActiveEstimate(orderId);
     await api()
       .post(`/api/workshop-needs/${needId}/erp-unlink`)
       .set('Authorization', `Bearer ${erpToken}`)
@@ -175,6 +199,17 @@ describeWithDb('integration — цена ERP в смете себестоимо�
     });
     expect(active).toHaveLength(1);
     expect(Number(active[0]!.lines[0]!.quotedPrice)).toBe(500);
+
+    // Ручная правка закупщика дебаунсом не трогается: цена 480 → новая версия сразу.
+    await api()
+      .patch(`/api/workshop-needs/${needId}`)
+      .set('Cookie', cookie)
+      .send({ quotedPrice: '480' })
+      .expect(200);
+    const afterManual = await orderMoney(orderId);
+    expect(afterManual.total).toBe(48_000);
+    expect(afterManual.version).toBe(4);
+    expect(afterManual.stale).toBe(false);
   });
 
   test('E1-1: erp-link без активной сметы (CALCULATION) не ставит отметку «устарела»', async () => {
@@ -228,10 +263,13 @@ describeWithDb('integration — цена ERP в смете себестоимо�
     expect(material).toBeDefined();
     expect(Number(material!.planRub)).toBe(50_000);
 
-    // Позже ERP проставила цену — она главнее и смета догоняет (тот же ЗП).
+    // Позже ERP проставила цену — она главнее и смета догоняет (тот же ЗП). Ревью E1-1: между
+    // связями ERP — окно дебаунса, поэтому смету «старим» (серия завершена).
+    await ageActiveEstimate(orderId);
     await erpLink(needId, { erpUnitPriceRub: '450' }).expect(201);
     expect((await orderMoney(orderId)).total).toBe(45_000);
     // И обратно: цену в ERP обнулили — снова цена закупщика, а не 0 ₽.
+    await ageActiveEstimate(orderId);
     await erpLink(needId, { erpUnitPriceRub: '0' }).expect(201);
     expect((await orderMoney(orderId)).total).toBe(50_000);
   });

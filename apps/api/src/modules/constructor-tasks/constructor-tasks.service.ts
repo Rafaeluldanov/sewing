@@ -55,7 +55,8 @@ import {
  *     как ввёл менеджер во вкладке расчёта); конверсии погонных метров в
  *     м² через ширину рулона НЕТ (Аудит движка расчёта 13.09.2026, K9:
  *     прежний JSDoc обещал `linearMeters × CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`,
- *     код так не делал никогда — см. комментарий в `saveDraft`);
+ *     код так не делал никогда — см. комментарий в `saveDraft`; ревью K9:
+ *     мёртвые константа и `metersToAreaM2` из `@sewing/shared` удалены);
  *   - `ConstructorTask` со `status='NEW'`;
  *   - `ConstructorTaskSizeRow[]`;
  *   - `ConstructorTaskFile[]`.
