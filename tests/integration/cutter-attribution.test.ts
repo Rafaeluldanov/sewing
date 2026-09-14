@@ -214,6 +214,34 @@ describeWithDb('integration — cutter attribution (PHASE 2 STEP 3)', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // 4a. Несколько ролей: раскрой во втором слоте `roles[]` — тоже раскройщик
+  // ---------------------------------------------------------------------------
+
+  test('cutterId — совместитель (role=SEAMSTRESS, roles ∋ CUTTER) → 201, начисление на него', async () => {
+    // Универсал стенда: основная роль швея, участок раскроя назначен вторым.
+    // Такой сотрудник закрывает задание раскроя в /cutter, и выпуск
+    // паспортов по нему падал с CUTTER_NOT_FOUND — проверялась только
+    // основная `role`.
+    const multi = await t.prisma.employee.update({
+      where: { id: seed.employees['seamstress'].id },
+      data: { roles: ['SEAMSTRESS', 'CUTTER'], activeRole: 'CUTTER' },
+    });
+    const r = await request(t.app.getHttpServer())
+      .post('/api/passports')
+      .set('Cookie', cookies.manager)
+      .send(passportBody({ cutterId: multi.id }));
+    expect(r.status).toBe(201);
+    expect(r.body.cutterId).toBe(multi.id);
+
+    // и в справочнике раскройщиков для select-а он теперь есть
+    const list = await request(t.app.getHttpServer())
+      .get('/api/employees/cutters')
+      .set('Cookie', cookies.manager);
+    expect(list.status).toBe(200);
+    expect(list.body.map((e: { id: string }) => e.id)).toContain(multi.id);
+  });
+
+  // ---------------------------------------------------------------------------
   // 5. cutterId указан, сотрудник CUTTER, но active=false → CUTTER_INACTIVE
   // ---------------------------------------------------------------------------
 

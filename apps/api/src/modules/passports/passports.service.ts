@@ -31,6 +31,7 @@ import {
   type ReleaseFromRollsResultDto,
   type UpdatePassportDto,
 } from '@sewing/shared/passports';
+import { hasAssignedRole } from '@sewing/shared/employees';
 import type { BatchCompleteOperationsResultDto } from '@sewing/shared/shifts';
 import { normalizeColor } from '@sewing/shared/colors';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -1030,9 +1031,9 @@ export class PassportsService {
     const nextCutterId = dto.cutterId ?? passport.cutterId;
     const nextCutter = await this.prisma.employee.findUnique({
       where: { id: nextCutterId },
-      select: { id: true, role: true, active: true },
+      select: { id: true, role: true, roles: true, active: true },
     });
-    if (!nextCutter || nextCutter.role !== Role.CUTTER) {
+    if (!nextCutter || !hasAssignedRole(nextCutter, Role.CUTTER)) {
       throw new CutterNotFoundException();
     }
     if (!nextCutter.active) {
@@ -4172,8 +4173,9 @@ export class PassportsService {
    * запишет immediate-начисление (через `EarningsService.createImmediateForCutter`).
    *
    * Контракт (см. JSDoc у `create()`):
-   *   - `dto.cutterId` пришёл явно → ищем в БД, требуем role=CUTTER и
-   *     active=true; иначе — `CUTTER_NOT_FOUND` / `CUTTER_INACTIVE`.
+   *   - `dto.cutterId` пришёл явно → ищем в БД, требуем назначенную роль
+   *     CUTTER (`role` или `roles[]`) и active=true; иначе —
+   *     `CUTTER_NOT_FOUND` / `CUTTER_INACTIVE`.
    *   - `dto.cutterId` пуст, но creator.role = CUTTER → возвращаем creator
    *     (исторический happy-path, где раскройщик сам выпускает паспорт).
    *   - Иначе → `CUTTER_REQUIRED` (UI должен показать select раскройщика
@@ -4184,14 +4186,18 @@ export class PassportsService {
    */
   private async resolveCutter(
     cutterId: string | undefined,
-    creator: { id: string; role: string; active: boolean },
+    creator: { id: string; role: string; roles?: readonly string[] | null; active: boolean },
   ): Promise<{ id: string }> {
+    // Роль раскройщика — по НАЗНАЧЕННОМУ набору (`role` + `roles[]`), а
+    // не только по основной: универсал «швея + раскрой» закрывает задание
+    // раскроя в /cutter, и выпуск паспортов по нему падал с
+    // `CUTTER_NOT_FOUND` (см. `hasAssignedRole`).
     if (cutterId) {
       const explicit = await this.prisma.employee.findUnique({
         where: { id: cutterId },
-        select: { id: true, role: true, active: true },
+        select: { id: true, role: true, roles: true, active: true },
       });
-      if (!explicit || explicit.role !== Role.CUTTER) {
+      if (!explicit || !hasAssignedRole(explicit, Role.CUTTER)) {
         throw new CutterNotFoundException();
       }
       if (!explicit.active) {
@@ -4199,7 +4205,7 @@ export class PassportsService {
       }
       return { id: explicit.id };
     }
-    if (creator.role === Role.CUTTER) {
+    if (hasAssignedRole(creator, Role.CUTTER)) {
       // Исторический happy-path: рабочее место раскройщика, паспорт
       // выпускается «на себя». Активность creator-а уже гарантирована
       // тем, что он залогинен (auth-flow проверяет `Employee.active`).

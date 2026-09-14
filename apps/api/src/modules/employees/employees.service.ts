@@ -248,8 +248,14 @@ export class EmployeesService {
    * `docs/cutter-assistant-passport-release-recon.md §5`.
    */
   async listActiveCutters(): Promise<ActiveCutterListItemDto[]> {
+    // Раскройщик по НАЗНАЧЕННОМУ набору ролей: совместитель с участком
+    // раскроя во втором слоте (`roles[]`) — тоже раскройщик (см.
+    // `hasAssignedRole`, `PassportsService.resolveCutter`).
     return this.prisma.employee.findMany({
-      where: { role: Role.CUTTER, active: true },
+      where: {
+        active: true,
+        OR: [{ role: Role.CUTTER }, { roles: { has: Role.CUTTER } }],
+      },
       orderBy: { fullName: 'asc' },
       select: { id: true, fullName: true, login: true },
     });

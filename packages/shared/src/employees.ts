@@ -132,6 +132,21 @@ export function normalizeAssignedRoles(
   return Array.from(set);
 }
 
+/**
+ * `true`, если сотруднику НАЗНАЧЕНА роль `wanted` — основной `role` или
+ * любой из `roles[]` (фича «несколько ролей», `docs/domain.md`). Единая
+ * проверка для гейтов «это раскройщик?» и т.п.: сравнение только с
+ * основной `role` отсекает совместителей (основная швея + участок
+ * раскроя) — так `resolveCutter` отвечал `CUTTER_NOT_FOUND` на
+ * раскройщика, который сам закрыл задание раскроя.
+ */
+export function hasAssignedRole(
+  employee: { role: string; roles?: readonly string[] | null },
+  wanted: string,
+): boolean {
+  return normalizeAssignedRoles(employee.role, employee.roles).includes(wanted);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
