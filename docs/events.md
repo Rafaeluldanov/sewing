@@ -727,6 +727,14 @@ audit-событий не существует.
   фильтровать по этому полю.
 - `ORDER_PATTERN_CHANGED` — `OrdersService.update` при смене лекала
   (`orders.service.ts:1353`).
+- `ORDER_VARIANTS_RENAMED` — `OrdersService.upsertOrderVariants` (из
+  `update` с полной картиной расцветок / ERP «дослать план»), когда
+  несопоставленная по цвету расцветка сопоставлена по порядку и
+  получила другой цвет: payload `renamed[] {variantId, from, to}` +
+  `summary`. Ревью G9-1 (аудит движка расчёта 13.09.2026): правки заказа
+  (нормы, слоты, ручные строки, потребность) остаются на расцветке, и
+  пара «удалили цвет + добавили другой» в одном сохранении читается как
+  переименование — журнал это называет явно.
 - `ORDER_OPERATION_PLAN_RECALCULATED` —
   `OrdersService.recalcOrderOperationPlan` (`orders.service.ts:922`).
 - `ORDER_STARTED` — `OrdersService.start`
@@ -1104,6 +1112,8 @@ DRAFT → CALCULATION → CALCULATION_DONE → IN_PRODUCTION → DONE
   (`orders.service.ts:1327`);
 - `ORDER_PATTERN_CHANGED` — смена лекала
   (`orders.service.ts:1353`);
+- `ORDER_VARIANTS_RENAMED` — переименование расцветок при полной замене
+  картины расцветок (пары «старый цвет → новый», ревью G9-1);
 - `ORDER_PATTERN_SNAPSHOT_CREATED` — фиксация snapshot-а лекала в
   `start`/`startCalculation` (`orders.service.ts:1754`,
   `orders.service.ts:1961`);

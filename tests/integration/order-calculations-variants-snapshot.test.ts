@@ -13,9 +13,12 @@
  *          восстанавливаются по вхождению, а не по одному `operationId`;
  *   V1-3 — заказ без расцветок (inline «Сделать расчёт»): тираж
  *          (`OrderItem`) едет в снимок и восстанавливается;
- *   V1-5 — отказ фазы D (FIXED без расценки при снятом `fixedRate`)
- *          отбивается ДО мутаций; незавершённое переключение
+ *   V1-5 — отказ фазы D (FIXED без расценки при снятом `fixedRate`;
+ *          ревью: BY_SIZE без ставки по размеру плана цели — зеркало
+ *          гарда L1-10) отбивается ДО мутаций; незавершённое переключение
  *          долечивается повторным activate, а не no-op;
+ *   V1-2 (ревью) — старый снимок без `routeCustomizedAt`/`routeSteps`
+ *          маршрут заказа не трогает; сброс на шаблон — только при явном null;
  *   E1-2/V1-1 — смета НЕактивного варианта догоняет правку строки и
  *          order-level логистики; при активации смета сверяется с
  *          входами и расхождение становится `costEstimateStaleAt`.
@@ -512,6 +515,132 @@ describeWithDb('integration — варианты просчёта: снимок 
     // Штатный повторный activate активного — по-прежнему no-op.
     const noop = await activate(orderId, calcA, 201);
     expect(noop.body.activeId).toBe(calcA);
+  });
+
+  test('V1-5 (ревью): BY_SIZE без ставки по размеру плана цели отбивается ДО мутаций, как гард L1-10', async () => {
+    // Снимок, снятый до гарда L1-10: шаг «Пошив» BY_SIZE, ставок по размерам
+    // нет ни в снимке, ни в справочнике. Раньше фаза 0 такое пропускала,
+    // фаза D отбивала 400 уже ПОСЛЕ коммита A+B — цель активна со снимком,
+    // и каждый следующий activate/create упирался в healPendingSwitch.
+    const P = await createOperation({ code: 'VS-15b-P', name: 'Пошив', fixedRate: 40 });
+    const T = await createTemplate('RT-VS-15b', [P.id]);
+    const orderId = await createPatternOrder(T); // 100 шт, размер M
+    const [step] = await stepsOf(orderId);
+    expect((await planOf(orderId)).costRub).toBe(4000);
+
+    const { calcA, calcB } = await cloneCalc(orderId);
+    // Снимок A — legacy: BY_SIZE без единой ставки (в БД напрямую).
+    const snapA0 = await snapshotOf(calcA);
+    const legacySnap = {
+      ...snapA0,
+      routeOverrides: [
+        {
+          operationId: P.id,
+          index: 0,
+          rateOverride: null,
+          timeNormSecOverride: null,
+          pricingModeOverride: 'BY_SIZE',
+          outsourced: false,
+          outsourcePriceRub: null,
+          sizeOverrides: [],
+        },
+      ],
+    };
+    await t.prisma.orderCalculation.update({
+      where: { id: calcA },
+      data: { snapshot: legacySnap as unknown as Prisma.InputJsonValue },
+    });
+
+    // B → A: честный 400 до мутаций, B активен без снимка, A нетронут.
+    const failed = await activate(orderId, calcA, 400);
+    expect(failed.body.code).toBe('ORDER_ROUTE_OVERRIDE_RATE_REQUIRED');
+    expect(failed.body.message).toMatch(/по размерам/);
+    expect(failed.body.message).toMatch(/«Пошив»/);
+    const calcs = await t.prisma.orderCalculation.findMany({
+      where: { orderId },
+      select: { id: true, isActive: true, snapshot: true },
+    });
+    expect(calcs.find((c) => c.id === calcB)!.isActive).toBe(true);
+    expect(calcs.find((c) => c.id === calcB)!.snapshot).toBeNull();
+    expect(calcs.find((c) => c.id === calcA)!.isActive).toBe(false);
+    expect(calcs.find((c) => c.id === calcA)!.snapshot).not.toBeNull();
+    const [stepAfter] = await stepsOf(orderId);
+    expect(stepAfter.id).toBe(step.id);
+    expect(stepAfter.pricingModeOverride).toBeNull();
+    expect((await planOf(orderId)).costRub).toBe(4000);
+    // Вкладки не заперты: «+ Вариант» по-прежнему работает.
+    await api().post(`/api/orders/${orderId}/calculations`).set('Cookie', manager).send({}).expect(201);
+
+    // Справочник закрыл размер M ставкой → переключение проходит,
+    // шаг восстановлен как BY_SIZE, план 100 × 12.
+    await t.prisma.operationRateBySize.create({
+      data: { operationId: P.id, sizeId: seed.sizes.M, rate: new Prisma.Decimal(12) },
+    });
+    await activate(orderId, calcA, 201);
+    const [stepA] = await stepsOf(orderId);
+    expect(stepA.pricingModeOverride).toBe('BY_SIZE');
+    expect((await planOf(orderId)).costRub).toBe(1200);
+    expect(await snapshotOf(calcA)).toBeNull();
+  });
+
+  test('V1-2 (ревью): старый снимок без routeCustomizedAt/routeSteps не сбрасывает холст заказа на шаблон', async () => {
+    // Прод: холст правили при одном варианте, неактивные снимки сняты до
+    // правки V1-2 (поля отсутствуют). Первое переключение вкладки не должно
+    // молча пересобрать маршрут цели из шаблона — «неизвестно» ≠ «не правлен».
+    const X = await createOperation({ code: 'VS-12c-X', name: 'Крой', fixedRate: 10 });
+    const Y = await createOperation({ code: 'VS-12c-Y', name: 'Пошив', fixedRate: 20 });
+    const Z = await createOperation({ code: 'VS-12c-Z', name: 'ОТК', fixedRate: 30 });
+    const W = await createOperation({ code: 'VS-12c-W', name: 'Вышивка', fixedRate: 50 });
+    const T = await createTemplate('RT-VS-12c', [X.id, Y.id, Z.id]);
+    const orderId = await createPatternOrder(T); // 100 шт
+    await applyRoute(orderId, [X.id, Y.id, Z.id, W.id]);
+    expect((await planOf(orderId)).costRub).toBe(11000);
+
+    const { calcA, calcB } = await cloneCalc(orderId);
+    // Старим снимок A: убираем поля маршрута, как они лежали до правки.
+    const snapA = await snapshotOf(calcA);
+    expect(snapA?.order.routeCustomizedAt).toEqual(expect.any(String));
+    const { routeCustomizedAt: _rc, ...orderWithoutFlag } = snapA!.order;
+    void _rc;
+    const { routeSteps: _rs, ...legacyRest } = snapA!;
+    void _rs;
+    await t.prisma.orderCalculation.update({
+      where: { id: calcA },
+      data: {
+        snapshot: { ...legacyRest, order: orderWithoutFlag } as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    // B → A: холст и флаг унаследованы, маршрут не пересобран.
+    await activate(orderId, calcA);
+    const planA = await planOf(orderId);
+    expect(planA.routeCustomizedAt).not.toBeNull();
+    expect((await stepsOf(orderId)).map((s) => s.code)).toEqual([
+      'VS-12c-X',
+      'VS-12c-Y',
+      'VS-12c-Z',
+      'VS-12c-W',
+    ]);
+    expect(planA.costRub).toBe(11000);
+
+    // Контроль: снимок с ЯВНЫМ null — сброс на шаблон, как задумано V1-2.
+    const snapB = await snapshotOf(calcB);
+    expect(snapB?.order.routeCustomizedAt).toEqual(expect.any(String));
+    await t.prisma.orderCalculation.update({
+      where: { id: calcB },
+      data: {
+        snapshot: {
+          ...snapB,
+          order: { ...snapB!.order, routeCustomizedAt: null },
+          routeSteps: [],
+        } as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await activate(orderId, calcB);
+    const planB = await planOf(orderId);
+    expect(planB.routeCustomizedAt).toBeNull();
+    expect((await stepsOf(orderId)).map((s) => s.code)).toEqual(['VS-12c-X', 'VS-12c-Y', 'VS-12c-Z']);
+    expect(planB.costRub).toBe(6000);
   });
 
   // -------------------------------------------------------------------------

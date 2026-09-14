@@ -390,7 +390,11 @@ Lifecycle:
    НЕактивных вариантов просчёта он пересобирает тем же вызовом (по их
    строкам и снимку; аудит движка расчёта 13.09.2026, E1-2/V1-1), а
    переключение варианта сверяет смету цели с входами и при расхождении
-   ставит ту же отметку.
+   ставит ту же отметку. Машинный путь ERP (`erp-link`/`erp-unlink`,
+   опция `erpBatch`; ревью E1-1) — исключение по частоте: ERP шлёт ручки
+   построчно, поэтому смета моложе 60 с новой версией не заменяется
+   (отметка «Цена ERP обновлена…» до следующего пересчёта), а сметы
+   неактивных вариантов на этом пути не трогаются.
 2. Пока сущность не попала в смету, в «Сводно» её не будет —
    секция «Прочее» читает документ, а не живые данные. Если строку
    надо показывать и до пересчёта, её подмешивают в
@@ -3186,6 +3190,8 @@ COMPANY_SETTINGS | COMPANY_DIVISION
 #### Заказы (`entityType = ORDER` / `ORDER_COST_ESTIMATE`)
 
 `ORDER_CREATED`, `ORDER_UPDATED`, `ORDER_PATTERN_CHANGED`,
+`ORDER_VARIANTS_RENAMED` (пары «старый цвет → новый» при сопоставлении
+расцветок по порядку, ревью G9-1),
 `ORDER_PATTERN_SNAPSHOT_CREATED`, `ORDER_OPERATION_PLAN_RECALCULATED`,
 `ORDER_CALCULATION_STARTED`, `ORDER_CALCULATION_COMPLETED`,
 `ORDER_COST_ESTIMATE_CREATED`, `ORDER_CALCULATION_REOPENED`,

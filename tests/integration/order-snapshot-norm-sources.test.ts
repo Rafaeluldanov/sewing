@@ -6,7 +6,9 @@
  *   T1-3. Смена размерного плана на размеры, которых в номенклатуре нет:
  *         recompute обязан снять метку «из номенклатуры» (метка и число
  *         решаются одним условием — выведенной нормой, как в материализации)
- *         и не молчать — отметка на заказе (`needsStaleReason`).
+ *         и не молчать — отметка на заказе (`needsStaleReason`). Ревью:
+ *         связь (`qtySourceRef`) при этом НЕ рвётся — при возврате плана на
+ *         покрытые размеры норма и метка возвращаются (цикл S → L → M).
  *   T1-4. Второй заход сопоставления (авто-расщепление единиц) не получает
  *         источники, занятые первым: «Кашкорсе» (кг) не берёт норму «Рибаны».
  *   T1-8. Обнуление тиража одной расцветки не сносит её шаблонные строки и
@@ -206,7 +208,9 @@ describeWithDb('integration — снимок материалов: нормы н
       select: { qtySource: true, qtySourceRef: true },
     });
     expect(dbRow.qtySource).toBe('TEMPLATE');
-    expect(dbRow.qtySourceRef).toBeNull();
+    // Ревью T1-3: метка понижена, но СВЯЗЬ с источником сохранена — по ней
+    // строка вернётся в номенклатуру, когда план снова её покроет.
+    expect(dbRow.qtySourceRef).toBe(cat.byLabel['Кулирка']);
 
     // Не молчим: отметка на заказе называет строку.
     const order = await t.prisma.order.findUniqueOrThrow({
@@ -217,11 +221,41 @@ describeWithDb('integration — снимок материалов: нормы н
     expect(order.needsStaleReason ?? '').toContain('«Кулирка»');
     expect(order.needsStaleReason ?? '').toMatch(/не покрывает размерный план/u);
 
-    // Симметрия с материализацией: заказ, созданный сразу с L, — та же метка.
+    // Ревью T1-3: план вернулся на покрытый размер (M=50) — строка снова
+    // «из номенклатуры» с нормой M (1.1), спецификация 55 м, и потребность
+    // считает те же 55 м: спецификация и потребность не расходятся.
+    await api()
+      .patch(`/api/orders/${orderId}`)
+      .set('Cookie', t.adminCookie)
+      .send({ items: [{ sizeId: seed.sizes.M, qtyPlan: 50 }] })
+      .expect(200);
+    const back = (await specLines(orderId)).find((l) => l.name === 'Кулирка')!;
+    expect(back.qtySource).toBe('NOMENCLATURE');
+    expect(back.qtySourceLabel).not.toBeNull();
+    expect(Number(back.qtyPerUnit)).toBeCloseTo(1.1, 4);
+    expect(Number(back.totalQty)).toBeCloseTo(55, 4);
+    const backDb = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, name: 'Кулирка' },
+      select: { qtySource: true, qtySourceRef: true },
+    });
+    expect(backDb.qtySource).toBe('NOMENCLATURE');
+    expect(backDb.qtySourceRef).toBe(cat.byLabel['Кулирка']);
+    const { needs } = await calculate(orderId);
+    const kulirkaNeed = needs.find((r) => r.materialRole === 'MAIN_FABRIC');
+    expect(kulirkaNeed).toBeDefined();
+    expect(Number(kulirkaNeed!.calculatedQty)).toBeCloseTo(55, 4);
+
+    // Симметрия с материализацией: заказ, созданный сразу с L, — та же метка,
+    // и та же сохранённая связь (ревью T1-3).
     const freshId = await createOrder(pid, { items: [{ sizeId: seed.sizes.L, qtyPlan: 100 }] });
     const fresh = (await specLines(freshId)).find((l) => l.name === 'Кулирка')!;
     expect(fresh.qtySource).toBe('TEMPLATE');
     expect(fresh.qtySourceLabel).toBeNull();
+    const freshDb = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId: freshId, name: 'Кулирка' },
+      select: { qtySourceRef: true },
+    });
+    expect(freshDb.qtySourceRef).toBe(cat.byLabel['Кулирка']);
   });
 
   test('T1-3 (контроль): план сменили на размер С нормой — строка остаётся «из номенклатуры», отметки нет', async () => {
@@ -521,5 +555,60 @@ describeWithDb('integration — снимок материалов: нормы н
     const row = await t.prisma.orderMaterialRequirement.findUniqueOrThrow({ where: { id: blackLineId } });
     expect(row.totalQty.toString()).toBe('0');
     expect(row.qtySource).toBe('ORDER');
+  });
+
+  test('T1-8 (ревью): legacy-заказ без спецификации — обнуление расцветки пересчитывает её строки в ноль', async () => {
+    // Заказ без лекала (legacy productId) → спецификации нет → ветка
+    // «материализовывать нечего». Раньше она ПРОПУСКАЛА группы с нулевым
+    // тиражом, и строки обнулённой расцветки хранили прежний totalQty.
+    const r = await api()
+      .post('/api/orders')
+      .set('Cookie', t.adminCookie)
+      .send({
+        orderDate: '2026-09-13T00:00:00.000Z',
+        clientId: seed.client.id,
+        productId: seed.product.id,
+        color: 'серый',
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+        variants: [
+          { color: 'Белый', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 60 }] },
+          { color: 'Чёрный', sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }] },
+        ],
+      })
+      .expect(201);
+    const orderId = r.body.id as string;
+    const variants = await t.prisma.orderVariant.findMany({ where: { orderId }, orderBy: { ordinal: 'asc' } });
+    const blackId = variants.find((v) => v.color === 'Чёрный')!.id;
+    const whiteId = variants.find((v) => v.color === 'Белый')!.id;
+    await api()
+      .post(`/api/orders/${orderId}/tech-card/lines`)
+      .set('Cookie', t.adminCookie)
+      .send({ orderVariantId: blackId, name: 'Лента', unit: 'м', qtyPerUnit: '0.9' })
+      .expect(201);
+    await api()
+      .post(`/api/orders/${orderId}/tech-card/lines`)
+      .set('Cookie', t.adminCookie)
+      .send({ orderVariantId: whiteId, name: 'Лента', unit: 'м', qtyPerUnit: '0.9' })
+      .expect(201);
+    const blackLine = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, orderVariantId: blackId },
+    });
+    expect(blackLine.totalQty.toString()).toBe('36');
+
+    // Тираж Чёрного → 0: строка жива, тираж — ноль, норма на месте.
+    await patchBlackColorway(orderId, blackId, []);
+    const zeroed = await t.prisma.orderMaterialRequirement.findUniqueOrThrow({ where: { id: blackLine.id } });
+    expect(zeroed.totalQty.toString()).toBe('0');
+    expect(zeroed.qtyPerUnit.toString()).toBe('0.9');
+    // Белый не тронут.
+    const white = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, orderVariantId: whiteId },
+    });
+    expect(white.totalQty.toString()).toBe('54');
+
+    // Возврат тиража — та же строка, 36 снова.
+    await patchBlackColorway(orderId, blackId, [{ sizeId: seed.sizes.M, qtyPlan: 40 }]);
+    const back = await t.prisma.orderMaterialRequirement.findUniqueOrThrow({ where: { id: blackLine.id } });
+    expect(back.totalQty.toString()).toBe('36');
   });
 });

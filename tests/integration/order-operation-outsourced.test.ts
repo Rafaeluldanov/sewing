@@ -1227,6 +1227,115 @@ describeWithDb('integration — сторонние услуги на опера�
     ]);
     expect((await planOf(orderId2)).costRub).toBeCloseTo(60 * 12 + 40 * 9, 2);
   });
+
+  test('гард BY_SIZE бьёт только по изменению: шаг, уже стоявший BY_SIZE без ставок, не запирает форму (L1-10, ревью)', async () => {
+    // Аудит 13.09.2026, L1-10, ревью: форма правки маршрута шлёт каждый шаг
+    // целиком (replace-all) с текущим режимом. Прод-заказ с шагом BY_SIZE
+    // без поразмерных ставок (принят до гарда, с warning) не должен
+    // запирать сохранение расценки СОСЕДНЕЙ операции — 400 только когда
+    // режим шага СТАЛ BY_SIZE или его набор ставок правили.
+    const sew = await createOperation(t, {
+      code: 'OUTS-RATE-GUARD-LEGACY-SEW',
+      name: 'Пошив',
+      pricingMode: 'SALARY_ONLY',
+      fixedRate: null,
+      timeNormMode: 'FIXED',
+      timeNormSec: 60,
+    });
+    const cut = await createOperation(t, {
+      code: 'OUTS-RATE-GUARD-LEGACY-CUT',
+      name: 'Крой',
+      pricingMode: 'FIXED',
+      fixedRate: 10,
+      timeNormMode: 'FIXED',
+      timeNormSec: 30,
+    });
+    const route = await createRoute(t, {
+      code: 'RT-OUTS-RATE-GUARD-LEGACY',
+      operationIds: [cut.id, sew.id],
+    });
+    const orderId = await createOrder(t, seed, manager, {
+      items: [
+        { sizeId: seed.sizes.M, qtyPlan: 60 },
+        { sizeId: seed.sizes.L, qtyPlan: 40 },
+      ],
+      routeTemplateId: route.id,
+    });
+    const sewStepId = await stepIdOf(orderId, sew.id);
+    const cutStepId = await stepIdOf(orderId, cut.id);
+
+    // Legacy-состояние: шаг уже BY_SIZE, ставка только по M (снимок принят
+    // до гарда) — пишем прямо в БД, ручка такое больше не принимает.
+    await t.prisma.orderRouteStep.update({
+      where: { id: sewStepId },
+      data: { pricingModeOverride: 'BY_SIZE' },
+    });
+    await t.prisma.orderRouteStepSizeOverride.create({
+      data: { orderRouteStepId: sewStepId, sizeId: seed.sizes.M, rate: new Prisma.Decimal(12) },
+    });
+
+    // Replace-all формы: «Пошив» как есть (режим и ставки не менялись),
+    // «Крой» — новая расценка. Сохраняется, расценка кроя записана.
+    await putOverrides(orderId, [
+      {
+        stepId: sewStepId,
+        pricingModeOverride: 'BY_SIZE',
+        sizeOverrides: [
+          { sizeId: seed.sizes.M, rate: 12 },
+          { sizeId: seed.sizes.L, rate: null },
+        ],
+      },
+      { stepId: cutStepId, pricingModeOverride: 'FIXED', rateOverride: 11 },
+    ]);
+    const cutStep = await t.prisma.orderRouteStep.findUniqueOrThrow({
+      where: { id: cutStepId },
+      select: { rateOverride: true },
+    });
+    expect(Number(cutStep.rateOverride)).toBe(11);
+    const sewStep = await stepOf(orderId, sew.id);
+    expect(sewStep.pricingModeOverride).toBe('BY_SIZE');
+    expect(sewStep.sizeOverrides.map((o) => o.sizeId)).toEqual([seed.sizes.M]);
+    // План не молчит: неизменённая дыра остаётся предупреждением плана.
+    const plan = await planOf(orderId);
+    expect((plan.warnings ?? []).join('\n')).toMatch(/Пошив/);
+
+    // Тот же шаг без набора ставок вовсе — тоже «не менялось», проходит.
+    await putOverrides(orderId, [{ stepId: sewStepId, pricingModeOverride: 'BY_SIZE' }]);
+
+    // А вот ПРАВКА ставок этого шага без закрытия L — 400: менеджер трогает
+    // именно поразмерный набор.
+    const edited = await putOverrides(
+      orderId,
+      [
+        {
+          stepId: sewStepId,
+          pricingModeOverride: 'BY_SIZE',
+          sizeOverrides: [{ sizeId: seed.sizes.M, rate: 13 }],
+        },
+      ],
+      400,
+    );
+    expect(edited.body.code).toBe('ORDER_ROUTE_OVERRIDE_RATE_REQUIRED');
+    expect(edited.body.message).toMatch(/размеров: L\./);
+    // Ставка M не переписана — 400 до мутаций.
+    expect(Number((await stepOf(orderId, sew.id)).sizeOverrides[0]!.rate)).toBe(12);
+
+    // Снятие ставки M (покрытие уменьшили) — тоже 400.
+    const reduced = await putOverrides(
+      orderId,
+      [{ stepId: sewStepId, pricingModeOverride: 'BY_SIZE', sizeOverrides: [] }],
+      400,
+    );
+    expect(reduced.body.code).toBe('ORDER_ROUTE_OVERRIDE_RATE_REQUIRED');
+
+    // Новый перевод соседнего шага на BY_SIZE без ставок — гард как прежде.
+    const fresh = await putOverrides(
+      orderId,
+      [{ stepId: cutStepId, pricingModeOverride: 'BY_SIZE' }],
+      400,
+    );
+    expect(fresh.body.code).toBe('ORDER_ROUTE_OVERRIDE_RATE_REQUIRED');
+  });
 });
 
 // ===========================================================================

@@ -89,21 +89,15 @@ export const CONSTRUCTOR_TASK_STATUS_TONE: Record<
 };
 
 // ---------------------------------------------------------------------------
-// Конверсия погонных метров → м² (для PatternMaterialArea)
+// Конверсии погонных метров → м² здесь НЕТ (Аудит движка расчёта
+// 13.09.2026, K9, ревью): прежние `CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`
+// (1,8 м) и `metersToAreaM2` не вызывались ни backend-ом, ни frontend-ом,
+// а их JSDoc обещал конверсию «при сохранении задачи конструктору» —
+// площади лекала `PatternMaterialArea` пишутся ТОЛЬКО из calc-payload
+// (м² по размерам, как ввёл менеджер; см. `ConstructorTasksService.saveDraft`).
+// Выдуманная ширина рулона в площадь лекала попадать не должна — обе
+// сущности удалены, чтобы их не «включили по документации».
 // ---------------------------------------------------------------------------
-
-/**
- * Дефолтная ширина рулона ткани (м), используемая для конверсии
- * `areaM2 = linearMeters × CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`
- * при сохранении задачи конструктору. 1.8 м — типичная ширина рулона
- * кулирки/кашкорсе по российскому рынку.
- *
- * После возврата лекала от конструктора area может быть пересчитана
- * по реальным `PatternSizeFile`-ам — этот дефолт используется только
- * до возврата лекала, чтобы расчёт «Потребности цеха» давал
- * приближённый, но осмысленный результат.
- */
-export const CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M = 1.8;
 
 // ---------------------------------------------------------------------------
 // Лимит размера файла
@@ -553,27 +547,6 @@ export type RequestReworkConstructorTaskDto = z.infer<
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Конверсия «погонные метры → м²» с дефолтной шириной рулона.
- * Используется и backend-ом (при создании `PatternMaterialArea`), и
- * frontend-ом (если понадобится показать прогноз м² в превью).
- *
- * Возвращает `null`, если входное значение тоже null/пустое — то
- * есть отсутствие данных по строке не превращается в `0 м²`.
- */
-export function metersToAreaM2(
-  linearMeters: number | string | null | undefined,
-  widthMeters: number = CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M,
-): number | null {
-  if (linearMeters == null || linearMeters === '') return null;
-  const n =
-    typeof linearMeters === 'number'
-      ? linearMeters
-      : Number(String(linearMeters).replace(',', '.'));
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Number((n * widthMeters).toFixed(4));
-}
 
 /**
  * Сгенерировать `article` для DRAFT-PatternItem. Уникальность
