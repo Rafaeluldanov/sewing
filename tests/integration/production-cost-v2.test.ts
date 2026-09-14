@@ -573,7 +573,18 @@ describeWithDb('integration — production cost v2 (управленческий
       qtyGood: 5,
       cutDate: day,
     });
-    // ОТК держал паспорт 6 минут (ISSUED→FINISHED, operationId = QC).
+    // ОТК держал паспорт 6 минут (ISSUED→FINISHED, operationId = QC) внутри
+    // смены: хронометраж без смены в себестоимость не идёт (рамка смены,
+    // решение владельца 14.09.2026).
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+        startedAt: new Date('2026-04-22T07:00:00.000Z'),
+        endedAt: new Date('2026-04-22T15:00:00.000Z'),
+      },
+    });
     await t.prisma.passportEvent.createMany({
       data: [
         {
@@ -633,12 +644,22 @@ describeWithDb('integration — production cost v2 (управленческий
         salaryPerHour: new Prisma.Decimal(600),
       },
     });
-    // Был на смене в этот день (источник простоя — `SalaryEntry`).
+    // Был на смене в этот день (источник простоя — `SalaryEntry`), сама
+    // смена — рамка хронометража (решение владельца 14.09.2026).
     await t.prisma.salaryEntry.create({
       data: {
         employeeId: seed.employees.qc.id,
         date: day,
         amount: new Prisma.Decimal(4800),
+      },
+    });
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+        startedAt: new Date('2026-04-23T07:00:00.000Z'),
+        endedAt: new Date('2026-04-23T15:00:00.000Z'),
       },
     });
     const passport = await createPackedPassport(t, seed, {

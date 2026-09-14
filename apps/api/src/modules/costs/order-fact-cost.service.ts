@@ -244,8 +244,13 @@ export class OrderFactCostService {
     const to = order.completedAt ?? new Date();
     if (from && passportIds.length > 0) {
       try {
-        const { rubByPassport } = await this.passportCost.apportionedSalaryForPeriod(from, to);
-        for (const pid of passportIds) salary += rubByPassport.get(pid) ?? 0;
+        const apportioned = await this.passportCost.apportionedSalaryForPeriod(from, to);
+        for (const pid of passportIds) salary += apportioned.rubByPassport.get(pid) ?? 0;
+        // Норма времени у окладной операции не задана — её работа по этому
+        // окну учтена как 0 ₽ (решение владельца 14.09.2026: терминалы
+        // ОТК/ВТО/упаковки считаются по норме × объём). Код, а не текст:
+        // документ выпуска читают ERP и UI по коду.
+        if (apportioned.warnings.length > 0) warnings.push('SALARY_NORM_MISSING');
       } catch (error) {
         warnings.push('SALARY_APPORTION_FAILED');
         this.logger.warn(

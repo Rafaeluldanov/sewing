@@ -215,6 +215,52 @@ describeWithDb('integration — production dashboard (Дашборд начал�
     expect(alert.message).toMatch(/ОТК/);
   });
 
+  test('4b. оплачено = фактическая смена (workedSeconds), учтено = норма × объём, остальное — простой', async () => {
+    // Решение владельца 14.09.2026: «в час оклад 500 ₽, 30 минут съели
+    // операции — остальное простой». Смена 6 ч (360 мин), ОТК прошёл 5 шт по
+    // норме 60 сек/шт = 5 мин → простой 355 мин, а не 480 − 5.
+    const today = startOfUtcToday();
+    await t.prisma.salaryEntry.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        date: today,
+        amount: new Prisma.Decimal(360),
+        source: 'SHIFT_DAY',
+        workedSeconds: 6 * 3600,
+      },
+    });
+    await t.prisma.operation.update({
+      where: { id: seed.operations.QC.id },
+      data: { timeNormMode: 'FIXED', timeNormSec: 60 },
+    });
+    const passport = await createPlacedPassport(t, seed, 5, today);
+    await t.prisma.passportEvent.create({
+      data: {
+        passportId: passport.id,
+        type: 'QC_PASSED',
+        operationId: seed.operations.QC.id,
+        employeeId: seed.employees.qc.id,
+        qty: 5,
+        createdAt: new Date(today.getTime() + 9 * 3_600_000),
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/dashboard/production')
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const qc = res.body.roleLoad.find(
+      (r: { role: string }) => r.role === 'QC',
+    );
+    expect(qc).toBeDefined();
+    expect(qc.employees).toBe(1);
+    expect(qc.paidMinutes).toBe(360);
+    expect(qc.trackedMinutes).toBe(5);
+    expect(qc.idleMinutes).toBe(355);
+    expect(qc.idleCost).toBeCloseTo(355, 2);
+    expect(qc.utilization).toBe(1);
+  });
+
   // -------------------------------------------------------------------------
   // 5. Период
   // -------------------------------------------------------------------------

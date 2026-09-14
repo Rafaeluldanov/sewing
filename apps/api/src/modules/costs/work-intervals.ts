@@ -3,37 +3,35 @@
  * потока событий паспортов. Выход кормит `apportionEmployeeTime`
  * (`time-apportionment.ts`), который делит нахлёсты между паспортами.
  *
- * Два пути «accept → complete», потому что в реальном флоу события
- * пишутся по-разному (проверено по эмиссии в `passports.service.ts`,
- * `qc.service.ts`, `packing.service.ts`):
+ * Правило одно (решение владельца 14.09.2026, «себестоимость по факту
+ * выполненных работ»): интервал есть ТОЛЬКО там, где есть свой accept.
  *
  *   1. ЯВНЫЙ ACCEPT — операции, которые рабочий «берёт» через смену
  *      (`issueToEmployee`): пишется `ISSUED_TO_EMPLOYEE` (accept) и затем
  *      `OPERATION_FINISHED` (complete) с тем же `operationId`. Сюда
- *      попадают швейные операции и окладные сменные (деление кроя,
- *      настил). Интервал = `[ISSUE..COMPLETE]` точно.
+ *      попадают швейные операции окладниц и окладные сменные (деление
+ *      кроя, «ВТО оклад», «крой оклад»). Интервал = `[ISSUE..COMPLETE]`
+ *      точно; рамкой смены и делением нахлёстов занимается вызывающий
+ *      код (`shift-frame.ts`, `time-apportionment.ts`).
  *
- *   1a. СКАН ОТК/ВТО — терминалы ОТК/ВТО берут паспорт сканом
- *      (`PassportsService.scanOnOperation` → `OPERATION_SCAN` с
- *      `operationId` операции QC/IRONING), а `QC_PASSED` / `WTO_PASSED`
- *      несут тот же `operationId`. `PassportRealCostService` подаёт такой
- *      скан сюда как `ISSUE` — интервал = `[SCAN..PASSED]` точно (аудит
- *      движка расчёта 13.09.2026, F1-5: прежняя премисса «`OPERATION_SCAN`
- *      в реальном флоу нет» была верна для швей, но не для ОТК/ВТО).
+ *   2. ЗАВЕРШЕНИЕ БЕЗ ACCEPT — терминалы ОТК/ВТО/упаковки (`QC_PASSED`
+ *      / `WTO_PASSED` / `PACKED`) и `OPERATION_FINISHED` без открытого
+ *      `ISSUE` по своей паре. Интервала НЕ строим — такое завершение
+ *      уходит в `unmatched`, и вызывающий код считает его по норме
+ *      времени операции × объём паспорта (`operation-time-norm.ts`).
  *
- *   2. ТОЛЬКО ТЕРМИНАЛ — упаковка (`PACKED`) и завершения без своего
- *      accept (ОТК/ВТО без скана, ретро-проходы). Accept выводим «по
- *      разрыву»: время с предыдущего завершения этого же сотрудника (он
- *      был занят с тех пор), но не больше `capMs` (защита «забыл
- *      закрыть»/«ушёл на обед»). Самое первое завершение в потоке, когда
- *      предыдущего нет, считаем минимально (`minMs`) — иначе первый паспорт
- *      дня съел бы целый cap. Это обобщение PACKING-эвристики
- *      (`PassportDurationsService.computePackingAccept`) на все терминальные
- *      окладные операции.
+ *      Почему не «по разрыву с предыдущего завершения», как было до
+ *      14.09.2026: на проде между отметками ОТК проходило 7,7 мин
+ *      (медиана) при p90 = 81 мин — в изделие ложился простой и обед
+ *      контролёра. И не по скану `OPERATION_SCAN → QC_PASSED` (аудит
+ *      13.09, F1-5): между сканом и «проверено» проходит 1 секунда
+ *      (медиана) — контролёр отмечает партию уже после проверки, и
+ *      хронометраж давал ноль. Норма × объём — единственная мера, которая
+ *      отражает выполненную работу, а не привычку отмечаться.
  *
  * Функция чистая и детерминированная — события передаются уже
- * нормализованными (`WorkEvent`), а cap/min — параметрами. Покрыта
- * unit-тестами (`tests/unit/work-intervals.test.ts`).
+ * нормализованными (`WorkEvent`). Покрыта unit-тестами
+ * (`tests/unit/work-intervals.test.ts`).
  */
 import type { WorkInterval } from './time-apportionment.js';
 
@@ -48,75 +46,65 @@ export interface WorkEvent {
   kind: WorkEventKind;
   /** Время события, мс от epoch. */
   atMs: number;
+  /**
+   * Количество по событию (`PassportEvent.qty`, у терминалов = `qtyGood`
+   * паспорта на момент отметки). Нужно только нормативной ветке —
+   * строитель его не читает, а прокидывает в `unmatched` как есть.
+   */
+  qty?: number | null;
 }
 
-export interface BuildWorkIntervalsOptions {
-  /** Потолок одного интервала, мс (защита «забыл закрыть»). */
-  capMs: number;
-  /** Минимальный интервал для самого первого терминала без accept, мс. */
-  minMs: number;
+export interface BuiltWorkIntervals {
+  /** Точные интервалы `[ISSUE..COMPLETE]` (путь 1). */
+  intervals: WorkInterval[];
+  /**
+   * Завершения без своего accept (путь 2) — считать по норме × объём.
+   * Порядок — по времени.
+   */
+  unmatched: WorkEvent[];
 }
 
 /**
  * Строит интервалы работы сотрудника. Вход — события ОДНОГО сотрудника
  * (любой порядок, функция сортирует по времени).
  *
- * Пара `ISSUE→COMPLETE` матчится по `(passportId, operationId)`. Если
- * перед `COMPLETE` нет открытого `ISSUE` — применяется фолбэк по разрыву.
+ * Пара `ISSUE→COMPLETE` матчится по `(passportId, operationId)`. Свежий
+ * `ISSUE` по той же паре перетирает незакрытый предыдущий (перевыдача).
+ * `ISSUE` без завершения (паспорт ещё на руках) интервала не даёт.
  */
-export function buildWorkIntervals(
-  events: WorkEvent[],
-  options: BuildWorkIntervalsOptions,
-): WorkInterval[] {
-  const { capMs, minMs } = options;
+export function buildWorkIntervals(events: WorkEvent[]): BuiltWorkIntervals {
   const sorted = [...events].sort((a, b) => a.atMs - b.atMs);
 
   // Открытые accept-ы по ключу passport|operation.
   const openIssue = new Map<string, number>();
-  // Время предыдущего завершения этого сотрудника — для фолбэка по разрыву.
-  let lastCompleteAt: number | null = null;
 
-  const out: WorkInterval[] = [];
+  const intervals: WorkInterval[] = [];
+  const unmatched: WorkEvent[] = [];
 
   for (const ev of sorted) {
     const key = `${ev.passportId} ${ev.operationId ?? ''}`;
     if (ev.kind === 'ISSUE') {
-      // Свежий accept перетирает предыдущий незакрытый (перевыдача).
       openIssue.set(key, ev.atMs);
       continue;
     }
 
-    // COMPLETE
-    let startMs: number;
     const issuedAt = openIssue.get(key);
     if (issuedAt !== undefined && issuedAt < ev.atMs) {
-      // Путь 1: точный accept из ISSUE.
-      startMs = issuedAt;
       openIssue.delete(key);
-    } else if (lastCompleteAt !== null) {
-      // Путь 2: разрыв с предыдущего завершения, но не больше cap.
-      startMs = Math.max(lastCompleteAt, ev.atMs - capMs);
-    } else {
-      // Путь 2, самый первый терминал в потоке — минимальный интервал.
-      startMs = ev.atMs - minMs;
-    }
-
-    // Жёсткий cap на длину (на случай очень старого ISSUE).
-    if (ev.atMs - startMs > capMs) {
-      startMs = ev.atMs - capMs;
-    }
-
-    lastCompleteAt = ev.atMs;
-
-    if (ev.atMs > startMs) {
-      out.push({
+      intervals.push({
         passportId: ev.passportId,
         operationId: ev.operationId,
-        startMs,
+        startMs: issuedAt,
         endMs: ev.atMs,
       });
+      continue;
     }
+    // Accept в ту же миллисекунду, что и complete (или позже) — данных о
+    // времени нет; открытый accept при этом снимаем, чтобы он не
+    // «зачёлся» следующему завершению по той же паре.
+    if (issuedAt !== undefined) openIssue.delete(key);
+    unmatched.push(ev);
   }
 
-  return out;
+  return { intervals, unmatched };
 }

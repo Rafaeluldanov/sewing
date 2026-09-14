@@ -5,9 +5,13 @@
  * Проверяем end-to-end на живых событиях:
  *   1) одиночный паспорт: материал(0) + сдельная(APPROVED) + оклад,
  *      где оклад = реальный интервал `ISSUED_TO_EMPLOYEE →
- *      OPERATION_FINISHED` × (salaryPerHour / 60);
+ *      OPERATION_FINISHED` × (salaryPerHour / 60) — внутри смены;
  *   2) разнос оклада: один окладник держит ДВА паспорта одновременно
  *      10 минут → каждому достаётся ровно по 5 минут (деление 1/k);
+ *   2a) рамка смены (решение владельца 14.09.2026): взяла в конце смены,
+ *      сдала назавтра — ночь на паспорт не ложится;
+ *   2b) терминал без accept (`QC_PASSED`) — норма времени × объём;
+ *      норма не задана → 0 ₽;
  *   3) RBAC: рабочему роль не положена.
  *
  * Сетап делаем напрямую через prisma (как в `earnings-rbac.test.ts`) —
@@ -79,6 +83,22 @@ describeWithDb('integration — себестоимость паспорта (ф�
     return order.id;
   }
 
+  /**
+   * Смена ОТК `[from..to]` — рамка хронометража (решение владельца
+   * 14.09.2026): без смены минуты «взяла → сдала» в себестоимость не идут.
+   */
+  async function qcShift(from: Date, to: Date): Promise<void> {
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+        startedAt: from,
+        endedAt: to,
+      },
+    });
+  }
+
   async function createPassport(
     orderId: string,
     number: string,
@@ -127,7 +147,9 @@ describeWithDb('integration — себестоимость паспорта (ф�
       },
     });
 
-    // ОТК держал паспорт ровно 6 минут (ISSUED → OPERATION_FINISHED).
+    // ОТК держал паспорт ровно 6 минут (ISSUED → OPERATION_FINISHED)
+    // внутри своей смены 08:00–16:00.
+    await qcShift(at(0), at(480));
     await t.prisma.passportEvent.createMany({
       data: [
         {
@@ -165,6 +187,104 @@ describeWithDb('integration — себестоимость паспорта (ф�
     expect(line.rub).toBeCloseTo(60, 2);
     expect(line.employeeName).toBe('Test QC');
     expect(line.operationName).toBe('ОТК');
+    expect(line.basis).toBe('TIMED');
+    expect(line.qty).toBeNull();
+  });
+
+  test('рамка смены: «взяла в конце смены — сдала назавтра» — ночь на паспорт не ложится', async () => {
+    const orderId = await createOrder('O-COST-1N');
+    const passportId = await createPassport(orderId, 'P-COST-1N', 10);
+
+    // Смена 1: 08:00–16:00 сегодня; смена 2: 08:00–16:00 завтра.
+    await qcShift(at(0), at(480));
+    await qcShift(at(24 * 60), at(24 * 60 + 480));
+    // Взяла в 15:50, сдала завтра в 08:20 → 10 мин сегодня + 20 мин завтра;
+    // 16 ночных часов между сменами в себестоимость не идут (раньше был бы
+    // потолок 60 мин, теперь — ровно смены).
+    await t.prisma.passportEvent.createMany({
+      data: [
+        {
+          passportId,
+          type: 'ISSUED_TO_EMPLOYEE',
+          operationId: seed.operations.QC.id,
+          employeeId: seed.employees.qc.id,
+          createdAt: at(470),
+        },
+        {
+          passportId,
+          type: 'OPERATION_FINISHED',
+          operationId: seed.operations.QC.id,
+          employeeId: seed.employees.qc.id,
+          createdAt: at(24 * 60 + 20),
+        },
+      ],
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get(`/api/costs/passport/${passportId}`)
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    expect(res.body.salaryCost).toBeCloseTo(30 * MINUTE_RATE, 2); // 300
+    // Две строки — по одной на каждый день смены.
+    const minutes = (res.body.salaryLines as { minutes: number }[])
+      .map((l) => l.minutes)
+      .sort((a, b) => a - b);
+    expect(minutes).toEqual([10, 20]);
+  });
+
+  test('терминал без accept: норма × объём; без нормы — 0 ₽', async () => {
+    const orderId = await createOrder('O-COST-1Q');
+    const passportId = await createPassport(orderId, 'P-COST-1Q', 10);
+    await qcShift(at(0), at(480));
+
+    // Только QC_PASSED (так ОТК и отмечается в реальном флоу) — accept-а нет.
+    // Нормы у ОТК в сиде нет → 0 ₽ (не «по разрыву», не по скану).
+    await t.prisma.passportEvent.create({
+      data: {
+        passportId,
+        type: 'QC_PASSED',
+        operationId: seed.operations.QC.id,
+        employeeId: seed.employees.qc.id,
+        qty: 10,
+        createdAt: at(30),
+      },
+    });
+    const noNorm = await request(t.app.getHttpServer())
+      .get(`/api/costs/passport/${passportId}`)
+      .set('Cookie', cookies.manager);
+    expect(noNorm.status).toBe(200);
+    expect(noNorm.body.salaryCost).toBe(0);
+    expect(noNorm.body.salaryLines).toHaveLength(0);
+
+    // Норма ОТК 36 сек/шт × 10 шт = 6 мин → 60 ₽.
+    await t.prisma.operation.update({
+      where: { id: seed.operations.QC.id },
+      data: { timeNormMode: 'FIXED', timeNormSec: 36 },
+    });
+    const normed = await request(t.app.getHttpServer())
+      .get(`/api/costs/passport/${passportId}`)
+      .set('Cookie', cookies.manager);
+    expect(normed.status).toBe(200);
+    expect(normed.body.salaryCost).toBeCloseTo(60, 2);
+    expect(normed.body.salaryLines).toHaveLength(1);
+    expect(normed.body.salaryLines[0].basis).toBe('NORMED');
+    expect(normed.body.salaryLines[0].qty).toBe(10);
+    expect(normed.body.salaryLines[0].minutes).toBeCloseTo(6, 1);
+
+    // Переопределение нормы в снимке маршрута заказа побеждает справочник:
+    // 60 сек/шт × 10 = 10 мин → 100 ₽.
+    await t.prisma.orderRouteStep.create({
+      data: {
+        orderId,
+        index: 0,
+        operationId: seed.operations.QC.id,
+        timeNormSecOverride: 60,
+      },
+    });
+    const overridden = await request(t.app.getHttpServer())
+      .get(`/api/costs/passport/${passportId}`)
+      .set('Cookie', cookies.manager);
+    expect(overridden.body.salaryCost).toBeCloseTo(100, 2);
   });
 
   // -------------------------------------------------------------------------
@@ -177,6 +297,7 @@ describeWithDb('integration — себестоимость паспорта (ф�
 
     // ОТК взял оба в 08:00 и завершил оба в 08:10 → нахлёст 10 минут,
     // каждому паспорту достаётся по 5 минут.
+    await qcShift(at(0), at(480));
     await t.prisma.passportEvent.createMany({
       data: [
         {
@@ -275,6 +396,7 @@ describeWithDb('integration — себестоимость паспорта (ф�
       },
     });
     // ОТК 6 минут (ISSUED→FINISHED) = 60 ₽ оклада; упаковка packer (сдельный) = 0.
+    await qcShift(at(0), at(480));
     await t.prisma.passportEvent.createMany({
       data: [
         { passportId, type: 'ISSUED_TO_EMPLOYEE', operationId: seed.operations.QC.id, employeeId: seed.employees.qc.id, createdAt: at(0) },

@@ -13,6 +13,7 @@ import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { erpMaterialFactByNeed } from './erp-material-fact.js';
+import { PassportRealCostService } from './passport-real-cost.service.js';
 import { TIRAGE_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { ACTIVE_CALCULATION_ESTIMATE_WHERE } from '../orders/cost-estimate-scope.js';
 
@@ -38,7 +39,10 @@ const FACT_ENTRY_STATUSES: EntryStatus[] = [
  *     прямая с/с факт считается по «списано»;
  *   - ФАКТ операций — «на текущий момент»: все `OperationEntry`, кроме
  *     CANCELLED/REVERSED (включая ещё не подтверждённые PENDING_RELEASE),
- *     подтверждённая часть подсвечивается отдельно;
+ *     подтверждённая часть подсвечивается отдельно; ПЛЮС разнесённый
+ *     оклад по факту выполненных работ (`PassportRealCostService`,
+ *     решение владельца 14.09.2026) — иначе у окладных операций
+ *     (ОТК/ВТО/упаковка, `SALARY_ONLY`) план был, а факт — всегда 0;
  *   - идентичность материала = `WorkshopNeed` (на неё ссылаются строка
  *     сметы, списание и приёмка); непривязанный факт собирается в
  *     синтетические строки;
@@ -53,7 +57,10 @@ const FACT_ENTRY_STATUSES: EntryStatus[] = [
  */
 @Injectable()
 export class OrderProductionDocumentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly passportRealCost: PassportRealCostService,
+  ) {}
 
   private m(v: Prisma.Decimal): Prisma.Decimal {
     return v.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
@@ -831,6 +838,8 @@ export class OrderProductionDocumentService {
       factQty: number;
       factRub: Prisma.Decimal;
       factApprovedRub: Prisma.Decimal;
+      /** Из `factRub` — разнесённый оклад (см. `factSalaryRub` в DTO). */
+      factSalaryRub: Prisma.Decimal;
       breakdown: Map<
         string,
         { sizeCode: string | null; color: string | null; qty: number; rub: Prisma.Decimal }
@@ -872,6 +881,7 @@ export class OrderProductionDocumentService {
         factQty: 0,
         factRub: new Prisma.Decimal(0),
         factApprovedRub: new Prisma.Decimal(0),
+        factSalaryRub: new Prisma.Decimal(0),
         breakdown: new Map(),
         outsourced: false,
         outsourceRub: null,
@@ -1050,6 +1060,7 @@ export class OrderProductionDocumentService {
           factQty: 0,
           factRub: new Prisma.Decimal(0),
           factApprovedRub: new Prisma.Decimal(0),
+          factSalaryRub: new Prisma.Decimal(0),
           breakdown: new Map(),
           // Строка без планового шага: подряд назначается только на шаге
           // маршрута, поэтому у «сироты» его быть не может. Если строка
@@ -1076,6 +1087,109 @@ export class OrderProductionDocumentService {
       b.rub = b.rub.add(e.amount);
       acc.breakdown.set(bk, b);
       ops.set(e.operationId, acc);
+    }
+
+    // --- ФАКТ оклада по факту выполненных работ (решение владельца
+    //     14.09.2026) ---
+    // Окладные операции (`SALARY_ONLY`: ОТК, ВТО, упаковка, настил, деление
+    // кроя) `OperationEntry` не пишут — без этого блока их факт в документе
+    // был всегда 0 при посчитанном плане. Источник — тот же разнос, что в
+    // документе выпуска и отчёте «Себестоимость» (`salaryRub` там = Σ здесь):
+    // хронометраж в рамке смены либо норма времени × объём. Штуки считаем по
+    // одному разу на паспорт × операцию (строк по паспорту может быть
+    // несколько — по дням и сотрудникам).
+    const salary = await this.passportRealCost.apportionedSalaryForOrder(orderId);
+    if (salary.linesByPassport.size > 0 || salary.missingNormByPassport.size > 0) {
+      const passportIds = Array.from(
+        new Set([
+          ...salary.linesByPassport.keys(),
+          ...salary.missingNormByPassport.keys(),
+        ]),
+      );
+      const passports = await this.prisma.passport.findMany({
+        where: { id: { in: passportIds } },
+        select: {
+          id: true,
+          color: true,
+          qtyGood: true,
+          size: { select: { code: true } },
+        },
+      });
+      const passportById = new Map(passports.map((p) => [p.id, p]));
+      const opIds = new Set<string>();
+      for (const lines of salary.linesByPassport.values()) {
+        for (const l of lines) if (l.operationId) opIds.add(l.operationId);
+      }
+      for (const ops of salary.missingNormByPassport.values()) {
+        for (const id of ops) opIds.add(id);
+      }
+      const opRows =
+        opIds.size > 0
+          ? await this.prisma.operation.findMany({
+              where: { id: { in: Array.from(opIds) } },
+              select: { id: true, code: true, name: true },
+            })
+          : [];
+      const opById = new Map(opRows.map((o) => [o.id, o]));
+      const ensureAcc = (operationId: string): OpAcc => {
+        const existing = ops.get(operationId);
+        if (existing) return existing;
+        const op = opById.get(operationId);
+        const acc: OpAcc = {
+          key: operationId,
+          index: 9000,
+          code: op?.code ?? operationId,
+          name: op?.name || op?.code || operationId,
+          planQty: null,
+          planTimeSec: null,
+          planRub: null,
+          factQty: 0,
+          factRub: new Prisma.Decimal(0),
+          factApprovedRub: new Prisma.Decimal(0),
+          factSalaryRub: new Prisma.Decimal(0),
+          breakdown: new Map(),
+          outsourced: false,
+          outsourceRub: null,
+        };
+        ops.set(operationId, acc);
+        return acc;
+      };
+      const countedQty = new Set<string>();
+      for (const [passportId, lines] of salary.linesByPassport) {
+        const passport = passportById.get(passportId);
+        const sizeCode = passport?.size?.code ?? null;
+        const color = passport?.color ?? null;
+        const bk = `${sizeCode ?? ''}|${color ?? ''}`;
+        for (const l of lines) {
+          if (!l.operationId || l.rub <= 0) continue;
+          const acc = ensureAcc(l.operationId);
+          const rub = new Prisma.Decimal(l.rub);
+          acc.factRub = acc.factRub.add(rub);
+          acc.factApprovedRub = acc.factApprovedRub.add(rub);
+          acc.factSalaryRub = acc.factSalaryRub.add(rub);
+          const b = acc.breakdown.get(bk) ?? {
+            sizeCode,
+            color,
+            qty: 0,
+            rub: new Prisma.Decimal(0),
+          };
+          b.rub = b.rub.add(rub);
+          const qtyKey = `${l.operationId}|${passportId}`;
+          if (!countedQty.has(qtyKey)) {
+            countedQty.add(qtyKey);
+            const qty = l.qty ?? passport?.qtyGood ?? 0;
+            acc.factQty += qty;
+            b.qty += qty;
+          }
+          acc.breakdown.set(bk, b);
+        }
+      }
+      // Завершения без нормы — строка операции есть (план по ней, скорее
+      // всего, тоже неполный), а факт занижен: предупреждаем документом.
+      for (const opIdsOfPassport of salary.missingNormByPassport.values()) {
+        for (const operationId of opIdsOfPassport) ensureAcc(operationId);
+        if (opIdsOfPassport.length > 0) docWarnings.add('SALARY_NORM_MISSING');
+      }
     }
 
     // --- Замещающие операции (PF3): свернуть факт замены в ОДНУ строку ---
@@ -1181,6 +1295,7 @@ export class OrderProductionDocumentService {
           factQty: acc.factQty,
           factRub: factRub.toFixed(2),
           factApprovedRub: this.m(acc.factApprovedRub).toFixed(2),
+          factSalaryRub: this.m(acc.factSalaryRub).toFixed(2),
           // Метка «делаем на стороне»: по отданному объёму факта не будет —
           // его никто не сканирует, и это НОРМА, а не недовыпуск. Поэтому
           // отдельным полем, а не кодом в `warnings` (там UI рисует ⚠).

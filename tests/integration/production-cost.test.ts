@@ -8,13 +8,13 @@
  * Покрытие:
  *   1. Базовая агрегация: упакованный паспорт даёт producedUnits +
  *      pieceworkCost + (распределённая) salaryCost.
- *   2. Окладная доля считается `PassportRealCostService`: реальное время
- *      `ISSUED_TO_EMPLOYEE → OPERATION_FINISHED`, а для терминалов без
- *      accept (ОТК/ВТО/упаковка) — по разрыву между последовательными
- *      завершениями (одиночный терминал = minMs = 1 мин), всё cap-ается
- *      `MAX_STAGE_MINUTES_PER_PASSPORT = 60` и делится между параллельными
- *      паспортами.
- *   3. Простой = `SHIFT_MINUTES − Σ trackedMinutes` для окладного
+ *   2. Окладная доля считается `PassportRealCostService` по факту
+ *      выполненных работ (решение владельца 14.09.2026): хронометраж
+ *      `ISSUED_TO_EMPLOYEE → OPERATION_FINISHED` в рамке смены с делением
+ *      между параллельными паспортами, а для терминалов без accept
+ *      (ОТК/ВТО/упаковка) — норма времени операции × объём; норма не
+ *      задана → 0 и предупреждение (раньше — «по разрыву» с потолком 60).
+ *   3. Простой = `оплачено − Σ trackedMinutes` для окладного
  *      сотрудника, у которого есть `SalaryEntry` за этот день. Простой
  *      НЕ распределяется на изделия (totalCost к нему не прибавляется).
  *   4. RBAC: SHOP_MANAGER/ADMIN — 200; остальные — 403; без сессии — 401.
@@ -94,6 +94,21 @@ describeWithDb('integration — production cost (Себестоимость вы
         salaryPerHour: new Prisma.Decimal(60),
       },
     });
+    // Терминалы ОТК/ВТО/упаковки accept-а не пишут — их работа считается
+    // по норме времени × объём (решение владельца 14.09.2026). Норма
+    // 60 сек/шт → 1 мин на изделие: qty паспорта = минуты = рубли.
+    await t.prisma.operation.updateMany({
+      where: {
+        id: {
+          in: [
+            seed.operations.QC.id,
+            seed.operations.IRONING.id,
+            seed.operations.PACKING.id,
+          ],
+        },
+      },
+      data: { timeNormMode: 'FIXED', timeNormSec: 60 },
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -120,18 +135,15 @@ describeWithDb('integration — production cost (Себестоимость вы
       },
     });
 
-    // Новый движок (`PassportRealCostService`) игнорирует `OPERATION_SCAN`
-    // (его в реальном флоу нет) и считает время по `ISSUED_TO_EMPLOYEE →
-    // OPERATION_FINISHED`, а для терминалов без accept — по разрыву между
-    // последовательными завершениями. Здесь у каждого окладника один
-    // терминал → minMs = 1 мин.
-    // ОТК: единственный QC_PASSED → 1 мин.
-    await writeStageDone(t, passport.id, 'QC_PASSED', seed.employees.qc.id, at(day, 9, 5));
-    // ВТО: единственный WTO_PASSED → 1 мин.
-    await writeStageDone(t, passport.id, 'WTO_PASSED', seed.employees.ironing.id, at(day, 10, 3));
-    // Упаковка: единственный PACKED → 1 мин.
+    // Движок (`PassportRealCostService`) считает терминалы без accept по
+    // норме × объём: 5 шт × 60 сек = 5 мин у каждого из трёх окладников.
+    // ОТК: QC_PASSED → 5 мин.
+    await writeStageDone(t, seed, passport.id, 'QC_PASSED', seed.employees.qc.id, at(day, 9, 5));
+    // ВТО: WTO_PASSED → 5 мин.
+    await writeStageDone(t, seed, passport.id, 'WTO_PASSED', seed.employees.ironing.id, at(day, 10, 3));
+    // Упаковка: PACKED → 5 мин.
     const packedAt = at(day, 11, 0);
-    await writePacked(t, passport.id, seed.employees.packer.id, packedAt, 5);
+    await writePacked(t, seed, passport.id, seed.employees.packer.id, packedAt, 5);
 
     // SalaryEntry создаём явно — мы не пускаем shifts/start, всё пишется
     // напрямую под admin-ом.
@@ -151,35 +163,37 @@ describeWithDb('integration — production cost (Себестоимость вы
     const d = body.days[0];
     expect(d.date).toBe('2026-04-10');
     expect(d.producedUnits).toBe(5);
-    // 1 ₽/мин × 1 мин × 3 окладника (ОТК+ВТО+упаковка, каждый = minMs) = 3 ₽.
-    expect(d.salaryCost).toBeCloseTo(3, 2);
+    // 1 ₽/мин × 5 мин × 3 окладника (ОТК+ВТО+упаковка, по норме) = 15 ₽.
+    expect(d.salaryCost).toBeCloseTo(15, 2);
     expect(d.pieceworkCost).toBeCloseTo(50, 2);
-    expect(d.totalCost).toBeCloseTo(53, 2);
-    expect(d.trackedMinutes).toBe(3);
-    // Простой = 3 окладника × 480 мин − 3 мин tracked = 1437 мин.
-    expect(d.idleMinutes).toBe(3 * 480 - 3);
-    // 1 ₽/мин × 1437 мин = 1437 ₽.
-    expect(d.idleCost).toBeCloseTo(1437, 2);
+    expect(d.totalCost).toBeCloseTo(65, 2);
+    expect(d.trackedMinutes).toBe(15);
+    // Простой = 3 окладника × 480 мин (legacy-строки без workedSeconds)
+    // − 15 мин tracked = 1425 мин.
+    expect(d.idleMinutes).toBe(3 * 480 - 15);
+    // 1 ₽/мин × 1425 мин = 1425 ₽.
+    expect(d.idleCost).toBeCloseTo(1425, 2);
 
     expect(body.summary.producedUnits).toBe(5);
-    expect(body.summary.totalCost).toBeCloseTo(53, 2);
-    expect(body.summary.avgCostPerUnit).toBeCloseTo(53 / 5, 2);
-    expect(body.summary.idleCost).toBeCloseTo(1437, 2);
+    expect(body.summary.totalCost).toBeCloseTo(65, 2);
+    expect(body.summary.avgCostPerUnit).toBeCloseTo(65 / 5, 2);
+    expect(body.summary.idleCost).toBeCloseTo(1425, 2);
   });
 
   // -------------------------------------------------------------------------
   // 2. Cap длительности
   // -------------------------------------------------------------------------
 
-  test('2. Аномально долгий разрыв cap-ается MAX_STAGE_MINUTES_PER_PASSPORT (60)', async () => {
+  test('2. Разрыв между отметками упаковщика на себестоимость не влияет — только норма × объём', async () => {
     const day = utcDay('2026-04-11');
     const p1 = await createPlacedPassport(t, seed, 1, day);
-    const p2 = await createPlacedPassport(t, seed, 1, day);
+    const p2 = await createPlacedPassport(t, seed, 4, day);
 
-    // Упаковщик пакует P1 в 09:00 (первый терминал = minMs = 1 мин), затем
-    // P2 в 12:00 — разрыв 180 мин, но cap 60 → ровно 60 мин на P2.
-    await writePacked(t, p1.id, seed.employees.packer.id, at(day, 9, 0), 1);
-    await writePacked(t, p2.id, seed.employees.packer.id, at(day, 12, 0), 1);
+    // Упаковщик пакует P1 в 09:00, P2 — в 12:00. Разрыв в 180 минут раньше
+    // ложился на P2 (с потолком 60 мин); теперь это простой, а на паспорта
+    // идёт норма: 1 шт → 1 мин, 4 шт → 4 мин (решение владельца 14.09.2026).
+    await writePacked(t, seed, p1.id, seed.employees.packer.id, at(day, 9, 0), 1);
+    await writePacked(t, seed, p2.id, seed.employees.packer.id, at(day, 12, 0), 4);
     await createSalary(t, seed.employees.packer.id, day, 480);
 
     const res = await request(t.app.getHttpServer())
@@ -188,10 +202,35 @@ describeWithDb('integration — production cost (Себестоимость вы
       .set('Cookie', cookies.manager);
     expect(res.status).toBe(200);
     const d = res.body.days[0];
-    // tracked = 1 (P1) + 60 (P2 cap) = 61 мин.
-    expect(d.trackedMinutes).toBe(61);
-    // (1 + 60) мин × 1 ₽/мин = 61 ₽ (оба паспорта упакованы в этот день).
-    expect(d.salaryCost).toBeCloseTo(61, 2);
+    expect(d.trackedMinutes).toBe(5);
+    expect(d.salaryCost).toBeCloseTo(5, 2);
+    // Остаток оплаченной смены — простой.
+    expect(d.idleMinutes).toBe(480 - 5);
+    expect(d.idleCost).toBeCloseTo(475, 2);
+  });
+
+  test('2b. Терминал без нормы времени: 0 ₽ и предупреждение отчёта', async () => {
+    const day = utcDay('2026-04-11');
+    const p1 = await createPlacedPassport(t, seed, 3, day);
+    await t.prisma.operation.update({
+      where: { id: seed.operations.PACKING.id },
+      data: { timeNormSec: null },
+    });
+    await writePacked(t, seed, p1.id, seed.employees.packer.id, at(day, 9, 0), 3);
+    await createSalary(t, seed.employees.packer.id, day, 480);
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-11', dateTo: '2026-04-11' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const d = res.body.days[0];
+    expect(d.trackedMinutes).toBe(0);
+    expect(d.salaryCost).toBe(0);
+    expect(d.idleMinutes).toBe(480);
+    expect(res.body.warnings).toHaveLength(1);
+    expect(res.body.warnings[0]).toContain('Норма времени не задана');
+    expect(res.body.warnings[0]).toContain('Упаковка (PACKING)');
   });
 
   // -------------------------------------------------------------------------
@@ -297,8 +336,8 @@ describeWithDb('integration — production cost (Себестоимость вы
         },
       });
     }
-    await writePacked(t, p1.id, seed.employees.packer.id, at(day, 11, 0), p1.qtyGood);
-    await writePacked(t, p2.id, seed.employees.packer.id, at(day, 11, 5), p2.qtyGood);
+    await writePacked(t, seed, p1.id, seed.employees.packer.id, at(day, 11, 0), p1.qtyGood);
+    await writePacked(t, seed, p2.id, seed.employees.packer.id, at(day, 11, 5), p2.qtyGood);
 
     const res = await request(t.app.getHttpServer())
       .get('/api/costs/production')
@@ -343,7 +382,7 @@ describeWithDb('integration — production cost (Себестоимость вы
         approvedAt: day,
       },
     });
-    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 2);
+    await writePacked(t, seed, passport.id, seed.employees.packer.id, at(day, 11, 0), 2);
 
     // POSTED MaterialIssue на этот паспорт — totalCost = 1 234.56 ₽.
     const order = await t.prisma.passport.findUniqueOrThrow({
@@ -381,16 +420,16 @@ describeWithDb('integration — production cost (Себестоимость вы
     expect(d.materialCost).toBeCloseTo(1234.56, 2);
     expect(d.pieceworkCost).toBeCloseTo(20, 2);
     // totalCost = piecework + salary + material; упаковщик-окладник вносит
-    // minMs = 1 мин × 1 ₽/мин = 1 ₽ (единственный PACKED).
-    expect(d.totalCost).toBeCloseTo(20 + 1234.56 + 1, 2);
+    // норма 1 мин × 2 шт × 1 ₽/мин = 2 ₽ (PACKED по норме).
+    expect(d.totalCost).toBeCloseTo(20 + 1234.56 + 2, 2);
     expect(res.body.summary.materialCost).toBeCloseTo(1234.56, 2);
-    expect(res.body.summary.totalCost).toBeCloseTo(20 + 1234.56 + 1, 2);
+    expect(res.body.summary.totalCost).toBeCloseTo(20 + 1234.56 + 2, 2);
   });
 
   test('7b. DRAFT MaterialIssue с passportId не включается в materialCost', async () => {
     const day = utcDay('2026-04-15');
     const passport = await createPlacedPassport(t, seed, 1, day);
-    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+    await writePacked(t, seed, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
 
     const order = await t.prisma.passport.findUniqueOrThrow({
       where: { id: passport.id },
@@ -423,14 +462,14 @@ describeWithDb('integration — production cost (Себестоимость вы
     expect(res.status).toBe(200);
     const d = res.body.days[0];
     expect(d.materialCost).toBe(0);
-    // Материал не вошёл (DRAFT); остаётся 1 ₽ оклада упаковщика (minMs).
+    // Материал не вошёл (DRAFT); остаётся 1 ₽ оклада упаковщика (норма 1 мин × 1 шт).
     expect(d.totalCost).toBeCloseTo(1, 2);
   });
 
   test('7c. CANCELLED MaterialIssue с passportId не включается в materialCost', async () => {
     const day = utcDay('2026-04-16');
     const passport = await createPlacedPassport(t, seed, 1, day);
-    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+    await writePacked(t, seed, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
 
     const order = await t.prisma.passport.findUniqueOrThrow({
       where: { id: passport.id },
@@ -464,14 +503,14 @@ describeWithDb('integration — production cost (Себестоимость вы
     expect(res.status).toBe(200);
     const d = res.body.days[0];
     expect(d.materialCost).toBe(0);
-    // Материал не вошёл (CANCELLED); остаётся 1 ₽ оклада упаковщика (minMs).
+    // Материал не вошёл (CANCELLED); остаётся 1 ₽ оклада упаковщика (норма 1 мин × 1 шт).
     expect(d.totalCost).toBeCloseTo(1, 2);
   });
 
   test('7d. POSTED MaterialIssue без passportId (order-level) не включается в materialCost', async () => {
     const day = utcDay('2026-04-17');
     const passport = await createPlacedPassport(t, seed, 1, day);
-    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+    await writePacked(t, seed, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
 
     const order = await t.prisma.passport.findUniqueOrThrow({
       where: { id: passport.id },
@@ -508,7 +547,7 @@ describeWithDb('integration — production cost (Себестоимость вы
     expect(res.status).toBe(200);
     const d = res.body.days[0];
     expect(d.materialCost).toBe(0);
-    // Order-level материал не вошёл; остаётся 1 ₽ оклада упаковщика (minMs).
+    // Order-level материал не вошёл; остаётся 1 ₽ оклада упаковщика (норма 1 мин × 1 шт).
     expect(d.totalCost).toBeCloseTo(1, 2);
   });
 
@@ -518,9 +557,7 @@ describeWithDb('integration — production cost (Себестоимость вы
 
     // Паспорт упакован В ПЕРИОДЕ.
     const inPassport = await createPlacedPassport(t, seed, 1, inPeriodDay);
-    await writePacked(
-      t,
-      inPassport.id,
+    await writePacked(t, seed, inPassport.id,
       seed.employees.packer.id,
       at(inPeriodDay, 11, 0),
       1,
@@ -532,9 +569,7 @@ describeWithDb('integration — production cost (Себестоимость вы
 
     // Паспорт упакован ВНЕ периода (после `to`).
     const outPassport = await createPlacedPassport(t, seed, 1, outsideDay);
-    await writePacked(
-      t,
-      outPassport.id,
+    await writePacked(t, seed, outPassport.id,
       seed.employees.packer.id,
       at(outsideDay, 11, 0),
       1,
@@ -600,7 +635,7 @@ describeWithDb('integration — production cost (Себестоимость вы
   test('7f. Несколько POSTED MaterialIssue по одному паспорту суммируются и попадают в день PACKED', async () => {
     const day = utcDay('2026-04-19');
     const passport = await createPlacedPassport(t, seed, 1, day);
-    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+    await writePacked(t, seed, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
 
     const order = await t.prisma.passport.findUniqueOrThrow({
       where: { id: passport.id },
@@ -662,7 +697,7 @@ describeWithDb('integration — production cost (Себестоимость вы
     expect(d.date).toBe('2026-04-19');
     // 300 + 200.50 = 500.50.
     expect(d.materialCost).toBeCloseTo(500.5, 2);
-    // + 1 ₽ оклада упаковщика (minMs, единственный PACKED).
+    // + 1 ₽ оклада упаковщика (норма 1 мин × 1 шт).
     expect(d.totalCost).toBeCloseTo(501.5, 2);
     expect(res.body.summary.materialCost).toBeCloseTo(500.5, 2);
   });
@@ -688,9 +723,9 @@ describeWithDb('integration — production cost (Себестоимость вы
       },
     });
 
-    await writeStageDone(t, passport.id, 'QC_PASSED', seed.employees.qc.id, at(day, 9, 5));
-    await writeStageDone(t, passport.id, 'WTO_PASSED', seed.employees.ironing.id, at(day, 10, 3));
-    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 5);
+    await writeStageDone(t, seed, passport.id, 'QC_PASSED', seed.employees.qc.id, at(day, 9, 5));
+    await writeStageDone(t, seed, passport.id, 'WTO_PASSED', seed.employees.ironing.id, at(day, 10, 3));
+    await writePacked(t, seed, passport.id, seed.employees.packer.id, at(day, 11, 0), 5);
     await createSalary(t, seed.employees.qc.id, day, 480);
     await createSalary(t, seed.employees.ironing.id, day, 480);
     await createSalary(t, seed.employees.packer.id, day, 480);
@@ -702,18 +737,18 @@ describeWithDb('integration — production cost (Себестоимость вы
     expect(res.status).toBe(200);
     const d = res.body.days[0];
     expect(d.pieceworkCost).toBeCloseTo(50, 2);
-    // ОТК+ВТО+упаковка, каждый один терминал = minMs = 1 мин → 3 ₽.
-    expect(d.salaryCost).toBeCloseTo(3, 2);
+    // ОТК+ВТО+упаковка, по норме 5 шт × 1 мин каждый → 15 ₽.
+    expect(d.salaryCost).toBeCloseTo(15, 2);
     expect(d.materialCost).toBe(0);
-    expect(d.totalCost).toBeCloseTo(53, 2);
-    // Простой = 3 окладника × 480 − 3 мин tracked = 1437 ₽.
-    expect(d.idleCost).toBeCloseTo(1437, 2);
+    expect(d.totalCost).toBeCloseTo(65, 2);
+    // Простой = 3 окладника × 480 − 15 мин tracked = 1425 ₽.
+    expect(d.idleCost).toBeCloseTo(1425, 2);
   });
 
   test('7h. MaterialIssueLine без workshopNeedId не мешает: сервис использует issue.totalCost', async () => {
     const day = utcDay('2026-04-21');
     const passport = await createPlacedPassport(t, seed, 1, day);
-    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+    await writePacked(t, seed, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
 
     const order = await t.prisma.passport.findUniqueOrThrow({
       where: { id: passport.id },
@@ -778,9 +813,7 @@ describeWithDb('integration — production cost (Себестоимость вы
     const dayPacked = utcDay('2026-04-22');
     const dayBefore = utcDay('2026-04-21');
     const passport = await createPlacedPassport(t, seed, 1, dayPacked);
-    await writePacked(
-      t,
-      passport.id,
+    await writePacked(t, seed, passport.id,
       seed.employees.packer.id,
       at(dayPacked, 11, 0),
       1,
@@ -885,18 +918,30 @@ async function createPlacedPassport(
   return { id: p.id, qtyGood: qty };
 }
 
+/**
+ * Терминал ОТК/ВТО — как в реальном флоу: с `operationId` (по нему движок
+ * берёт норму времени) и `qty` = `qtyGood` паспорта (сервисы пишут его).
+ */
 async function writeStageDone(
   t: TestApp,
+  seed: SeedResult,
   passportId: string,
   type: 'QC_PASSED' | 'WTO_PASSED',
   employeeId: string,
   at: Date,
 ): Promise<void> {
+  const passport = await t.prisma.passport.findUniqueOrThrow({
+    where: { id: passportId },
+    select: { qtyGood: true },
+  });
   await t.prisma.passportEvent.create({
     data: {
       passportId,
       type,
       employeeId,
+      operationId:
+        type === 'QC_PASSED' ? seed.operations.QC.id : seed.operations.IRONING.id,
+      qty: passport.qtyGood,
       createdAt: at,
     },
   });
@@ -904,6 +949,7 @@ async function writeStageDone(
 
 async function writePacked(
   t: TestApp,
+  seed: SeedResult,
   passportId: string,
   employeeId: string,
   at: Date,
@@ -914,6 +960,7 @@ async function writePacked(
       passportId,
       type: 'PACKED',
       employeeId,
+      operationId: seed.operations.PACKING.id,
       qty,
       createdAt: at,
     },

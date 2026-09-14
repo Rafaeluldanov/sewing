@@ -6,7 +6,6 @@ import {
   PassportStatus,
   Prisma,
   Role,
-  SalaryRateMode,
 } from '@prisma/client';
 import {
   PRODUCTION_DASHBOARD_ROLE_LABELS,
@@ -21,7 +20,6 @@ import {
   type ProductionDashboardStage,
   type ProductionDashboardTrendDayDto,
 } from '@sewing/shared/dashboard';
-import { SHIFT_MINUTES } from '@sewing/shared/costs';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   bucketOf,
@@ -29,6 +27,8 @@ import {
 } from '../shopfloor/shopfloor-projection.js';
 import { CostsService } from '../costs/costs.service.js';
 import { PassportDurationsService } from '../costs/passport-durations.service.js';
+import { PassportRealCostService } from '../costs/passport-real-cost.service.js';
+import { loadShiftPresence } from '../costs/shift-presence.js';
 import { isSalaryEligible } from '../employees/compensation.js';
 import {
   effectiveHourlyRateWithNorm,
@@ -43,8 +43,13 @@ import {
  * существующих `Passport` / `PassportEvent` / `Order` / `OperationEntry`
  * / `SalaryEntry`, плюс переиспользуем готовые сервисы:
  *   - `CostsService.getProductionCost` — series для графика и period idle;
- *   - `PassportDurationsService.listForPeriod` — длительности стадий
- *     для расчёта role load;
+ *   - `PassportRealCostService.apportionedSalaryForPeriod` + `shift-presence`
+ *     — учтённые и оплаченные минуты окладников для role load и пикового
+ *     простоя (тот же движок, что у отчётов себестоимости — решение
+ *     владельца 14.09.2026: «остальное — простой» считается от
+ *     фактически оплаченных минут, а не от 480);
+ *   - `PassportDurationsService.listForPeriod` — длительности стадий для
+ *     алерта об аномальных паспортах;
  *   - shopfloor-projection (`bucketOf`) — то же правило раскладки
  *     паспортов по стадиям, что и на `/shopfloor` (см. ADR-0013).
  *
@@ -57,6 +62,7 @@ export class DashboardService {
     private readonly prisma: PrismaService,
     private readonly costs: CostsService,
     private readonly durations: PassportDurationsService,
+    private readonly passportRealCost: PassportRealCostService,
   ) {}
 
   async getProductionDashboard(
@@ -357,41 +363,24 @@ export class DashboardService {
     dayStart: Date,
     dayEnd: Date,
   ): Promise<ProductionDashboardRoleLoadDto[]> {
-    // 1) Все стадии за день.
-    const stages = await this.durations.listForPeriod(dayStart, dayEnd);
-
-    // 2) Кто в этот день был на смене. Признак «человек оплачен за этот
-    // день» — `SalaryEntry` за день, как и раньше.
-    //
-    // Исключение — месячный оклад (29.07.2026): дневных строк у него
-    // нет вовсе, единственная строка `MONTH_SALARY` стоит на 1-м числе
-    // месяца. По старому признаку весь окладной цех на месячной ставке
-    // выпал бы из загрузки ролей во все дни, кроме первого. Поэтому для
-    // НИХ (и только для них) присутствие берём из самих смен.
-    // Расширять это правило на почасовиков нельзя: у них смена без
-    // `SalaryEntry` — это ещё не закрытая смена, и считать по ней
-    // простой значило бы менять смысл показателя.
-    const [salaryEntries, shiftEmployees] = await Promise.all([
-      this.prisma.salaryEntry.findMany({
-        where: { date: { gte: dayStart, lte: dayEnd } },
-        select: { employeeId: true },
-      }),
-      this.prisma.shiftSession.findMany({
-        where: { startedAt: { gte: dayStart, lte: dayEnd } },
-        select: { employeeId: true },
-        distinct: ['employeeId'],
-      }),
+    // 1) Учтённые минуты окладников за день — тем же движком, что отчёты
+    //    себестоимости (хронометраж в рамке смены + норма × объём), и
+    //    оплаченные минуты дня — из общего `loadShiftPresence`
+    //    (`SalaryEntry.workedSeconds` у почасовика, закрытые смены у
+    //    месячника). Раньше здесь были длительности стадий с потолком
+    //    60 мин и константа 480 — дашборд расходился с отчётом.
+    const dayKey = toDateKey(dayStart);
+    const [salary, presence] = await Promise.all([
+      this.passportRealCost.apportionedSalaryForPeriod(dayStart, dayEnd),
+      loadShiftPresence(this.prisma, dayStart, dayEnd),
     ]);
-    const salaryEntryEmployeeIds = new Set(
-      salaryEntries.map((s) => s.employeeId),
-    );
-    const shiftEmployeeIds = new Set(shiftEmployees.map((s) => s.employeeId));
+    const trackedByEmployee = pickDay(salary.trackedMinutesByEmpDay, dayKey);
+    const paidByEmployee = pickDay(presence.paidMinutesByEmpDay, dayKey);
 
-    const employeeIds = new Set<string>();
-    for (const s of stages) employeeIds.add(s.employeeId);
-    for (const id of salaryEntryEmployeeIds) employeeIds.add(id);
-    for (const id of shiftEmployeeIds) employeeIds.add(id);
-
+    const employeeIds = new Set<string>([
+      ...trackedByEmployee.keys(),
+      ...paidByEmployee.keys(),
+    ]);
     if (employeeIds.size === 0) {
       return PRODUCTION_DASHBOARD_ROLE_KEYS.map((role) => ({
         role,
@@ -415,97 +404,76 @@ export class DashboardService {
         salaryPerMonth: true,
       },
     });
-    const employeeById = new Map(employees.map((e) => [e.id, e]));
 
     // Норма часов месяца — знаменатель производной ставки месячного
     // окладника. Берём один раз на весь день, а не в цикле по людям:
     // день целиком лежит внутри одного месяца.
     const normHours = await resolveMonthNormHours(this.prisma, dayStart);
 
-    // 3) Подготовка агрегатов по ролям.
+    // 2) Агрегаты по ролям.
     const acc = new Map<
       ProductionDashboardRole,
       {
         salariedEmps: Set<string>;
-        trackedByEmployee: Map<string, number>;
+        trackedMinutes: number;
+        paidMinutes: number;
+        idleMinutes: number;
+        idleCost: number;
       }
     >();
     for (const role of PRODUCTION_DASHBOARD_ROLE_KEYS) {
-      acc.set(role, { salariedEmps: new Set(), trackedByEmployee: new Map() });
+      acc.set(role, {
+        salariedEmps: new Set(),
+        trackedMinutes: 0,
+        paidMinutes: 0,
+        idleMinutes: 0,
+        idleCost: 0,
+      });
     }
-
-    const presentEmployeeIds = new Set<string>(salaryEntryEmployeeIds);
-    for (const id of shiftEmployeeIds) {
-      const emp = employeeById.get(id);
-      if (emp?.salaryRateMode === SalaryRateMode.MONTHLY) {
-        presentEmployeeIds.add(id);
-      }
-    }
-
-    for (const employeeId of presentEmployeeIds) {
-      const emp = employeeById.get(employeeId);
-      if (!emp) continue;
+    for (const emp of employees) {
       const role = mapEmployeeRoleToDashboardRole(emp.role);
       if (!role) continue;
-      // В salaried-мн-во кладём только окладных — у `PIECEWORK` ставки
-      // нет, простой ему не считаем (см. CostsService.idleCost логика).
-      if (!isSalaryEligible(emp.compensationType)) continue;
-      acc.get(role)!.salariedEmps.add(emp.id);
+      const a = acc.get(role)!;
+      const tracked = trackedByEmployee.get(emp.id) ?? 0;
+      // tracked суммируем по всем (в т.ч. MIXED, если зашёл на стадию) —
+      // минуты важны для загрузки цеха; простой и «оплачено» — только у
+      // тех, кто был на смене и получает оклад.
+      a.trackedMinutes += tracked;
+      const paid = paidByEmployee.get(emp.id) ?? 0;
+      if (paid <= 0 || !isSalaryEligible(emp.compensationType)) continue;
+      a.salariedEmps.add(emp.id);
+      a.paidMinutes += paid;
+      const minute = computeMinuteRate(
+        effectiveHourlyRateWithNorm(emp, normHours),
+      );
+      if (minute <= 0) continue;
+      const idle = Math.max(0, paid - tracked);
+      a.idleMinutes += idle;
+      a.idleCost += idle * minute;
     }
 
-    for (const st of stages) {
-      const emp = employeeById.get(st.employeeId);
-      if (!emp) continue;
-      const role = mapEmployeeRoleToDashboardRole(emp.role);
-      if (!role) continue;
-      const m = acc.get(role)!.trackedByEmployee;
-      m.set(emp.id, (m.get(emp.id) ?? 0) + st.durationMinutes);
-    }
-
-    // 4) Складываем итог.
+    // 3) Складываем итог.
     const result: ProductionDashboardRoleLoadDto[] = [];
     for (const role of PRODUCTION_DASHBOARD_ROLE_KEYS) {
       const a = acc.get(role)!;
-      const employeesCount = a.salariedEmps.size;
-      const paidMinutes = employeesCount * SHIFT_MINUTES;
-      let trackedMinutes = 0;
-      let idleMinutes = 0;
-      let idleCost = 0;
-      // tracked суммируем по всем (включая «не окладных» — например,
-      // если кто-то с MIXED в этот день зашёл на стадию, его минуты
-      // важны для tracked цеха, но idle ему не считаем).
-      for (const m of a.trackedByEmployee.values()) trackedMinutes += m;
-      for (const empId of a.salariedEmps) {
-        const emp = employeeById.get(empId)!;
-        const minute = computeMinuteRate(
-          effectiveHourlyRateWithNorm(emp, normHours),
-        );
-        if (minute <= 0) continue;
-        const tracked = a.trackedByEmployee.get(empId) ?? 0;
-        const idle = Math.max(0, SHIFT_MINUTES - tracked);
-        idleMinutes += idle;
-        idleCost += idle * minute;
-      }
+      const paidMinutes = Math.round(a.paidMinutes);
+      const trackedMinutes = Math.round(a.trackedMinutes);
       const utilization =
         paidMinutes > 0
           ? Math.min(100, Math.round((trackedMinutes / paidMinutes) * 100))
           : 0;
       result.push({
         role,
-        employees: employeesCount,
+        employees: a.salariedEmps.size,
         paidMinutes,
         trackedMinutes,
-        idleMinutes,
-        idleCost: round2(idleCost),
+        idleMinutes: Math.round(a.idleMinutes),
+        idleCost: round2(a.idleCost),
         utilization,
       });
     }
     return result;
   }
-
-  // -------------------------------------------------------------------------
-  // Alerts
-  // -------------------------------------------------------------------------
 
   private async computeAlerts(args: {
     pipeline: ProductionDashboardPipelineDto;
@@ -603,24 +571,18 @@ export class DashboardService {
     dayEnd: Date,
   ): Promise<{ employeeId: string; fullName: string; idleMinutes: number } | null> {
     const dayStart = startOfUtcDay(dayEnd);
-    const stages = await this.durations.listForPeriod(dayStart, dayEnd);
-    const salaryEntries = await this.prisma.salaryEntry.findMany({
-      where: { date: { gte: dayStart, lte: dayEnd } },
-      select: { employeeId: true },
-    });
-    if (salaryEntries.length === 0) return null;
+    const dayKey = toDateKey(dayStart);
+    // Те же учтённые и оплаченные минуты, что в role load и отчётах.
+    const [salary, presence] = await Promise.all([
+      this.passportRealCost.apportionedSalaryForPeriod(dayStart, dayEnd),
+      loadShiftPresence(this.prisma, dayStart, dayEnd),
+    ]);
+    const paidByEmployee = pickDay(presence.paidMinutesByEmpDay, dayKey);
+    if (paidByEmployee.size === 0) return null;
+    const trackedByEmployee = pickDay(salary.trackedMinutesByEmpDay, dayKey);
 
-    const trackedByEmployee = new Map<string, number>();
-    for (const s of stages) {
-      trackedByEmployee.set(
-        s.employeeId,
-        (trackedByEmployee.get(s.employeeId) ?? 0) + s.durationMinutes,
-      );
-    }
-
-    const ids = Array.from(new Set(salaryEntries.map((s) => s.employeeId)));
     const employees = await this.prisma.employee.findMany({
-      where: { id: { in: ids } },
+      where: { id: { in: Array.from(paidByEmployee.keys()) } },
       select: { id: true, fullName: true, compensationType: true },
     });
 
@@ -628,8 +590,12 @@ export class DashboardService {
       null;
     for (const e of employees) {
       if (!isSalaryEligible(e.compensationType)) continue;
-      const tracked = trackedByEmployee.get(e.id) ?? 0;
-      const idle = Math.max(0, SHIFT_MINUTES - tracked);
+      const idle = Math.round(
+        Math.max(
+          0,
+          (paidByEmployee.get(e.id) ?? 0) - (trackedByEmployee.get(e.id) ?? 0),
+        ),
+      );
       if (!best || idle > best.idleMinutes) {
         best = { employeeId: e.id, fullName: e.fullName, idleMinutes: idle };
       }
@@ -667,6 +633,21 @@ const STAGE_LABELS: Record<ProductionDashboardStage, string> = {
   PACKING: 'Упаковка',
   FINISHED: 'Выпущено',
 };
+
+/**
+ * Минуты одного UTC-дня из карты `${employeeId}|${YYYY-MM-DD}` (как её
+ * отдают `PassportRealCostService` и `loadShiftPresence`) → по сотруднику.
+ */
+function pickDay(byEmpDay: Map<string, number>, dayKey: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const suffix = `|${dayKey}`;
+  for (const [key, minutes] of byEmpDay) {
+    if (!key.endsWith(suffix)) continue;
+    const employeeId = key.slice(0, key.length - suffix.length);
+    out.set(employeeId, (out.get(employeeId) ?? 0) + minutes);
+  }
+  return out;
+}
 
 function mapEmployeeRoleToDashboardRole(
   // `Employee.role` — строка (`AppRole.code`), а не enum: роли

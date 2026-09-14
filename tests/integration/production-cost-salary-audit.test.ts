@@ -18,9 +18,14 @@
  *           по месяцу дня события, а не по `from` окна; окно двигают
  *           только завершения окладных операций; расширение назад не
  *           дальше 60 дней — с предупреждением.
- *   F1-5  — `OPERATION_SCAN` терминала ОТК/ВТО = accept: интервал
- *           `[скан..QC_PASSED]` точный, обед между паспортами на изделие
- *           не ложится; скан швеи accept-ом не считается.
+ *   F1-5  — терминал ОТК/ВТО без своего accept. Аудит 13.09 читал скан
+ *           `OPERATION_SCAN` как accept; решение владельца 14.09.2026 —
+ *           на проде между сканом и «проверено» проходит секунда, поэтому
+ *           терминалы считаются по НОРМЕ ВРЕМЕНИ × ОБЪЁМ, обед между
+ *           паспортами на изделие не ложится по построению; скан
+ *           accept-ом не считается ни у кого. Хронометраж (`ISSUED →
+ *           FINISHED`) режется РАМКОЙ СМЕНЫ (`ShiftSession`), потолка
+ *           60 мин больше нет — поэтому у окладников в фикстурах есть смены.
  *   F1-11 — v2: оклад выпуска уже в `totalCostRub`, предупреждение
  *           «не распределён» ключуется на оклад по не выпущенным паспортам,
  *           страница «Отчёт» не прибавляет `salaryWorkingCostRub` второй раз.
@@ -204,6 +209,42 @@ describeWithDb('integration — себестоимость: оклад / про�
     });
   }
 
+  /**
+   * Закрытая смена сотрудника — рамка хронометража (решение владельца
+   * 14.09.2026): минуты `ISSUED → FINISHED` вне смены в себестоимость не идут.
+   */
+  async function shift(key: string, day: string, from = '07:00', to = '19:00'): Promise<void> {
+    const equipment =
+      key === 'qc'
+        ? seed.equipment['qc-station-01']
+        : key === 'packer'
+          ? seed.equipment['packing-station-01']
+          : seed.equipment['overlock-01'];
+    const operation =
+      key === 'qc'
+        ? seed.operations.QC
+        : key === 'packer'
+          ? seed.operations.PACKING
+          : seed.operations.SEW_OVERLOCK_1;
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees[key].id,
+        equipmentId: equipment.id,
+        operationId: operation.id,
+        startedAt: at(day, from),
+        endedAt: at(day, to),
+      },
+    });
+  }
+
+  /** Норма времени ОТК, сек/шт — для терминалов без accept (норма × объём). */
+  async function qcNorm(seconds: number | null): Promise<void> {
+    await t.prisma.operation.update({
+      where: { id: seed.operations.QC.id },
+      data: { timeNormMode: 'FIXED', timeNormSec: seconds },
+    });
+  }
+
   async function dailyReport(dateFrom: string, dateTo = dateFrom) {
     const res = await http()
       .get('/api/costs/production')
@@ -380,8 +421,9 @@ describeWithDb('integration — себестоимость: оклад / про�
     await setHourly('qc');
     const DAY = '2026-04-23';
     await shiftDay(seed.employees.qc.id, DAY, workedSeconds, amount);
+    await shift('qc', DAY);
     const { passportId } = await createPassport({ day: DAY, qty: 5 });
-    // ОТК держал паспорт ровно 60 мин (= cap, не режется) → 600 ₽ рабочей части.
+    // ОТК держал паспорт ровно 60 мин внутри смены → 600 ₽ рабочей части.
     await issueFinished(passportId, seed.operations.QC.id, seed.employees.qc.id, at(DAY, '08:00'), at(DAY, '09:00'));
     await pack(passportId, at(DAY, '12:00'), 5);
     const day = (await dailyReport(DAY)).days[0];
@@ -453,6 +495,8 @@ describeWithDb('integration — себестоимость: оклад / про�
   test('F1-3: ОТК накануне упаковки попадает в день упаковки, в v2 allocated и совпадает с FINAL-снимком', async () => {
     await setHourly('qc');
     await setHourly('packer');
+    await shift('qc', '2026-08-31');
+    await shift('packer', '2026-09-01');
     const { passportId, orderId } = await createPassport({ day: '2026-08-31', qty: 5 });
     // 31.08: ОТК 30 мин = 300 ₽; 01.09: упаковка 5 мин = 50 ₽.
     await issueFinished(passportId, seed.operations.QC.id, seed.employees.qc.id, at('2026-08-31', '10:00'), at('2026-08-31', '10:30'));
@@ -518,6 +562,9 @@ describeWithDb('integration — себестоимость: оклад / про�
     const qc = seed.employees.qc.id;
     const augMinute = 96000 / 168 / 60; // 9,5238 ₽/мин
     const sepMinute = 96000 / 176 / 60; // 9,0909 ₽/мин
+    await shift('qc', '2026-08-31');
+    await shift('qc', '2026-09-02');
+    await shift('packer', '2026-09-02');
 
     // A: ОТК 31.08 (30 мин, норма августа), упаковка 02.09 (5 мин × 10 ₽).
     const a = await createPassport({ day: '2026-08-31', qty: 5, orderNumber: 'O-F13-A' });
@@ -556,6 +603,10 @@ describeWithDb('integration — себестоимость: оклад / про�
   test('F1-3 (ревью): OPERATION_FINISHED швеи-сдельщицы окно не двигает; ретро-ОТК старше 60 дней — окно ограничено и есть предупреждение', async () => {
     await setHourly('qc');
     await setHourly('packer');
+    await shift('qc', '2026-06-01');
+    await shift('qc', '2026-09-02');
+    await shift('packer', '2026-09-02');
+    await shift('packer', '2026-09-03');
     // C: швея закрыла операцию в июне (сдельщица), ОТК и упаковка 02.09 —
     // окно не уезжает в июнь, предупреждения нет, оклад = 30 × 10 + 5 × 10.
     const c = await createPassport({ day: '2026-06-01', qty: 5, orderNumber: 'O-F13-C' });
@@ -591,14 +642,18 @@ describeWithDb('integration — себестоимость: оклад / про�
   });
 
   // ---------------------------------------------------------------------------
-  // F1-5 — OPERATION_SCAN как accept ОТК/ВТО
+  // F1-5 — терминал ОТК/ВТО без accept: норма × объём (решение владельца 14.09.2026)
   // ---------------------------------------------------------------------------
 
-  test('F1-5: интервал скан → QC_PASSED точный: A = 10 мин / 100 ₽, B = 40 мин / 400 ₽; дневной отчёт и FINAL согласованы', async () => {
+  test('F1-5: ОТК по норме × объём: A и B по 10 шт × 60 с = 10 мин / 100 ₽ независимо от сканов; дневной отчёт и FINAL согласованы', async () => {
     await setHourly('qc');
+    await qcNorm(60);
     const DAY = '2026-06-10';
+    await shift('qc', DAY);
     const A = (await createPassport({ day: DAY, qty: 10 })).passportId;
     const B = (await createPassport({ day: DAY, qty: 10 })).passportId;
+    // Скан A за 10 мин до «проверено», скан B — за 40: на прежнем хронометраже
+    // B стоил бы вчетверо дороже; по норме объём одинаков — суммы одинаковы.
     await qcScanAndPass(A, at(DAY, '08:50'), at(DAY, '09:00'));
     await qcScanAndPass(B, at(DAY, '09:05'), at(DAY, '09:45'));
 
@@ -607,17 +662,17 @@ describeWithDb('integration — себестоимость: оклад / про�
     expect(a.salaryLines).toHaveLength(1);
     expect(a.salaryLines[0].minutes).toBeCloseTo(10, 1);
     expect(a.salaryCost).toBeCloseTo(10 * MINUTE_RATE, 2);
-    expect(b.salaryLines[0].minutes).toBeCloseTo(40, 1);
-    expect(b.salaryCost).toBeCloseTo(40 * MINUTE_RATE, 2);
+    expect(b.salaryLines[0].minutes).toBeCloseTo(10, 1);
+    expect(b.salaryCost).toBeCloseTo(10 * MINUTE_RATE, 2);
 
     await pack(A, at(DAY, '12:00'), 10);
     await pack(B, at(DAY, '12:05'), 10);
     await shiftDay(seed.employees.qc.id, DAY, 8 * 3600, 8 * SALARY_PER_HOUR);
     const d = (await dailyReport(DAY)).days[0];
-    expect(d.trackedMinutes).toBe(50);
-    expect(d.idleMinutes).toBe(430);
-    expect(d.idleCost).toBeCloseTo(430 * MINUTE_RATE, 2);
-    expect(d.salaryCost).toBeCloseTo(50 * MINUTE_RATE, 2);
+    expect(d.trackedMinutes).toBe(20);
+    expect(d.idleMinutes).toBe(460);
+    expect(d.idleCost).toBeCloseTo(460 * MINUTE_RATE, 2);
+    expect(d.salaryCost).toBeCloseTo(20 * MINUTE_RATE, 2);
 
     const fin = await http()
       .post('/api/costs/snapshots/finalize')
@@ -627,12 +682,14 @@ describeWithDb('integration — себестоимость: оклад / про�
     expect(fin.body.finalized).toBe(2);
     const bFinal = await passportCost(B);
     expect(bFinal.isFinal).toBe(true);
-    expect(bFinal.salaryCost).toBeCloseTo(400, 2);
+    expect(bFinal.salaryCost).toBeCloseTo(100, 2);
   });
 
-  test('F1-5: обед между паспортами на изделие не ложится: C = 5 мин / 50 ₽, D = 10 мин / 100 ₽', async () => {
+  test('F1-5: обед между паспортами на изделие не ложится: C и D по норме, разрыв 65 мин — простой', async () => {
     await setHourly('qc');
+    await qcNorm(30);
     const DAY = '2026-06-10';
+    await shift('qc', DAY);
     const C = (await createPassport({ day: DAY, qty: 10 })).passportId;
     const D = (await createPassport({ day: DAY, qty: 10 })).passportId;
     await qcScanAndPass(C, at(DAY, '11:50'), at(DAY, '11:55'));
@@ -641,17 +698,18 @@ describeWithDb('integration — себестоимость: оклад / про�
     const dd = await passportCost(D);
     expect(c.salaryLines[0].minutes).toBeCloseTo(5, 1);
     expect(c.salaryCost).toBeCloseTo(5 * MINUTE_RATE, 2);
-    expect(dd.salaryLines[0].minutes).toBeCloseTo(10, 1);
-    expect(dd.salaryCost).toBeCloseTo(10 * MINUTE_RATE, 2);
+    expect(dd.salaryLines[0].minutes).toBeCloseTo(5, 1);
+    expect(dd.salaryCost).toBeCloseTo(5 * MINUTE_RATE, 2);
   });
 
-  test('F1-5: скан на швейной операции accept-ом не считается — у швеи по-прежнему ISSUED_TO_EMPLOYEE', async () => {
+  test('F1-5: скан accept-ом не считается — у швеи-окладницы хронометраж по ISSUED_TO_EMPLOYEE в рамке смены', async () => {
     // MIXED-швея с окладом: скан в 08:00, выдача в 08:30, завершение в 08:40 → 10 мин, а не 40.
     await t.prisma.employee.update({
       where: { id: seed.employees.seamstress.id },
       data: { compensationType: 'MIXED', salaryRateMode: 'HOURLY', salaryPerHour: new Prisma.Decimal(SALARY_PER_HOUR) },
     });
     const DAY = '2026-06-11';
+    await shift('seamstress', DAY);
     const P = (await createPassport({ day: DAY, qty: 10 })).passportId;
     const op = seed.operations.SEW_OVERLOCK_1.id;
     const emp = seed.employees.seamstress.id;
@@ -668,8 +726,24 @@ describeWithDb('integration — себестоимость: оклад / про�
     expect(p.salaryCost).toBeCloseTo(10 * MINUTE_RATE, 2);
   });
 
-  test('F1-5: реальный терминал ОТК (shifts/start → scan → qc/complete) пишет OPERATION_SCAN, и движок считает по нему', async () => {
+  test('F1-5: рамка смены — «взяла в конце смены, сдала назавтра»: ночь на паспорт не ложится, потолка 60 мин нет', async () => {
+    await t.prisma.employee.update({
+      where: { id: seed.employees.seamstress.id },
+      data: { compensationType: 'MIXED', salaryRateMode: 'HOURLY', salaryPerHour: new Prisma.Decimal(SALARY_PER_HOUR) },
+    });
+    await shift('seamstress', '2026-06-11', '08:00', '17:00');
+    await shift('seamstress', '2026-06-12', '08:00', '17:00');
+    const P = (await createPassport({ day: '2026-06-11', qty: 10 })).passportId;
+    // Взяла 11.06 в 15:00, сдала 12.06 в 10:00: 2 ч + 2 ч = 240 мин (раньше — 60 по потолку).
+    await issueFinished(P, seed.operations.SEW_OVERLOCK_1.id, seed.employees.seamstress.id, at('2026-06-11', '15:00'), at('2026-06-12', '10:00'));
+    const p = await passportCost(P);
+    expect(p.salaryCost).toBeCloseTo(240 * MINUTE_RATE, 2);
+    expect(p.salaryLines.map((l) => l.minutes).sort()).toEqual([120, 120]);
+  });
+
+  test('F1-5: реальный терминал ОТК (shifts/start → scan → qc/complete) — движок считает QC_PASSED по норме × объём', async () => {
     await setHourly('qc');
+    await qcNorm(120); // 2 мин/шт × 5 шт = 10 мин
     const order = await http()
       .post('/api/orders')
       .set('Cookie', cookies.manager)
@@ -714,20 +788,16 @@ describeWithDb('integration — себестоимость: оклад / про�
     const events = await t.prisma.passportEvent.findMany({
       where: { passportId, employeeId: seed.employees.qc.id, operationId: seed.operations.QC.id },
       orderBy: { createdAt: 'asc' },
-      select: { id: true, type: true, createdAt: true },
+      select: { id: true, type: true, createdAt: true, qty: true },
     });
     const scan = events.find((e) => e.type === 'OPERATION_SCAN')!;
     const passed = events.find((e) => e.type === 'QC_PASSED')!;
     expect(scan).toBeDefined();
     expect(passed).toBeDefined();
+    expect(passed.qty).toBe(5);
     expect(events.some((e) => e.type === 'ISSUED_TO_EMPLOYEE')).toBe(false);
 
-    // Терминал прошёл за миллисекунды — отодвигаем скан на 10 минут назад
-    // (форма событий при этом ровно та, что пишет прод).
-    await t.prisma.passportEvent.update({
-      where: { id: scan.id },
-      data: { createdAt: new Date(passed.createdAt.getTime() - 10 * 60_000) },
-    });
+    // Терминал прошёл за миллисекунды — скан не accept: минуты — по норме.
     const cost = await passportCost(passportId);
     expect(cost.salaryLines).toHaveLength(1);
     expect(cost.salaryLines[0].minutes).toBeCloseTo(10, 1);
@@ -744,6 +814,7 @@ describeWithDb('integration — себестоимость: оклад / про�
       data: { name: 'Худи F1', article: `HD-F1-${tag()}`, status: 'ACTIVE' },
     });
     const DAY = '2026-06-15';
+    await shift('qc', DAY);
     // A — упакован в D, ОТК 10 мин = 100 ₽.
     const A = (await createPassport({ day: DAY, qty: 5, patternItemId: pattern.id, orderNumber: 'O-F111-A' })).passportId;
     await issueFinished(A, seed.operations.QC.id, seed.employees.qc.id, at(DAY, '08:00'), at(DAY, '08:10'));

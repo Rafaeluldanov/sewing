@@ -8,8 +8,6 @@ import {
   Prisma,
 } from '@prisma/client';
 import {
-  MAX_STAGE_MINUTES_PER_PASSPORT,
-  SHIFT_MINUTES,
   type FinalizeDayResultDto,
   type PassportCostDto,
   type PassportCostSalaryLineDto,
@@ -24,30 +22,28 @@ import {
   effectiveHourlyRateWithNorm,
   resolveMonthNormHours,
 } from '../salary/salary-rate.js';
-import {
-  apportionEmployeeTime,
-} from './time-apportionment.js';
+import { resolveShiftWorkedCapSeconds } from '../salary/shift-worked-cap.js';
+import { apportionEmployeeTime } from './time-apportionment.js';
 import { buildWorkIntervals, type WorkEvent } from './work-intervals.js';
+import {
+  clipToShiftFrames,
+  loadShiftFrames,
+  splitByUtcDay,
+} from './shift-frame.js';
+import { loadTimeNormResolver } from './operation-time-norm.js';
 
 const MATERIAL_ISSUE_STATUS_POSTED = 'POSTED';
-const CAP_MS = MAX_STAGE_MINUTES_PER_PASSPORT * 60_000;
-const MIN_MS = 60_000; // минимальный учитываемый интервал = 1 минута
 
-/** События-«accept». */
+/** События-«accept» (точный хронометраж — только по ним). */
 const ISSUE_TYPES = [PassportEventType.ISSUED_TO_EMPLOYEE];
 /**
- * Аудит движка расчёта 13.09.2026, F1-5: терминалы ОТК/ВТО берут паспорт
- * СКАНОМ (`PassportsService.scanOnOperation` пишет `OPERATION_SCAN` с
- * `operationId` операции QC/IRONING, `ISSUED_TO_EMPLOYEE` не пишет), а
- * `QC_PASSED` / `WTO_PASSED` несут тот же `operationId` — скан и есть
- * точный accept для этих категорий (так же его читает дашборд,
- * `PassportDurationsService`). Для остальных категорий (швеи, крой,
- * упаковка) accept остаётся `ISSUED_TO_EMPLOYEE` / разрыв по терминалам.
+ * На сколько дней раньше окна читать accept-ы: паспорт, взятый в пятницу и
+ * сданный в понедельник, в понедельничном окне без своего `ISSUE` ушёл бы в
+ * нормативную ветку, хотя хронометраж по нему есть. Рамка смены всё равно
+ * оставит от такого интервала только минуты внутри смен (решение
+ * владельца 14.09.2026).
  */
-const SCAN_ACCEPT_CATEGORIES: OperationCategory[] = [
-  OperationCategory.QC,
-  OperationCategory.IRONING,
-];
+const ISSUE_LOOKBACK_DAYS = 7;
 /** События-«complete» (терминалы операций/стадий). */
 const COMPLETE_TYPES = [
   PassportEventType.OPERATION_FINISHED,
@@ -99,6 +95,19 @@ export interface ApportionedSalary {
       rub: number;
     }
   >;
+  /**
+   * Предупреждения разноса (решение владельца 14.09.2026): сейчас — «у
+   * операции не задана норма времени» для завершений без хронометража,
+   * которые из-за этого учтены как 0 минут. Пусто, когда сказать нечего.
+   */
+  warnings: string[];
+  /**
+   * Паспорта, у которых завершение окладника учтено как 0 мин из-за
+   * незаданной нормы: `passportId → operationId[]`. Нужно потребителям с
+   * разрезом по заказу (документ план→факт), чтобы предупредить именно
+   * там, где строка занижена.
+   */
+  missingNormByPassport: Map<string, string[]>;
 }
 
 /**
@@ -107,21 +116,37 @@ export interface ApportionedSalary {
  *   total = материал(нетто) + сдельная(APPROVED) + распределённый оклад
  *
  * Сдельная и материал — прямые суммы по паспорту (как в `CostsService`).
- * Окладная часть — реальное время окладников, разнесённое по паспортам:
- *   1. `buildWorkIntervals` строит интервалы `[accept..complete]` из
- *      событий сотрудника (точный ISSUE→FINISHED; для ОТК/ВТО accept =
- *      `OPERATION_SCAN` терминала — F1-5; для упаковки и терминалов без
- *      accept — фолбэк по разрыву), capped `MAX_STAGE_MINUTES_PER_PASSPORT`;
- *   2. `apportionEmployeeTime` делит нахлёсты между одновременно
- *      удерживаемыми паспортами;
- *   3. минуты × (`salaryPerHour` / 60) = ₽ оклада на паспорт.
+ * Окладная часть — ФАКТ ВЫПОЛНЕННЫХ РАБОТ окладника, разнесённый по
+ * паспортам (решение владельца 14.09.2026: «в час оклад 500 ₽, 30 минут
+ * съели операции — в себестоимость 30 минут, остальное простой»). Две
+ * ветки, по одной на каждый способ отметки:
  *
- * Разнос требует ПОЛНОГО потока событий сотрудника за день (иначе деление
- * «1/k» посчитает k неверно), поэтому события грузятся по сотруднику за
- * всё окно, обработка — по сотруднику × UTC-дню (cap рвёт ночные разрывы).
+ *   1. ХРОНОМЕТРАЖ — операции со своим accept (`ISSUED_TO_EMPLOYEE →
+ *      OPERATION_FINISHED`: швеи-окладницы, деление кроя, «ВТО оклад»).
+ *      `buildWorkIntervals` строит интервал `[взяла..сдала]`,
+ *      `clipToShiftFrames` оставляет от него только минуты ВНУТРИ смен
+ *      сотрудника (ночь и обед на изделие не ложатся; потолка в 60 минут
+ *      больше нет), `apportionEmployeeTime` делит нахлёсты между
+ *      одновременно удерживаемыми паспортами.
+ *   2. НОРМА × ОБЪЁМ — завершения без accept (`QC_PASSED` / `WTO_PASSED`
+ *      / `PACKED`, `OPERATION_FINISHED` без своего `ISSUE`): минуты =
+ *      норма времени операции (с переопределением заказа, см.
+ *      `operation-time-norm.ts`) × `qty` события / 60. Норма не задана →
+ *      0 минут и предупреждение в `warnings` (молчаливый ноль читался бы
+ *      как «ОТК бесплатна»).
  *
- * Метод `apportionedSalaryForPeriod` переиспользует `CostsService` для
- * дневного отчёта «Себестоимость выпуска».
+ *   3. минуты × ставка/мин сотрудника (по дню, `salary-rate.ts`) = ₽
+ *      оклада на паспорт. Простой = оплаченные минуты дня
+ *      (`shift-presence.ts`) − разнесённые; на изделия не ложится.
+ *
+ * Разнос требует ПОЛНОГО потока событий сотрудника (иначе деление «1/k»
+ * посчитает k неверно), поэтому события грузятся по сотруднику за всё окно
+ * (accept-ы — ещё на `ISSUE_LOOKBACK_DAYS` раньше), а минуты режутся по
+ * UTC-дням уже после рамки смены — простой считается по дню.
+ *
+ * Метод `apportionedSalaryForPeriod` переиспользуют `CostsService`
+ * (дневной отчёт), `ProductionCostV2Service`, `OrderFactCostService`,
+ * `DashboardService` и документ план→факт заказа.
  */
 @Injectable()
 export class PassportRealCostService {
@@ -384,7 +409,7 @@ export class PassportRealCostService {
 
   /**
    * Разносит оклад всех окладников, активных в окне `[from..to]`, по
-   * паспортам. Обработка идёт по сотруднику × UTC-дню.
+   * паспортам (обе ветки — хронометраж в рамке смены и норма × объём).
    */
   private async apportionSalary(
     from: Date,
@@ -395,6 +420,8 @@ export class PassportRealCostService {
       linesByPassport: new Map(),
       trackedMinutesByEmpDay: new Map(),
       salaryByOperation: new Map(),
+      warnings: [],
+      missingNormByPassport: new Map(),
     };
 
     // 1) Кандидаты — исполнители терминальных событий в окне.
@@ -467,19 +494,18 @@ export class PassportRealCostService {
       );
     };
 
-    // 2) Полный поток ISSUE/COMPLETE окладников в окне (+ сканы ОТК/ВТО
-    //    как accept — F1-5).
+    // 2) Полный поток окладников: accept-ы — с запасом назад (паспорт,
+    //    взятый до окна и сданный в окне, иначе терял бы хронометраж),
+    //    завершения — строго в окне. `OPERATION_SCAN` не читаем: для ОТК/ВТО
+    //    скан и «проверено» разделяет секунда (см. `work-intervals.ts`).
+    const issueFrom = new Date(from.getTime() - ISSUE_LOOKBACK_DAYS * 86_400_000);
     const events = await this.prisma.passportEvent.findMany({
       where: {
         employeeId: { in: salariedIds },
-        type: {
-          in: [
-            ...ISSUE_TYPES,
-            PassportEventType.OPERATION_SCAN,
-            ...COMPLETE_TYPES,
-          ],
-        },
-        createdAt: { gte: from, lte: to },
+        OR: [
+          { type: { in: ISSUE_TYPES }, createdAt: { gte: issueFrom, lte: to } },
+          { type: { in: COMPLETE_TYPES }, createdAt: { gte: from, lte: to } },
+        ],
       },
       select: {
         passportId: true,
@@ -487,93 +513,170 @@ export class PassportRealCostService {
         employeeId: true,
         type: true,
         createdAt: true,
-        operation: { select: { category: true } },
+        qty: true,
+        passport: { select: { orderId: true, sizeId: true, qtyGood: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
+    if (events.length === 0) return empty;
 
-    // emp×day -> события.
-    const byEmpDay = new Map<string, WorkEvent[]>();
+    const passportMeta = new Map<
+      string,
+      { orderId: string | null; sizeId: string | null; qtyGood: number }
+    >();
+    const byEmployee = new Map<string, WorkEvent[]>();
     for (const ev of events) {
       if (!ev.employeeId) continue;
-      let kind: WorkEvent['kind'];
-      if (ev.type === PassportEventType.ISSUED_TO_EMPLOYEE) {
-        kind = 'ISSUE';
-      } else if (ev.type === PassportEventType.OPERATION_SCAN) {
-        // Скан = accept только на операциях ОТК/ВТО (F1-5); скан швеи /
-        // упаковщика в разнос не входит — у них свой accept.
-        if (
-          !ev.operation ||
-          !SCAN_ACCEPT_CATEGORIES.includes(ev.operation.category)
-        ) {
-          continue;
-        }
-        kind = 'ISSUE';
-      } else {
-        kind = 'COMPLETE';
-      }
-      const key = `${ev.employeeId}|${toDateKey(ev.createdAt)}`;
-      const arr = byEmpDay.get(key) ?? [];
+      passportMeta.set(ev.passportId, {
+        orderId: ev.passport?.orderId ?? null,
+        sizeId: ev.passport?.sizeId ?? null,
+        qtyGood: ev.passport?.qtyGood ?? 0,
+      });
+      const arr = byEmployee.get(ev.employeeId) ?? [];
       arr.push({
         passportId: ev.passportId,
         operationId: ev.operationId,
-        kind,
+        kind: ev.type === PassportEventType.ISSUED_TO_EMPLOYEE ? 'ISSUE' : 'COMPLETE',
         atMs: ev.createdAt.getTime(),
+        qty: ev.qty,
       });
-      byEmpDay.set(key, arr);
+      byEmployee.set(ev.employeeId, arr);
     }
+
+    // 3) Интервалы хронометража и завершения без accept — по сотруднику.
+    type Built = ReturnType<typeof buildWorkIntervals>;
+    const builtByEmployee = new Map<string, Built>();
+    const normPairs: { operationId: string; orderId: string | null }[] = [];
+    for (const [employeeId, evs] of byEmployee) {
+      const built = buildWorkIntervals(evs);
+      builtByEmployee.set(employeeId, built);
+      for (const u of built.unmatched) {
+        if (u.operationId) {
+          normPairs.push({
+            operationId: u.operationId,
+            orderId: passportMeta.get(u.passportId)?.orderId ?? null,
+          });
+        }
+      }
+    }
+    const [frames, norms] = await Promise.all([
+      loadShiftFrames(
+        this.prisma,
+        Array.from(byEmployee.keys()),
+        issueFrom,
+        to,
+        await resolveShiftWorkedCapSeconds(this.prisma),
+      ),
+      loadTimeNormResolver(this.prisma, normPairs),
+    ]);
 
     const rubByPassport = new Map<string, number>();
     const trackedMinutesByEmpDay = new Map<string, number>();
     const operationIds = new Set<string>();
-    const rawByPassport = new Map<
-      string,
-      Array<{
-        operationId: string | null;
-        employeeId: string;
-        minutes: number;
-        rub: number;
-      }>
-    >();
+    type RawLine = {
+      operationId: string | null;
+      employeeId: string;
+      minutes: number;
+      rub: number;
+      basis: PassportCostSalaryLineDto['basis'];
+      qty: number | null;
+    };
+    const rawByPassport = new Map<string, RawLine[]>();
     // Сырой агрегат оклада по операциям (минуты/₽), до подписей.
     const byOpRaw = new Map<string, { minutes: number; rub: number }>();
+    // Завершения без нормы: операция → сколько отметок и изделий ушло в 0.
+    const missingNorm = new Map<string, { events: number; qty: number }>();
+    const missingNormByPassport = new Map<string, string[]>();
 
-    for (const [key, dayEvents] of byEmpDay) {
-      const sep = key.lastIndexOf('|');
-      const employeeId = key.slice(0, sep);
-      const rate = await rateFor(employeeId, key.slice(sep + 1));
-      const intervals = buildWorkIntervals(dayEvents, {
-        capMs: CAP_MS,
-        minMs: MIN_MS,
-      });
-      const apportioned = apportionEmployeeTime(intervals);
-      let trackedThisEmpDay = 0;
-      for (const a of apportioned) {
-        if (a.minutes <= 0) continue;
-        trackedThisEmpDay += a.minutes;
-        const rub = a.minutes * rate;
-        rubByPassport.set(
-          a.passportId,
-          (rubByPassport.get(a.passportId) ?? 0) + rub,
-        );
-        if (a.operationId) {
-          operationIds.add(a.operationId);
-          const op = byOpRaw.get(a.operationId) ?? { minutes: 0, rub: 0 };
-          op.minutes += a.minutes;
-          op.rub += rub;
-          byOpRaw.set(a.operationId, op);
-        }
-        const arr = rawByPassport.get(a.passportId) ?? [];
-        arr.push({ operationId: a.operationId, employeeId, minutes: a.minutes, rub });
-        rawByPassport.set(a.passportId, arr);
-      }
+    const addLine = (
+      passportId: string,
+      dayKey: string,
+      line: RawLine,
+    ): void => {
+      if (line.minutes <= 0) return;
+      const empDayKey = `${line.employeeId}|${dayKey}`;
       trackedMinutesByEmpDay.set(
-        key,
-        (trackedMinutesByEmpDay.get(key) ?? 0) + trackedThisEmpDay,
+        empDayKey,
+        (trackedMinutesByEmpDay.get(empDayKey) ?? 0) + line.minutes,
       );
+      rubByPassport.set(passportId, (rubByPassport.get(passportId) ?? 0) + line.rub);
+      if (line.operationId) {
+        operationIds.add(line.operationId);
+        const op = byOpRaw.get(line.operationId) ?? { minutes: 0, rub: 0 };
+        op.minutes += line.minutes;
+        op.rub += line.rub;
+        byOpRaw.set(line.operationId, op);
+      }
+      const arr = rawByPassport.get(passportId) ?? [];
+      arr.push(line);
+      rawByPassport.set(passportId, arr);
+    };
+
+    for (const [employeeId, built] of builtByEmployee) {
+      // 4) Хронометраж: рамка смены → по UTC-дням → деление нахлёстов
+      //    внутри дня (границы дня — те же точки заметающей прямой, что и
+      //    в общем разносе, поэтому доли паспортов не меняются).
+      const clipped = clipToShiftFrames(
+        built.intervals,
+        frames.get(employeeId) ?? [],
+      );
+      const byDay = new Map<string, typeof clipped>();
+      for (const piece of splitByUtcDay(clipped)) {
+        const arr = byDay.get(piece.dayKey) ?? [];
+        arr.push(piece);
+        byDay.set(piece.dayKey, arr);
+      }
+      for (const [dayKey, dayIntervals] of byDay) {
+        const rate = await rateFor(employeeId, dayKey);
+        for (const a of apportionEmployeeTime(dayIntervals)) {
+          addLine(a.passportId, dayKey, {
+            operationId: a.operationId,
+            employeeId,
+            minutes: a.minutes,
+            rub: a.minutes * rate,
+            basis: 'TIMED',
+            qty: null,
+          });
+        }
+      }
+
+      // 5) Норма × объём: завершение без accept.
+      for (const u of built.unmatched) {
+        const dayKey = toDateKey(new Date(u.atMs));
+        const meta = passportMeta.get(u.passportId);
+        const qty = u.qty ?? meta?.qtyGood ?? 0;
+        const sec = u.operationId
+          ? norms.secondsFor(u.operationId, meta?.orderId ?? null, meta?.sizeId ?? null)
+          : null;
+        if (sec === null) {
+          const key = u.operationId ?? '';
+          const m = missingNorm.get(key) ?? { events: 0, qty: 0 };
+          m.events += 1;
+          m.qty += qty;
+          missingNorm.set(key, m);
+          if (u.operationId) {
+            const arr = missingNormByPassport.get(u.passportId) ?? [];
+            if (!arr.includes(u.operationId)) arr.push(u.operationId);
+            missingNormByPassport.set(u.passportId, arr);
+          }
+          continue;
+        }
+        if (qty <= 0) continue;
+        const minutes = (sec * qty) / 60;
+        const rate = await rateFor(employeeId, dayKey);
+        addLine(u.passportId, dayKey, {
+          operationId: u.operationId,
+          employeeId,
+          minutes,
+          rub: minutes * rate,
+          basis: 'NORMED',
+          qty,
+        });
+      }
     }
 
     // Подписи операций.
+    for (const id of missingNorm.keys()) if (id) operationIds.add(id);
     const opMeta = new Map<
       string,
       { code: string; name: string; category: string }
@@ -611,9 +714,24 @@ export class PassportRealCostService {
             employeeName: nameByEmployee.get(l.employeeId) ?? l.employeeId,
             minutes: round1(l.minutes),
             rub: round2(l.rub),
+            basis: l.basis,
+            qty: l.qty,
           };
         }),
       );
+    }
+
+    const warnings: string[] = [];
+    if (missingNorm.size > 0) {
+      const parts: string[] = [];
+      for (const [opId, m] of missingNorm) {
+        const meta = opId ? opMeta.get(opId) : null;
+        const label = meta ? `${meta.name} (${meta.code})` : 'операция не указана';
+        parts.push(`${label}: ${m.events} отм., ${m.qty} шт.`);
+      }
+      const msg = `Норма времени не задана — работа окладника учтена как 0 мин: ${parts.join('; ')}. Заполните норму в справочнике операций`;
+      warnings.push(msg);
+      this.logger.warn(`event=costs.salary-norm-missing ${msg}`);
     }
 
     return {
@@ -621,6 +739,8 @@ export class PassportRealCostService {
       linesByPassport,
       trackedMinutesByEmpDay,
       salaryByOperation,
+      warnings,
+      missingNormByPassport,
     };
   }
 
@@ -632,27 +752,8 @@ export class PassportRealCostService {
   async apportionedSalaryForPeriod(
     from: Date,
     to: Date,
-  ): Promise<
-    Pick<
-      ApportionedSalary,
-      | 'rubByPassport'
-      | 'linesByPassport'
-      | 'trackedMinutesByEmpDay'
-      | 'salaryByOperation'
-    >
-  > {
-    const {
-      rubByPassport,
-      linesByPassport,
-      trackedMinutesByEmpDay,
-      salaryByOperation,
-    } = await this.apportionSalary(from, to);
-    return {
-      rubByPassport,
-      linesByPassport,
-      trackedMinutesByEmpDay,
-      salaryByOperation,
-    };
+  ): Promise<ApportionedSalary> {
+    return this.apportionSalary(from, to);
   }
 
   /**
@@ -679,14 +780,21 @@ export class PassportRealCostService {
     period: {
       from: Date;
       to: Date;
-      result: Pick<ApportionedSalary, 'rubByPassport' | 'linesByPassport'>;
+      result: Pick<ApportionedSalary, 'rubByPassport' | 'linesByPassport'> & {
+        warnings?: string[];
+      };
     },
   ): Promise<
     Pick<ApportionedSalary, 'rubByPassport' | 'linesByPassport'> & {
       warnings: string[];
     }
   > {
-    if (passportIds.length === 0) return { ...period.result, warnings: [] };
+    // Предупреждения самого разноса (норма не задана) едут дальше и без
+    // второго прохода; при втором проходе его окно шире и покрывает их.
+    const periodWarnings = period.result.warnings ?? [];
+    if (passportIds.length === 0) {
+      return { ...period.result, warnings: [...periodWarnings] };
+    }
     const span = await this.prisma.passportEvent.aggregate({
       where: {
         passportId: { in: passportIds },
@@ -728,13 +836,72 @@ export class PassportRealCostService {
       from.getTime() === period.from.getTime() &&
       to.getTime() === period.to.getTime()
     ) {
-      return { ...period.result, warnings };
+      return { ...period.result, warnings: [...periodWarnings, ...warnings] };
     }
-    const { rubByPassport, linesByPassport } = await this.apportionSalary(
-      from,
-      to,
+    const second = await this.apportionSalary(from, to);
+    return {
+      rubByPassport: second.rubByPassport,
+      linesByPassport: second.linesByPassport,
+      warnings: [...warnings, ...second.warnings],
+    };
+  }
+
+  /**
+   * Разнесённый оклад по паспортам ОДНОГО заказа — для документа
+   * план→факт (решение владельца 14.09.2026: у окладных операций факт в
+   * документе был всегда 0, они не пишут `OperationEntry`). Окно — от
+   * первого до последнего завершения окладных операций по паспортам заказа
+   * (как `salaryFor` у одного паспорта); разнос идёт по всему цеху, чтобы
+   * деление нахлёстов было честным, а наружу отдаются только строки этого
+   * заказа.
+   */
+  async apportionedSalaryForOrder(orderId: string): Promise<{
+    linesByPassport: Map<string, PassportCostSalaryLineDto[]>;
+    /** Паспорта заказа с завершениями без нормы: `passportId → operationId[]`. */
+    missingNormByPassport: Map<string, string[]>;
+  }> {
+    const empty = {
+      linesByPassport: new Map<string, PassportCostSalaryLineDto[]>(),
+      missingNormByPassport: new Map<string, string[]>(),
+    };
+    const passports = await this.prisma.passport.findMany({
+      where: { orderId },
+      select: { id: true },
+    });
+    if (passports.length === 0) return empty;
+    const passportIds = passports.map((p) => p.id);
+    const span = await this.prisma.passportEvent.aggregate({
+      where: {
+        passportId: { in: passportIds },
+        type: { in: COMPLETE_TYPES },
+        employeeId: { not: null },
+        OR: [
+          { operation: { category: { in: SALARIED_OPERATION_CATEGORIES } } },
+          {
+            employee: {
+              compensationType: { in: [CompensationType.SALARY, CompensationType.MIXED] },
+            },
+          },
+        ],
+      },
+      _min: { createdAt: true },
+      _max: { createdAt: true },
+    });
+    if (!span._min.createdAt || !span._max.createdAt) return empty;
+    const all = await this.apportionSalary(
+      startOfUtcDay(span._min.createdAt),
+      endOfUtcDay(span._max.createdAt),
     );
-    return { rubByPassport, linesByPassport, warnings };
+    const own = new Set(passportIds);
+    const linesByPassport = new Map<string, PassportCostSalaryLineDto[]>();
+    for (const [pid, lines] of all.linesByPassport) {
+      if (own.has(pid)) linesByPassport.set(pid, lines);
+    }
+    const missingNormByPassport = new Map<string, string[]>();
+    for (const [pid, ops] of all.missingNormByPassport) {
+      if (own.has(pid)) missingNormByPassport.set(pid, ops);
+    }
+    return { linesByPassport, missingNormByPassport };
   }
 
   private async salaryFor(

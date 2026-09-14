@@ -400,7 +400,18 @@ function OperationsTable({ rows }: { rows: OrderProductionOperationRowDto[] }) {
                       </span>
                     )}
                   </td>
-                  <td style={{ textAlign: 'right' }}>{fmtRub(r.factRub)}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    {fmtRub(r.factRub)}
+                    {Number(r.factSalaryRub) > 0.004 && (
+                      <span
+                        className="admin-muted"
+                        style={{ display: 'block', fontSize: 11 }}
+                        title="Оклад по факту выполненных работ: хронометраж в рамке смены либо норма времени × объём (ОТК/ВТО/упаковка)"
+                      >
+                        в т.ч. оклад {fmtRub(r.factSalaryRub)}
+                      </span>
+                    )}
+                  </td>
                   <td style={{ textAlign: 'right' }}>
                     <Variance
                       value={r.varianceRub}

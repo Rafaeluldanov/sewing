@@ -2368,6 +2368,29 @@ DTO: `packages/shared/src/dashboard.ts`.
 DTO: `packages/shared/src/costs.ts`,
 `packages/shared/src/production-cost.ts`.
 
+### 35a. Окладная часть себестоимости — факт выполненных работ (14.09.2026)
+
+Решение владельца: «в час оклад 500 ₽, 30 минут съели операции —
+в себестоимость 30 минут, остальное простой». Движок —
+`costs/passport-real-cost.service.ts`, один на все витрины
+(`/api/costs/passport/:id`, `/api/costs/production`,
+`/api/admin/production-cost/v2`, документ выпуска `salaryRub`,
+документ план→факт `factSalaryRub`, дашборд `roleLoad`):
+
+| Как отмечена операция | Минуты на паспорт | Где |
+| --- | --- | --- |
+| Свой accept: `ISSUED_TO_EMPLOYEE → OPERATION_FINISHED` (швеи-окладницы, деление кроя, «ВТО оклад») | хронометраж «взяла → сдала», **пересечённый со сменами сотрудника** (`ShiftSession`, `costs/shift-frame.ts`); ночь/обед вне смены на изделие не ложатся; нахлёсты делятся между одновременно удерживаемыми паспортами | `basis = TIMED` |
+| Терминал без accept: `QC_PASSED` / `WTO_PASSED` / `PACKED`, `OPERATION_FINISHED` без своего `ISSUE` | **норма времени операции × `qty` отметки** (`costs/operation-time-norm.ts`: `OrderRouteStep.timeNormSecOverride` / поразмерные переопределения заказа → `Operation.timeNormSec` / `OperationTimeNormBySize`) | `basis = NORMED`, `qty` |
+
+Нормы не задана → 0 минут и предупреждение: текстом в `warnings`
+дневного отчёта и v2, кодом `SALARY_NORM_MISSING` в документе выпуска
+и документе план→факт. `OPERATION_SCAN` accept-ом не считается (на
+проде между сканом ОТК и «проверено» — секунда), «по разрыву между
+отметками» и потолок `MAX_STAGE_MINUTES_PER_PASSPORT` в себестоимости
+больше не используются (потолок остался у длительностей стадий
+дашборда). Простой = оплаченные минуты дня (`costs/shift-presence.ts`)
+− разнесённые, на изделия не распределяется.
+
 ---
 
 <a id="36-admin"></a>

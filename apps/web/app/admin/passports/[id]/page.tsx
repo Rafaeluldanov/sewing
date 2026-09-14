@@ -417,13 +417,14 @@ export default async function AdminPassportDetailPage({ params }: Params) {
                         className="admin-muted"
                         style={{ marginBottom: '0.4rem', fontSize: '0.85rem' }}
                       >
-                        Разнос оклада по реальному времени:
+                        Разнос оклада по факту выполненных работ:
                       </div>
                       <table className="admin-table">
                         <thead>
                           <tr>
                             <th>Операция</th>
                             <th>Сотрудник</th>
+                            <th>Основание</th>
                             <th style={{ textAlign: 'right' }}>Мин</th>
                             <th style={{ textAlign: 'right' }}>Сумма</th>
                           </tr>
@@ -433,6 +434,13 @@ export default async function AdminPassportDetailPage({ params }: Params) {
                             <tr key={`${l.employeeId}-${l.operationId ?? 'na'}-${i}`}>
                               <td>{l.operationName ?? l.operationCode ?? '—'}</td>
                               <td>{l.employeeName}</td>
+                              {/* Решение владельца 14.09.2026: хронометраж в рамке
+                                  смены либо норма времени × количество по отметке. */}
+                              <td className="admin-muted">
+                                {l.basis === 'NORMED'
+                                  ? `по норме${l.qty != null ? ` × ${l.qty} шт.` : ''}`
+                                  : 'хронометраж'}
+                              </td>
                               <td style={{ textAlign: 'right' }}>{l.minutes}</td>
                               <td style={{ textAlign: 'right' }}>
                                 <strong>{formatMoney(l.rub)} ₽</strong>

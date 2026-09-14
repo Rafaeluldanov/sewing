@@ -92,11 +92,11 @@ export class CostsService {
     const { from, to, dateFromIso, dateToIso } = resolvePeriod(query);
 
     // 1) Разнос оклада по паспортам + учтённые минуты по сотруднику×дню.
-    //    Источник — реальные интервалы `ISSUED_TO_EMPLOYEE →
-    //    OPERATION_FINISHED` (для ОТК/ВТО accept = `OPERATION_SCAN`
-    //    терминала, F1-5) с делением нахлёстов (см.
-    //    `PassportRealCostService.apportionedSalaryForPeriod`). Это покрывает
-    //    все окладные операции: ОТК/ВТО/упаковку/деление кроя/настил.
+    //    Источник — факт выполненных работ (решение владельца 14.09.2026):
+    //    хронометраж `ISSUED_TO_EMPLOYEE → OPERATION_FINISHED` в рамке
+    //    смены с делением нахлёстов, а для терминалов ОТК/ВТО/упаковки —
+    //    норма времени операции × объём (см.
+    //    `PassportRealCostService.apportionedSalaryForPeriod`).
     const salary = await this.passportRealCost.apportionedSalaryForPeriod(
       from,
       to,
