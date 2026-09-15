@@ -19,6 +19,10 @@
  *   5. Клиентский `getApiBaseUrl()` на чужом хосте (тенант ≠ хост из
  *      `NEXT_PUBLIC_API_URL`) уходит в same-origin `/api` — иначе на
  *      любом тенанте кроме дефолтного поллинг получал бы 401.
+ *   6. «Скрыть меню» (15.09): кнопка `AdminSidebarHideToggle` на странице,
+ *      маркер `data-admin-sidebar-hidden` на КНОПКЕ, а CSS прячет sidebar
+ *      через `.admin-layout:has(...)` — уход со страницы возвращает меню
+ *      без cleanup-а. Кнопка не лезет в DOM layout-а руками.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,6 +36,7 @@ const SERVICE = 'apps/api/src/modules/shopfloor/order-stand.service.ts';
 const BOARD = 'apps/web/app/admin/orders/[id]/stand/order-stand-board.tsx';
 const PAGE = 'apps/web/app/admin/orders/[id]/stand/page.tsx';
 const HEADER = 'apps/web/components/orders/view/order-management-header.tsx';
+const TOGGLE = 'apps/web/components/admin/admin-sidebar-hide-toggle.client.tsx';
 
 describe('схема стенда — контракт', () => {
   test('у каждого места паспорта есть подпись', () => {
@@ -127,6 +132,21 @@ describe('схема стенда — frontend', () => {
     expect(src).toMatch(/href=\{`\/admin\/orders\/\$\{order\.id\}\/stand`\}/);
     expect(src).toMatch(/Схема стенда/);
     expect(src).toMatch(/order-hero-card__stand-link/);
+  });
+
+  test('«Скрыть меню» — маркер на кнопке, sidebar прячет CSS через :has()', () => {
+    const page = readSrc(PAGE);
+    expect(page).toMatch(/<AdminSidebarHideToggle storageKey="order-stand-sidebar-hidden-v1" \/>/);
+    const toggle = readSrc(TOGGLE);
+    expect(toggle.startsWith("'use client';")).toBe(true);
+    expect(toggle).toMatch(/'data-admin-sidebar-hidden'/);
+    expect(toggle).toMatch(/aria-pressed=\{hidden\}/);
+    // состояние — только через маркер; DOM layout-а руками не трогаем
+    expect(toggle).not.toMatch(/querySelector\(|classList\.|document\.body/);
+    const css = readSrc('apps/web/app/globals.css');
+    expect(css).toMatch(/\.admin-layout:has\(\[data-admin-sidebar-hidden\]\) \{\s*grid-template-columns: minmax\(0, 1fr\);/);
+    expect(css).toMatch(/\.admin-layout:has\(\[data-admin-sidebar-hidden\]\) \.admin-sidebar \{\s*display: none;/);
+    expect(readSrc('apps/web/components/admin/index.ts')).toMatch(/AdminSidebarHideToggle/);
   });
 
   test('стили страницы объявлены в globals.css', () => {

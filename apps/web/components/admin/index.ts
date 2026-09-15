@@ -16,6 +16,7 @@ export { AdminTable, type AdminTableColumn } from './admin-table';
 export { AdminTableRow } from './admin-table-row';
 export { AdminTechInfo } from './admin-tech-info';
 export { AdminPageShell } from './admin-page-shell';
+export { AdminSidebarHideToggle } from './admin-sidebar-hide-toggle.client';
 export { AdminPagination, paginate } from './admin-pagination';
 export { AdminSearchInput } from './admin-search-input.client';
 export { AdminProductionHeatmap } from './admin-production-heatmap';

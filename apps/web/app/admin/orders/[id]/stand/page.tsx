@@ -4,7 +4,7 @@ import { ArrowLeft, Compass } from 'lucide-react';
 import type { OrderStandDto } from '@sewing/shared/order-stand';
 import { ApiRequestError } from '@/lib/api';
 import { getOrderStand } from '@/lib/order-stand-api';
-import { AdminPageShell } from '@/components/admin';
+import { AdminPageShell, AdminSidebarHideToggle } from '@/components/admin';
 import { OrderStandBoard } from './order-stand-board';
 
 /**
@@ -22,6 +22,10 @@ import { OrderStandBoard } from './order-stand-board';
  * клиентской `OrderStandBoard` (поллинг `GET /api/orders/:id/stand`
  * каждые 5 с, как монитор цеха). Доступ — общий guard `/admin`
  * (`canSeeAdmin`), как у карточки заказа.
+ *
+ * «Скрыть меню» (`AdminSidebarHideToggle`) прячет боковое меню админки —
+ * на экране у стенда схеме нужна вся ширина. Выбор помнится на
+ * устройстве (`localStorage`, свой ключ страницы).
  */
 export default async function OrderStandPage({
   params,
@@ -42,12 +46,15 @@ export default async function OrderStandPage({
       title={`Схема стенда · ${initial.order.number}`}
       subtitle="Маршрут заказа, стеллаж и паспорта — QR настоящие, сканируйте с экрана"
       actions={
-        <Link
-          href={`/admin/orders/${encodeURIComponent(params.id)}`}
-          className="admin-btn admin-btn--ghost"
-        >
-          <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />К заказу
-        </Link>
+        <>
+          <AdminSidebarHideToggle storageKey="order-stand-sidebar-hidden-v1" />
+          <Link
+            href={`/admin/orders/${encodeURIComponent(params.id)}`}
+            className="admin-btn admin-btn--ghost"
+          >
+            <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />К заказу
+          </Link>
+        </>
       }
     >
       <OrderStandBoard orderId={params.id} initial={initial} />

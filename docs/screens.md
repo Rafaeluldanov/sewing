@@ -1358,6 +1358,16 @@ productId, mode, …)` в `apps/web/app/orders/[id]/passports/actions.ts`.
 (`/shopfloor/display`), — цифры совпадают по построению. Доступ — общий
 guard `/admin` (`canSeeAdmin`). Печатной версии нет (экран).
 
+Кнопка «Скрыть меню» в шапке страницы (рядом с «К заказу») прячет
+боковое меню админки — на экране у стенда схеме нужна вся ширина.
+Реализация — `AdminSidebarHideToggle`
+(`components/admin/admin-sidebar-hide-toggle.client.tsx`): кнопка несёт
+маркер `data-admin-sidebar-hidden`, CSS
+`.admin-layout:has([data-admin-sidebar-hidden])` переводит раскладку в
+одну колонку; уход со страницы возвращает меню само. Выбор помнится на
+устройстве (`localStorage`, ключ `order-stand-sidebar-hidden-v1`). На
+≤ 900 px (мобильный drawer) кнопки нет.
+
 ## 8. Дашборд начальника (`/dashboard`)
 
 - **Таблица по размерам** (строки — размеры, столбцы — этапы):

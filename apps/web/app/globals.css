@@ -8293,6 +8293,23 @@ body:has(.admin-layout) .app-header__nav { display: none; }
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Страница может спрятать sidebar сама (первый случай — «Схема стенда»
+   по заказу на экране у стенда). Клиентская кнопка
+   `AdminSidebarHideToggle` (`components/admin/admin-sidebar-hide-toggle.client.tsx`)
+   несёт маркер `data-admin-sidebar-hidden`, пока меню скрыто, — раскладка
+   становится одноколоночной. Маркер живёт на кнопке, а не на layout-е:
+   ушли со страницы — меню вернулось само. На ≤ 900 px сайдбара нет
+   (мобильный drawer), кнопку прячем. */
+.admin-layout:has([data-admin-sidebar-hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.admin-layout:has([data-admin-sidebar-hidden]) .admin-sidebar {
+  display: none;
+}
+@media (max-width: 900px) {
+  .admin-sidebar-hide-toggle { display: none; }
+}
+
 /* Шапка раздела супер-админа: узкая строка с иконкой, ссылкой на список
    тенантов и именем пользователя. Горизонтальный паддинг совпадает с
    `.admin-page-shell` (--admin-space-lg), чтобы ссылка была на одной
