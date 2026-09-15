@@ -11,7 +11,10 @@
  *   - клиент «Стенд» и шаблон маршрута «Экспо: оверлок → ОТК → ВТО → упаковка»
  *     (без маршрута у паспорта нет снапшота шагов, и швея не сможет взять крой
  *     иначе как из ячейки; с маршрутом монитор рисует ▶/✔ по операциям);
- *   - заказ с одной расцветкой и размерами, «Запустить в производство»;
+ *   - файлы лекал-заглушки по размерам заказа (если нет), заказ с одной
+ *     расцветкой, «Расчёт» (потребность в материалах), «Запустить в
+ *     производство», отметка «Материал поступил» — чтобы блок «3 Материал»
+ *     на схеме стенда был «Готов к крою», а не «не готов»;
  *   - паспорта по размерам (начисление за раскрой — на `expo-cutter`) в ячейке;
  *     живой шаг 4 в /cutter (расклады → «Выпуск») скрипт не подменяет;
  *   - `--stage sewing`: `expo-seamstress` открывает смену на оверлоке и берёт
@@ -136,6 +139,34 @@ const sizes = rows(await call(admin, 'GET', '/api/sizes'));
 const sizeByCode = Object.fromEntries(sizes.map((s) => [s.code, s]));
 for (const c of SIZE_CODES) if (!sizeByCode[c]) throw new Error(`размер ${c} не найден; есть: ${sizes.map((s) => s.code).join(' ')}`);
 
+// 3a. файлы лекал по размерам заказа — заглушки. Сидовая номенклатура без
+// файлов даёт блокер «Нет файла лекала по размерам» в готовности к крою;
+// грузим маленький PDF на каждый размер, у которого активного файла нет
+// (штатная ручка, как «Загрузить файл» в карточке номенклатуры).
+{
+  const detail = must(await call(admin, 'GET', `/api/patterns/${pattern.id}`), 'pattern detail');
+  const hasFile = new Set(
+    (detail.sizeFiles ?? [])
+      .filter((f) => f.fileUrl && String(f.status).toUpperCase() === 'ACTIVE')
+      .map((f) => f.sizeId),
+  );
+  let uploaded = 0;
+  for (const c of SIZE_CODES) {
+    const sizeId = sizeByCode[c].id;
+    if (hasFile.has(sizeId)) continue;
+    const form = new FormData();
+    form.append('file', new Blob([placeholderPdf(`${pattern.name} — размер ${c} (демо стенда)`)], { type: 'application/pdf' }), `lekalo-${c}.pdf`);
+    const res = await fetch(`${API}/api/patterns/${pattern.id}/sizes/${sizeId}/file`, {
+      method: 'POST',
+      headers: { 'x-tenant-host': HOST, cookie: admin },
+      body: form,
+    });
+    if (!res.ok) console.log(`    ! файл лекала ${c}: HTTP ${res.status} ${(await res.text()).slice(0, 160)}`);
+    else uploaded += 1;
+  }
+  console.log(`[3a] лекала: ${uploaded ? `загружено заглушек ${uploaded}` : 'файлы по всем размерам уже есть'}`);
+}
+
 // 4. заказ
 const today = new Date();
 const due = new Date(today.getTime() + 14 * 86400e3);
@@ -146,14 +177,34 @@ const order = must(
     clientId: client.id,
     patternItemId: pattern.id,
     routeTemplateId: route.id,
+    color: COLOR,
     comment: 'Демо-заказ для стенда (создан scripts/demo/expo-demo-order.mjs)',
     items: SIZE_CODES.map((c) => ({ sizeId: sizeByCode[c].id, qtyPlan: QTY })),
     variants: [{ color: COLOR, sizes: SIZE_CODES.map((c) => ({ sizeId: sizeByCode[c].id, qtyPlan: QTY })) }],
   }),
   'create order',
 );
+// «Расчёт» (DRAFT → CALCULATION) считает потребность в материалах
+// (WorkshopNeed) — без неё блок «2 Расчёт» пуст, а «Материал поступил»
+// отвечает NO_BLOCKING_NEEDS. Плановую себестоимость не завершаем: для неё
+// нужны цены закупщика по каждой строке.
+must(await call(admin, 'POST', `/api/orders/${order.id}/start-calculation`, {}), 'start-calculation');
 must(await call(admin, 'POST', `/api/orders/${order.id}/start`, {}), 'start order');
-console.log(`[3] заказ ${order.number ?? order.id}: ${pattern.name}, ${COLOR}, ${SIZE_CODES.map((c) => `${c}×${QTY}`).join(' ')} — в производстве`);
+console.log(`[3] заказ ${order.number ?? order.id}: ${pattern.name}, ${COLOR}, ${SIZE_CODES.map((c) => `${c}×${QTY}`).join(' ')} — потребность рассчитана, в производстве`);
+
+// 4a. «Материал поступил» — штатная ручная отметка (OrderMaterialArrivalOverride):
+// без неё блок «3 Материал» на схеме стенда горит «Не готов к крою», потому что
+// приёмок на демо-тенанте нет. Без workshopNeedIds применяется ко всем
+// блокирующим потребностям; склад и остатки не трогает.
+const arrived = await call(admin, 'POST', `/api/orders/${order.id}/material-arrived`, {
+  comment: 'Стенд: материал на месте (демо-заказ, без складской приёмки)',
+});
+if (!arrived.ok) console.log(`    ! отметка «Материал поступил» не прошла: ${arrived.json?.code ?? arrived.status}`);
+const readiness = await call(admin, 'GET', `/api/orders/${order.id}/cut-readiness`);
+const readyLabel = readiness.ok
+  ? `${readiness.json.status}${readiness.json.blockersCount ? ` (блокеров: ${readiness.json.blockersCount}: ${readiness.json.blockers.map((b) => b.title ?? b.key).join('; ')})` : ''}`
+  : `недоступна (${readiness.status})`;
+console.log(`[3b] материал отмечен как поступивший · готовность к крою: ${readyLabel}`);
 
 // 5. раскрой → паспорта → ячейка
 // Живой раскройщик (`CUTTER`) паспорта руками не выпускает — только через
@@ -216,6 +267,30 @@ console.log(`
 for (const p of passports) console.log(`    ${p.number}  ${p.sizeCode.padEnd(4)} ${API}/api/passports/${p.id}/print`);
 console.log(`
 Дальше руками: ${STAGE === 'cut' ? 'телефон expo → «Начать смену» → QR блока 5 → «Взять крой» → скан этикетки паспорта' : 'телефон expo-seamstress → «Операция закрыта» → ОТК сканирует паспорт'}.`);
+
+/** Минимальный валидный PDF с одной строкой текста (латиница/кириллица через WinAnsi не гарантирована — пишем ASCII-транслит). */
+function placeholderPdf(label) {
+  const ascii = label.normalize('NFKD').replace(/[^\x20-\x7e]/g, '').replace(/[()\\]/g, '') || 'DEMO PATTERN';
+  const stream = `BT /F1 18 Tf 40 780 Td (${ascii}) Tj ET`;
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [];
+  objs.forEach((o, i) => {
+    offsets.push(Buffer.byteLength(out));
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(out);
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
 
 function parseArgs(list) {
   const out = {};
